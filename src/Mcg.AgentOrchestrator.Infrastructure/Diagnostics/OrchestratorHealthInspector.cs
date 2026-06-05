@@ -51,7 +51,8 @@ public static class OrchestratorHealthInspector
         var providers = new[]
         {
             InspectProvider("OpenAI", "OPENAI_API_KEY", "codex", environment, commandExists),
-            InspectProvider("Anthropic", "ANTHROPIC_API_KEY", "claude", environment, commandExists)
+            InspectProvider("Anthropic", "ANTHROPIC_API_KEY", "claude", environment, commandExists),
+            InspectOllamaProvider(environment)
         };
 
         var profiles = workerProfiles.Profiles
@@ -94,6 +95,30 @@ public static class OrchestratorHealthInspector
         }
 
         return new ProviderConfigurationStatus(providerName, false, "Offline", $"{apiKeyName} is not set and '{localBridgeExecutable}' was not found; offline scripted provider will be used.");
+    }
+
+    private static ProviderConfigurationStatus InspectOllamaProvider(IReadOnlyDictionary<string, string?> environment)
+    {
+        var baseUrl = environment.TryGetValue("OLLAMA_BASE_URL", out var url) && !string.IsNullOrWhiteSpace(url)
+            ? url
+            : "http://localhost:11434";
+
+        try
+        {
+            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            var response = probe.GetAsync($"{baseUrl.TrimEnd('/')}/api/version").GetAwaiter().GetResult();
+            if (response.IsSuccessStatusCode)
+            {
+                var model = environment.TryGetValue("OLLAMA_MODEL", out var m) && !string.IsNullOrWhiteSpace(m) ? m : "qwen3:8b";
+                return new ProviderConfigurationStatus("Ollama", true, "LocalBridge", $"Ollama is running at {baseUrl}; default model is '{model}'.");
+            }
+        }
+        catch
+        {
+            // Ollama is not reachable
+        }
+
+        return new ProviderConfigurationStatus("Ollama", false, "Offline", $"Ollama is not reachable at {baseUrl}.");
     }
 
     private static IEnumerable<AgentConfigurationValidation> InspectAgents(
