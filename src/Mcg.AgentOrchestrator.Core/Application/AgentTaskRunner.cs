@@ -83,11 +83,17 @@ public sealed class AgentTaskRunner
 
     private static ModelRequest BuildRequest(Goal goal, TaskSpec task, AgentDefinition agent)
     {
-        var systemPrompt =
+        var isLocal = LocalModelPromptOptimizer.IsLocalProvider(agent.Model.ProviderName);
+
+        var baseSystemPrompt =
             $"You are the {agent.Role} agent in a software-development orchestrator. " +
             "Complete the assigned SDLC task, state concrete results, verification evidence, blockers, and any human input needed. " +
             "If you cannot proceed without operator input, include a line that starts with HUMAN_INPUT: followed by the exact question. " +
             "Avoid generic status summaries; ground conclusions in files, command output, or cited source material.";
+
+        var systemPrompt = isLocal
+            ? LocalModelPromptOptimizer.OptimizeSystemPrompt(baseSystemPrompt, agent.Role)
+            : baseSystemPrompt;
 
         var timeline = string.Join(
             Environment.NewLine,
@@ -101,6 +107,11 @@ public sealed class AgentTaskRunner
             $"Verification plan: {task.VerificationPlan ?? "none"}{Environment.NewLine}" +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role)}{Environment.NewLine}" +
             $"Recent timeline:{Environment.NewLine}{timeline}";
+
+        if (isLocal)
+        {
+            userPrompt = LocalModelPromptOptimizer.AppendThinkingGuidance(userPrompt, agent.Role);
+        }
 
         return new ModelRequest(
             systemPrompt,
