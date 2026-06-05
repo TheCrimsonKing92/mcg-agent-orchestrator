@@ -1,0 +1,105 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
+
+internal static partial class GoalManagementCommandService
+{
+public static async Task<object?> ApplyTaskActionAsync(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskSpec task,
+    string operation,
+    string body)
+{
+    switch (operation.ToLowerInvariant())
+    {
+        case "run":
+            return await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
+
+        case "dispatch":
+            var dispatch = DashboardRequestParser.ParseDispatchSubmission(body);
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord(dispatch.WorkerName, dispatch.Command, workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+            return null;
+
+        case "profile-dispatch":
+            var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
+            var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
+            var profileDispatch = ProfileDispatchTask(kernel, workspace, goal, task, profile);
+            return DashboardResponseMapper.ToProfileDispatchDto(goal, profileDispatch);
+
+        case "subscription-dispatch":
+            var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+            var subscriptionDispatch = SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles);
+            return DashboardResponseMapper.ToProfileDispatchDto(goal, subscriptionDispatch);
+
+        case "start":
+            new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
+            return null;
+
+        case "refresh":
+            new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+            return null;
+
+        case "cancel":
+            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            return null;
+
+        case "verify":
+            var verify = DashboardRequestParser.ParseVerifySubmission(body);
+            var verification = await new LocalProcessVerifier().RunAsync(verify.Command, workspace.ExecutionDirectory);
+            kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+            return null;
+
+        case "verify-manual":
+            var manual = DashboardRequestParser.ParseManualVerifySubmission(body);
+            var manualVerification = ManualVerificationRecorder.Create(
+                manual.Passed,
+                manual.Note,
+                workspace.ExecutionDirectory,
+                DateTimeOffset.UtcNow);
+            kernel.RecordTaskVerification(goal.Id, task.Id, manualVerification);
+            return null;
+
+        case "complete-verify":
+            var complete = DashboardRequestParser.ParseManualVerifySubmission(body);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, complete.Note);
+            var completeVerification = ManualVerificationRecorder.Create(
+                true,
+                complete.Note,
+                workspace.ExecutionDirectory,
+                DateTimeOffset.UtcNow);
+            kernel.RecordTaskVerification(goal.Id, task.Id, completeVerification);
+            return null;
+
+        case "progress":
+            var progress = DashboardRequestParser.ParseProgressSubmission(body);
+            kernel.ReportTaskProgress(goal.Id, task.Id, CliArgumentParser.ParseReportableStatus(progress.Status), progress.Message);
+            return null;
+
+        case "retry":
+            var retry = DashboardRequestParser.ParseRetrySubmission(body);
+            kernel.RetryTask(goal.Id, task.Id, retry.Message);
+            return null;
+
+        case "verification-plan":
+            var verificationPlan = DashboardRequestParser.ParseVerificationPlanSubmission(body);
+            kernel.SetTaskVerificationPlan(goal.Id, task.Id, verificationPlan.Plan);
+            return DashboardResponseMapper.ToTaskVerificationPlanDto(goal, task);
+
+        case "ask":
+            var ask = DashboardRequestParser.ParseAskSubmission(body);
+            var request = kernel.RequestHumanInput(goal.Id, task.Id, ask.Question);
+            return DashboardResponseMapper.ToHumanInputDto(kernel, request);
+
+        default:
+            throw new ArgumentException("Task operation must be run, retry, verification-plan, dispatch, profile-dispatch, subscription-dispatch, start, refresh, cancel, verify, verify-manual, complete-verify, progress, or ask.");
+    }
+}
+}

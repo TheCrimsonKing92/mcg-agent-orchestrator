@@ -1,0 +1,52 @@
+**/bin/
+**/obj/
+
+# IDE and editor state
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+.vs/
+.idea/
+.vscode/
+
+# Test and coverage output
+TestResults/
+**/TestResults/
+coverage/
+coverage.*/
+*.coverage
+*.coveragexml
+*.trx
+
+# Publish/package/build artifacts
+artifacts/
+publish/
+*.nupkg
+*.snupkg
+
+# Local orchestrator/prototype state
+.orchestrator/
+**/.orchestrator/
+**/.orchestrator-demo/
+**/.orchestrator-prototype/
+**/.scratch/
+
+# Local agent/tool settings
+.claude/settings.local.json
+
+# Logs and local diagnostics
+*.log
+*.pid
+*.tmp
+
+# Local environment/secrets
+.env
+.env.*
+!.env.example
+appsettings.Development.json
+appsettings.Local.json
+
+# OS cruft
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,167 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+
+public sealed class HealthInspectorTests
+{
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_provider_key_status")]
+    public void OrchestratorHealthInspectorReportsProviderKeyStatus()
+{
+    var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["OPENAI_API_KEY"] = "set"
+    };
+
+    var report = OrchestratorHealthInspector.Inspect(environment, AgentCatalog.Default(), WorkerProfileCatalog.Default(), _ => false);
+
+    Assert.True(report.Providers.Single(provider => provider.ProviderName == "OpenAI").IsConfigured);
+    Assert.False(report.Providers.Single(provider => provider.ProviderName == "Anthropic").IsConfigured);
+    Assert.Equal("ApiKey", report.Providers.Single(provider => provider.ProviderName == "OpenAI").Mode);
+    Assert.Equal("Offline", report.Providers.Single(provider => provider.ProviderName == "Anthropic").Mode);
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_subscription_only_agents_by_worker_profile")]
+    public void OrchestratorHealthInspectorValidatesSubscriptionOnlyAgentsByWorkerProfile()
+{
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription Developer",
+        AgentRole.Developer,
+        new ModelProfile("Unknown", "unused", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("local-subscription"));
+    var catalog = new AgentCatalog([agent]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("local-subscription", "agent-cli {promptPath}")]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        catalog,
+        profiles,
+        command => command == "agent-cli");
+
+    var developer = report.Agents.Single(agent => agent.Role == AgentRole.Developer);
+    Assert.True(developer.IsValid);
+    Assert.Equal(AgentExecutionPolicy.SubscriptionOnly, developer.ExecutionPolicy);
+    Assert.Equal("local-subscription", developer.SubscriptionProfileName);
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_local_bridge_provider_status")]
+    public void OrchestratorHealthInspectorReportsLocalBridgeProviderStatus()
+{
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        AgentCatalog.Default(),
+        WorkerProfileCatalog.Default(),
+        command => command is "codex");
+
+    var openAi = report.Providers.Single(provider => provider.ProviderName == "OpenAI");
+    var anthropic = report.Providers.Single(provider => provider.ProviderName == "Anthropic");
+
+    Assert.True(openAi.IsConfigured);
+    Assert.Equal("LocalBridge", openAi.Mode);
+    Assert.Contains(openAi.Detail, text => text.Contains("codex", StringComparison.Ordinal));
+    Assert.False(anthropic.IsConfigured);
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_treats_default_cli_bridges_as_optional_profiles")]
+    public void OrchestratorHealthInspectorTreatsDefaultCliBridgesAsOptionalProfiles()
+{
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
+        AgentCatalog.Default(),
+        WorkerProfileCatalog.Default(),
+        command => command == "Write-Output");
+
+    Assert.True(report.IsReady);
+    Assert.False(report.WorkerProfiles.Single(profile => profile.Name == "codex-cli").IsResolvable);
+    Assert.True(report.WorkerProfiles.Single(profile => profile.Name == "codex-cli").IsOptional);
+    Assert.False(report.WorkerProfiles.Single(profile => profile.Name == "claude-cli").IsResolvable);
+    Assert.True(report.WorkerProfiles.Single(profile => profile.Name == "claude-cli").IsOptional);
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_agent_providers_and_roles")]
+    public void OrchestratorHealthInspectorValidatesAgentProvidersAndRoles()
+{
+    var catalog = new AgentCatalog(
+    [
+        new AgentDefinition(
+            new AgentId("openai-planner"),
+            "OpenAI planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt", ModelCapability.Text, SubscriptionMode.ApiKey)),
+        new AgentDefinition(
+            new AgentId("bad-developer"),
+            "Bad developer",
+            AgentRole.Developer,
+            new ModelProfile("Unknown", "unknown", ModelCapability.Text, SubscriptionMode.ApiKey))
+    ]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        catalog,
+        WorkerProfileCatalog.Default(),
+        command => true);
+
+    Assert.True(report.Agents.Single(agent => agent.Role == AgentRole.Planner).IsValid);
+    Assert.False(report.Agents.Single(agent => agent.Role == AgentRole.Developer).IsValid);
+    Assert.False(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).IsValid);
+    Assert.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Developer).Detail, text => text.Contains("not registered", StringComparison.Ordinal));
+    Assert.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).Detail, text => text.Contains("No agent", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_worker_profile_commands")]
+    public void OrchestratorHealthInspectorValidatesWorkerProfileCommands()
+{
+    var catalog = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("ok", "agent-cli --prompt {promptPath}"),
+        new WorkerProfile("missing", "missing-cli {promptPath}")
+    ]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        AgentCatalog.Default(),
+        catalog,
+        command => command == "agent-cli");
+
+    Assert.True(report.WorkerProfiles.Single(profile => profile.Name == "ok").IsResolvable);
+    Assert.False(report.WorkerProfiles.Single(profile => profile.Name == "missing").IsResolvable);
+    Assert.Equal("missing-cli", report.WorkerProfiles.Single(profile => profile.Name == "missing").Executable);
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_warns_on_echo_only_worker_profiles")]
+    public void OrchestratorHealthInspectorWarnsOnEchoOnlyWorkerProfiles()
+{
+    var catalog = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        AgentCatalog.Default(),
+        catalog,
+        command => command == "Write-Output");
+
+    var codex = report.WorkerProfiles.Single(profile => profile.Name == "codex-cli");
+    Assert.True(codex.IsResolvable);
+    Assert.True(codex.IsEchoOnly);
+    Assert.False(codex.IsPatchCapable);
+    Assert.Contains(codex.Detail, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_codex_patch_capability")]
+    public void OrchestratorHealthInspectorReportsCodexPatchCapability()
+{
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-ok", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("codex-readonly", "codex exec (Get-Content -Raw {promptPath})")
+    ]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        AgentCatalog.Default(),
+        profiles,
+        command => command == "codex");
+
+    var ok = report.WorkerProfiles.Single(profile => profile.Name == "codex-ok");
+    var readOnly = report.WorkerProfiles.Single(profile => profile.Name == "codex-readonly");
+    Assert.True(ok.IsPatchCapable);
+    Assert.Contains(ok.Detail, text => text.Contains("workspace-write", StringComparison.Ordinal));
+    Assert.False(readOnly.IsPatchCapable);
+    Assert.Contains(readOnly.Detail, text => text.Contains("missing --sandbox workspace-write", StringComparison.Ordinal));
+}
+}

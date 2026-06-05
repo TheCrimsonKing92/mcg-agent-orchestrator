@@ -1,0 +1,329 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
+
+internal static partial class GoalManagementCommandService
+{
+private const int MaxAutomaticHandoffSteps = 20;
+
+public static async Task<AdvanceResultDto> AdvanceGoalAsync(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
+    Goal goal)
+{
+    var actions = kernel.BuildNextActions(goal.Id);
+    var item = actions.Items.FirstOrDefault();
+    if (item is null)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, null, NextActionAutomationKind.None, "No next actions are available.", null);
+    }
+
+    var automation = NextActionAutomationPolicy.Build(item);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1);
+    if (!automation.CanExecute || automation.TaskId is null)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, automation.Message, null);
+    }
+
+    object? result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation);
+
+    return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, automation.Message, result);
+}
+
+public static async Task<AdvanceLoopResultDto> AdvanceGoalUntilBlockedAsync(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
+    Goal goal)
+{
+    return await AdvanceUntilBlockedAsync(
+        kernel,
+        goal,
+        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation),
+        automation => automation.Message);
+}
+
+private static async Task<object?> AdvanceRunAssignedTaskAsync(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskId taskId)
+{
+    var task = goal.Tasks.Single(task => task.Id == taskId);
+    var agent = ResolveAssignedAgent(task, agents);
+    if (agent.ExecutionPolicy == AgentExecutionPolicy.SubscriptionOnly)
+    {
+        return DashboardResponseMapper.ToProfileDispatchDto(
+            goal,
+            SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath)));
+    }
+
+    if (agent.ExecutionPolicy is AgentExecutionPolicy.PreferSubscription or AgentExecutionPolicy.AnyAvailable)
+    {
+        try
+        {
+            return DashboardResponseMapper.ToProfileDispatchDto(
+                goal,
+                SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath)));
+        }
+        catch (InvalidOperationException)
+        {
+            // Fall back to API-backed execution below.
+        }
+        catch (KeyNotFoundException)
+        {
+            // Fall back to API-backed execution below.
+        }
+    }
+
+    var result = await new AgentTaskRunner(kernel, agents, providers).RunAsync(goal.Id, taskId);
+    return DashboardResponseMapper.ToTaskDetailDto(result.Goal, goal.Tasks.Single(task => task.Id == taskId));
+}
+
+private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+{
+    if (task.AssignedAgentId is null)
+    {
+        throw new InvalidOperationException($"Task '{task.Id}' is not assigned to an agent.");
+    }
+
+    return agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId)
+        ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found.");
+}
+
+public static AdvanceResultDto AdvanceGoalWithSubscriptions(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    OrchestratorWorkspace workspace,
+    Goal goal)
+{
+    var actions = kernel.BuildNextActions(goal.Id);
+    var item = actions.Items.FirstOrDefault();
+    if (item is null)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, null, NextActionAutomationKind.None, "No next actions are available.", null);
+    }
+
+    var automation = NextActionAutomationPolicy.Build(item);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1);
+    if (!automation.CanExecute || automation.TaskId is null)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, automation.Message, null);
+    }
+
+    var message = GetSubscriptionAutomationMessage(automation);
+    object? result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation);
+
+    return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, message, result);
+}
+
+public static AdvanceLoopResultDto AdvanceGoalWithSubscriptionsUntilBlocked(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    OrchestratorWorkspace workspace,
+    Goal goal)
+{
+    return AdvanceUntilBlockedAsync(
+        kernel,
+        goal,
+        automation => Task.FromResult(ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation)),
+        GetSubscriptionAutomationMessage).GetAwaiter().GetResult();
+}
+
+private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    Func<NextActionAutomationPlan, Task<object?>> execute,
+    Func<NextActionAutomationPlan, string> messageFor)
+{
+    var steps = new List<AdvanceResultDto>();
+    NextActionDto? blockingAction = null;
+    DateTimeOffset? continueAfter = null;
+    var stopReason = "No next actions are available.";
+
+    for (var index = 0; index < MaxAutomaticHandoffSteps; index++)
+    {
+        var actions = kernel.BuildNextActions(goal.Id);
+        var item = actions.Items.FirstOrDefault();
+        if (item is null)
+        {
+            stopReason = "No next actions are available.";
+            break;
+        }
+
+        var automation = NextActionAutomationPolicy.Build(item);
+        var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1);
+        if (!automation.CanExecute || automation.TaskId is null)
+        {
+            blockingAction = action;
+            stopReason = automation.Message;
+            break;
+        }
+
+        object? result;
+        try
+        {
+            result = await execute(automation);
+        }
+        catch (InvalidOperationException ex)
+        {
+            blockingAction = action;
+            if (TryGetSubscriptionRetryWindow(goal, automation, out var retryAfter, out var retryReason))
+            {
+                continueAfter = retryAfter;
+                stopReason = retryReason;
+            }
+            else
+            {
+                stopReason = ex.Message;
+            }
+
+            break;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            blockingAction = action;
+            stopReason = ex.Message;
+            break;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            blockingAction = action;
+            stopReason = $"Automatic handoff stopped: {ex.Message}";
+            break;
+        }
+
+        var step = new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, messageFor(automation), result);
+        steps.Add(step);
+
+        var pauseReason = GetAutomaticHandoffPauseReason(kernel.GetTask(goal.Id, automation.TaskId), automation.Kind);
+        if (pauseReason is not null)
+        {
+            stopReason = pauseReason;
+            break;
+        }
+    }
+
+    if (steps.Count == MaxAutomaticHandoffSteps)
+    {
+        var actions = kernel.BuildNextActions(goal.Id);
+        var item = actions.Items.FirstOrDefault();
+        blockingAction = item is null ? null : DashboardResponseMapper.ToNextActionDto(goal, item, 1);
+        stopReason = $"Stopped after {MaxAutomaticHandoffSteps} automated step(s); run continuation again if more safe actions remain.";
+    }
+
+    return new AdvanceLoopResultDto(goal.Id.Value, steps.Count > 0, steps.Count, stopReason, blockingAction, steps, ContinueAfter: continueAfter);
+}
+
+private static bool TryGetSubscriptionRetryWindow(
+    Goal goal,
+    NextActionAutomationPlan automation,
+    out DateTimeOffset retryAfter,
+    out string reason)
+{
+    retryAfter = default;
+    reason = string.Empty;
+    if (automation.Kind != NextActionAutomationKind.RunAssignedTask || automation.TaskId is null)
+    {
+        return false;
+    }
+
+    var task = goal.Tasks.FirstOrDefault(task => task.Id == automation.TaskId);
+    if (task is null || !DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out retryAfter))
+    {
+        return false;
+    }
+
+    reason = $"Subscription retry window is deferred for task {task.Id.Value[..8]}; retry after {retryAfter:u}.";
+    return true;
+}
+
+private static async Task<object?> ExecuteAutomationAsync(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    NextActionAutomationPlan automation)
+{
+    return automation.Kind switch
+    {
+        NextActionAutomationKind.RunAssignedTask =>
+            await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, automation.TaskId!),
+        NextActionAutomationKind.RefreshRunningProcess =>
+            AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
+        NextActionAutomationKind.StartRecordedDispatch =>
+            AdvanceStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!),
+        NextActionAutomationKind.DelegatePendingTask =>
+            DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
+        _ => null
+    };
+}
+
+private static object? ExecuteSubscriptionAutomation(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    NextActionAutomationPlan automation)
+{
+    return automation.Kind switch
+    {
+        NextActionAutomationKind.RunAssignedTask =>
+            DashboardResponseMapper.ToProfileDispatchDto(
+                goal,
+                SubscriptionDispatchTask(
+                    kernel,
+                    workspace,
+                    goal,
+                    goal.Tasks.Single(task => task.Id == automation.TaskId),
+                    agents,
+                    profiles)),
+        NextActionAutomationKind.RefreshRunningProcess =>
+            AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
+        NextActionAutomationKind.StartRecordedDispatch =>
+            AdvanceStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!),
+        NextActionAutomationKind.DelegatePendingTask =>
+            DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
+        _ => null
+    };
+}
+
+private static string GetSubscriptionAutomationMessage(NextActionAutomationPlan automation)
+{
+    return automation.Kind == NextActionAutomationKind.RunAssignedTask
+        ? "Prepared subscription-backed dispatch for the assigned task."
+        : automation.Message;
+}
+
+private static string? GetAutomaticHandoffPauseReason(TaskSpec task, NextActionAutomationKind kind)
+{
+    if (kind == NextActionAutomationKind.RefreshRunningProcess && task.LastProcess is { IsRunning: true })
+    {
+        return $"Background work is still running for task {task.Id.Value[..8]}; continue after it exits.";
+    }
+
+    return null;
+}
+
+public static TaskDetailDto AdvanceRefreshRunningProcess(AgentOrchestratorKernel kernel, Goal goal, TaskId taskId)
+{
+    new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, taskId);
+    return DashboardResponseMapper.ToTaskDetailDto(goal, goal.Tasks.Single(task => task.Id == taskId));
+}
+
+public static TaskDetailDto AdvanceStartRecordedDispatch(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, TaskId taskId)
+{
+    new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory);
+    return DashboardResponseMapper.ToTaskDetailDto(goal, goal.Tasks.Single(task => task.Id == taskId));
+}
+}

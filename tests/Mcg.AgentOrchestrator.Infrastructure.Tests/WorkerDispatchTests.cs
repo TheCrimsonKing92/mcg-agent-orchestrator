@@ -1,0 +1,377 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+
+public sealed class WorkerDispatchTests
+{
+    [Xunit.Fact(DisplayName = "WorkerCommandTemplate_expands_profile_template_and_writes_prompt")]
+    public void WorkerCommandTemplateExpandsProfileTemplateAndWritesPrompt()
+{
+    var root = CreateTempDirectory();
+    var brief = new TaskBrief(
+        new GoalId("goal123456789"),
+        new TaskId("task123456789"),
+        AgentRole.Developer,
+        "Developer: implement",
+        "brief content");
+    var profile = new WorkerProfile("agent", "agent-cli --prompt {promptPath} --role {role}");
+
+    var preparation = WorkerCommandTemplate.Prepare(brief, profile.Name, profile.CommandTemplate, root);
+
+    Assert.True(File.Exists(preparation.PromptPath));
+    Assert.Equal("brief content", File.ReadAllText(preparation.PromptPath));
+    Assert.Contains(preparation.Command, text => text.Contains("agent-cli --prompt", StringComparison.Ordinal));
+    Assert.Contains(preparation.Command, text => text.Contains("--role Developer", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_agent_subscription_profile_and_template_variables")]
+    public void WorkerProfileDispatcherUsesAgentSubscriptionProfileAndTemplateVariables()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Dispatch configured subscription worker");
+    var agent = new AgentDefinition(
+        new AgentId("configured-developer"),
+        "Configured Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("custom-codex", "gpt-5.3-codex", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("custom-codex", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-reasoning {apiReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Equal("custom-codex", task.LastDispatch!.WorkerName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_ready_tasks_and_returns_prompt_paths")]
+    public void WorkerProfileDispatcherPreparesReadyTasksAndReturnsPromptPaths()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Dispatch local subscription workers");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profile = new WorkerProfile("codex-cli", "codex exec (Get-Content -Raw {promptPath})");
+
+    var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile, promptRoot, workingDirectory, dispatchedAt);
+
+    Assert.Equal(1, results.Count);
+    var result = results.Single();
+    Assert.Equal(goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer).Id, result.Task.Id);
+    Assert.True(File.Exists(result.PromptPath));
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains(prompt, text => text.Contains("Dispatch local subscription workers", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains(result.Task.VerificationPlan!, StringComparison.Ordinal));
+    Assert.True(result.Task.LastDispatch is not null);
+    Assert.Equal("codex-cli", result.Task.LastDispatch!.WorkerName);
+    Assert.Equal(workingDirectory, result.Task.LastDispatch.WorkingDirectory);
+    Assert.Equal(dispatchedAt, result.Task.LastDispatch.DispatchedAt);
+    Assert.Contains(result.Task.LastDispatch.Command, text => text.Contains(result.PromptPath, StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Running, result.Task.Status);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_subscription_tasks_by_assigned_provider")]
+    public void WorkerProfileDispatcherPreparesSubscriptionTasksByAssignedProvider()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Dispatch subscription-backed workers");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Equal(5, results.Count);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+    Assert.Equal("codex-cli", developer.LastDispatch!.WorkerName);
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
+    Assert.False(developer.LastDispatch.Command.Contains("{workingDirectory}", StringComparison.Ordinal));
+    Assert.Equal("codex-cli", researcher.LastDispatch!.WorkerName);
+    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
+    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.True(File.Exists(results.Single(result => result.Task.Id == developer.Id).PromptPath));
+    Assert.Equal(WorkTaskStatus.Running, developer.Status);
+    Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_to_api_model_settings_for_default_openai_subscription_profile")]
+    public void WorkerProfileDispatcherFallsBackToApiModelSettingsForDefaultOpenAiSubscriptionProfile()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Dispatch default OpenAI subscription profile");
+    var agent = new AgentDefinition(
+        new AgentId("openai-researcher"),
+        "OpenAI researcher",
+        AgentRole.Researcher,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_echo_only_subscription_profiles")]
+    public void WorkerProfileDispatcherRejectsEchoOnlySubscriptionProfiles()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Reject echo subscription profile");
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        Path.Combine(root, "prompts"),
+        root,
+        DateTimeOffset.UtcNow));
+
+    Assert.Contains(ex.Message, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_developer_subscription_profiles_that_cannot_patch")]
+    public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCannotPatch()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Reject non-patching subscription profile");
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} {promptPath}"));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        Path.Combine(root, "prompts"),
+        root,
+        DateTimeOffset.UtcNow));
+
+    Assert.Contains(ex.Message, text => text.Contains("not patch-capable", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_echo_only_profiles_not_preparable")]
+    public void SubscriptionPlanMarksEchoOnlyProfilesNotPreparable()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Plan echo subscription profile");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+
+    var developer = plan.Items.First(item => item.Role == AgentRole.Developer);
+    Assert.True(developer.ProfileExists);
+    Assert.True(developer.ProfileIsEchoOnly);
+    Assert.False(developer.ProfileIsPatchCapable);
+    Assert.False(developer.CanPrepare);
+    Assert.Contains(developer.Detail, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_non_patching_developer_profiles_not_preparable")]
+    public void SubscriptionPlanMarksNonPatchingDeveloperProfilesNotPreparable()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Plan non-patching subscription profile");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec {promptPath}"));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+
+    var developer = plan.Items.First(item => item.Role == AgentRole.Developer);
+    var planner = plan.Items.First(item => item.Role == AgentRole.Planner);
+    Assert.True(developer.ProfileExists);
+    Assert.False(developer.ProfileIsPatchCapable);
+    Assert.False(developer.CanPrepare);
+    Assert.Contains(developer.Detail, text => text.Contains("not patch-capable", StringComparison.Ordinal));
+    Assert.True(planner.CanPrepare);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
+    public void SubscriptionPlanMarksUsageLimitedTasksNotPreparableUntilRetryTime()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Plan retry-later subscription task");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var now = DateTimeOffset.UtcNow;
+    var retryTime = now.AddHours(1);
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", now));
+    kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
+        "codex exec",
+        "C:\\repo",
+        1,
+        string.Empty,
+        $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
+        now));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
+
+    var item = plan.Items.First(item => item.Role == AgentRole.Developer);
+    Assert.Equal(1, plan.RetryDeferredCount);
+    Assert.Equal(developer.SubscriptionRetryAfter, plan.NextSubscriptionRetryAfter);
+    Assert.False(item.CanPrepare);
+    Assert.Equal(developer.SubscriptionRetryAfter, item.RetryAfter);
+    Assert.True(item.RetryDelaySeconds is > 0);
+    Assert.Contains(item.Detail, text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
+    Assert.Contains(item.Detail, text => text.Contains("retry after", StringComparison.Ordinal));
+    Assert.Equal(developer.SubscriptionRetryAfter, DashboardResponseMapper.ToTaskSummaryDto(goal, developer).SubscriptionRetryAfter);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
+    public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var failureAt = DateTimeOffset.Parse("2026-06-01T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Skip retry-later subscription dispatch");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, failureAt));
+    kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
+        "codex exec",
+        workingDirectory,
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        failureAt));
+
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        failureAt.AddMinutes(30));
+
+    Assert.False(results.Any(result => result.Task.Id == developer.Id));
+    Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+    Assert.True(developer.LastVerification is null);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        developer,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        failureAt.AddMinutes(30)));
+    Assert.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_dispatch_without_supported_assignment")]
+    public void WorkerProfileDispatcherRejectsSubscriptionDispatchWithoutSupportedAssignment()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var unassignedGoal = kernel.CreateGoal("Reject unassigned", [new TaskSpec(TaskId.New(), "Unassigned", AgentRole.Developer)]);
+    Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        unassignedGoal,
+        unassignedGoal.Tasks.Single(),
+        AgentCatalog.Default().Agents,
+        WorkerProfileCatalog.Default(),
+        CreateTempDirectory(),
+        Environment.CurrentDirectory,
+        DateTimeOffset.UtcNow));
+
+    var unsupported = new AgentDefinition(
+        AgentId.New(),
+        "Local",
+        AgentRole.Developer,
+        new ModelProfile("Local", "local", ModelCapability.Text, SubscriptionMode.LocalBridge));
+    var unsupportedGoal = kernel.CreateGoal("Reject unsupported", [new TaskSpec(TaskId.New(), "Unsupported", AgentRole.Developer)]);
+    kernel.ActivateGoal(unsupportedGoal.Id, [unsupported]);
+    Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        unsupportedGoal,
+        unsupportedGoal.Tasks.Single(),
+        [unsupported],
+        WorkerProfileCatalog.Default(),
+        CreateTempDirectory(),
+        Environment.CurrentDirectory,
+        DateTimeOffset.UtcNow));
+}
+}
+

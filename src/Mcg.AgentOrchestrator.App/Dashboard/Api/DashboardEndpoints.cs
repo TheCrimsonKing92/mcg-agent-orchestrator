@@ -1,0 +1,216 @@
+using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
+
+internal static partial class DashboardEndpoints
+{
+    private static readonly string[] GetAndPost = ["GET", "POST"];
+
+    public static void MapDashboardEndpoints(
+        this WebApplication app,
+        IOrchestratorStateRepository repository,
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        DashboardHostArgs args)
+    {
+        var services = new DashboardEndpointServices(new DashboardStateService(repository), workspace, providers, args, app.Lifetime, new DashboardContinuationService());
+        if (args.EnableOperatorControls)
+        {
+            services.Continuations.RestoreSubscriptionWatches(services);
+        }
+
+        app.MapGet("/health", () => Text("ok", "text/plain; charset=utf-8"));
+        app.MapGet("/assets/dashboard.css", (HttpContext context) => NoStoreText(context, DashboardAssets.Styles, "text/css; charset=utf-8"));
+        if (args.EnableOperatorControls)
+        {
+            app.MapGet("/assets/dashboard.js", (HttpContext context) => NoStoreText(context, DashboardAssets.OperatorControlsScript, "text/javascript; charset=utf-8"));
+        }
+
+        app.MapGet("/", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services)));
+        app.MapGet("/dashboard", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services)));
+
+        var api = app.MapGroup("/api");
+        api.MapGet("/health", () => Json(BuildHealthReport(services)));
+        api.MapGet("/doctor", () => Json(BuildHealthReport(services)));
+        api.MapGet("/continuations", () => Json(services.Continuations.GetStatuses()));
+        api.MapGet("/continuations/summary", () => Json(services.Continuations.GetSummary()));
+        api.MapGet("/system/dashboard-host", () => Json(BuildHostInfo(services)));
+        if (args.EnableOperatorControls)
+        {
+            api.MapGet("/system/processes", () => Json(DashboardProcessInspector.InspectCurrent()));
+            api.MapGet("/system/build-test-cleanup", () => Json(BuildTestCleanup(services)));
+            api.MapGet("/system/build-test-runs", () => Json(BuildTestRuns(services)));
+            api.MapGet("/system/build-test-runs/log", async Task<IResult> (HttpContext context) => await Safe(() => BuildTestRunLog(context, services)));
+            api.MapPost("/system/run-build-test-cycle", () => Safe(() => RunBuildTestCycle(services)));
+            api.MapPost("/system/stop-dashboard", () => Safe(() => StopDashboard(services)));
+            api.MapMethods("/provider-smoke", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleProviderSmokeAsync(context)));
+            api.MapMethods("/agents", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleAgentsAsync(context, services)));
+            api.MapMethods("/worker-profiles", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleWorkerProfilesAsync(context, services)));
+            api.MapMethods("/goals", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleGoalsAsync(context, services)));
+        }
+        else
+        {
+            api.MapGet("/goals", async Task<IResult> (HttpContext context) => await Safe(() => HandleGoalsAsync(context, services)));
+            api.MapPost("/goals", () => ReadOnly());
+            api.MapPost("/system/run-build-test-cycle", () => ReadOnly());
+            api.MapPost("/system/stop-dashboard", () => ReadOnly());
+        }
+
+        api.MapGet("/goals/{goalId}", (string goalId) => Safe(() => GetGoalAsync(goalId, services)));
+
+        var goals = api.MapGroup("/goals/{goalId}");
+        goals.MapGet("/transcript", (string goalId) => Safe(() => GetGoalTranscriptAsync(goalId, services)));
+        goals.MapGet("/subscription-plan", (string goalId) => Safe(() => GetSubscriptionPlanAsync(goalId, services)));
+        goals.MapGet("/work-summary", (string goalId) => Safe(() => GetGoalWorkSummaryAsync(goalId, services)));
+        if (args.EnableOperatorControls)
+        {
+            goals.MapPost("/tasks", async Task<IResult> (HttpContext context, string goalId) => await Safe(() => AddTaskAsync(context, goalId, services)));
+            goals.MapPost("/ask", async Task<IResult> (HttpContext context, string goalId) => await Safe(() => AskGoalAsync(context, goalId, services)));
+            goals.MapMethods("/tasks/{taskId}/{operation}", GetAndPost, async Task<IResult> (HttpContext context, string goalId, string taskId, string operation) =>
+                await Safe(() => HandleTaskOperationAsync(context, goalId, taskId, operation, services)));
+            goals.MapPost("/delegate", (string goalId) => Safe(() => DelegateGoalAsync(goalId, services)));
+            goals.MapPost("/advance", (string goalId) => Safe(() => AdvanceGoalAsync(goalId, services)));
+            goals.MapPost("/advance-subscription", (string goalId) => Safe(() => AdvanceGoalWithSubscriptionsAsync(goalId, services)));
+            goals.MapPost("/advance-until-blocked", (string goalId) => Safe(() => AdvanceGoalUntilBlockedAsync(goalId, services)));
+            goals.MapPost("/advance-subscription-until-blocked", (string goalId) => Safe(() => AdvanceGoalWithSubscriptionsUntilBlockedAsync(goalId, services)));
+            goals.MapPost("/{operation}", async Task<IResult> (HttpContext context, string goalId, string operation) =>
+                await Safe(() => HandleGoalBatchOperationAsync(context, goalId, operation, services)));
+        }
+        else
+        {
+            goals.MapPost("/tasks", () => ReadOnly());
+            goals.MapPost("/ask", () => ReadOnly());
+            goals.MapGet("/tasks/{taskId}/{operation}", async Task<IResult> (HttpContext context, string goalId, string taskId, string operation) =>
+                await Safe(() => HandleTaskOperationAsync(context, goalId, taskId, operation, services)));
+            goals.MapPost("/tasks/{taskId}/{operation}", () => ReadOnly());
+            goals.MapPost("/delegate", () => ReadOnly());
+            goals.MapPost("/advance", () => ReadOnly());
+            goals.MapPost("/advance-subscription", () => ReadOnly());
+            goals.MapPost("/advance-until-blocked", () => ReadOnly());
+            goals.MapPost("/advance-subscription-until-blocked", () => ReadOnly());
+            goals.MapPost("/{operation}", () => ReadOnly());
+        }
+
+        api.MapGet("/monitor", async Task<IResult> (HttpContext context) => await Safe(() => GetMonitorAsync(context, services)));
+        api.MapGet("/acceptance", async Task<IResult> (HttpContext context) => await Safe(() => GetAcceptanceAsync(context, services)));
+        api.MapGet("/evidence", async Task<IResult> (HttpContext context) => await Safe(() => GetEvidenceAsync(context, services)));
+        api.MapGet("/stages", async Task<IResult> (HttpContext context) => await Safe(() => GetStagesAsync(context, services)));
+        api.MapGet("/gates", async Task<IResult> (HttpContext context) => await Safe(() => GetGatesAsync(context, services)));
+        api.MapGet("/verification-worklist", async Task<IResult> (HttpContext context) => await Safe(() => GetVerificationWorklistAsync(context, services)));
+        api.MapGet("/human-input-worklist", async Task<IResult> (HttpContext context) => await Safe(() => GetHumanInputWorklistAsync(context, services)));
+        api.MapGet("/next", async Task<IResult> (HttpContext context) => await Safe(() => GetNextActionsAsync(context, services)));
+        api.MapGet("/source-survey", async Task<IResult> (HttpContext context) => await Safe(() => GetSourceSurvey(context, services)));
+        api.MapGet("/pending-input", async Task<IResult> (HttpContext context) => await Safe(() => GetPendingInputAsync(context, services)));
+        if (args.EnableOperatorControls)
+        {
+            api.MapPost("/input/{inputId}/answer", async Task<IResult> (HttpContext context, string inputId) =>
+                await Safe(() => AnswerHumanInputAsync(context, inputId, services)));
+        }
+        else
+        {
+            api.MapPost("/input/{inputId}/answer", () => ReadOnly());
+        }
+
+        api.MapGet("/tasks", async Task<IResult> (HttpContext context) => await Safe(() => QueryTasksAsync(context, services)));
+        api.MapGet("/task/{taskId}", async Task<IResult> (HttpContext context, string taskId) => await Safe(() => GetTaskAsync(context, taskId, services)));
+
+        app.MapFallback(() => Text("not found", "text/plain; charset=utf-8", StatusCodes.Status404NotFound));
+    }
+
+    public static OrchestratorHealthReport BuildHealthReport(DashboardEndpointServices services)
+    {
+        return OrchestratorHealthInspector.InspectCurrentEnvironment(
+            AgentCatalogStore.Load(services.AgentCatalogPath),
+            WorkerProfileStore.Load(services.WorkerProfilePath));
+    }
+
+    private static Task<AgentOrchestratorKernel> LoadAsync(DashboardEndpointServices services, CancellationToken cancellationToken = default) =>
+        services.State.LoadAsync(cancellationToken);
+
+    private static Task<IResult> MutateAsync(
+        DashboardEndpointServices services,
+        Func<AgentOrchestratorKernel, Task<IResult>> mutation,
+        CancellationToken cancellationToken = default) =>
+        services.State.MutateAsync(mutation, cancellationToken);
+
+    private static Task<IResult> MutateAsync(
+        DashboardEndpointServices services,
+        Func<AgentOrchestratorKernel, Func<Task>, Task<IResult>> mutation,
+        CancellationToken cancellationToken = default) =>
+        services.State.MutateAsync(mutation, cancellationToken);
+
+    private static Task<IResult> MutateIfChangedAsync(
+        DashboardEndpointServices services,
+        Func<AgentOrchestratorKernel, Task<(bool Changed, IResult Result)>> mutation,
+        CancellationToken cancellationToken = default) =>
+        services.State.MutateIfChangedAsync(mutation, cancellationToken);
+
+    private static Goal ResolveGoal(HttpRequest request, AgentOrchestratorKernel kernel)
+    {
+        return OrchestratorEntityResolver.ResolveGoal(
+            kernel,
+            OrchestratorEntityResolver.GetLatestGoal(kernel),
+            DashboardRequestParser.GetQueryValue(request, "goal"));
+    }
+
+    private static Goal ResolveGoal(AgentOrchestratorKernel kernel, string goalId)
+    {
+        return OrchestratorEntityResolver.ResolveGoal(kernel, OrchestratorEntityResolver.GetLatestGoal(kernel), goalId);
+    }
+
+    private static IResult Json(object payload, int statusCode = StatusCodes.Status200OK)
+    {
+        return Results.Json(payload, DashboardJson.Options(), statusCode: statusCode);
+    }
+
+    private static IResult Text(string content, string contentType, int statusCode = StatusCodes.Status200OK)
+    {
+        return Results.Text(content, contentType, statusCode: statusCode);
+    }
+
+    private static IResult ReadOnly()
+    {
+        return Text(
+            "dashboard read-only: simple hosted dashboard does not allow operator actions",
+            "text/plain; charset=utf-8",
+            StatusCodes.Status403Forbidden);
+    }
+
+    private static IResult NoStoreText(HttpContext context, string content, string contentType)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        return Text(content, contentType);
+    }
+
+    private static async Task<IResult> Safe(Func<Task<IResult>> handler)
+    {
+        try
+        {
+            return await handler();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return Text($"dashboard not found: {ex.Message}", "text/plain; charset=utf-8", StatusCodes.Status404NotFound);
+        }
+        catch (ArgumentException ex)
+        {
+            return Text($"dashboard invalid request: {ex.Message}", "text/plain; charset=utf-8", StatusCodes.Status400BadRequest);
+        }
+        catch (Exception ex)
+        {
+            return Text($"dashboard error: {ex.Message}", "text/plain; charset=utf-8", StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static Task<IResult> Safe(Func<IResult> handler) => Safe(() => Task.FromResult(handler()));
+
+    private static async Task<string> ReadRequestBodyAsync(HttpRequest request)
+    {
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        return await reader.ReadToEndAsync();
+    }
+}

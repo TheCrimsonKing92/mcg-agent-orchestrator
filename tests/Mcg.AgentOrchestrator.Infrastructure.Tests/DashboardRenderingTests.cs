@@ -1,0 +1,675 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+
+public sealed class DashboardRenderingTests
+{
+    [Xunit.Fact(DisplayName = "DashboardRenderer_renders_goal_tasks_and_attention")]
+    public void DashboardRendererRendersGoalTasksAndAttention()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render dashboard");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", DateTimeOffset.UtcNow));
+
+    var html = DashboardRenderer.Render(kernel);
+
+    Assert.Contains(html, text => text.Contains("Render dashboard", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Running dispatch", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("dotnet test", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Recommended next steps", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("execute-dispatch 3", StringComparison.Ordinal));
+    Assert.False(html.Contains("data-next-action=", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Goal completion", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Accepted: False", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Recorded proof", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Dispatch: 1", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Task readiness", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("In progress", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Verification status", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<th>Gate</th>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Not ready", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("complete the task before accepting this gate", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Verification to-do", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Complete the task before recording final verification", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>task 3</code>", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
+    public void DashboardRendererCanEmitAutoRefreshMetadata()
+{
+    var kernel = new AgentOrchestratorKernel();
+    kernel.CreateGoal("Watch dashboard");
+
+    var staticHtml = DashboardRenderer.Render(kernel);
+    var refreshingHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15));
+    var operatorRefreshingHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true));
+
+    Assert.False(staticHtml.Contains("http-equiv=\"refresh\"", StringComparison.Ordinal));
+    Assert.Contains(refreshingHtml, text => text.Contains("<meta http-equiv=\"refresh\" content=\"15\">", StringComparison.Ordinal));
+    Assert.Contains(refreshingHtml, text => text.Contains("Auto-refresh every 15 seconds", StringComparison.Ordinal));
+    Assert.False(operatorRefreshingHtml.Contains("http-equiv=\"refresh\"", StringComparison.Ordinal));
+    Assert.Contains(operatorRefreshingHtml, text => text.Contains("Auto-update every 15 seconds", StringComparison.Ordinal));
+    Assert.Contains(operatorRefreshingHtml, text => text.Contains("data-refresh-seconds=\"15\"", StringComparison.Ordinal));
+    Assert.Contains(operatorRefreshingHtml, text => text.Contains("href=\"/assets/dashboard.css\"", StringComparison.Ordinal));
+    Assert.Contains(operatorRefreshingHtml, text => text.Contains("src=\"/assets/dashboard.js\"", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_operator_controls")]
+    public void DashboardRendererCanEmitOperatorControls()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Operate from browser");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Should we use main?");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output ok", Environment.CurrentDirectory, DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(
+            1234,
+            "Write-Output ok",
+            Environment.CurrentDirectory,
+            "stdout.log",
+            "stderr.log",
+            "exit.txt",
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            false));
+
+    var health = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
+        AgentCatalog.Default(),
+        WorkerProfileCatalog.Default(),
+        _ => true);
+    var staticHtml = DashboardRenderer.Render(kernel);
+    var workspace = new DashboardWorkspaceContext(
+        @"C:\repo\.orchestrator",
+        @"C:\repo\.orchestrator\state.json",
+        @"C:\repo",
+        @"C:\repo\.orchestrator\prompts",
+        @"C:\repo\.orchestrator\logs",
+        @"C:\repo\.orchestrator\workers.json",
+        @"C:\repo\.orchestrator\agents.json",
+        12345,
+        @".\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open",
+        new DashboardProcessDiagnostic(
+            12345,
+            "Mcg.AgentOrchestrator.App",
+            @"C:\repo\artifacts\Mcg.AgentOrchestrator.App.exe",
+            [5087],
+            [
+                new DashboardSiblingProcessContext(
+                    67890,
+                    @"C:\repo\artifacts\Mcg.AgentOrchestrator.App.exe",
+                    DateTimeOffset.Parse("2026-06-04T12:00:01Z"),
+                    [5098],
+                    "Stop-Process -Id 67890",
+                    "same process name")
+            ],
+            "Detected 1 sibling dashboard app process(es). Stop only exact known PIDs after confirming they are stale."),
+        BuildTestRuns:
+        [
+            new DashboardBuildTestRunSummaryDto(
+                "20260604-161905",
+                DateTimeOffset.Parse("2026-06-04T16:19:05Z"),
+                true,
+                true,
+                true,
+                true,
+                "Passed",
+                @"C:\repo\.orchestrator\logs\dashboard-build-test-cycle-20260604-161905.ps1",
+                @"C:\repo\.orchestrator\logs\dashboard-build-test-cycle-20260604-161905.out.log",
+                @"C:\repo\.orchestrator\logs\dashboard-build-test-cycle-20260604-161905.err.log",
+                "Build succeeded.\nBuildSucceeded        : True\nTestSucceeded         : True",
+                string.Empty)
+        ]);
+    var continuation = new DashboardContinuationStatusDto(
+        goal.Id.Value,
+        true,
+        DateTimeOffset.Parse("2026-06-04T12:00:00Z"),
+        DateTimeOffset.Parse("2026-06-04T12:00:05Z"),
+        1,
+        "Background work is still running for task abcdef12; continue after it exits.",
+        null,
+        DateTimeOffset.Parse("2026-06-04T12:05:00Z"),
+        true);
+    var operatorHtml = DashboardRenderer.Render(
+        kernel,
+        new DashboardRenderOptions(
+            EnableOperatorControls: true,
+            HealthReport: health,
+            Workspace: workspace,
+            ContinuationWatches: [continuation]));
+
+    Assert.False(staticHtml.Contains("data-action=\"/api/goals\"", StringComparison.Ordinal));
+    Assert.False(staticHtml.Contains("Setup Doctor", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-action=\"/api/goals\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"href=\"/api/goals/{goal.Id.Value[..8]}\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Goal JSON", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<label for=\"new-goal\">Goal</label>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"workflow\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<option value=\"simple\">Simple task</option>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"autoHandoff\" value=\"false\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Automatically start subscription handoff", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Prototype workspace", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Execution directory", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains(@"C:\repo", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains(@"C:\repo\.orchestrator\workers.json", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Dashboard PID", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("12345", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Stop this known process before full build/test", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Prototype process diagnostic", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Detected 1 sibling dashboard app process", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("67890", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<code>5087</code>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<code>5098</code>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Stop-Process -Id 67890", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Open process diagnostic", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("href=\"/api/system/processes\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Build/test cleanup plan", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Open build/test cleanup plan", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("href=\"/api/system/build-test-cleanup\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-action-button=\"/api/system/run-build-test-cycle\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Run dashboard build/test cycle", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("POST /api/system/run-build-test-cycle", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Build/test run history", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("href=\"/api/system/build-test-runs\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("20260604-161905", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("BuildSucceeded        : True", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("TestSucceeded         : True", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("/api/system/build-test-runs/log?path=", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains(@".\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("dotnet build Mcg.AgentOrchestrator.sln --no-restore", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("dotnet test Mcg.AgentOrchestrator.sln --no-build", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Restart command", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains(@".\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-action=\"/api/system/stop-dashboard\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Stop dashboard for build/test", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Server continuation", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Open continuation summary", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("/api/continuations/summary", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Open continuation status", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("/api/continuations", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<th>Source</th>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Restored from durable store", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Next check", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("2026-06-04 12:05:00Z", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Background work is still running", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Open source survey", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("href=\"/api/source-survey\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Setup Doctor", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-next-action=\"RefreshRunningProcess\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-next-action=\"DelegatePendingTask\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("OPENAI_API_KEY is set.", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("local-echo", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("codex-cli", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<td>Optional</td>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<th>Patch</th>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Patch-capable", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Human decisions", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<th>Work item</th>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Task 3: Developer", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/human-input-worklist?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Source survey", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Low-noise repository map", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"answer {request.Id.Value[..8]} &lt;answer&gt;", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"id=\"input-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"href=\"#input-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-next-action=\"AnswerHumanInput\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("class=\"decision-question\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Recent task activity", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"<textarea id=\"answer-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Submit Answer", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("class=\"answer-choice-row\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"answer\" value=\"Yes\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"answer\" value=\"No\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"data-toggle-custom-answer=\"answer-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("aria-expanded=\"false\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("src=\"/assets/dashboard.js\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("/api/provider-smoke?target=all", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("/api/provider-smoke?target=openai", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-action=\"/api/agents\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-agent-config=\"true\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"executionPolicy\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"providerName\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<select name=\"modelName\" data-provider-options=\"apiModels\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("agentProviderOptions", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("summarizeResponse", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Server continuation is watching", StringComparison.Ordinal));
+    Assert.False(DashboardAssets.OperatorControlsScript.Contains("Auto-resume scheduled", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Stopped:", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Changed:", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Started build/test cycle PID", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Dashboard stop requested for PID", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Siblings:", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("window.__dashboardSubmitForm", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("window.__dashboardReady = true", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("data-action=\"/api/worker-profiles\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"commandTemplate\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/monitor?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Work summary", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Open compact JSON", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/work-summary", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/acceptance?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/evidence?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/stages?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/next?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/gates?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/verification-worklist?goal={goal.Id.Value[..8]}", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/transcript", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/subscription-plan", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/advance", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/advance-subscription", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/advance-until-blocked", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/advance-subscription-until-blocked", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Continue subscription handoff", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Continue safe actions", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/profile-dispatch-ready", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/subscription-dispatch-ready", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/start-subscription-ready", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/cancel-dispatches", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"data-action=\"/api/goals/{goal.Id.Value[..8]}/tasks\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"data-action=\"/api/goals/{goal.Id.Value[..8]}/ask\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<option>Developer</option>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"delegate\" value=\"false\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"verificationPlan\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Goal question", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/start-dispatches", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/input/{request.Id.Value[..8]}/answer", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/brief", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/timeline", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/gate", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/verification-plan", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/verifications", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/run", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Current next action", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Background process is running: pid 1234", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/refresh", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Advanced task controls", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/retry", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("Retry note", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("What changed or what should be tried next?", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/profile-dispatch", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/subscription-dispatch", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"plan\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("value=\"codex-cli\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/progress", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"message\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/ask", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("name=\"question\"", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/verify", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("dotnet test --filter", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("AgentCatalog|WorkerProfile", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("PowerShell: quote filters that contain |", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/verify-manual", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains("<option value=\"false\">Failed</option>", StringComparison.Ordinal));
+    Assert.Contains(operatorHtml, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/3/logs", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardProcessInspector_filters_current_process_and_executable_siblings")]
+    public void DashboardProcessInspectorFiltersCurrentProcessAndExecutableSiblings()
+{
+    DashboardProcessSnapshot[] processes =
+    [
+        new DashboardProcessSnapshot(10, @"C:\repo\Mcg.AgentOrchestrator.App.exe", DateTimeOffset.Parse("2026-06-04T12:00:00Z"), "current"),
+        new DashboardProcessSnapshot(11, @"C:\repo\Mcg.AgentOrchestrator.App.exe", DateTimeOffset.Parse("2026-06-04T12:00:01Z"), "same process name"),
+        new DashboardProcessSnapshot(12, @"D:\other\Mcg.AgentOrchestrator.App.exe", DateTimeOffset.Parse("2026-06-04T12:00:02Z"), "different app")
+    ];
+    var listeningPortsByPid = new Dictionary<int, IReadOnlyList<int>>
+    {
+        [10] = new List<int> { 5087 },
+        [11] = new List<int> { 5098 },
+        [12] = new List<int> { 5100 }
+    };
+
+    var diagnostic = DashboardProcessInspector.Build(
+        "Mcg.AgentOrchestrator.App",
+        10,
+        @"C:\repo\Mcg.AgentOrchestrator.App.exe",
+        processes,
+        listeningPortsByPid);
+
+    Assert.Equal(10, diagnostic.CurrentProcessId);
+    Assert.Equal(5087, diagnostic.CurrentListeningPorts.Single());
+    Assert.Equal(1, diagnostic.SiblingProcesses.Count);
+    Assert.Equal(11, diagnostic.SiblingProcesses[0].ProcessId);
+    Assert.Equal(5098, diagnostic.SiblingProcesses[0].ListeningPorts.Single());
+    Assert.Equal("Stop-Process -Id 11", diagnostic.SiblingProcesses[0].SafeStopCommand);
+    Assert.Contains(diagnostic.Message, text => text.Contains("Detected 1 sibling", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardProcessInspector_parses_netstat_listening_ports_by_pid")]
+    public void DashboardProcessInspectorParsesNetstatListeningPortsByPid()
+{
+    const string netstat = """
+
+      Proto  Local Address          Foreign Address        State           PID
+      TCP    0.0.0.0:5087           0.0.0.0:0              LISTENING       12345
+      TCP    [::]:5087              [::]:0                 LISTENING       12345
+      TCP    127.0.0.1:5098         0.0.0.0:0              LISTENING       67890
+      TCP    127.0.0.1:60123        127.0.0.1:443          ESTABLISHED     67890
+      UDP    0.0.0.0:5353           *:*                                    111
+      """;
+
+    var parsed = DashboardProcessInspector.ParseNetstatListeningPorts(netstat);
+
+    Assert.Equal(2, parsed.Count);
+    Assert.Equal(5087, parsed[12345].Single());
+    Assert.Equal(5098, parsed[67890].Single());
+}
+    [Xunit.Fact(DisplayName = "DashboardRenderer_highlights_completed_goals")]
+    public void DashboardRendererHighlightsCompletedGoals()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Done from dashboard",
+        [new TaskSpec(TaskId.New(), "Finish the simple goal", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(
+        goal.Id,
+        task.Id,
+        ManualVerificationRecorder.Create(true, "Looks complete.", Environment.CurrentDirectory, DateTimeOffset.UtcNow));
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+
+    Assert.Contains(html, text => text.Contains("completion-banner", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Goal complete", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("manual-only verification", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("No execution, dispatch, or process proof is recorded", StringComparison.Ordinal));
+    Assert.False(html.Contains("No operator action is required.", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("This task is complete and has passing verification evidence.", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "DashboardNextActionControls_builds_direct_controls_for_safe_actions")]
+    public void DashboardNextActionControlsBuildsDirectControlsForSafeActions()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Map direct next actions");
+    var task = goal.Tasks[2];
+    var goalPrefix = goal.Id.Value[..8];
+
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
+        "Run task",
+        "POST",
+        $"/api/goals/{goalPrefix}/tasks/3/run");
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.RefreshRunningProcess, task.Id, null, "Refresh it"),
+        "Refresh process",
+        "POST",
+        $"/api/goals/{goalPrefix}/tasks/3/refresh");
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.ExecuteRecordedDispatch, task.Id, null, "Start it"),
+        "Start prepared work",
+        "POST",
+        $"/api/goals/{goalPrefix}/tasks/3/start");
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.DelegatePendingTask, null, null, "Delegate"),
+        "Assign tasks",
+        "POST",
+        $"/api/goals/{goalPrefix}/delegate");
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.InspectFailedTask, task.Id, null, "Inspect"),
+        "Inspect task",
+        "GET",
+        $"/api/task/3?goal={goalPrefix}");
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.FixFailedVerification, task.Id, null, "Fix verification"),
+        "Verification records",
+        "GET",
+        $"/api/goals/{goalPrefix}/tasks/3/verifications");
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.MonitorGoal, null, null, "Monitor"),
+        "Monitor goal",
+        "GET",
+        $"/api/monitor?goal={goalPrefix}");
+
+    Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify")));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_prepared_dispatch_as_primary_task_action")]
+    public void DashboardRendererSurfacesPreparedDispatchAsPrimaryTaskAction()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Operate a prepared dispatch");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", DateTimeOffset.UtcNow));
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var taskNumber = goal.Tasks.Select((candidate, index) => (candidate, index))
+        .Single(item => item.candidate.Id == task.Id)
+        .index + 1;
+
+    Assert.Contains(html, text => text.Contains("Prepared handoff for codex-cli.", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>codex exec prompt.md</code>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/start\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Start prepared work", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"href=\"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/brief\"", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_makes_advanced_process_controls_state_aware")]
+    public void DashboardRendererMakesAdvancedProcessControlsStateAware()
+{
+    var now = DateTimeOffset.UtcNow;
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Render state-aware process controls",
+        [
+            new TaskSpec(TaskId.New(), "Prepared dispatch", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Running process", AgentRole.Tester),
+            new TaskSpec(TaskId.New(), "No process", AgentRole.Reviewer)
+        ]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var prepared = goal.Tasks[0];
+    var running = goal.Tasks[1];
+    var noProcess = goal.Tasks[2];
+    kernel.RecordTaskDispatch(goal.Id, prepared.Id, new TaskDispatchRecord("local", "echo prepared", "C:\\repo", now));
+    kernel.RecordTaskDispatch(goal.Id, running.Id, new TaskDispatchRecord("local", "echo running", "C:\\repo", now));
+    kernel.RecordTaskProcessStarted(goal.Id, running.Id, new TaskProcessRecord(1234, "echo running", "C:\\repo", "out.log", "err.log", "exit.txt", now, null, null));
+    kernel.ReportTaskProgress(goal.Id, noProcess.Id, WorkTaskStatus.Running, "No process yet.");
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var goalPrefix = goal.Id.Value[..8];
+    var preparedControls = ExtractTaskControls(html, 1);
+    var runningControls = ExtractTaskControls(html, 2);
+    var noProcessControls = ExtractTaskControls(html, 3);
+
+    Assert.Contains(preparedControls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start\"", StringComparison.Ordinal));
+    Assert.False(preparedControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/refresh\"", StringComparison.Ordinal));
+    Assert.False(preparedControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/cancel\"", StringComparison.Ordinal));
+    Assert.Contains(preparedControls, text => text.Contains("Task has no background process to refresh.", StringComparison.Ordinal));
+    Assert.Contains(preparedControls, text => text.Contains("Task has no background process to cancel.", StringComparison.Ordinal));
+
+    Assert.False(runningControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/start\"", StringComparison.Ordinal));
+    Assert.Contains(runningControls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/refresh\"", StringComparison.Ordinal));
+    Assert.Contains(runningControls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/cancel\"", StringComparison.Ordinal));
+    Assert.Contains(runningControls, text => text.Contains("Task already has a running process pid=1234.", StringComparison.Ordinal));
+
+    Assert.False(noProcessControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/start\"", StringComparison.Ordinal));
+    Assert.False(noProcessControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/refresh\"", StringComparison.Ordinal));
+    Assert.False(noProcessControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/cancel\"", StringComparison.Ordinal));
+    Assert.Contains(noProcessControls, text => text.Contains("Task has no recorded dispatch.", StringComparison.Ordinal));
+    Assert.Contains(noProcessControls, text => text.Contains("Task has no background process to refresh.", StringComparison.Ordinal));
+    Assert.Contains(noProcessControls, text => text.Contains("Task has no background process to cancel.", StringComparison.Ordinal));
+}
+
+static void AssertControl(Goal goal, NextActionItem item, string label, string method, string url)
+{
+    var control = DashboardNextActionControls.Build(goal, item);
+
+    Assert.True(control is not null);
+    Assert.Equal(label, control!.Label);
+    Assert.Equal(method, control.Method);
+    Assert.Equal(url, control.Url);
+}
+
+static string ExtractTaskControls(string html, int taskNumber)
+{
+    var start = html.IndexOf($"<strong>Task {taskNumber} controls</strong>", StringComparison.Ordinal);
+    Assert.True(start >= 0);
+    var next = html.IndexOf($"<strong>Task {taskNumber + 1} controls</strong>", start + 1, StringComparison.Ordinal);
+    return next < 0 ? html[start..] : html[start..next];
+}
+    [Xunit.Fact(DisplayName = "DashboardRenderer_can_focus_an_older_goal_outside_recent_window")]
+    public void DashboardRendererCanFocusAnOlderGoalOutsideRecentWindow()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var focused = kernel.CreateGoal("Focused older goal");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(focused.Id, [agent]);
+
+    for (var index = 0; index < 12; index++)
+    {
+        kernel.CreateGoal($"Recent goal {index}");
+    }
+
+    var focusedPrefix = focused.Id.Value[..8];
+    var defaultHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var focusedHtml = DashboardRenderer.Render(
+        kernel,
+        new DashboardRenderOptions(
+            EnableOperatorControls: true,
+            FocusGoalPrefix: focusedPrefix));
+
+    Assert.False(defaultHtml.Contains($"data-action=\"/api/goals/{focusedPrefix}/tasks/1/complete-verify\"", StringComparison.Ordinal));
+    Assert.Contains(defaultHtml, text => text.Contains("Goal Archive", StringComparison.Ordinal));
+    Assert.Contains(defaultHtml, text => text.Contains("id=\"goal-archive-focus\"", StringComparison.Ordinal));
+    Assert.Contains(defaultHtml, text => text.Contains("list=\"goal-archive-options\"", StringComparison.Ordinal));
+    Assert.Contains(defaultHtml, text => text.Contains($"<option value=\"{focusedPrefix}\">Focused older goal</option>", StringComparison.Ordinal));
+    Assert.Contains(defaultHtml, text => text.Contains($"href=\"/?goal={focusedPrefix}\"", StringComparison.Ordinal));
+    Assert.Contains(focusedHtml, text => text.Contains("Focused older goal", StringComparison.Ordinal));
+    Assert.Contains(focusedHtml, text => text.Contains($"Focused goal filter: <code>{focusedPrefix}</code>", StringComparison.Ordinal));
+    Assert.Contains(focusedHtml, text => text.Contains($"value=\"{focusedPrefix}\"", StringComparison.Ordinal));
+    Assert.Contains(focusedHtml, text => text.Contains($"data-action=\"/api/goals/{focusedPrefix}/tasks/1/complete-verify\"", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_recoverable_subscription_limit_evidence")]
+    public void DashboardRendererSurfacesRecoverableSubscriptionLimitEvidence()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Show retry later");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var now = DateTimeOffset.UtcNow;
+    var retryTime = now.AddHours(1);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", now));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec",
+        "C:\\repo",
+        1,
+        string.Empty,
+        $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
+        now));
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+
+    Assert.Contains(html, text => text.Contains("Retry later", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("task Assigned", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Subscription retry queue", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Subscription handoff is paused", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Retry after", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Developer", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "DashboardRenderer_html_encodes_dynamic_content")]
+    public void DashboardRendererHtmlEncodesDynamicContent()
+{
+    var kernel = new AgentOrchestratorKernel();
+    kernel.CreateGoal("<script>alert(1)</script>");
+
+    var html = DashboardRenderer.Render(kernel);
+
+    Assert.Contains(html, text => text.Contains("&lt;script&gt;alert(1)&lt;/script&gt;", StringComparison.Ordinal));
+    Assert.False(html.Contains("<script>alert(1)</script>", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "GoalTranscriptRenderer_renders_status_actions_and_evidence")]
+    public void GoalTranscriptRendererRendersStatusActionsAndEvidence()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Export transcript");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("provider-smoke openai", "C:\\repo", 0, "OpenAI: ok", "", DateTimeOffset.UtcNow));
+    var testerTask = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+    kernel.RecordTaskVerification(goal.Id, testerTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, "", "failed", DateTimeOffset.UtcNow));
+
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+
+    Assert.Contains(transcript, text => text.Contains("# Goal", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Objective: Export transcript", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Recommended Next Steps", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Goal Completion", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Accepted: False", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Recorded Proof", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("dispatch: 1", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Task Readiness", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Ready for acceptance: False", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Verification Status", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Human Decisions", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Which branch?", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains($"Suggested command: answer {request.Id.Value[..8]} <answer>", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("## Verification To-Do", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Suggested command: task 1", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("retry 4 <note>", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("provider-smoke openai", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains($"Verification plan: {task.VerificationPlan}", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("OpenAI: ok", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Task timeline", StringComparison.Ordinal));
+
+    var readyKernel = new AgentOrchestratorKernel();
+    var readyGoal = readyKernel.CreateGoal("Ready transcript");
+    readyKernel.ActivateGoal(readyGoal.Id, AgentCatalog.Default().Agents);
+    var readyTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal);
+    Assert.Contains(readyTranscript, text => text.Contains("subscription-dispatch", StringComparison.Ordinal));
+}
+}

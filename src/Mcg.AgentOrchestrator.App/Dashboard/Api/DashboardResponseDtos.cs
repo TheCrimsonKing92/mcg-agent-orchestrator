@@ -1,0 +1,152 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
+
+internal sealed record AgentDto(
+    string Id,
+    string Name,
+    AgentRole Role,
+    string ProviderName,
+    string ModelName,
+    string? ReasoningEffort,
+    AgentStatus Status,
+    AgentExecutionPolicy ExecutionPolicy,
+    string? SubscriptionProfileName,
+    string? SubscriptionModelAlias,
+    string? SubscriptionReasoningEffort);
+
+internal sealed record WorkerProfileDto(
+    string Name,
+    string CommandTemplate,
+    string Executable,
+    bool IsResolvable,
+    bool IsEchoOnly,
+    bool IsPatchCapable,
+    bool IsOptional,
+    string Detail);
+
+internal sealed record SubscriptionPlanDto(
+    string GoalId,
+    string Objective,
+    GoalStatus Status,
+    int ReadyToPrepareCount,
+    int ResolvableProfileCount,
+    int RetryDeferredCount,
+    DateTimeOffset? NextSubscriptionRetryAfter,
+    IReadOnlyList<SubscriptionPlanItemDto> Items);
+
+internal sealed record SubscriptionPlanItemDto(
+    int TaskNumber,
+    string TaskId,
+    AgentRole Role,
+    WorkTaskStatus TaskStatus,
+    string Description,
+    string? AgentId,
+    string? AgentName,
+    string? ProviderName,
+    string? ModelName,
+    AgentExecutionPolicy? ExecutionPolicy,
+    string? ProfileName,
+    string? SubscriptionModelAlias,
+    bool ProfileExists,
+    bool ProfileIsResolvable,
+    bool ProfileIsEchoOnly,
+    bool ProfileIsPatchCapable,
+    bool CanPrepare,
+    string Detail,
+    DateTimeOffset? RetryAfter = null,
+    int? RetryDelaySeconds = null);
+
+internal sealed record ProviderSmokeReportDto(
+    string Target,
+    IReadOnlyList<ProviderSmokeResultDto> Results,
+    bool AnySucceeded,
+    bool AnyConfigured);
+
+internal sealed record ProviderSmokeResultDto(
+    string ProviderName,
+    string Status,
+    string? ModelName,
+    string Detail,
+    string? StopReason,
+    int? InputTokens,
+    int? OutputTokens,
+    string? ResponseText);
+
+internal sealed record DashboardStopResultDto(
+    int ProcessId,
+    IReadOnlyList<int> ListeningPorts,
+    IReadOnlyList<DashboardStopSiblingDto> SiblingProcesses,
+    string RestartCommand,
+    string Message);
+
+internal sealed record DashboardStopSiblingDto(
+    int ProcessId,
+    IReadOnlyList<int> ListeningPorts,
+    string SafeStopCommand);
+
+internal sealed record DashboardBuildTestCleanupDto(
+    int CurrentProcessId,
+    IReadOnlyList<int> CurrentListeningPorts,
+    string StopCurrentUrl,
+    string RunBuildTestCycleUrl,
+    IReadOnlyList<DashboardStopSiblingDto> SiblingProcesses,
+    string VerifyNoAppProcessesCommand,
+    string BuildCommand,
+    string TestCommand,
+    string RestartCommand,
+    string BuildTestCycleCommand,
+    IReadOnlyList<string> Checklist);
+
+internal sealed record DashboardBuildTestRunDto(
+    int ProcessId,
+    string Command,
+    string RunnerPath,
+    string OutputLogPath,
+    string ErrorLogPath,
+    string Message);
+
+public sealed record DashboardBuildTestRunSummaryDto(
+    string Stamp,
+    DateTimeOffset? StartedAt,
+    bool HasOutputLog,
+    bool HasErrorLog,
+    bool BuildSucceeded,
+    bool TestSucceeded,
+    string Status,
+    string RunnerPath,
+    string OutputLogPath,
+    string ErrorLogPath,
+    string OutputPreview,
+    string ErrorPreview);
+
+internal sealed record DashboardHostInfoDto(
+    string CommandName,
+    string BindUrl,
+    string BrowserUrl,
+    string DashboardUrl,
+    IReadOnlyList<string> HostedDashboardUrls,
+    string SourceSurveyUrl,
+    IReadOnlyList<string> HostedSourceSurveyUrls,
+    string HostedAccessNote,
+    int? AutoRefreshSeconds,
+    bool OpensBrowser,
+    bool OperatorControlsEnabled,
+    string RestartCommand);
+
+internal sealed record GoalSummaryDto(string Id, string Objective, GoalStatus Status, int TotalTasks, DateTimeOffset? LastEventAt);
+
+internal sealed record GoalDetailDto(GoalSummaryDto Goal, IReadOnlyList<TaskSummaryDto> Tasks, bool VerificationSatisfied);
+
+internal sealed record DelegationPlanDto(string GoalId, IReadOnlyList<TaskAssignmentDto> Assignments);
+
+internal sealed record TaskAssignmentDto(string TaskId, string AgentId, AgentRole Role);
+
+internal enum WorkerProfileImportMode
+{
+    Merge,
+    Replace
+}
+
+

@@ -1,0 +1,71 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+
+public sealed class AgentCatalogTests
+{
+    [Xunit.Fact(DisplayName = "AgentCatalog_default_contains_sdlc_roles")]
+    public void AgentCatalogDefaultContainsSdlcRoles()
+{
+    var catalog = AgentCatalog.Default();
+
+    Assert.Equal(5, catalog.Agents.Count);
+
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        var agent = catalog.GetRequired(role);
+        Assert.Equal("OpenAI", agent.Model.ProviderName);
+        Assert.Equal("gpt-5.5", agent.Model.ModelName);
+        Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
+        Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
+        Assert.Equal("gpt-5.5", agent.Subscription.ModelAlias);
+    }
+
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).Model.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Researcher).Model.ReasoningEffort);
+    Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).Model.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).Model.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).Model.ReasoningEffort);
+
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).Subscription!.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Researcher).Subscription!.ReasoningEffort);
+    Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).Subscription!.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).Subscription!.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).Subscription!.ReasoningEffort);
+}
+    [Xunit.Fact(DisplayName = "AgentCatalog_upsert_replaces_role")]
+    public void AgentCatalogUpsertReplacesRole()
+{
+    var replacement = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-test", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey));
+
+    var catalog = AgentCatalog.Default().UpsertRole(replacement);
+
+    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal("Anthropic developer", catalog.GetRequired(AgentRole.Developer).Name);
+    Assert.Equal("claude-test", catalog.GetRequired(AgentRole.Developer).Model.ModelName);
+}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_roundtrips_agents")]
+    public void AgentCatalogStoreRoundtripsAgents()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var catalog = AgentCatalog.Default().UpsertRole(new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-review", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey)));
+
+    AgentCatalogStore.Save(path, catalog);
+    var restored = AgentCatalogStore.Load(path);
+
+    Assert.Equal("OpenAI reviewer", restored.GetRequired(AgentRole.Reviewer).Name);
+    Assert.Equal("gpt-review", restored.GetRequired(AgentRole.Reviewer).Model.ModelName);
+}
+}
+
