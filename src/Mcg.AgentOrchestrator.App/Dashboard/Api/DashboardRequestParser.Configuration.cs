@@ -40,6 +40,7 @@ public static AgentSubmissionDto ParseAgentSubmission(string body)
         submission.ModelName.Trim(),
         string.IsNullOrWhiteSpace(submission.Name) ? null : submission.Name.Trim(),
         string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? null : submission.ReasoningEffort.Trim(),
+        submission.MaxOutputTokens,
         string.IsNullOrWhiteSpace(submission.ExecutionPolicy) ? null : submission.ExecutionPolicy.Trim(),
         string.IsNullOrWhiteSpace(submission.SubscriptionProfileName) ? null : submission.SubscriptionProfileName.Trim(),
         string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias) ? null : submission.SubscriptionModelAlias.Trim(),
@@ -68,7 +69,8 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             submission.ModelName,
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
             SubscriptionMode.ApiKey,
-            string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? null : submission.ReasoningEffort),
+            string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? null : submission.ReasoningEffort,
+            submission.MaxOutputTokens),
         ExecutionPolicy: executionPolicy,
         Subscription: subscription);
 }

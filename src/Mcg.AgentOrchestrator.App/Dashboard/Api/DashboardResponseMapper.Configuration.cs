@@ -14,6 +14,7 @@ public static AgentDto ToAgentDto(AgentDefinition agent)
         agent.Model.ProviderName,
         agent.Model.ModelName,
         agent.Model.ReasoningEffort,
+        agent.Model.MaxOutputTokens,
         agent.Status,
         agent.ExecutionPolicy,
         agent.Subscription?.WorkerProfileName,

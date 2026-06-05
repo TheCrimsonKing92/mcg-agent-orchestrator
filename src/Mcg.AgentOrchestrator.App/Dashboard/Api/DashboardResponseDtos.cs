@@ -10,6 +10,7 @@ internal sealed record AgentDto(
     string ProviderName,
     string ModelName,
     string? ReasoningEffort,
+    int? MaxOutputTokens,
     AgentStatus Status,
     AgentExecutionPolicy ExecutionPolicy,
     string? SubscriptionProfileName,

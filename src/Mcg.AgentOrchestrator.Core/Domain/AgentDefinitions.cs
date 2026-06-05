@@ -5,7 +5,8 @@ public sealed record ModelProfile(
     string ModelName,
     ModelCapability Capabilities,
     SubscriptionMode SubscriptionMode,
-    string? ReasoningEffort = null);
+    string? ReasoningEffort = null,
+    int? MaxOutputTokens = null);
 
 public sealed record SubscriptionLaunchProfile(
     string WorkerProfileName,

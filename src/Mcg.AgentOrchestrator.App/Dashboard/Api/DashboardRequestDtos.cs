@@ -15,6 +15,7 @@ internal sealed record AgentSubmissionDto(
     string ModelName,
     string? Name,
     string? ReasoningEffort = null,
+    int? MaxOutputTokens = null,
     string? ExecutionPolicy = null,
     string? SubscriptionProfileName = null,
     string? SubscriptionModelAlias = null,

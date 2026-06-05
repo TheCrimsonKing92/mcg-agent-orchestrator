@@ -402,7 +402,7 @@ public static partial class DashboardRenderer
             var subscription = string.IsNullOrWhiteSpace(agent.SubscriptionProfileName)
                 ? "<span class=\"meta\">none</span>"
                 : $"{Encode(agent.SubscriptionProfileName)}<br><span class=\"meta\">{Encode(agent.SubscriptionModelAlias ?? "default CLI model")}</span>";
-            html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span></td><td>{subscription}</td>");
+            html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span><br><span class=\"meta\">max tokens: {(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "1200")}</span></td><td>{subscription}</td>");
             html.AppendLine($"<td class=\"{(agent.IsValid ? "ok" : "bad")}\">{Encode(agent.Detail)}</td>");
             if (enableOperatorControls)
             {
@@ -477,6 +477,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<div class=\"field\"><label>Provider</label><select name=\"providerName\">");
         html.AppendLine(RenderProviderOption("OpenAI", provider));
         html.AppendLine(RenderProviderOption("Anthropic", provider));
+        html.AppendLine(RenderProviderOption("Ollama", provider));
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>API model</label><select name=\"modelName\" data-provider-options=\"apiModels\" required>");
         RenderProviderSelectOptions(html, provider, agent.ModelName, ApiModelOptions);
@@ -484,6 +485,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<div class=\"field\"><label>API reasoning</label><select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\">");
         RenderProviderSelectOptions(html, provider, agent.ReasoningEffort, ApiReasoningOptions);
         html.AppendLine("</select></div>");
+        html.AppendLine($"<div class=\"field\"><label>Max tokens</label><input type=\"number\" name=\"maxOutputTokens\" min=\"1\" placeholder=\"1200\" value=\"{(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
         html.AppendLine("<div class=\"field\"><label>Subscription profile</label><select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\">");
         RenderSubscriptionProfileOptions(html, provider, subscriptionProfile, workerProfiles);
         html.AppendLine("</select></div>");
