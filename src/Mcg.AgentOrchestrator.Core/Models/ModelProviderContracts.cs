@@ -2,7 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record ModelMessage(string Role, string Content);
 
-public sealed record ModelOptions(double Temperature = 0.2, int? MaxOutputTokens = null, string? ReasoningEffort = null);
+public sealed record ModelOptions(double Temperature = 0.2, int? MaxOutputTokens = null, string? ReasoningEffort = null, string? ModelName = null);
 
 public sealed record ModelRequest(string SystemPrompt, IReadOnlyList<ModelMessage> Messages, ModelOptions Options);
 

@@ -25,7 +25,7 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
     {
         var body = new
         {
-            model = _modelName,
+            model = string.IsNullOrWhiteSpace(request.Options.ModelName) ? _modelName : request.Options.ModelName,
             instructions = request.SystemPrompt,
             input = request.Messages.Select(message => new { role = message.Role, content = message.Content }).ToArray(),
             max_output_tokens = request.Options.MaxOutputTokens,
@@ -103,7 +103,7 @@ public sealed class AnthropicMessagesModelProvider : IModelProvider
     {
         var body = new
         {
-            model = _modelName,
+            model = string.IsNullOrWhiteSpace(request.Options.ModelName) ? _modelName : request.Options.ModelName,
             max_tokens = request.Options.MaxOutputTokens ?? 1200,
             system = request.SystemPrompt,
             messages = request.Messages.Select(message => new { role = NormalizeRole(message.Role), content = message.Content }).ToArray()
@@ -215,7 +215,7 @@ public sealed class ChatCompletionsModelProvider : IModelProvider
 
         var body = new
         {
-            model = _modelName,
+            model = string.IsNullOrWhiteSpace(request.Options.ModelName) ? _modelName : request.Options.ModelName,
             messages,
             stream = false,
             temperature = request.Options.Temperature,

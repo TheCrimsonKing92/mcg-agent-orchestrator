@@ -5,8 +5,9 @@ var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_RE
 var workspace = OrchestratorWorkspace.ForDirectory(
     Environment.CurrentDirectory,
     string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory);
-var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
+var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
+var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 
 if (args.Length > 0 && args[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))

@@ -40,19 +40,39 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAi("high"), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex("high"))
         ]);
     }
+
+    public static AgentCatalog OllamaDefault()
+    {
+        static ModelProfile Qwen3(int maxOutputTokens) =>
+            new("Ollama", "qwen3:8b", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.LocalBridge, MaxOutputTokens: maxOutputTokens);
+
+        static ModelProfile Coder(int maxOutputTokens) =>
+            new("Ollama", "qwen2.5-coder:7b", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.LocalBridge, MaxOutputTokens: maxOutputTokens);
+
+        return new AgentCatalog(
+        [
+            new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Qwen3(8192)),
+            new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Qwen3(8192)),
+            new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(2048)),
+            new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Qwen3(8192)),
+            new(new AgentId("ollama-reviewer"), "Ollama reviewer", AgentRole.Reviewer, Qwen3(8192))
+        ]);
+    }
 }
 
 public static class AgentCatalogStore
 {
-    public static AgentCatalog Load(string path)
+    public static AgentCatalog Load(string path, AgentCatalog? fallback = null)
     {
+        var defaultCatalog = fallback ?? AgentCatalog.Default();
+
         if (!File.Exists(path))
         {
-            return AgentCatalog.Default();
+            return defaultCatalog;
         }
 
         var catalog = JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), JsonOptions());
-        return catalog is null || catalog.Agents.Count == 0 ? AgentCatalog.Default() : catalog;
+        return catalog is null || catalog.Agents.Count == 0 ? defaultCatalog : catalog;
     }
 
     public static void Save(string path, AgentCatalog catalog)

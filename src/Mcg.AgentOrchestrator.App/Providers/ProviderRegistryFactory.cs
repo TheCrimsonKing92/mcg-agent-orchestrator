@@ -29,6 +29,9 @@ internal static class ProviderRegistryFactory
         return new InMemoryModelProviderRegistry(providers);
     }
 
+    public static bool IsOllamaReachable() =>
+        IsOllamaReachable(Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434");
+
     private static bool IsOllamaReachable(string baseUrl)
     {
         try

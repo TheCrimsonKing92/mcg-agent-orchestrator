@@ -105,7 +105,7 @@ public sealed class AgentTaskRunner
         return new ModelRequest(
             systemPrompt,
             [new ModelMessage("user", userPrompt)],
-            new ModelOptions(Temperature: 0.2, MaxOutputTokens: agent.Model.MaxOutputTokens ?? 1200, ReasoningEffort: agent.Model.ReasoningEffort));
+            new ModelOptions(Temperature: 0.2, MaxOutputTokens: agent.Model.MaxOutputTokens ?? 1200, ReasoningEffort: agent.Model.ReasoningEffort, ModelName: agent.Model.ModelName));
     }
 
     private static string TrimForTimeline(string value)
