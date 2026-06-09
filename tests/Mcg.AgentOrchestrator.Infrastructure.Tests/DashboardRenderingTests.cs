@@ -684,7 +684,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/gate", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/verification-plan", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/verifications", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/run", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Current next action", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Background process is running: pid 1234", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/2/refresh", StringComparison.Ordinal));
@@ -818,20 +818,20 @@ public sealed class DashboardRenderingTests
         new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
         "Run task",
         "POST",
-        $"/api/goals/{goalPrefix}/tasks/3/run");
+        $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true");
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
         "Prepare subscription handoff",
         "POST",
-        $"/api/goals/{goalPrefix}/tasks/3/run",
+        $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true",
         [Validation(task.RequiredRole, AgentExecutionPolicy.PreferSubscription)]);
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
         "Prepare subscription handoff",
         "POST",
-        $"/api/goals/{goalPrefix}/tasks/3/run",
+        $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true",
         [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)]);
     AssertControl(
         goal,
@@ -912,14 +912,14 @@ public sealed class DashboardRenderingTests
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
 
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
-    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/api-run\"", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run\">Explicit API run</button>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run\">Run task</button>", StringComparison.Ordinal));
-    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run\"", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
-    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/api-run", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run?confirmTaskRun=true\">Explicit API run</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true\">Run task</button>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 3</code>", StringComparison.Ordinal));

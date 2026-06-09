@@ -386,7 +386,8 @@ The dashboard host also exposes local JSON endpoints for scripted monitoring and
 - `POST /api/goals/<goal-id-prefix>/start-subscription-ready?confirmBatchStart=true`; the response includes provider-selected `Dispatches`, `ProcessPlan` ready/skipped reasons, and `Processes` for started tasks
 - `POST /api/goals/<goal-id-prefix>/start-dispatches?confirmBatchStart=true`; the response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
 - `POST /api/goals/<goal-id-prefix>/refresh-dispatches`; the response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/run`
+- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/run?confirmTaskRun=true`
+- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/api-run?confirmTaskRun=true`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/retry` with either a raw note body or JSON like `{ "message": "Retry after failed verification" }`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/dispatch` with JSON like `{ "workerName": "local", "command": "Write-Output ok" }`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/profile-dispatch` with either a raw profile name body or JSON like `{ "profileName": "codex-cli" }`

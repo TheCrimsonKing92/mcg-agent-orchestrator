@@ -18,7 +18,7 @@ public static class DashboardNextActionControls
         return item.Kind switch
         {
             NextActionKind.RunAssignedTask when taskNumber is not null =>
-                new DashboardNextActionControl(GetRunActionLabel(goal, item.TaskId, agents), "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/run"),
+                new DashboardNextActionControl(GetRunActionLabel(goal, item.TaskId, agents), "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/run?confirmTaskRun=true"),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>

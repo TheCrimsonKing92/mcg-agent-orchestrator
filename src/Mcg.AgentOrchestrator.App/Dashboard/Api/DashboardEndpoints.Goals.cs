@@ -168,6 +168,12 @@ internal static partial class DashboardEndpoints
 
         var body = await ReadRequestBodyAsync(context.Request);
         var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var confirmation = RequireTaskRunConfirmation(context, operation);
+        if (confirmation is not null)
+        {
+            return confirmation;
+        }
+
         return await MutateAsync(
             services,
             async current =>
@@ -327,6 +333,24 @@ internal static partial class DashboardEndpoints
             ? null
             : Text(
                 "dashboard invalid request: subscription advance requires confirmSubscriptionAdvance=true because it can prepare or start worker processes.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
+    }
+
+    private static IResult? RequireTaskRunConfirmation(HttpContext context, string operation)
+    {
+        if (!operation.Equals("run", StringComparison.OrdinalIgnoreCase) &&
+            !operation.Equals("api-run", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var confirmed = context.Request.Query.TryGetValue("confirmTaskRun", out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+        return confirmed
+            ? null
+            : Text(
+                "dashboard invalid request: task run operations require confirmTaskRun=true because they can invoke model-backed work.",
                 "text/plain; charset=utf-8",
                 StatusCodes.Status400BadRequest);
     }
