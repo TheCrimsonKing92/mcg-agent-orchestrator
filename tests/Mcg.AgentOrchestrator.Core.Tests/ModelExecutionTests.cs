@@ -148,6 +148,29 @@ public sealed class ModelExecutionTests
     Assert.Contains(openAi.LastRequest.Messages, message => message.Content.Contains("Challenge generic summaries", StringComparison.Ordinal));
     Assert.Equal("high", openAi.LastRequest.Options.ReasoningEffort);
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_timeline_messages_in_prompt")]
+    public async Task ExecuteAssignedTaskTrimsNoisyTimelineMessagesInPrompt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Trim noisy API prompt timeline");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var noisyMessage = $"api-event-start {new string('z', 900)} api-event-tail";
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, noisyMessage);
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run focused tests.");
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("api-event-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("api-event-tail", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains(new string('z', 900), StringComparison.Ordinal));
+}
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_complex_model_only_for_complex_tasks")]
     public async Task ExecuteAssignedTaskUsesComplexModelOnlyForComplexTasks()

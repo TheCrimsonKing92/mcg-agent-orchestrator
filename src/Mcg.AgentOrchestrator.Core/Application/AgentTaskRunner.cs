@@ -113,7 +113,7 @@ public sealed class AgentTaskRunner
 
         var timeline = string.Join(
             Environment.NewLine,
-            goal.Timeline.TakeLast(12).Select(evt => $"- {evt.Kind}: {evt.Message}"));
+            goal.Timeline.TakeLast(12).Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false)));
 
         var userPrompt =
             $"Goal: {goal.Objective}{Environment.NewLine}" +

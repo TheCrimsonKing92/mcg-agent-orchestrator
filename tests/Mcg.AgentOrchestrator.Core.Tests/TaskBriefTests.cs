@@ -77,6 +77,25 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains(new string('b', 1600), StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('c', 1600), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_timeline_messages")]
+    public void BuildTaskBriefTrimsNoisyTimelineMessages()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Trim noisy timeline");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var noisyMessage = $"event-start {new string('x', 900)} event-tail";
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, noisyMessage);
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run focused tests.");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("event-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("event-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('x', 900), StringComparison.Ordinal));
+}
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {
