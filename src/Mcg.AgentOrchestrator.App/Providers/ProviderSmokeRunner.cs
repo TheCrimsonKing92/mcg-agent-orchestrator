@@ -101,8 +101,20 @@ public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target, F
         "openai" => ["OpenAI"],
         "anthropic" => ["Anthropic"],
         "ollama" => ["Ollama"],
-        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [task-number]; omit the target to prefer local Ollama when reachable; use provider-smoke all --confirm-all only for deliberate broad checks.")
+        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]; omit the target to prefer local Ollama when reachable; use provider-smoke all --confirm-all only for deliberate broad checks.")
     };
+}
+
+public static bool RequiresPaidConfirmation(string target, Func<bool>? isOllamaReachable = null)
+{
+    return ResolveProviderSmokeTargets(target, isOllamaReachable)
+        .Any(IsPaidProviderName);
+}
+
+public static bool IsPaidProviderName(string providerName)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
 }
 
 private static IReadOnlyList<string> ResolveDefaultProviderSmokeTargets(Func<bool> isOllamaReachable)

@@ -78,6 +78,8 @@ public sealed class DashboardHostTests
         var processDiagnostic = await client.GetStringAsync(new Uri(new Uri(url), "api/system/processes"));
         var cleanupPlan = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-cleanup"));
         var buildTestRuns = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-runs"));
+        using var paidSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=openai"));
+        var paidSmokeGet = await paidSmokeGetResponse.Content.ReadAsStringAsync();
         using var broadSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=all"));
         var broadSmokeGet = await broadSmokeGetResponse.Content.ReadAsStringAsync();
         using var broadSmokePostResponse = await client.PostAsync(
@@ -165,6 +167,8 @@ public sealed class DashboardHostTests
             Assert.Contains(cleanupPlan, text => text.Contains("Invoke-DashboardBuildTestCycle.ps1", StringComparison.Ordinal));
         }
         Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(buildTestRuns).RootElement.ValueKind);
+        Assert.Equal(HttpStatusCode.BadRequest, paidSmokeGetResponse.StatusCode);
+        Assert.Contains(paidSmokeGet, text => text.Contains("confirmPaidSmoke=true", StringComparison.Ordinal));
         Assert.Equal(HttpStatusCode.BadRequest, broadSmokeGetResponse.StatusCode);
         Assert.Contains(broadSmokeGet, text => text.Contains("broad paid smoke tests are deliberate", StringComparison.Ordinal));
         Assert.Equal(HttpStatusCode.BadRequest, broadSmokePostResponse.StatusCode);

@@ -16,17 +16,24 @@ private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<strin
         case "provider-smoke":
             var smokeArgs = parts.Skip(1)
                 .Where(part => !part.Equals("--confirm-all", StringComparison.OrdinalIgnoreCase))
+                .Where(part => !part.Equals("--confirm-paid-smoke", StringComparison.OrdinalIgnoreCase))
                 .ToList();
             var confirmAllSmoke = parts.Any(part => part.Equals("--confirm-all", StringComparison.OrdinalIgnoreCase));
+            var confirmPaidSmoke = parts.Any(part => part.Equals("--confirm-paid-smoke", StringComparison.OrdinalIgnoreCase));
             if (smokeArgs.Count > 2)
             {
-                throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [task-number], or provider-smoke all --confirm-all [task-number].");
+                throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], or provider-smoke all --confirm-all [task-number].");
             }
 
             var smokeTarget = smokeArgs.Count > 0 ? smokeArgs[0] : ProviderSmokeRunner.DefaultTarget;
             if (smokeTarget.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmAllSmoke)
             {
                 throw new InvalidOperationException("provider-smoke all requires --confirm-all because broad paid smoke tests are deliberate.");
+            }
+
+            if (ProviderSmokeRunner.RequiresPaidConfirmation(smokeTarget) && !confirmAllSmoke && !confirmPaidSmoke)
+            {
+                throw new InvalidOperationException("Paid provider smoke requires --confirm-paid-smoke because it can make a live billable request.");
             }
 
             TaskSpec? smokeTask = null;

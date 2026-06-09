@@ -371,6 +371,16 @@ public sealed class DashboardRenderingTests
 
     Assert.Contains(ex.Message, text => text.Contains("confirmAutoHandoff=true", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_confirmation_for_paid_provider_smoke")]
+    public void DashboardRequestParserRequiresConfirmationForPaidProviderSmoke()
+{
+    var ex = Assert.Throws<ArgumentException>(() =>
+        DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"openai\"}"));
+
+    Xunit.Assert.Contains("confirmPaidSmoke=true", ex.Message);
+    Assert.Equal("ollama", DashboardRequestParser.ParseProviderSmokeSubmission("ollama"));
+    Assert.Equal("openai", DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"openai\",\"confirmPaidSmoke\":true}"));
+}
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_confirmation_for_broad_provider_smoke")]
     public void DashboardRequestParserRequiresConfirmationForBroadProviderSmoke()
 {
@@ -611,9 +621,11 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<th>Patch</th>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("Patch-capable", StringComparison.Ordinal));
     Assert.False(configHtml.Contains("Smoke default provider", StringComparison.Ordinal));
-    Assert.False(configHtml.Contains("href=\"/api/provider-smoke\"", StringComparison.Ordinal));
+    Assert.False(configHtml.Contains("/api/provider-smoke?target=openai", StringComparison.Ordinal));
     Assert.False(configHtml.Contains("/api/provider-smoke?target=all", StringComparison.Ordinal));
-    Assert.Contains(configHtml, text => text.Contains("/api/provider-smoke?target=openai", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/provider-smoke\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("name=\"target\" value=\"openai\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("name=\"confirmPaidSmoke\" value=\"true\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/agents\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("data-agent-config=\"true\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"executionPolicy\"", StringComparison.Ordinal));

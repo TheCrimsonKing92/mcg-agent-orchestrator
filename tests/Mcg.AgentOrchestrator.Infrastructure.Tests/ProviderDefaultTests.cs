@@ -47,6 +47,17 @@ public sealed class ProviderDefaultTests
         Assert.Equal("OpenAI", paidFallbackTargets.Single());
     }
 
+    [Xunit.Fact(DisplayName = "Provider_smoke_identifies_paid_targets_that_need_confirmation")]
+    public void ProviderSmokeIdentifiesPaidTargetsThatNeedConfirmation()
+    {
+        Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation("ollama"));
+        Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget, () => true));
+        Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("openai"));
+        Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("anthropic"));
+        Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("all"));
+        Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget, () => false));
+    }
+
     [Xunit.Fact(DisplayName = "Scripted_provider_requests_configuration_instead_of_fake_completion")]
     public async Task ScriptedProviderRequestsConfigurationInsteadOfFakeCompletion()
     {

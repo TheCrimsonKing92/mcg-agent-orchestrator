@@ -167,6 +167,38 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("--confirm-all", ex!.Message);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_paid_provider_smoke_requires_confirm_flag")]
+    public void CliPaidProviderSmokeRequiresConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["provider-smoke", "openai"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-paid-smoke", ex!.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_retry_requires_message_without_clearing_evidence")]
     public void CliRetryRequiresMessageWithoutClearingEvidence()
     {

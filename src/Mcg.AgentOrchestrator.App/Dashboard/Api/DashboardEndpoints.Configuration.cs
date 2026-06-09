@@ -16,6 +16,11 @@ internal static partial class DashboardEndpoints
             throw new ArgumentException("Smoking all providers requires POST so broad paid smoke tests are deliberate.");
         }
 
+        if (!isPost && ProviderSmokeRunner.RequiresPaidConfirmation(target))
+        {
+            throw new ArgumentException("Paid provider smoke requires POST with confirmPaidSmoke=true because it can make a live billable request.");
+        }
+
         return Json(await ProviderSmokeRunner.RunProviderSmokeReportAsync(target));
     }
 

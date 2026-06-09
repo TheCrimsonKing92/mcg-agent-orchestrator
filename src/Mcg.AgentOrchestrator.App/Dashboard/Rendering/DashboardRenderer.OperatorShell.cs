@@ -388,7 +388,7 @@ public static partial class DashboardRenderer
         foreach (var provider in report.Providers)
         {
             var smoke = enableOperatorControls
-                ? RenderProviderSmokeLink(provider.ProviderName)
+                ? RenderProviderSmokeControl(provider.ProviderName)
                 : "<span class=\"meta\">operator only</span>";
             html.AppendLine($"<tr><td>{Encode(provider.ProviderName)}</td><td>{Encode(provider.Mode)}</td><td>{Encode(provider.Detail)}</td><td>{smoke}</td></tr>");
         }
@@ -450,13 +450,22 @@ public static partial class DashboardRenderer
         html.AppendLine("</section>");
     }
 
-    private static string RenderProviderSmokeLink(string providerName)
+    private static string RenderProviderSmokeControl(string providerName)
     {
         var smokeTarget = providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
             ? "openai"
             : providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
                 ? "anthropic"
                 : Uri.EscapeDataString(providerName.ToLowerInvariant());
+        if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "<form class=\"controls compact\" data-action=\"/api/provider-smoke\">" +
+                $"<input type=\"hidden\" name=\"target\" value=\"{Encode(smokeTarget)}\">" +
+                "<input type=\"hidden\" name=\"confirmPaidSmoke\" value=\"true\">" +
+                "<button type=\"submit\">Smoke</button></form>";
+        }
+
         return $"<a href=\"/api/provider-smoke?target={Encode(smokeTarget)}\" target=\"_blank\" rel=\"noopener\">Smoke</a>";
     }
 

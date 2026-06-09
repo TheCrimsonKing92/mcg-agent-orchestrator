@@ -208,26 +208,32 @@ public static string ParseProviderSmokeSubmission(string body)
     var trimmed = body.Trim();
     if (string.IsNullOrWhiteSpace(trimmed))
     {
+        RequireProviderSmokeConfirmation(ProviderSmokeRunner.DefaultTarget, confirmAll: false, confirmPaidSmoke: false);
         return ProviderSmokeRunner.DefaultTarget;
     }
 
     if (!trimmed.StartsWith("{", StringComparison.Ordinal))
     {
-        RequireBroadProviderSmokeConfirmation(trimmed, confirmed: false);
+        RequireProviderSmokeConfirmation(trimmed, confirmAll: false, confirmPaidSmoke: false);
         return trimmed;
     }
 
     var submission = JsonSerializer.Deserialize<ProviderSmokeSubmissionDto>(trimmed, DashboardJson.Options());
     var target = string.IsNullOrWhiteSpace(submission?.Target) ? ProviderSmokeRunner.DefaultTarget : submission.Target.Trim();
-    RequireBroadProviderSmokeConfirmation(target, submission?.ConfirmAll is true);
+    RequireProviderSmokeConfirmation(target, submission?.ConfirmAll is true, submission?.ConfirmPaidSmoke is true);
     return target;
 }
 
-private static void RequireBroadProviderSmokeConfirmation(string target, bool confirmed)
+internal static void RequireProviderSmokeConfirmation(string target, bool confirmAll, bool confirmPaidSmoke)
 {
-    if (target.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmed)
+    if (target.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmAll)
     {
         throw new ArgumentException("Smoking all providers requires confirmAll=true because broad paid smoke tests are deliberate.");
+    }
+
+    if (ProviderSmokeRunner.RequiresPaidConfirmation(target) && !confirmAll && !confirmPaidSmoke)
+    {
+        throw new ArgumentException("Paid provider smoke requires confirmPaidSmoke=true because it can make a live billable request.");
     }
 }
 }
