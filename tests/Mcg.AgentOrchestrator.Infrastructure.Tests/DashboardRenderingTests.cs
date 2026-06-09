@@ -553,6 +553,20 @@ public sealed class DashboardRenderingTests
         $"/api/goals/{goalPrefix}/tasks/3/run");
     AssertControl(
         goal,
+        new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
+        "Prepare subscription handoff",
+        "POST",
+        $"/api/goals/{goalPrefix}/tasks/3/run",
+        [Validation(task.RequiredRole, AgentExecutionPolicy.PreferSubscription)]);
+    AssertControl(
+        goal,
+        new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
+        "Run or prepare handoff",
+        "POST",
+        $"/api/goals/{goalPrefix}/tasks/3/run",
+        [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)]);
+    AssertControl(
+        goal,
         new NextActionItem(NextActionKind.RefreshRunningProcess, task.Id, null, "Refresh it"),
         "Refresh process",
         "POST",
@@ -589,6 +603,45 @@ public sealed class DashboardRenderingTests
         $"/api/monitor?goal={goalPrefix}");
 
     Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify")));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_labels_run_controls_by_execution_policy")]
+    public void DashboardRendererLabelsRunControlsByExecutionPolicy()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Render policy-aware run labels",
+        [
+            new TaskSpec(TaskId.New(), "Subscription preferred", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Flexible execution", AgentRole.Tester),
+            new TaskSpec(TaskId.New(), "API execution", AgentRole.Reviewer)
+        ]);
+    var agents = new[]
+    {
+        Agent(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription),
+        Agent(AgentRole.Tester, AgentExecutionPolicy.AnyAvailable),
+        Agent(AgentRole.Reviewer, AgentExecutionPolicy.ApiOnly)
+    };
+    kernel.ActivateGoal(goal.Id, agents);
+
+    var goalPrefix = goal.Id.Value[..8];
+    var health = new OrchestratorHealthReport(
+        [],
+        [
+            Validation(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription),
+            Validation(AgentRole.Tester, AgentExecutionPolicy.AnyAvailable),
+            Validation(AgentRole.Reviewer, AgentExecutionPolicy.ApiOnly)
+        ],
+        []);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix));
+
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run\">Run or prepare handoff</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run\">Run task</button>", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_prepared_dispatch_as_primary_task_action")]
@@ -670,14 +723,47 @@ public sealed class DashboardRenderingTests
     Assert.Contains(noProcessControls, text => text.Contains("Task has no background process to cancel.", StringComparison.Ordinal));
 }
 
-static void AssertControl(Goal goal, NextActionItem item, string label, string method, string url)
+static void AssertControl(
+    Goal goal,
+    NextActionItem item,
+    string label,
+    string method,
+    string url,
+    IReadOnlyList<AgentConfigurationValidation>? agents = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item);
+    var control = DashboardNextActionControls.Build(goal, item, agents);
 
     Assert.True(control is not null);
     Assert.Equal(label, control!.Label);
     Assert.Equal(method, control.Method);
     Assert.Equal(url, control.Url);
+}
+
+static AgentDefinition Agent(AgentRole role, AgentExecutionPolicy policy)
+{
+    return new AgentDefinition(
+        AgentId.New(),
+        role.ToString(),
+        role,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: policy);
+}
+
+static AgentConfigurationValidation Validation(AgentRole role, AgentExecutionPolicy policy)
+{
+    return new AgentConfigurationValidation(
+        role,
+        role.ToString(),
+        "OpenAI",
+        "test",
+        null,
+        null,
+        policy,
+        null,
+        null,
+        null,
+        true,
+        "valid");
 }
 
 static string ExtractTaskControls(string html, int taskNumber)

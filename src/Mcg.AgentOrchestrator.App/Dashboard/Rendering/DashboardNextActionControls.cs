@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
@@ -6,7 +7,10 @@ public sealed record DashboardNextActionControl(string Label, string Method, str
 
 public static class DashboardNextActionControls
 {
-    public static DashboardNextActionControl? Build(Goal goal, NextActionItem item)
+    public static DashboardNextActionControl? Build(
+        Goal goal,
+        NextActionItem item,
+        IReadOnlyList<AgentConfigurationValidation>? agents = null)
     {
         var goalPrefix = goal.Id.Value[..8];
         int? taskNumber = item.TaskId is null ? null : GetTaskDisplayNumber(goal, item.TaskId);
@@ -14,7 +18,7 @@ public static class DashboardNextActionControls
         return item.Kind switch
         {
             NextActionKind.RunAssignedTask when taskNumber is not null =>
-                new DashboardNextActionControl("Run task", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/run"),
+                new DashboardNextActionControl(GetRunActionLabel(goal, item.TaskId, agents), "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/run"),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
@@ -42,6 +46,36 @@ public static class DashboardNextActionControls
         }
 
         throw new KeyNotFoundException($"Task '{taskId}' was not found.");
+    }
+
+    public static string GetRunActionLabel(
+        Goal goal,
+        TaskId? taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+    {
+        var policy = ResolveTaskExecutionPolicy(goal, taskId, agents);
+        return policy switch
+        {
+            AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription => "Prepare subscription handoff",
+            AgentExecutionPolicy.AnyAvailable => "Run or prepare handoff",
+            _ => "Run task"
+        };
+    }
+
+    private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
+        Goal goal,
+        TaskId? taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents)
+    {
+        if (taskId is null || agents is null)
+        {
+            return null;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        return task is null
+            ? null
+            : agents.FirstOrDefault(agent => agent.Role == task.RequiredRole)?.ExecutionPolicy;
     }
 }
 

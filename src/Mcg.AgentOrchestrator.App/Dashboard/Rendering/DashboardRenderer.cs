@@ -274,7 +274,7 @@ public static partial class DashboardRenderer
                     html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
                     if (options.EnableOperatorControls)
                     {
-                        html.AppendLine($"<td>{RenderNextActionControl(goal, item)}</td>");
+                        html.AppendLine($"<td>{RenderNextActionControl(goal, item, options)}</td>");
                     }
                     html.AppendLine("</tr>");
                 }
@@ -405,7 +405,7 @@ public static partial class DashboardRenderer
             html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
             if (options.EnableOperatorControls)
             {
-                html.AppendLine($"<td>{RenderNextActionControl(goal, item)}</td>");
+                html.AppendLine($"<td>{RenderNextActionControl(goal, item, options)}</td>");
             }
             html.AppendLine("</tr>");
         }
@@ -541,7 +541,7 @@ public static partial class DashboardRenderer
             {
                 html.AppendLine("</tr>");
                 html.AppendLine("<tr class=\"task-action-row\">");
-                html.AppendLine($"<td colspan=\"7\">{RenderTaskActions(goal, task)}</td>");
+                html.AppendLine($"<td colspan=\"7\">{RenderTaskActions(goal, task, options)}</td>");
             }
             html.AppendLine("</tr>");
         }

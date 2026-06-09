@@ -102,9 +102,9 @@ public static partial class DashboardRenderer
         return $"<strong>{Encode(roleText)}</strong><br><span class=\"meta\">{Encode(statusText)}</span><br>{Encode(descriptionText)}";
     }
 
-    private static string RenderNextActionControl(Goal goal, NextActionItem item)
+    private static string RenderNextActionControl(Goal goal, NextActionItem item, DashboardRenderOptions options)
     {
-        var control = DashboardNextActionControls.Build(goal, item);
+        var control = DashboardNextActionControls.Build(goal, item, options.HealthReport?.Agents);
         if (control is null)
         {
             if (item.Kind == NextActionKind.AnswerHumanInput && item.HumanInputRequestId is not null)

@@ -172,7 +172,7 @@ public static partial class DashboardRenderer
         html.AppendLine("</form>");
     }
 
-    private static string RenderTaskActions(Goal goal, TaskSpec task)
+    private static string RenderTaskActions(Goal goal, TaskSpec task, DashboardRenderOptions options)
     {
         var goalPrefix = Encode(goal.Id.Value[..8]);
         var taskNumber = GetTaskDisplayNumber(goal, task.Id);
@@ -232,7 +232,7 @@ public static partial class DashboardRenderer
         html.AppendLine($"<a href=\"{prefix}/gate\" target=\"_blank\" rel=\"noreferrer\">Verification status</a>");
         html.AppendLine($"<a href=\"{prefix}/verification-plan\" target=\"_blank\" rel=\"noreferrer\">Verification plan</a>");
         html.AppendLine($"<a href=\"{prefix}/verifications\" target=\"_blank\" rel=\"noreferrer\">Verification records</a>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/run\">Run task</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/run\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents))}</button>");
         RenderAdvancedProcessAction(html, prefix, "start", "Start prepared work", GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "cancel", "Cancel process", GetCancelProcessReadiness(task));
@@ -370,5 +370,4 @@ public static partial class DashboardRenderer
         public static TaskActionReadiness NotReady(string reason) => new(false, reason);
     }
 }
-
 
