@@ -43,6 +43,40 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains("dotnet test", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("failed", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_model_and_verification_evidence")]
+    public async Task BuildTaskBriefTrimsNoisyModelAndVerificationEvidence()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Trim noisy brief evidence");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var modelOutput = $"model-start {new string('a', 1600)} model-tail";
+    var stdout = $"stdout-start {new string('b', 1600)} stdout-tail";
+    var stderr = $"stderr-start {new string('c', 1600)} stderr-tail";
+    var runner = new AgentTaskRunner(
+        kernel,
+        agents,
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", modelOutput)]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, stdout, stderr, clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("model-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("model-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("stdout-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("stdout-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("stderr-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("stderr-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('a', 1600), StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('b', 1600), StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('c', 1600), StringComparison.Ordinal));
+}
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {
