@@ -385,7 +385,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<h3>Providers</h3>");
         if (enableOperatorControls)
         {
-            html.AppendLine("<p class=\"meta\"><a href=\"/api/provider-smoke?target=all\" target=\"_blank\" rel=\"noopener\">Smoke all providers</a></p>");
+            html.AppendLine("<p class=\"meta\"><a href=\"/api/provider-smoke\" target=\"_blank\" rel=\"noopener\">Smoke default provider</a> &middot; <a href=\"/api/provider-smoke?target=all\" target=\"_blank\" rel=\"noopener\">Smoke all providers</a></p>");
         }
 
         html.AppendLine("<table><thead><tr><th>Provider</th><th>Mode</th><th>Detail</th><th>Smoke</th></tr></thead><tbody>");

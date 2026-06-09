@@ -14,7 +14,7 @@ private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<strin
             return false;
 
         case "provider-smoke":
-            var smokeTarget = parts.Count > 1 ? parts[1] : "all";
+            var smokeTarget = parts.Count > 1 ? parts[1] : ProviderSmokeRunner.DefaultTarget;
             TaskSpec? smokeTask = null;
             if (parts.Count > 2)
             {

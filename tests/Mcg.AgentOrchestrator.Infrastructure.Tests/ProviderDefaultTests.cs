@@ -35,4 +35,14 @@ public sealed class ProviderDefaultTests
             Environment.SetEnvironmentVariable("OPENAI_MODEL", previousModel);
         }
     }
+
+    [Xunit.Fact(DisplayName = "Provider_smoke_default_targets_one_provider")]
+    public void ProviderSmokeDefaultTargetsOneProvider()
+    {
+        var targets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget);
+
+        Assert.Equal("openai", ProviderSmokeRunner.DefaultTarget);
+        Assert.Equal(1, targets.Count);
+        Assert.Equal("OpenAI", targets.Single());
+    }
 }

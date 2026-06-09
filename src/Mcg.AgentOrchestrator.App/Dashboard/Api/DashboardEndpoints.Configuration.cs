@@ -9,7 +9,7 @@ internal static partial class DashboardEndpoints
     {
         var target = context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
             ? DashboardRequestParser.ParseProviderSmokeSubmission(await ReadRequestBodyAsync(context.Request))
-            : DashboardRequestParser.GetQueryValue(context.Request, "target") ?? "all";
+            : DashboardRequestParser.GetQueryValue(context.Request, "target") ?? ProviderSmokeRunner.DefaultTarget;
         return Json(await ProviderSmokeRunner.RunProviderSmokeReportAsync(target));
     }
 

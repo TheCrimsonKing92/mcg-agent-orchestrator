@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Providers;
 
 internal static class ProviderSmokeRunner
 {
+public const string DefaultTarget = "openai";
+
 public static string RunProviderSmoke(string target)
 {
     var tester = new ProviderSmokeTester();

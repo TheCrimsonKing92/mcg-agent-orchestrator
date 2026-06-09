@@ -136,7 +136,7 @@ public static string ParseProviderSmokeSubmission(string body)
     var trimmed = body.Trim();
     if (string.IsNullOrWhiteSpace(trimmed))
     {
-        return "all";
+        return ProviderSmokeRunner.DefaultTarget;
     }
 
     if (!trimmed.StartsWith("{", StringComparison.Ordinal))
@@ -145,6 +145,6 @@ public static string ParseProviderSmokeSubmission(string body)
     }
 
     var submission = JsonSerializer.Deserialize<ProviderSmokeSubmissionDto>(trimmed, DashboardJson.Options());
-    return string.IsNullOrWhiteSpace(submission?.Target) ? "all" : submission.Target.Trim();
+    return string.IsNullOrWhiteSpace(submission?.Target) ? ProviderSmokeRunner.DefaultTarget : submission.Target.Trim();
 }
 }
