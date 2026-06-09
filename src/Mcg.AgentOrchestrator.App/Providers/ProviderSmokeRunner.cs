@@ -117,7 +117,7 @@ public static bool TryCreateLiveProvider(string providerName, out IModelProvider
             return false;
         }
 
-        modelName = Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? "gpt-5.5";
+        modelName = Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? ProviderModelDefaults.OpenAi;
         provider = new OpenAiResponsesModelProvider(ProviderHttpClientFactory.CreateOpenAiClient(), key, modelName);
         return true;
     }
@@ -131,7 +131,7 @@ public static bool TryCreateLiveProvider(string providerName, out IModelProvider
             return false;
         }
 
-        modelName = Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? "claude-sonnet-4-20250514";
+        modelName = Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? ProviderModelDefaults.Anthropic;
         provider = new AnthropicMessagesModelProvider(ProviderHttpClientFactory.CreateAnthropicClient(), key, modelName);
         return true;
     }
@@ -139,7 +139,7 @@ public static bool TryCreateLiveProvider(string providerName, out IModelProvider
     if (providerName.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
     {
         var baseUrl = Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434";
-        modelName = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? "qwen3:8b";
+        modelName = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? ProviderModelDefaults.Ollama;
 
         try
         {

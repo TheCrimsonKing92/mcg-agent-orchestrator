@@ -13,14 +13,14 @@ internal static class ProviderRegistryFactory
 
         providers.Add(string.IsNullOrWhiteSpace(openAiKey)
             ? new ScriptedModelProvider("OpenAI")
-            : new OpenAiResponsesModelProvider(ProviderHttpClientFactory.CreateOpenAiClient(), openAiKey, Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? "gpt-5.5"));
+            : new OpenAiResponsesModelProvider(ProviderHttpClientFactory.CreateOpenAiClient(), openAiKey, Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? ProviderModelDefaults.OpenAi));
 
         providers.Add(string.IsNullOrWhiteSpace(anthropicKey)
             ? new ScriptedModelProvider("Anthropic")
-            : new AnthropicMessagesModelProvider(ProviderHttpClientFactory.CreateAnthropicClient(), anthropicKey, Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? "claude-sonnet-4-20250514"));
+            : new AnthropicMessagesModelProvider(ProviderHttpClientFactory.CreateAnthropicClient(), anthropicKey, Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? ProviderModelDefaults.Anthropic));
 
         var ollamaBaseUrl = Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434";
-        var ollamaModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? "qwen3:8b";
+        var ollamaModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? ProviderModelDefaults.Ollama;
 
         providers.Add(IsOllamaReachable(ollamaBaseUrl)
             ? new ChatCompletionsModelProvider(ProviderHttpClientFactory.CreateOllamaClient(ollamaBaseUrl), ollamaModel, "Ollama")
