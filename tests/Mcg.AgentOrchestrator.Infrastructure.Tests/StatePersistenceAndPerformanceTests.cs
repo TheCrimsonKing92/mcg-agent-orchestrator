@@ -63,6 +63,40 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
     Assert.Contains(repairedWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude -p", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_uses_local_agent_fallback_when_supplied")]
+    public void PrototypeWorkspaceSeederUsesLocalAgentFallbackWhenSupplied()
+{
+    var root = CreateTempDirectory();
+    var workspace = PrototypeWorkspaceSeeder.Create(root, AgentCatalog.OllamaDefault());
+    var agentPath = Path.Combine(workspace, ".orchestrator", "agents.json");
+
+    var restored = AgentCatalogStore.Load(agentPath);
+
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        var agent = restored.GetRequired(role);
+        Assert.Equal("Ollama", agent.Model.ProviderName);
+        Assert.Equal("qwen2.5-coder:7b", agent.Model.ModelName);
+        Assert.True(agent.Subscription is null);
+        Assert.Equal("qwen3:8b", agent.ComplexModel!.ModelName);
+    }
+}
+    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_repairs_paid_defaults_to_local_fallback")]
+    public void PrototypeWorkspaceSeederRepairsPaidDefaultsToLocalFallback()
+{
+    var root = CreateTempDirectory();
+    var workspace = PrototypeWorkspaceSeeder.Create(root);
+    var agentPath = Path.Combine(workspace, ".orchestrator", "agents.json");
+    AgentCatalogStore.Save(agentPath, AgentCatalog.Default());
+
+    PrototypeWorkspaceSeeder.Create(root, AgentCatalog.OllamaDefault());
+
+    var restored = AgentCatalogStore.Load(agentPath);
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        Assert.Equal("Ollama", restored.GetRequired(role).Model.ProviderName);
+    }
+}
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_preserves_custom_real_subscription_profiles")]
     public void PrototypeWorkspaceSeederPreservesCustomRealSubscriptionProfiles()
 {

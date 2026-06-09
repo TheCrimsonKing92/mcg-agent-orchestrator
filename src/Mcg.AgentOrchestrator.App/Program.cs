@@ -12,7 +12,7 @@ var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 
 if (args.Length > 0 && args[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
 {
-    return DashboardHost.RunPrototypeUi(CliArgumentParser.NormalizeArgs(args), providers);
+    return DashboardHost.RunPrototypeUi(CliArgumentParser.NormalizeArgs(args), providers, agentFallback);
 }
 
 if (args.Length > 0 && args[0].Equals("prototype", StringComparison.OrdinalIgnoreCase))

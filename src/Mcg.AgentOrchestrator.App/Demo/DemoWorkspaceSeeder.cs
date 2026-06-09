@@ -9,7 +9,7 @@ public static class PrototypeWorkspaceSeeder
     public const string PrototypeWorkspaceName = "workspace";
     private const long MaxRetainedPrototypeStateBytes = 5 * 1024 * 1024;
 
-    public static string Create(string rootDirectory)
+    public static string Create(string rootDirectory, AgentCatalog? defaultAgents = null)
     {
         var workspace = GetWorkspacePath(rootDirectory);
         var orchestratorDirectory = Path.Combine(workspace, ".orchestrator");
@@ -18,7 +18,7 @@ public static class PrototypeWorkspaceSeeder
         var statePath = Path.Combine(orchestratorDirectory, "state.json");
         var agentCatalogPath = Path.Combine(orchestratorDirectory, "agents.json");
         var workerProfilePath = Path.Combine(orchestratorDirectory, "workers.json");
-        var agents = LoadPrototypeAgents(agentCatalogPath).Agents;
+        var agents = LoadPrototypeAgents(agentCatalogPath, defaultAgents).Agents;
         var workerProfiles = LoadPrototypeWorkerProfiles(workerProfilePath);
         if (File.Exists(statePath) && !ShouldResetPrototypeState(statePath))
         {
@@ -61,10 +61,10 @@ public static class PrototypeWorkspaceSeeder
         return Path.Combine(rootDirectory, PrototypeDirectoryName, PrototypeWorkspaceName);
     }
 
-    private static AgentCatalog LoadPrototypeAgents(string agentCatalogPath)
+    private static AgentCatalog LoadPrototypeAgents(string agentCatalogPath, AgentCatalog? defaultAgents)
     {
-        var catalog = AgentCatalogStore.Load(agentCatalogPath);
-        var defaults = AgentCatalog.Default();
+        var catalog = AgentCatalogStore.Load(agentCatalogPath, defaultAgents);
+        var defaults = defaultAgents ?? AgentCatalog.Default();
 
         foreach (var role in Enum.GetValues<AgentRole>())
         {

@@ -13,10 +13,10 @@ internal sealed record DashboardUrlPrefixes(string BindUrlPrefix, string? Public
 
 internal static class DashboardHost
 {
-public static int RunPrototypeUi(IReadOnlyList<string> parts, IModelProviderRegistry providers)
+public static int RunPrototypeUi(IReadOnlyList<string> parts, IModelProviderRegistry providers, AgentCatalog? agentFallback = null)
 {
     var hostArgs = ParseDashboardHostArgs(parts, "prototype-ui", defaultOpenBrowser: true);
-    var prototypeWorkspacePath = PrototypeWorkspaceSeeder.Create(Environment.CurrentDirectory);
+    var prototypeWorkspacePath = PrototypeWorkspaceSeeder.Create(Environment.CurrentDirectory, agentFallback);
     var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
     var prototypeWorkspace = OrchestratorWorkspace.ForDirectory(
         prototypeWorkspacePath,
