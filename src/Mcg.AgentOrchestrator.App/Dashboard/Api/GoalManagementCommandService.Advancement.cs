@@ -31,7 +31,7 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     object? result;
     try
     {
-        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation);
+        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false);
     }
     catch (InvalidOperationException ex)
     {

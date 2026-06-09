@@ -85,6 +85,38 @@ public sealed class AdvanceLoopTests
     Assert.True(task.LastExecution is null);
     Assert.True(provider.LastRequest is null);
 }
+
+    [Xunit.Fact(DisplayName = "AdvanceGoalAsync_stops_before_api_only_model_execution")]
+    public async Task AdvanceGoalAsyncStopsBeforeApiOnlyModelExecution()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Implement API-backed task", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Advance should not spend API tokens", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("api-developer"),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var provider = new FakeSmokeProvider();
+
+    var result = await GoalManagementCommandService.AdvanceGoalAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([provider]),
+        workspace,
+        goal);
+
+    Assert.False(result.Executed);
+    Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.AutomationKind);
+    Assert.Contains(result.Message, text => text.Contains("stopped before API-backed execution", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastExecution is null);
+    Assert.True(provider.LastRequest is null);
+}
     [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_blocks_prefer_subscription_before_api_fallback")]
     public async Task AdvanceGoalUntilBlockedBlocksPreferSubscriptionBeforeApiFallback()
 {
