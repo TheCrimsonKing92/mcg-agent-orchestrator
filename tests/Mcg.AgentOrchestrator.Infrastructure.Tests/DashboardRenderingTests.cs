@@ -642,9 +642,11 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"1024\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"1200\"", StringComparison.Ordinal));
     AssertOpenAiModelOrderIsCostAware(configHtml);
     AssertOpenAiModelOrderIsCostAware(DashboardAssets.OperatorControlsScript);
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("maxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexMaxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexProviderName", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/worker-profiles\"", StringComparison.Ordinal));
@@ -1020,6 +1022,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("<option value=\"Ollama\" selected>Ollama</option>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<option value=\"qwen2.5-coder:7b\" selected>Qwen2.5 Coder 7B</option>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<option value=\"\" selected>None</option>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("max tokens: 8192", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"8192\" value=\"\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"8192\" value=\"8192\"", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Ollama: {", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("qwen2.5-coder:7b", StringComparison.Ordinal));

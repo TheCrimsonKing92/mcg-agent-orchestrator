@@ -76,7 +76,33 @@ public sealed class ProviderDefaultTests
         await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))
             .RunAsync(goal.Id, task.Id);
 
-        Assert.Equal(1200, provider.LastRequest!.Options.MaxOutputTokens);
+        Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, provider.LastRequest!.Options.MaxOutputTokens);
+    }
+
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_complex_paid_output_fallback_for_complex_tasks")]
+    public async Task AgentTaskRunnerUsesComplexPaidOutputFallbackForComplexTasks()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(
+            TaskId.New(),
+            "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+            AgentRole.Developer,
+            "Record explicit verification.");
+        var goal = kernel.CreateGoal("Run paid complex model with default budget", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
+            ComplexModel: new ModelProfile("OpenAI", "gpt-complex", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var provider = new FakeSmokeProvider(providerName: "OpenAI");
+
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))
+            .RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, provider.LastRequest!.Options.MaxOutputTokens);
     }
 
     [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_larger_local_output_fallback")]

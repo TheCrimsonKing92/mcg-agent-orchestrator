@@ -401,14 +401,17 @@ public static partial class DashboardRenderer
         var defaultAgentProvider = ResolveDefaultAgentProvider(report.Providers);
         foreach (var agent in report.Agents)
         {
+            var providerForDefaults = string.IsNullOrWhiteSpace(agent.ProviderName)
+                ? defaultAgentProvider
+                : agent.ProviderName;
             html.AppendLine("<tr>");
             var subscription = string.IsNullOrWhiteSpace(agent.SubscriptionProfileName)
                 ? "<span class=\"meta\">none</span>"
                 : $"{Encode(agent.SubscriptionProfileName)}<br><span class=\"meta\">{Encode(agent.SubscriptionModelAlias ?? "default CLI model")}</span>";
             var complexLabel = agent.ComplexModelName is not null
-                ? $"<br><span class=\"meta\">complex: {Encode(agent.ComplexModelName)} reasoning {Encode(agent.ComplexReasoningEffort ?? "default")} @ {(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "default")}</span>"
+                ? $"<br><span class=\"meta\">complex: {Encode(agent.ComplexModelName)} reasoning {Encode(agent.ComplexReasoningEffort ?? "default")} @ {DisplayMaxTokens(agent.ComplexProviderName ?? providerForDefaults, agent.ComplexMaxOutputTokens, complex: true)}</span>"
                 : "";
-            html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span><br><span class=\"meta\">max tokens: {(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "1200")}</span>{complexLabel}</td><td>{subscription}</td>");
+            html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span><br><span class=\"meta\">max tokens: {DisplayMaxTokens(providerForDefaults, agent.MaxOutputTokens, complex: false)}</span>{complexLabel}</td><td>{subscription}</td>");
             html.AppendLine($"<td class=\"{(agent.IsValid ? "ok" : "bad")}\">{Encode(agent.Detail)}</td>");
             if (enableOperatorControls)
             {
@@ -503,7 +506,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<div class=\"field\"><label>API reasoning</label><select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\">");
         RenderProviderSelectOptions(html, provider, agent.ReasoningEffort, ApiReasoningOptions);
         html.AppendLine("</select></div>");
-        html.AppendLine($"<div class=\"field\"><label>Max tokens</label><input type=\"number\" name=\"maxOutputTokens\" min=\"1\" placeholder=\"1200\" value=\"{(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
+        html.AppendLine($"<div class=\"field\"><label>Max tokens</label><input type=\"number\" name=\"maxOutputTokens\" min=\"1\" placeholder=\"{DefaultMaxTokensPlaceholder(provider)}\" value=\"{(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
         html.AppendLine("<div class=\"field\"><label>Subscription profile</label><select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\">");
         RenderSubscriptionProfileOptions(html, provider, subscriptionProfile, workerProfiles);
         html.AppendLine("</select></div>");
@@ -598,6 +601,21 @@ public static partial class DashboardRenderer
     }
 
     private static string DefaultApiModel(string provider) => ApiModelOptions(provider)[0].Value;
+
+    private static string DisplayMaxTokens(string provider, int? configured, bool complex)
+    {
+        return configured.HasValue
+            ? configured.Value.ToString()
+            : (complex ? DefaultComplexMaxTokensPlaceholder(provider) : DefaultMaxTokensPlaceholder(provider)).ToString();
+    }
+
+    private static int DefaultMaxTokensPlaceholder(string provider)
+    {
+        return provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
+                ? AgentCatalog.RoutineApiMaxOutputTokens
+                : 8192;
+    }
 
     private static int DefaultComplexMaxTokensPlaceholder(string provider)
     {

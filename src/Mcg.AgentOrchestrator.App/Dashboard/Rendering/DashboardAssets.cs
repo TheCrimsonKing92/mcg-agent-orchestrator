@@ -107,6 +107,7 @@ function profileOptions(form, preferred){
   });
   return unique.map(name => [name, name || 'None']);
 }
+function maxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '1024' : '8192'; }
 function complexMaxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '1200' : '8192'; }
 function syncAgentConfig(form, preserve){
   const providerSelect = form.querySelector('select[name="providerName"]');
@@ -126,6 +127,8 @@ function syncAgentConfig(form, preserve){
   setOptions(form.querySelector('select[name="subscriptionModelAlias"]'), options.subscriptionModels, keep ? form.querySelector('select[name="subscriptionModelAlias"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="subscriptionReasoningEffort"]'), options.subscriptionReasoning, keep ? form.querySelector('select[name="subscriptionReasoningEffort"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="complexReasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="complexReasoningEffort"]')?.value : '', keep);
+  const maxTokens = form.querySelector('input[name="maxOutputTokens"]');
+  if(maxTokens) maxTokens.placeholder = maxTokenPlaceholder(provider);
   const complexProvider = form.querySelector('input[name="complexProviderName"]')?.value || provider;
   const complexMaxTokens = form.querySelector('input[name="complexMaxOutputTokens"]');
   if(complexMaxTokens) complexMaxTokens.placeholder = complexMaxTokenPlaceholder(complexProvider);
