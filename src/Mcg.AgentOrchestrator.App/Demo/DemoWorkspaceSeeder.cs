@@ -89,7 +89,21 @@ public static class PrototypeWorkspaceSeeder
             current.Subscription is null ||
             !EqualsIgnoreCase(current.Subscription.WorkerProfileName, desired.Subscription!.WorkerProfileName) ||
             !EqualsIgnoreCase(current.Subscription.ModelAlias, desired.Subscription.ModelAlias) ||
-            !EqualsIgnoreCase(current.Subscription.ReasoningEffort, desired.Subscription.ReasoningEffort);
+            !EqualsIgnoreCase(current.Subscription.ReasoningEffort, desired.Subscription.ReasoningEffort) ||
+            !ModelsMatch(current.ComplexModel, desired.ComplexModel);
+    }
+
+    private static bool ModelsMatch(ModelProfile? current, ModelProfile? desired)
+    {
+        if (current is null || desired is null)
+        {
+            return current is null && desired is null;
+        }
+
+        return EqualsIgnoreCase(current.ProviderName, desired.ProviderName) &&
+            EqualsIgnoreCase(current.ModelName, desired.ModelName) &&
+            EqualsIgnoreCase(current.ReasoningEffort, desired.ReasoningEffort) &&
+            current.MaxOutputTokens == desired.MaxOutputTokens;
     }
 
     private static bool EqualsIgnoreCase(string? left, string? right)

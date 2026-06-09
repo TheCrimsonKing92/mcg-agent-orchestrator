@@ -22,7 +22,8 @@ internal sealed record AgentSubmissionDto(
     string? SubscriptionReasoningEffort = null,
     string? ComplexProviderName = null,
     string? ComplexModelName = null,
-    int? ComplexMaxOutputTokens = null);
+    int? ComplexMaxOutputTokens = null,
+    string? ComplexReasoningEffort = null);
 
 internal sealed record WorkerProfileSubmissionDto(string Name, string CommandTemplate);
 

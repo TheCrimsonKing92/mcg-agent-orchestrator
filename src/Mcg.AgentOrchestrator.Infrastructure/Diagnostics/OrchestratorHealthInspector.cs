@@ -20,7 +20,8 @@ public sealed record AgentConfigurationValidation(
     string Detail,
     string? ComplexProviderName = null,
     string? ComplexModelName = null,
-    int? ComplexMaxOutputTokens = null);
+    int? ComplexMaxOutputTokens = null,
+    string? ComplexReasoningEffort = null);
 
 public sealed record WorkerProfileValidation(
     string Name,
@@ -182,7 +183,8 @@ public static class OrchestratorHealthInspector
                 BuildAgentValidationDetail(agent, providerKnown, profileKnown, apiAllowed, subscriptionAllowed, profileName),
                 agent.ComplexModel?.ProviderName,
                 agent.ComplexModel?.ModelName,
-                agent.ComplexModel?.MaxOutputTokens);
+                agent.ComplexModel?.MaxOutputTokens,
+                agent.ComplexModel?.ReasoningEffort);
         }
     }
 

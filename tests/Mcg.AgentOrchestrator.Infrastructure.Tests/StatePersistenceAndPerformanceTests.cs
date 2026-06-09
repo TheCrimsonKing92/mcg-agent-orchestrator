@@ -171,9 +171,7 @@ public sealed class StatePersistenceAndPerformanceTests
     PrototypeWorkspaceSeeder.Create(root);
 
     var restored = AgentCatalogStore.Load(agentPath);
-    Assert.Equal("custom-openai-planner", restored.GetRequired(AgentRole.Planner).Id.Value);
-    Assert.Equal("Custom OpenAI planner", restored.GetRequired(AgentRole.Planner).Name);
-
+    AssertPrototypeAgent(restored.GetRequired(AgentRole.Planner), "openai-planner", "high");
     AssertPrototypeAgent(restored.GetRequired(AgentRole.Researcher), "openai-researcher", "high");
     AssertPrototypeAgent(restored.GetRequired(AgentRole.Developer), "openai-developer", "medium");
     AssertPrototypeAgent(restored.GetRequired(AgentRole.Tester), "openai-tester", "high");
@@ -275,14 +273,18 @@ public sealed class StatePersistenceAndPerformanceTests
 {
     Assert.Equal(expectedId, agent.Id.Value);
     Assert.Equal("OpenAI", agent.Model.ProviderName);
-    Assert.Equal("gpt-5.5", agent.Model.ModelName);
+    Assert.Equal("gpt-5.4-mini", agent.Model.ModelName);
     Assert.Equal(expectedReasoningEffort, agent.Model.ReasoningEffort);
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
     Assert.True(agent.Subscription is not null);
     var subscription = agent.Subscription!;
     Assert.Equal("codex-cli", subscription.WorkerProfileName);
-    Assert.Equal("gpt-5.5", subscription.ModelAlias);
+    Assert.Equal("gpt-5.3-codex", subscription.ModelAlias);
     Assert.Equal(expectedReasoningEffort, subscription.ReasoningEffort);
+    Assert.True(agent.ComplexModel is not null);
+    Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
+    Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
+    Assert.Equal(expectedReasoningEffort, agent.ComplexModel.ReasoningEffort);
 }
 }
 

@@ -47,7 +47,8 @@ public static AgentSubmissionDto ParseAgentSubmission(string body)
         string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort) ? null : submission.SubscriptionReasoningEffort.Trim(),
         string.IsNullOrWhiteSpace(submission.ComplexProviderName) ? null : submission.ComplexProviderName.Trim(),
         string.IsNullOrWhiteSpace(submission.ComplexModelName) ? null : submission.ComplexModelName.Trim(),
-        submission.ComplexMaxOutputTokens);
+        submission.ComplexMaxOutputTokens,
+        string.IsNullOrWhiteSpace(submission.ComplexReasoningEffort) ? null : submission.ComplexReasoningEffort.Trim());
 }
 
 public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submission)
@@ -69,6 +70,7 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             submission.ComplexModelName,
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
             SubscriptionMode.ApiKey,
+            string.IsNullOrWhiteSpace(submission.ComplexReasoningEffort) ? null : submission.ComplexReasoningEffort,
             MaxOutputTokens: submission.ComplexMaxOutputTokens)
         : null;
 

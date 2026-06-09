@@ -409,7 +409,7 @@ public static partial class DashboardRenderer
                 ? "<span class=\"meta\">none</span>"
                 : $"{Encode(agent.SubscriptionProfileName)}<br><span class=\"meta\">{Encode(agent.SubscriptionModelAlias ?? "default CLI model")}</span>";
             var complexLabel = agent.ComplexModelName is not null
-                ? $"<br><span class=\"meta\">complex: {Encode(agent.ComplexModelName)} @ {(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "default")}</span>"
+                ? $"<br><span class=\"meta\">complex: {Encode(agent.ComplexModelName)} reasoning {Encode(agent.ComplexReasoningEffort ?? "default")} @ {(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "default")}</span>"
                 : "";
             html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span><br><span class=\"meta\">max tokens: {(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "1200")}</span>{complexLabel}</td><td>{subscription}</td>");
             html.AppendLine($"<td class=\"{(agent.IsValid ? "ok" : "bad")}\">{Encode(agent.Detail)}</td>");
@@ -507,6 +507,9 @@ public static partial class DashboardRenderer
         html.AppendLine("<details style=\"margin-top:0.5em\"><summary style=\"cursor:pointer;font-size:0.85em\">Complex task model (auto-selected for ambitious tasks)</summary>");
         html.AppendLine($"<div class=\"field\"><label>Complex provider</label><input type=\"text\" name=\"complexProviderName\" value=\"{Encode(agent.ComplexProviderName ?? "")}\" placeholder=\"same as above\"></div>");
         html.AppendLine($"<div class=\"field\"><label>Complex model</label><input type=\"text\" name=\"complexModelName\" value=\"{Encode(agent.ComplexModelName ?? "")}\" placeholder=\"none\"></div>");
+        html.AppendLine("<div class=\"field\"><label>Complex reasoning</label><select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\">");
+        RenderProviderSelectOptions(html, agent.ComplexProviderName ?? provider, agent.ComplexReasoningEffort, ApiReasoningOptions);
+        html.AppendLine("</select></div>");
         html.AppendLine($"<div class=\"field\"><label>Complex max tokens</label><input type=\"number\" name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"8192\" value=\"{(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
         html.AppendLine("</details>");
         html.AppendLine("<button type=\"submit\">Save</button>");

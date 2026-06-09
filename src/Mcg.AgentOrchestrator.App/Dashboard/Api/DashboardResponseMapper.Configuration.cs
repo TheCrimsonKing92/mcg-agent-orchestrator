@@ -22,7 +22,8 @@ public static AgentDto ToAgentDto(AgentDefinition agent)
         agent.Subscription?.ReasoningEffort,
         agent.ComplexModel?.ProviderName,
         agent.ComplexModel?.ModelName,
-        agent.ComplexModel?.MaxOutputTokens);
+        agent.ComplexModel?.MaxOutputTokens,
+        agent.ComplexModel?.ReasoningEffort);
 }
 
 public static IReadOnlyList<WorkerProfileDto> ToWorkerProfileDtos(string agentCatalogPath, WorkerProfileCatalog catalog)

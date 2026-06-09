@@ -64,6 +64,31 @@ public sealed class DashboardRenderingTests
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("href=\"/assets/dashboard.css\"", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("src=\"/assets/dashboard.js\"", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_preserves_complex_reasoning_effort")]
+    public void DashboardRequestParserPreservesComplexReasoningEffort()
+{
+    var submission = DashboardRequestParser.ParseAgentSubmission(
+        """
+        {
+          "role": "Developer",
+          "providerName": "OpenAI",
+          "modelName": "gpt-5.4-mini",
+          "reasoningEffort": "medium",
+          "executionPolicy": "PreferSubscription",
+          "subscriptionProfileName": "codex-cli",
+          "subscriptionModelAlias": "gpt-5.3-codex",
+          "subscriptionReasoningEffort": "medium",
+          "complexProviderName": "OpenAI",
+          "complexModelName": "gpt-5.5",
+          "complexReasoningEffort": "high"
+        }
+        """);
+
+    var agent = DashboardRequestParser.CreateAgentDefinition(submission);
+
+    Assert.Equal("gpt-5.5", agent.ComplexModel!.ModelName);
+    Assert.Equal("high", agent.ComplexModel.ReasoningEffort);
+}
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_operator_controls")]
     public void DashboardRendererCanEmitOperatorControls()
 {
@@ -285,6 +310,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/worker-profiles\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"commandTemplate\"", StringComparison.Ordinal));
 

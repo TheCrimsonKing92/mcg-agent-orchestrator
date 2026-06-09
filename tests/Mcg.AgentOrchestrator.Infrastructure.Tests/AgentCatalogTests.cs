@@ -17,10 +17,12 @@ public sealed class AgentCatalogTests
     {
         var agent = catalog.GetRequired(role);
         Assert.Equal("OpenAI", agent.Model.ProviderName);
-        Assert.Equal("gpt-5.5", agent.Model.ModelName);
+        Assert.Equal("gpt-5.4-mini", agent.Model.ModelName);
         Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
-        Assert.Equal("gpt-5.5", agent.Subscription.ModelAlias);
+        Assert.Equal("gpt-5.3-codex", agent.Subscription.ModelAlias);
+        Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
+        Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
     }
 
     Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).Model.ReasoningEffort);
@@ -34,6 +36,12 @@ public sealed class AgentCatalogTests
     Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).Subscription!.ReasoningEffort);
     Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).Subscription!.ReasoningEffort);
     Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).Subscription!.ReasoningEffort);
+
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).ComplexModel!.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Researcher).ComplexModel!.ReasoningEffort);
+    Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).ComplexModel!.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).ComplexModel!.ReasoningEffort);
+    Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).ComplexModel!.ReasoningEffort);
 }
     [Xunit.Fact(DisplayName = "AgentCatalog_upsert_replaces_role")]
     public void AgentCatalogUpsertReplacesRole()

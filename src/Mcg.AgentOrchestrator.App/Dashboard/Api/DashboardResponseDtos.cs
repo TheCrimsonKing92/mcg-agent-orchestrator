@@ -18,7 +18,8 @@ internal sealed record AgentDto(
     string? SubscriptionReasoningEffort,
     string? ComplexProviderName,
     string? ComplexModelName,
-    int? ComplexMaxOutputTokens);
+    int? ComplexMaxOutputTokens,
+    string? ComplexReasoningEffort);
 
 internal sealed record WorkerProfileDto(
     string Name,
@@ -155,4 +156,3 @@ internal enum WorkerProfileImportMode
     Merge,
     Replace
 }
-

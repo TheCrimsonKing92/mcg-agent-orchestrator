@@ -113,6 +113,7 @@ function syncAgentConfig(form, preserve){
   setOptions(form.querySelector('select[name="subscriptionProfileName"]'), profileOptions(form, options.preferredProfile), keep ? form.querySelector('select[name="subscriptionProfileName"]')?.value : options.preferredProfile, keep);
   setOptions(form.querySelector('select[name="subscriptionModelAlias"]'), options.subscriptionModels, keep ? form.querySelector('select[name="subscriptionModelAlias"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="subscriptionReasoningEffort"]'), options.subscriptionReasoning, keep ? form.querySelector('select[name="subscriptionReasoningEffort"]')?.value : '', keep);
+  setOptions(form.querySelector('select[name="complexReasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="complexReasoningEffort"]')?.value : '', keep);
 }
 function syncAgentConfigs(){ document.querySelectorAll('form[data-agent-config]').forEach(form => syncAgentConfig(form, true)); }
 async function refreshContent(force){ if(!force && isEditing()) return; const current = document.getElementById('dashboard-content'); if(!current) return; const response = await fetch(location.href, { cache: 'no-store' }); if(!response.ok) return; const text = await response.text(); const doc = new DOMParser().parseFromString(text, 'text/html'); const next = doc.getElementById('dashboard-content'); if(next) current.replaceWith(next); }
