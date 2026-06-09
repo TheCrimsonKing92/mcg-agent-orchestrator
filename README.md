@@ -132,7 +132,7 @@ task-timeline <task-number>
 pending
 run <task-number>
 api-run <task-number>
-retry <task-number> [message]
+retry <task-number> <message>
 dispatch <task-number> <worker-name> <command>
 worker-profiles
 worker-profile <name> <command-template>
@@ -229,7 +229,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 
 `next` prints prioritized recommended follow-up commands for pending human input, failed tasks, failed verification, running dispatches, missing verification, assigned work, and pending tasks. `advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task. `delegate` reruns role-based assignment for pending tasks.
 
-`retry <task-number> [message]` reopens a failed, cancelled, or rework-needed task. It preserves prior execution and verification history, clears the latest verification gate, and moves assigned tasks back to `Assigned` so they can be run or dispatched again. Running tasks must be refreshed or cancelled before retrying, and tasks waiting for human input must be answered first.
+`retry <task-number> <message>` reopens a failed, cancelled, or rework-needed task. The message is required so clearing execution or verification evidence has an explicit rework reason. Retry preserves prior execution and verification history, clears the latest verification gate, and moves assigned tasks back to `Assigned` so they can be run or dispatched again. Running tasks must be refreshed or cancelled before retrying, and tasks waiting for human input must be answered first.
 
 `acceptance` reports whether the goal is accepted, how many task gates have passed, pending human input count, open verification count, and concrete blockers with suggested commands. `evidence` rolls up execution, dispatch, process, verification, and pending-human-input evidence across every task so the goal can be audited from one command. `stages` maps each SDLC task to a readiness state such as `ReadyToRun`, `InProgress`, `NeedsVerification`, `VerificationFailed`, or `Verified`, with the next command for that stage. `gates` reports whether each task is accepted for completion. `verify-needed` lists only open verification work and prints a suggested command for each task that is not ready, missing verification, or has failed verification. A task gate passes only when the task is completed and its latest verification succeeded. A goal is marked `Completed` only after every task gate passes.
 

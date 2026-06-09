@@ -104,6 +104,25 @@ public sealed class TaskVerificationTests
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("Fix and rerun", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "RetryTask_requires_message_before_clearing_evidence")]
+    public void RetryTaskRequiresMessageBeforeClearingEvidence()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry needs reason");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var verification = new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", clock.UtcNow);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implementation done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+
+    var ex = Assert.Throws<ArgumentException>(() => kernel.RetryTask(goal.Id, task.Id, " "));
+
+    Assert.Contains(ex.Message, text => text.Contains("Retry message cannot be empty", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(verification, task.LastVerification);
+    Assert.True(!goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
+}
     [Xunit.Fact(DisplayName = "RetryTask_rejects_running_or_waiting_tasks")]
     public void RetryTaskRejectsRunningOrWaitingTasks()
 {

@@ -370,6 +370,17 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains("confirmAll=true", ex.Message);
     Assert.Equal("all", DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"all\",\"confirmAll\":true}"));
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_retry_note")]
+    public void DashboardRequestParserRequiresRetryNote()
+{
+    var empty = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
+    var json = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
+    var parsed = DashboardRequestParser.ParseRetrySubmission("{\"message\":\"Fix failed verification\"}");
+
+    Assert.Contains(empty.Message, text => text.Contains("Retry note cannot be empty", StringComparison.Ordinal));
+    Assert.Contains(json.Message, text => text.Contains("non-empty 'message'", StringComparison.Ordinal));
+    Assert.Equal("Fix failed verification", parsed.Message);
+}
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_operator_controls")]
     public void DashboardRendererCanEmitOperatorControls()
 {

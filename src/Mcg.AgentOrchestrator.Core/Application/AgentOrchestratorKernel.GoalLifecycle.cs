@@ -74,6 +74,11 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
+        var retryMessage = message.Trim();
+        if (string.IsNullOrWhiteSpace(retryMessage))
+        {
+            throw new ArgumentException("Retry message cannot be empty.", nameof(message));
+        }
 
         if (task.Status == WorkTaskStatus.Running || task.LastProcess is { IsRunning: true })
         {
@@ -92,7 +97,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
-        Append(goal, taskId, ProgressKind.TaskRetried, string.IsNullOrWhiteSpace(message) ? "Retry requested." : message.Trim());
+        Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         RefreshGoalStatus(goal);
         return task;
     }

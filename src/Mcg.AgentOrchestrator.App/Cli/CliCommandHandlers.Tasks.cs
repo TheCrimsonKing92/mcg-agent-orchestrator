@@ -86,10 +86,10 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "retry":
-            CliArgumentParser.RequirePartCount(parts, 2, "retry <task-number> [message]");
+            CliArgumentParser.RequirePartCount(parts, 3, "retry <task-number> <message>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var retryTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            context.Kernel.RetryTask(context.CurrentGoal.Id, retryTask.Id, parts.Count > 2 ? parts[2] : "Retry requested.");
+            context.Kernel.RetryTask(context.CurrentGoal.Id, retryTask.Id, parts[2]);
             ConsoleViews.PrintTask(context.CurrentGoal, retryTask);
             return true;
 

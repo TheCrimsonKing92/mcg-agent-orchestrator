@@ -83,7 +83,7 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
 {
     if (string.IsNullOrWhiteSpace(body))
     {
-        return new RetrySubmissionDto("Retry requested.");
+        throw new ArgumentException("Retry note cannot be empty.");
     }
 
     var trimmed = body.Trim();
@@ -93,7 +93,12 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
     }
 
     var submission = JsonSerializer.Deserialize<RetrySubmissionDto>(trimmed, DashboardJson.Options());
-    return new RetrySubmissionDto(string.IsNullOrWhiteSpace(submission?.Message) ? "Retry requested." : submission.Message.Trim());
+    if (string.IsNullOrWhiteSpace(submission?.Message))
+    {
+        throw new ArgumentException("Retry JSON must include a non-empty 'message' value.");
+    }
+
+    return new RetrySubmissionDto(submission.Message.Trim());
 }
 
 public static VerificationPlanSubmissionDto ParseVerificationPlanSubmission(string body)

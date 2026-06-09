@@ -166,4 +166,51 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-all", ex!.Message);
     }
+
+    [Xunit.Fact(DisplayName = "Cli_retry_requires_message_without_clearing_evidence")]
+    public void CliRetryRequiresMessageWithoutClearingEvidence()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Avoid evidence-free retry", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        var verification = new TaskVerificationRecord("dotnet test", root, 0, "passed", "", DateTimeOffset.UtcNow);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+
+        ArgumentException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["retry", "1"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (ArgumentException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("retry <task-number> <message>", ex!.Message);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.Equal(verification, task.LastVerification);
+    }
 }
