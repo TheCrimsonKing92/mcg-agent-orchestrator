@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Providers;
 
 internal static class ProviderSmokeRunner
 {
-public const string DefaultTarget = "openai";
+public const string DefaultTarget = "default";
 
 public static string RunProviderSmoke(string target)
 {
@@ -92,16 +92,22 @@ public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(str
         results.Any(result => !result.Status.Equals("skipped", StringComparison.OrdinalIgnoreCase)));
 }
 
-public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target)
+public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target, Func<bool>? isOllamaReachable = null)
 {
     return target.ToLowerInvariant() switch
     {
+        "default" => ResolveDefaultProviderSmokeTargets(isOllamaReachable ?? ProviderRegistryFactory.IsOllamaReachable),
         "all" => ["OpenAI", "Anthropic", "Ollama"],
         "openai" => ["OpenAI"],
         "anthropic" => ["Anthropic"],
         "ollama" => ["Ollama"],
-        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [task-number]; use provider-smoke all --confirm-all only for deliberate broad checks.")
+        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [task-number]; omit the target to prefer local Ollama when reachable; use provider-smoke all --confirm-all only for deliberate broad checks.")
     };
+}
+
+private static IReadOnlyList<string> ResolveDefaultProviderSmokeTargets(Func<bool> isOllamaReachable)
+{
+    return isOllamaReachable() ? ["Ollama"] : ["OpenAI"];
 }
 
 public static bool TryCreateLiveProvider(string providerName, out IModelProvider provider, out string modelName, out string detail)

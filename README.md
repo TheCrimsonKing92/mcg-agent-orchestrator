@@ -295,7 +295,7 @@ The Ollama adapter uses the OpenAI-compatible chat completions API, so it also w
 
 ### Smoke Testing
 
-Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to make a live, minimal request and print the provider response, stop reason, and token usage. The command skips unconfigured providers and fails if no live provider is available. Add a task number, for example `provider-smoke openai 4`, to append the successful smoke result to that task's verification history. Use `provider-smoke all --confirm-all` only when intentionally comparing every configured provider.
+Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to make a live, minimal request and print the provider response, stop reason, and token usage. Omitting the provider prefers reachable local Ollama and falls back to OpenAI. The command skips unconfigured providers and fails if no live provider is available. Add a task number, for example `provider-smoke openai 4`, to append the successful smoke result to that task's verification history. Use `provider-smoke all --confirm-all` only when intentionally comparing every configured provider.
 
 ## Setup Doctor
 

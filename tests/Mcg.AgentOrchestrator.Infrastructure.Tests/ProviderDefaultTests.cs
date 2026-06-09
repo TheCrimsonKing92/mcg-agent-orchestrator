@@ -39,11 +39,12 @@ public sealed class ProviderDefaultTests
     [Xunit.Fact(DisplayName = "Provider_smoke_default_targets_one_provider")]
     public void ProviderSmokeDefaultTargetsOneProvider()
     {
-        var targets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget);
+        var localTargets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget, () => true);
+        var paidFallbackTargets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget, () => false);
 
-        Assert.Equal("openai", ProviderSmokeRunner.DefaultTarget);
-        Assert.Equal(1, targets.Count);
-        Assert.Equal("OpenAI", targets.Single());
+        Assert.Equal("default", ProviderSmokeRunner.DefaultTarget);
+        Assert.Equal("Ollama", localTargets.Single());
+        Assert.Equal("OpenAI", paidFallbackTargets.Single());
     }
 
     [Xunit.Fact(DisplayName = "Scripted_provider_requests_configuration_instead_of_fake_completion")]
