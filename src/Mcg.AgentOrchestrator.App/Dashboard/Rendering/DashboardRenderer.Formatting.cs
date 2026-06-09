@@ -9,13 +9,17 @@ public static partial class DashboardRenderer
 {
     private static string RenderEvidence(TaskSpec task)
     {
+        var execution = task.LastExecution is null
+            ? string.Empty
+            : RenderExecutionSummary(task.LastExecution);
+
         if (task.LastVerification is not null)
         {
             var cls = task.LastVerification.Succeeded ? "ok" : "bad";
             var history = task.VerificationHistory.Count == 1
                 ? "1 verification"
                 : $"{task.VerificationHistory.Count} verifications";
-            return $"<div class=\"{cls}\">Verification exit {task.LastVerification.ExitCode}: {Encode(task.LastVerification.Command)} <span class=\"meta\">({history})</span></div>";
+            return $"<div class=\"{cls}\">Verification exit {task.LastVerification.ExitCode}: {Encode(task.LastVerification.Command)} <span class=\"meta\">({history})</span></div>{execution}";
         }
 
         if (DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task))
@@ -41,10 +45,18 @@ public static partial class DashboardRenderer
 
         if (task.LastExecution is not null)
         {
-            return $"<pre>{Encode(task.LastExecution.Output)}</pre>";
+            return $"{execution}<pre>{Encode(task.LastExecution.Output)}</pre>";
         }
 
         return "<span class=\"meta\">none</span>";
+    }
+
+    private static string RenderExecutionSummary(TaskExecutionRecord execution)
+    {
+        var inputTokens = execution.Usage?.InputTokens?.ToString() ?? "n/a";
+        var outputTokens = execution.Usage?.OutputTokens?.ToString() ?? "n/a";
+
+        return $"<div>Model: {Encode(execution.ProviderName)}/{Encode(execution.ModelName)} by {Encode(execution.AgentName)} <span class=\"meta\">tokens {inputTokens} in / {outputTokens} out &middot; stop reason {Encode(execution.StopReason)}</span></div>";
     }
 
     private static string RenderVerificationPlan(TaskSpec task)

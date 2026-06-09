@@ -45,6 +45,33 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("Complete the task before recording final verification", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>task 3</code>", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_renders_api_model_execution_usage")]
+    public async Task DashboardRendererRendersApiModelExecutionUsage()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render model usage");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]));
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var goalPrefix = goal.Id.Value[..8];
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+
+    Assert.Contains(html, text => text.Contains("Model: Fake/fake-model by API developer", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("tokens 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
     public void DashboardRendererCanEmitAutoRefreshMetadata()
 {
