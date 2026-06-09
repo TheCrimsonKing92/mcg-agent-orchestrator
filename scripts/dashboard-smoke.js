@@ -1,26 +1,56 @@
 (async () => {
-  const text = document.body.innerText || '';
-  const requiredText = [
-    'Prototype workspace',
-    'Open source survey',
-    'Goal JSON',
-    'Stop dashboard for build/test',
-    'Setup Doctor'
-  ];
+  // Verify nav bar is present on the current page
+  const nav = document.querySelector('.dashboard-nav');
+  if (!nav) {
+    throw new Error('Nav bar (.dashboard-nav) was not rendered.');
+  }
 
-  for (const value of requiredText) {
-    if (!text.includes(value)) {
-      throw new Error(`Missing dashboard text: ${value}`);
+  const navLinks = Array.from(nav.querySelectorAll('a'));
+  const navHrefs = navLinks.map(anchor => anchor.getAttribute('href'));
+  for (const required of ['/', '/config', '/system']) {
+    if (!navHrefs.includes(required)) {
+      throw new Error(`Nav bar missing link to ${required}.`);
     }
   }
 
-  const sourceSurveyLink = Array.from(document.querySelectorAll('a'))
-    .find(anchor => anchor.textContent?.includes('Open source survey'));
-  if (!sourceSurveyLink) {
-    throw new Error('Source survey link was not rendered.');
+  // Ops view (current page) should have goal summary
+  const opsText = document.body.innerText || '';
+  const opsRequired = ['Goal JSON'];
+  for (const value of opsRequired) {
+    if (!opsText.includes(value)) {
+      throw new Error(`Missing ops view text: ${value}`);
+    }
   }
 
-  const sourceSurvey = await fetch(sourceSurveyLink.href + '?max=25', { cache: 'no-store' });
+  // Fetch config view and verify Setup Doctor
+  const configResponse = await fetch('/config', { cache: 'no-store' });
+  if (!configResponse.ok) {
+    throw new Error(`Config view failed with ${configResponse.status}.`);
+  }
+  const configHtml = await configResponse.text();
+  if (!configHtml.includes('Setup Doctor')) {
+    throw new Error('Config view missing Setup Doctor.');
+  }
+
+  // Fetch system view and verify workspace/diagnostics
+  const systemResponse = await fetch('/system', { cache: 'no-store' });
+  if (!systemResponse.ok) {
+    throw new Error(`System view failed with ${systemResponse.status}.`);
+  }
+  const systemHtml = await systemResponse.text();
+  const systemRequired = [
+    'Prototype workspace',
+    'Open source survey',
+    'Stop dashboard for build/test'
+  ];
+  for (const value of systemRequired) {
+    if (!systemHtml.includes(value)) {
+      throw new Error(`System view missing text: ${value}`);
+    }
+  }
+
+  // Source survey link check via API
+  const sourceSurvey = await fetch('/api/source-survey?max=25', { cache: 'no-store' });
   if (!sourceSurvey.ok) {
     throw new Error(`Source survey failed with ${sourceSurvey.status}.`);
   }
@@ -36,6 +66,7 @@
     throw new Error(`Source survey included excluded paths: ${excluded.join(', ')}`);
   }
 
+  // Goal JSON link check
   const goalLink = Array.from(document.querySelectorAll('a'))
     .find(anchor => anchor.textContent?.includes('Goal JSON'));
   if (!goalLink) {

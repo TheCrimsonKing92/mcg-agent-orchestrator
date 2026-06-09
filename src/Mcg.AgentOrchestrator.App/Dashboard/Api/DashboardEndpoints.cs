@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -30,8 +31,11 @@ internal static partial class DashboardEndpoints
             app.MapGet("/assets/dashboard.js", (HttpContext context) => NoStoreText(context, DashboardAssets.OperatorControlsScript, "text/javascript; charset=utf-8"));
         }
 
-        app.MapGet("/", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services)));
-        app.MapGet("/dashboard", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services)));
+        app.MapGet("/", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services, DashboardView.Ops)));
+        app.MapGet("/dashboard", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services, DashboardView.Ops)));
+        app.MapGet("/config", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services, DashboardView.Config)));
+        app.MapGet("/system", async Task<IResult> (HttpContext context) => await Safe(() => RenderDashboardAsync(context, services, DashboardView.System)));
+        app.MapGet("/goal/{goalPrefix}", async Task<IResult> (HttpContext context, string goalPrefix) => await Safe(() => RenderDashboardAsync(context, services, DashboardView.Goal, goalPrefix)));
 
         var api = app.MapGroup("/api");
         api.MapGet("/health", () => Json(BuildHealthReport(services)));

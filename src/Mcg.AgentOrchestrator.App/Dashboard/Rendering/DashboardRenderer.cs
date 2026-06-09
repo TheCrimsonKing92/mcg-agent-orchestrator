@@ -6,13 +6,16 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
+public enum DashboardView { Ops, Goal, Config, System }
+
 public sealed record DashboardRenderOptions(
     int? AutoRefreshSeconds = null,
     bool EnableOperatorControls = false,
     OrchestratorHealthReport? HealthReport = null,
     DashboardWorkspaceContext? Workspace = null,
     IReadOnlyList<DashboardContinuationStatusDto>? ContinuationWatches = null,
-    string? FocusGoalPrefix = null);
+    string? FocusGoalPrefix = null,
+    DashboardView View = DashboardView.Ops);
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,
@@ -100,7 +103,14 @@ public static partial class DashboardRenderer
         {
             html.AppendLine($"<meta http-equiv=\"refresh\" content=\"{options.AutoRefreshSeconds.Value}\">");
         }
-        html.AppendLine("<title>MCG Agent Orchestrator</title>");
+        var viewTitle = options.View switch
+        {
+            DashboardView.Config => "Configuration",
+            DashboardView.System => "System",
+            DashboardView.Goal => "Goal Detail",
+            _ => "MCG Agent Orchestrator"
+        };
+        html.AppendLine($"<title>{Encode(viewTitle)} — MCG Agent Orchestrator</title>");
         if (options.EnableOperatorControls)
         {
             html.AppendLine("<link rel=\"stylesheet\" href=\"/assets/dashboard.css\">");
@@ -123,275 +133,26 @@ public static partial class DashboardRenderer
                 ? "Read-only hosted dashboard"
                 : "Static dashboard export";
         html.AppendLine($"<header><h1>MCG Agent Orchestrator</h1><div>{Encode(mode)}</div></header>");
+        RenderNavBar(html, options, displayedGoals);
         var refreshAttribute = options.AutoRefreshSeconds is > 0
             ? $" data-refresh-seconds=\"{options.AutoRefreshSeconds.Value}\""
             : string.Empty;
         html.AppendLine($"<main id=\"dashboard-content\"{refreshAttribute}>");
-        if (options.EnableOperatorControls)
+
+        switch (options.View)
         {
-            RenderGlobalOperatorControls(html, options.Workspace, options.ContinuationWatches ?? []);
-        }
-        else if (options.Workspace is not null)
-        {
-            RenderReadOnlyHostedContext(html, options.Workspace);
-        }
-
-        if (options.HealthReport is not null)
-        {
-            RenderHealthReport(html, options.HealthReport, options.EnableOperatorControls);
-        }
-
-        if (goals.Count == 0)
-        {
-            html.AppendLine(options.EnableOperatorControls
-                ? "<section><h2>No goals</h2><p class=\"meta\">No active goals yet.</p></section>"
-                : "<section><h2>No goals</h2><p>Create a goal from the CLI to populate this dashboard.</p></section>");
-        }
-        else if (options.EnableOperatorControls && displayedGoals.Count < goals.Count)
-        {
-            var focusNote = string.IsNullOrWhiteSpace(options.FocusGoalPrefix)
-                ? string.Empty
-                : $" Focused goal filter: <code>{Encode(options.FocusGoalPrefix)}</code>.";
-            html.AppendLine($"<section><h2>Recent Goals</h2><p class=\"meta\">Showing {displayedGoals.Count} of {goals.Count} goals.{focusNote} Use goal JSON links, <code>?goal=&lt;prefix&gt;</code>, or report endpoints for older goals.</p></section>");
-        }
-
-        if (options.EnableOperatorControls && goals.Count > 0)
-        {
-            RenderGoalArchiveControl(html, goals, options.FocusGoalPrefix);
-        }
-
-        foreach (var goal in displayedGoals)
-        {
-            var monitor = kernel.BuildMonitor(goal.Id);
-            var verificationGate = kernel.BuildVerificationGate(goal.Id);
-            var evidence = kernel.BuildGoalEvidenceSummary(goal.Id);
-            html.AppendLine("<section class=\"goal-card\">");
-            html.AppendLine("<div class=\"goal-header\">");
-            html.AppendLine($"<h2>{Encode(goal.Objective)}</h2>");
-            var goalJsonLink = options.Workspace is not null
-                ? $" &middot; <a href=\"/api/goals/{Encode(goal.Id.Value[..8])}\" target=\"_blank\" rel=\"noopener\">Goal JSON</a>"
-                : string.Empty;
-            html.AppendLine($"<div class=\"meta\">Goal {Encode(goal.Id.Value)} &middot; <span class=\"pill\">{Encode(Display(goal.Status))}</span> &middot; Last event {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}{goalJsonLink}</div>");
-            html.AppendLine("</div>");
-            if (goal.Status == GoalStatus.Completed && verificationGate.IsSatisfied)
-            {
-                html.AppendLine("<div class=\"completion-banner\">");
-                html.AppendLine("<strong>Goal complete</strong>");
-                if (IsManualOnlyCompletion(evidence))
-                {
-                    html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed with manual-only verification. No execution, dispatch, or process proof is recorded; inspect the verification note before treating this as implemented work.</span>");
-                }
-                else
-                {
-                    html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. No operator action is required.</span>");
-                }
-
-                html.AppendLine("</div>");
-            }
-
-            if (options.EnableOperatorControls)
-            {
-                RenderGoalOperatorControls(html, kernel, goal);
-            }
-
-            RenderGoalWorkModel(html, goal, verificationGate);
-            RenderSubscriptionRetryQueue(html, goal);
-
-            html.AppendLine("<div class=\"goal-overview-grid\">");
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Task status</h3>");
-            html.AppendLine("<p class=\"section-note\">Current state of each task under this goal.</p>");
-            html.AppendLine("<table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>");
-            foreach (var count in monitor.TaskStatusCounts)
-            {
-                html.AppendLine($"<tr><td>{Encode(Display(count.Status))}</td><td>{count.Count}</td></tr>");
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Needs attention</h3>");
-            html.AppendLine("<p class=\"section-note\">Items that may block or delay progress.</p>");
-            if (monitor.AttentionItems.Count == 0)
-            {
-                html.AppendLine("<p class=\"ok\">No attention items.</p>");
-            }
-            else
-            {
-                foreach (var item in monitor.AttentionItems)
-                {
-                    var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
-                    html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(item.Message)}</div>");
-                }
-            }
-            html.AppendLine("</div>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-work-grid\">");
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Human decisions</h3>");
-            html.AppendLine("<p class=\"section-note\">Questions waiting for an operator answer.</p>");
-            var humanInputWorklist = kernel.BuildHumanInputWorklist(goal.Id);
-            html.AppendLine($"<p class=\"{(humanInputWorklist.OpenCount == 0 ? "ok" : "bad")}\">Open: {humanInputWorklist.OpenCount}</p>");
-            html.AppendLine("<table><thead><tr><th>Request</th><th>Work item</th><th>Question</th><th>Command</th></tr></thead><tbody>");
-            if (humanInputWorklist.Items.Count == 0)
-            {
-                html.AppendLine("<tr><td colspan=\"4\">none</td></tr>");
-            }
-            else
-            {
-                foreach (var item in humanInputWorklist.Items)
-                {
-                    var answerLink = options.EnableOperatorControls
-                        ? $"<br><a class=\"button-link\" href=\"#{Encode(BuildHumanInputFormAnchor(item.RequestId))}\">Answer</a>"
-                        : string.Empty;
-                    html.AppendLine("<tr>");
-                    html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(item.Question)}<br><span class=\"meta\">{Encode(item.SuggestedAction)}</span></td><td><code>{Encode(BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
-                    html.AppendLine("</tr>");
-                }
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Recommended next steps</h3>");
-            html.AppendLine("<p class=\"section-note\">The next actions the system believes can move the goal forward.</p>");
-            var nextActionControlHeader = options.EnableOperatorControls ? "<th>Control</th>" : string.Empty;
-            html.AppendLine($"<table><thead><tr><th>Priority</th><th>Work item</th><th>Action</th><th>Suggested Command</th>{nextActionControlHeader}</tr></thead><tbody>");
-            var nextActions = kernel.BuildNextActions(goal.Id);
-            for (var index = 0; index < nextActions.Items.Count; index++)
-            {
-                var item = nextActions.Items[index];
-                html.AppendLine("<tr>");
-                html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
-                if (options.EnableOperatorControls)
-                {
-                    html.AppendLine($"<td>{RenderNextActionControl(goal, item)}</td>");
-                }
-
-                html.AppendLine("</tr>");
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-readiness-grid\">");
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Goal completion</h3>");
-            html.AppendLine("<p class=\"section-note\">A goal completes when every task has passed verification and no human decision is pending.</p>");
-            var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
-            html.AppendLine($"<p class=\"{(acceptance.IsAccepted ? "ok" : "bad")}\">Accepted: {acceptance.IsAccepted} &middot; Tasks passed: {acceptance.PassedTasks}/{acceptance.TotalTasks} &middot; Open verification: {acceptance.OpenVerificationCount} &middot; Pending input: {acceptance.PendingHumanInputCount}</p>");
-            if (acceptance.Blockers.Count == 0)
-            {
-                html.AppendLine("<p class=\"ok\">No acceptance blockers.</p>");
-            }
-            else
-            {
-                html.AppendLine("<table><thead><tr><th>Scope</th><th>Blocker</th><th>Action</th><th>Command</th></tr></thead><tbody>");
-                foreach (var blocker in acceptance.Blockers)
-                {
-                    int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
-                    var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
-                    html.AppendLine("<tr>");
-                    html.AppendLine($"<td>{Encode(scope)}</td><td>{Encode(Display(blocker.Kind))}<br><span class=\"meta\">{Encode(blocker.Message)}</span></td><td>{Encode(blocker.SuggestedAction)}</td><td><code>{Encode(BuildAcceptanceSuggestedCommand(blocker, taskNumber))}</code></td>");
-                    html.AppendLine("</tr>");
-                }
-                html.AppendLine("</tbody></table>");
-            }
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Recorded proof</h3>");
-            html.AppendLine("<p class=\"section-note\">Latest execution, handoff, process, or verification proof recorded for each task.</p>");
-            html.AppendLine($"<p>Execution: {evidence.TasksWithExecution} &middot; Dispatch: {evidence.TasksWithDispatch} &middot; Process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses}) &middot; Verification: {evidence.TasksWithVerification} (passed {evidence.PassedVerifications}, failed {evidence.FailedVerifications}) &middot; Pending input: {evidence.PendingHumanInputCount}</p>");
-            html.AppendLine("<table><thead><tr><th>#</th><th>Evidence</th><th>Message</th></tr></thead><tbody>");
-            foreach (var item in evidence.Tasks)
-            {
-                html.AppendLine("<tr>");
-                html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.TaskId)}</td><td>{Encode(Display(item.LatestEvidence))}<br><span class=\"meta\">{item.Role} &middot; {Encode(Display(item.TaskStatus))}</span></td><td>{Encode(item.Message)}</td>");
-                html.AppendLine("</tr>");
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel goal-panel-wide\">");
-            html.AppendLine("<h3>Task readiness</h3>");
-            html.AppendLine("<p class=\"section-note\">Why each task can run, needs verification, is blocked, or is already verified.</p>");
-            var stages = kernel.BuildStageReadinessReport(goal.Id);
-            html.AppendLine($"<p class=\"{(stages.IsReadyForAcceptance ? "ok" : "bad")}\">Ready for acceptance: {stages.IsReadyForAcceptance} &middot; Verified: {stages.VerifiedStages}/{stages.TotalStages} &middot; Open: {stages.OpenStages} &middot; Blocked: {stages.BlockedStages}</p>");
-            html.AppendLine("<table><thead><tr><th>#</th><th>Stage</th><th>Status</th><th>Action</th><th>Command</th></tr></thead><tbody>");
-            foreach (var stage in stages.Stages)
-            {
-                var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
-                html.AppendLine("<tr>");
-                html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(stage.Description)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(stage.SuggestedAction)}<br><span class=\"meta\">{Encode(stage.Message)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(taskNumber, stage))}</code></td>");
-                html.AppendLine("</tr>");
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Verification status</h3>");
-            html.AppendLine("<p class=\"section-note\">Whether each task has enough verification proof to count toward goal completion.</p>");
-            html.AppendLine($"<p class=\"{(verificationGate.IsSatisfied ? "ok" : "bad")}\">Satisfied: {verificationGate.IsSatisfied}</p>");
-            html.AppendLine("<table><thead><tr><th>#</th><th>Gate</th><th>Message</th></tr></thead><tbody>");
-            foreach (var gate in verificationGate.Tasks)
-            {
-                html.AppendLine("<tr>");
-                html.AppendLine($"<td>{GetTaskDisplayNumber(goal, gate.TaskId)}</td><td>{Encode(Display(gate.GateStatus))}</td><td>{Encode(gate.Message)}</td>");
-                html.AppendLine("</tr>");
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel\">");
-            html.AppendLine("<h3>Verification to-do</h3>");
-            html.AppendLine("<p class=\"section-note\">Verification work still needed before the goal can complete.</p>");
-            var verificationWorklist = kernel.BuildVerificationWorklist(goal.Id);
-            html.AppendLine($"<p class=\"{(verificationWorklist.OpenCount == 0 ? "ok" : "bad")}\">Open: {verificationWorklist.OpenCount}</p>");
-            html.AppendLine("<table><thead><tr><th>#</th><th>Gate</th><th>Action</th><th>Command</th></tr></thead><tbody>");
-            if (verificationWorklist.Items.Count == 0)
-            {
-                html.AppendLine("<tr><td colspan=\"4\">none</td></tr>");
-            }
-            else
-            {
-                foreach (var item in verificationWorklist.Items)
-                {
-                    var taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
-                    html.AppendLine("<tr>");
-                    html.AppendLine($"<td>{taskNumber}</td><td>{Encode(Display(item.GateStatus))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td>{Encode(item.SuggestedAction)}</td><td><code>{Encode(BuildVerificationSuggestedCommand(taskNumber, item.GateStatus))}</code></td>");
-                    html.AppendLine("</tr>");
-                }
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("<div class=\"goal-panel goal-panel-wide tasks-panel\">");
-            html.AppendLine("<h3>Tasks</h3>");
-            html.AppendLine("<p class=\"section-note\">The work items that make up the goal. Each task has a role, status, verification plan, and latest proof.</p>");
-            html.AppendLine("<table class=\"tasks-table\"><thead><tr><th>#</th><th>Role</th><th>Status</th><th>Gate</th><th>Description</th><th>Verification Plan</th><th>Latest Evidence</th></tr></thead><tbody>");
-            for (var index = 0; index < goal.Tasks.Count; index++)
-            {
-                var task = goal.Tasks[index];
-                var gate = verificationGate.Tasks.Single(item => item.TaskId == task.Id);
-                html.AppendLine("<tr class=\"task-summary-row\">");
-                html.AppendLine($"<td>{index + 1}</td><td>{task.RequiredRole}</td><td>{Encode(Display(task.Status))}</td><td>{RenderTaskGate(gate)}</td><td>{Encode(task.Description)}</td><td>{RenderVerificationPlan(task)}</td>");
-                html.AppendLine($"<td>{RenderEvidence(task)}</td>");
-                if (options.EnableOperatorControls)
-                {
-                    html.AppendLine("</tr>");
-                    html.AppendLine("<tr class=\"task-action-row\">");
-                    html.AppendLine($"<td colspan=\"7\">{RenderTaskActions(goal, task)}</td>");
-                }
-
-                html.AppendLine("</tr>");
-            }
-            html.AppendLine("</tbody></table>");
-            html.AppendLine("</div>");
-
-            html.AppendLine("</section>");
+            case DashboardView.Config:
+                RenderConfigView(html, options);
+                break;
+            case DashboardView.System:
+                RenderSystemView(html, options);
+                break;
+            case DashboardView.Goal:
+                RenderGoalDetailView(html, kernel, goals, displayedGoals, options);
+                break;
+            default:
+                RenderOpsView(html, kernel, goals, displayedGoals, options);
+                break;
         }
 
         html.AppendLine("</main>");
@@ -402,6 +163,477 @@ public static partial class DashboardRenderer
 
         html.AppendLine("</body></html>");
         return html.ToString();
+    }
+
+    private static void RenderNavBar(StringBuilder html, DashboardRenderOptions options, IReadOnlyList<Goal> displayedGoals)
+    {
+        var active = options.View;
+        html.AppendLine("<nav class=\"dashboard-nav\">");
+        html.AppendLine($"<a href=\"/\"{(active == DashboardView.Ops ? " class=\"active\"" : "")}>Operations</a>");
+        html.AppendLine($"<a href=\"/config\"{(active == DashboardView.Config ? " class=\"active\"" : "")}>Configuration</a>");
+        html.AppendLine($"<a href=\"/system\"{(active == DashboardView.System ? " class=\"active\"" : "")}>System</a>");
+        if (!string.IsNullOrWhiteSpace(options.FocusGoalPrefix))
+        {
+            html.AppendLine($"<a href=\"/goal/{Encode(options.FocusGoalPrefix)}\"{(active == DashboardView.Goal ? " class=\"active\"" : "")}>Goal: {Encode(options.FocusGoalPrefix)}</a>");
+        }
+        html.AppendLine("</nav>");
+    }
+
+    private static void RenderConfigView(StringBuilder html, DashboardRenderOptions options)
+    {
+        if (options.HealthReport is not null)
+        {
+            RenderHealthReport(html, options.HealthReport, options.EnableOperatorControls);
+        }
+        else
+        {
+            html.AppendLine("<section><h2>Configuration</h2><p class=\"meta\">Health report is not available.</p></section>");
+        }
+    }
+
+    private static void RenderSystemView(StringBuilder html, DashboardRenderOptions options)
+    {
+        if (options.EnableOperatorControls)
+        {
+            RenderSystemDiagnostics(html, options.Workspace, options.ContinuationWatches ?? []);
+        }
+        else if (options.Workspace is not null)
+        {
+            RenderReadOnlyHostedContext(html, options.Workspace);
+        }
+        else
+        {
+            html.AppendLine("<section><h2>System</h2><p class=\"meta\">No workspace context available.</p></section>");
+        }
+    }
+
+    private static void RenderOpsView(
+        StringBuilder html,
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<Goal> goals,
+        IReadOnlyList<Goal> displayedGoals,
+        DashboardRenderOptions options)
+    {
+        if (options.EnableOperatorControls)
+        {
+            RenderCreateGoalForm(html);
+        }
+
+        if (goals.Count == 0)
+        {
+            html.AppendLine(options.EnableOperatorControls
+                ? "<section><h2>No goals</h2><p class=\"meta\">No active goals yet.</p></section>"
+                : "<section><h2>No goals</h2><p>Create a goal from the CLI to populate this dashboard.</p></section>");
+            return;
+        }
+
+        if (options.EnableOperatorControls && displayedGoals.Count < goals.Count)
+        {
+            var focusNote = string.IsNullOrWhiteSpace(options.FocusGoalPrefix)
+                ? string.Empty
+                : $" Focused goal filter: <code>{Encode(options.FocusGoalPrefix)}</code>.";
+            html.AppendLine($"<section><p class=\"meta\">Showing {displayedGoals.Count} of {goals.Count} goals.{focusNote}</p></section>");
+        }
+
+        RenderGlobalAttentionSummary(html, kernel, displayedGoals);
+
+        foreach (var goal in displayedGoals)
+        {
+            var monitor = kernel.BuildMonitor(goal.Id);
+            var verificationGate = kernel.BuildVerificationGate(goal.Id);
+            var evidence = kernel.BuildGoalEvidenceSummary(goal.Id);
+            var goalPrefix = goal.Id.Value[..8];
+            html.AppendLine("<section class=\"goal-card\">");
+            RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+
+            // Attention items — always visible in ops
+            if (monitor.AttentionItems.Count > 0)
+            {
+                html.AppendLine("<div class=\"goal-panel\">");
+                html.AppendLine("<h3>Needs attention</h3>");
+                foreach (var item in monitor.AttentionItems)
+                {
+                    var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
+                    html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(item.Message)}</div>");
+                }
+                html.AppendLine("</div>");
+            }
+
+            // Next steps — always visible in ops
+            var nextActions = kernel.BuildNextActions(goal.Id);
+            if (nextActions.Items.Count > 0)
+            {
+                html.AppendLine("<div class=\"goal-panel\">");
+                html.AppendLine("<h3>Recommended next steps</h3>");
+                var nextActionControlHeader = options.EnableOperatorControls ? "<th>Control</th>" : string.Empty;
+                html.AppendLine($"<table><thead><tr><th>Priority</th><th>Work item</th><th>Action</th><th>Suggested Command</th>{nextActionControlHeader}</tr></thead><tbody>");
+                for (var index = 0; index < nextActions.Items.Count; index++)
+                {
+                    var item = nextActions.Items[index];
+                    html.AppendLine("<tr>");
+                    html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
+                    if (options.EnableOperatorControls)
+                    {
+                        html.AppendLine($"<td>{RenderNextActionControl(goal, item)}</td>");
+                    }
+                    html.AppendLine("</tr>");
+                }
+                html.AppendLine("</tbody></table>");
+                html.AppendLine("</div>");
+            }
+
+            RenderSubscriptionRetryQueue(html, goal);
+
+            // Collapsed details: task status counts, work model
+            html.AppendLine("<details>");
+            html.AppendLine("<summary>Task status and work model</summary>");
+            html.AppendLine("<div class=\"goal-overview-grid\">");
+            html.AppendLine("<div class=\"goal-panel\">");
+            html.AppendLine("<h3>Task status</h3>");
+            html.AppendLine("<table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>");
+            foreach (var count in monitor.TaskStatusCounts)
+            {
+                html.AppendLine($"<tr><td>{Encode(Display(count.Status))}</td><td>{count.Count}</td></tr>");
+            }
+            html.AppendLine("</tbody></table>");
+            html.AppendLine("</div>");
+            html.AppendLine("</div>");
+            RenderGoalWorkModel(html, goal, verificationGate);
+            html.AppendLine("</details>");
+
+            html.AppendLine("</section>");
+        }
+
+        // Pending input forms for focused goal
+        if (options.EnableOperatorControls && !string.IsNullOrWhiteSpace(options.FocusGoalPrefix))
+        {
+            var focusedGoal = displayedGoals.FirstOrDefault(goal => goal.Id.Value.StartsWith(options.FocusGoalPrefix, StringComparison.OrdinalIgnoreCase));
+            if (focusedGoal is not null)
+            {
+                RenderPendingInputForms(html, kernel, focusedGoal);
+            }
+        }
+
+        if (options.EnableOperatorControls && goals.Count > 0)
+        {
+            RenderGoalArchiveControl(html, goals, options.FocusGoalPrefix);
+        }
+
+        if (options.EnableOperatorControls)
+        {
+            html.AppendLine("<div id=\"op-status\" class=\"statusline\" aria-live=\"polite\"></div>");
+        }
+    }
+
+    private static void RenderGoalDetailView(
+        StringBuilder html,
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<Goal> goals,
+        IReadOnlyList<Goal> displayedGoals,
+        DashboardRenderOptions options)
+    {
+        var goal = !string.IsNullOrWhiteSpace(options.FocusGoalPrefix)
+            ? goals.FirstOrDefault(g => g.Id.Value.StartsWith(options.FocusGoalPrefix, StringComparison.OrdinalIgnoreCase))
+            : displayedGoals.FirstOrDefault();
+        if (goal is null)
+        {
+            html.AppendLine("<section><h2>Goal not found</h2><p class=\"meta\">No goal matches the given prefix.</p></section>");
+            return;
+        }
+
+        var monitor = kernel.BuildMonitor(goal.Id);
+        var verificationGate = kernel.BuildVerificationGate(goal.Id);
+        var evidence = kernel.BuildGoalEvidenceSummary(goal.Id);
+        var goalPrefix = goal.Id.Value[..8];
+
+        html.AppendLine("<section class=\"goal-card\">");
+        RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+
+        // Attention items and next steps — open
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine("<h3>Needs attention</h3>");
+        if (monitor.AttentionItems.Count == 0)
+        {
+            html.AppendLine("<p class=\"ok\">No attention items.</p>");
+        }
+        else
+        {
+            foreach (var item in monitor.AttentionItems)
+            {
+                var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
+                html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(item.Message)}</div>");
+            }
+        }
+        html.AppendLine("</div>");
+
+        html.AppendLine("<div class=\"goal-work-grid\">");
+        // Human decisions
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine("<h3>Human decisions</h3>");
+        var humanInputWorklist = kernel.BuildHumanInputWorklist(goal.Id);
+        html.AppendLine($"<p class=\"{(humanInputWorklist.OpenCount == 0 ? "ok" : "bad")}\">Open: {humanInputWorklist.OpenCount}</p>");
+        html.AppendLine("<table><thead><tr><th>Request</th><th>Work item</th><th>Question</th><th>Command</th></tr></thead><tbody>");
+        if (humanInputWorklist.Items.Count == 0)
+        {
+            html.AppendLine("<tr><td colspan=\"4\">none</td></tr>");
+        }
+        else
+        {
+            foreach (var item in humanInputWorklist.Items)
+            {
+                var answerLink = options.EnableOperatorControls
+                    ? $"<br><a class=\"button-link\" href=\"#{Encode(BuildHumanInputFormAnchor(item.RequestId))}\">Answer</a>"
+                    : string.Empty;
+                html.AppendLine("<tr>");
+                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(item.Question)}<br><span class=\"meta\">{Encode(item.SuggestedAction)}</span></td><td><code>{Encode(BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
+                html.AppendLine("</tr>");
+            }
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+
+        // Next steps
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine("<h3>Recommended next steps</h3>");
+        var nextActionControlHeader = options.EnableOperatorControls ? "<th>Control</th>" : string.Empty;
+        html.AppendLine($"<table><thead><tr><th>Priority</th><th>Work item</th><th>Action</th><th>Suggested Command</th>{nextActionControlHeader}</tr></thead><tbody>");
+        var nextActions = kernel.BuildNextActions(goal.Id);
+        for (var index = 0; index < nextActions.Items.Count; index++)
+        {
+            var item = nextActions.Items[index];
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
+            if (options.EnableOperatorControls)
+            {
+                html.AppendLine($"<td>{RenderNextActionControl(goal, item)}</td>");
+            }
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+        html.AppendLine("</div>");
+
+        // Pending input forms
+        if (options.EnableOperatorControls)
+        {
+            RenderPendingInputForms(html, kernel, goal);
+        }
+
+        // Operator controls
+        if (options.EnableOperatorControls)
+        {
+            RenderGoalOperatorControls(html, kernel, goal);
+        }
+
+        RenderSubscriptionRetryQueue(html, goal);
+        RenderGoalWorkModel(html, goal, verificationGate);
+
+        // Readiness: goal completion open, others in <details>
+        html.AppendLine("<div class=\"goal-readiness-grid\">");
+        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine("<h3>Goal completion</h3>");
+        html.AppendLine($"<p class=\"{(acceptance.IsAccepted ? "ok" : "bad")}\">Accepted: {acceptance.IsAccepted} &middot; Tasks passed: {acceptance.PassedTasks}/{acceptance.TotalTasks} &middot; Open verification: {acceptance.OpenVerificationCount} &middot; Pending input: {acceptance.PendingHumanInputCount}</p>");
+        if (acceptance.Blockers.Count == 0)
+        {
+            html.AppendLine("<p class=\"ok\">No acceptance blockers.</p>");
+        }
+        else
+        {
+            html.AppendLine("<table><thead><tr><th>Scope</th><th>Blocker</th><th>Action</th><th>Command</th></tr></thead><tbody>");
+            foreach (var blocker in acceptance.Blockers)
+            {
+                int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
+                var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
+                html.AppendLine("<tr>");
+                html.AppendLine($"<td>{Encode(scope)}</td><td>{Encode(Display(blocker.Kind))}<br><span class=\"meta\">{Encode(blocker.Message)}</span></td><td>{Encode(blocker.SuggestedAction)}</td><td><code>{Encode(BuildAcceptanceSuggestedCommand(blocker, taskNumber))}</code></td>");
+                html.AppendLine("</tr>");
+            }
+            html.AppendLine("</tbody></table>");
+        }
+        html.AppendLine("</div>");
+
+        var verificationWorklist = kernel.BuildVerificationWorklist(goal.Id);
+        var verificationTodoOpen = verificationWorklist.OpenCount > 0 ? " open" : string.Empty;
+        html.AppendLine($"<details{verificationTodoOpen}>");
+        html.AppendLine("<summary>Verification to-do</summary>");
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine($"<p class=\"{(verificationWorklist.OpenCount == 0 ? "ok" : "bad")}\">Open: {verificationWorklist.OpenCount}</p>");
+        html.AppendLine("<table><thead><tr><th>#</th><th>Gate</th><th>Action</th><th>Command</th></tr></thead><tbody>");
+        if (verificationWorklist.Items.Count == 0)
+        {
+            html.AppendLine("<tr><td colspan=\"4\">none</td></tr>");
+        }
+        else
+        {
+            foreach (var item in verificationWorklist.Items)
+            {
+                var taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
+                html.AppendLine("<tr>");
+                html.AppendLine($"<td>{taskNumber}</td><td>{Encode(Display(item.GateStatus))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td>{Encode(item.SuggestedAction)}</td><td><code>{Encode(BuildVerificationSuggestedCommand(taskNumber, item.GateStatus))}</code></td>");
+                html.AppendLine("</tr>");
+            }
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+        html.AppendLine("</details>");
+
+        html.AppendLine("<details>");
+        html.AppendLine("<summary>Recorded proof</summary>");
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine($"<p>Execution: {evidence.TasksWithExecution} &middot; Dispatch: {evidence.TasksWithDispatch} &middot; Process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses}) &middot; Verification: {evidence.TasksWithVerification} (passed {evidence.PassedVerifications}, failed {evidence.FailedVerifications}) &middot; Pending input: {evidence.PendingHumanInputCount}</p>");
+        html.AppendLine("<table><thead><tr><th>#</th><th>Evidence</th><th>Message</th></tr></thead><tbody>");
+        foreach (var item in evidence.Tasks)
+        {
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.TaskId)}</td><td>{Encode(Display(item.LatestEvidence))}<br><span class=\"meta\">{item.Role} &middot; {Encode(Display(item.TaskStatus))}</span></td><td>{Encode(item.Message)}</td>");
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+        html.AppendLine("</details>");
+
+        html.AppendLine("<details>");
+        html.AppendLine("<summary>Task readiness</summary>");
+        html.AppendLine("<div class=\"goal-panel goal-panel-wide\">");
+        var stages = kernel.BuildStageReadinessReport(goal.Id);
+        html.AppendLine($"<p class=\"{(stages.IsReadyForAcceptance ? "ok" : "bad")}\">Ready for acceptance: {stages.IsReadyForAcceptance} &middot; Verified: {stages.VerifiedStages}/{stages.TotalStages} &middot; Open: {stages.OpenStages} &middot; Blocked: {stages.BlockedStages}</p>");
+        html.AppendLine("<table><thead><tr><th>#</th><th>Stage</th><th>Status</th><th>Action</th><th>Command</th></tr></thead><tbody>");
+        foreach (var stage in stages.Stages)
+        {
+            var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(stage.Description)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(stage.SuggestedAction)}<br><span class=\"meta\">{Encode(stage.Message)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(taskNumber, stage))}</code></td>");
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+        html.AppendLine("</details>");
+
+        html.AppendLine("<details>");
+        html.AppendLine("<summary>Verification status</summary>");
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine($"<p class=\"{(verificationGate.IsSatisfied ? "ok" : "bad")}\">Satisfied: {verificationGate.IsSatisfied}</p>");
+        html.AppendLine("<table><thead><tr><th>#</th><th>Gate</th><th>Message</th></tr></thead><tbody>");
+        foreach (var gate in verificationGate.Tasks)
+        {
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, gate.TaskId)}</td><td>{Encode(Display(gate.GateStatus))}</td><td>{Encode(gate.Message)}</td>");
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+        html.AppendLine("</details>");
+        html.AppendLine("</div>");
+
+        // Tasks table
+        html.AppendLine("<div class=\"goal-panel goal-panel-wide tasks-panel\">");
+        html.AppendLine("<h3>Tasks</h3>");
+        html.AppendLine("<table class=\"tasks-table\"><thead><tr><th>#</th><th>Role</th><th>Status</th><th>Gate</th><th>Description</th><th>Verification Plan</th><th>Latest Evidence</th></tr></thead><tbody>");
+        for (var index = 0; index < goal.Tasks.Count; index++)
+        {
+            var task = goal.Tasks[index];
+            var gate = verificationGate.Tasks.Single(item => item.TaskId == task.Id);
+            html.AppendLine("<tr class=\"task-summary-row\">");
+            html.AppendLine($"<td>{index + 1}</td><td>{task.RequiredRole}</td><td>{Encode(Display(task.Status))}</td><td>{RenderTaskGate(gate)}</td><td>{Encode(task.Description)}</td><td>{RenderVerificationPlan(task)}</td>");
+            html.AppendLine($"<td>{RenderEvidence(task)}</td>");
+            if (options.EnableOperatorControls)
+            {
+                html.AppendLine("</tr>");
+                html.AppendLine("<tr class=\"task-action-row\">");
+                html.AppendLine($"<td colspan=\"7\">{RenderTaskActions(goal, task)}</td>");
+            }
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</div>");
+
+        html.AppendLine("</section>");
+
+        if (options.EnableOperatorControls)
+        {
+            html.AppendLine("<div id=\"op-status\" class=\"statusline\" aria-live=\"polite\"></div>");
+        }
+    }
+
+    private static void RenderGoalHeader(
+        StringBuilder html,
+        Goal goal,
+        GoalMonitor monitor,
+        GoalVerificationGate verificationGate,
+        GoalEvidenceSummary evidence,
+        DashboardRenderOptions options)
+    {
+        var goalPrefix = goal.Id.Value[..8];
+        html.AppendLine("<div class=\"goal-header\">");
+        html.AppendLine($"<h2><a href=\"/goal/{Encode(goalPrefix)}\">{Encode(goal.Objective)}</a></h2>");
+        var goalJsonLink = options.Workspace is not null
+            ? $" &middot; <a href=\"/api/goals/{Encode(goalPrefix)}\" target=\"_blank\" rel=\"noopener\">Goal JSON</a>"
+            : string.Empty;
+        html.AppendLine($"<div class=\"meta\">Goal {Encode(goal.Id.Value)} &middot; <span class=\"pill\">{Encode(Display(goal.Status))}</span> &middot; Last event {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}{goalJsonLink}</div>");
+        html.AppendLine("</div>");
+        if (goal.Status == GoalStatus.Completed && verificationGate.IsSatisfied)
+        {
+            html.AppendLine("<div class=\"completion-banner\">");
+            html.AppendLine("<strong>Goal complete</strong>");
+            if (IsManualOnlyCompletion(evidence))
+            {
+                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed with manual-only verification. No execution, dispatch, or process proof is recorded; inspect the verification note before treating this as implemented work.</span>");
+            }
+            else
+            {
+                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. No operator action is required.</span>");
+            }
+            html.AppendLine("</div>");
+        }
+    }
+
+    private static void RenderGlobalAttentionSummary(
+        StringBuilder html,
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<Goal> displayedGoals)
+    {
+        html.AppendLine("<section>");
+        html.AppendLine("<h2>Goals</h2>");
+        html.AppendLine("<table><thead><tr><th>Goal</th><th>Status</th><th>Tasks</th><th>Attention</th><th>Pending Input</th></tr></thead><tbody>");
+        foreach (var goal in displayedGoals)
+        {
+            var monitor = kernel.BuildMonitor(goal.Id);
+            var prefix = goal.Id.Value[..8];
+            var attentionClass = monitor.AttentionItems.Count > 0 ? " class=\"bad\"" : "";
+            var inputClass = monitor.PendingHumanInputCount > 0 ? " class=\"bad\"" : "";
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td><a href=\"/goal/{Encode(prefix)}\">{Encode(TruncateObjective(goal.Objective))}</a></td>");
+            html.AppendLine($"<td><span class=\"pill\">{Encode(Display(goal.Status))}</span></td>");
+            html.AppendLine($"<td>{monitor.TotalTasks}</td>");
+            html.AppendLine($"<td{attentionClass}>{monitor.AttentionItems.Count}</td>");
+            html.AppendLine($"<td{inputClass}>{monitor.PendingHumanInputCount}</td>");
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</section>");
+    }
+
+    private static void RenderPendingInputForms(StringBuilder html, AgentOrchestratorKernel kernel, Goal goal)
+    {
+        var pending = kernel.HumanInputRequests
+            .Where(request => request.GoalId == goal.Id && !request.IsCompleted)
+            .OrderBy(request => request.RequestedAt)
+            .ToList();
+        if (pending.Count == 0) return;
+        html.AppendLine("<h3>Pending Input</h3>");
+        foreach (var request in pending)
+        {
+            RenderPendingInputForm(html, goal, request);
+        }
+    }
+
+    private static string TruncateObjective(string objective)
+    {
+        const int maxLength = 60;
+        return objective.Length <= maxLength
+            ? objective
+            : string.Concat(objective.AsSpan(0, maxLength - 1), "...");
     }
 
     private static void RenderSubscriptionRetryQueue(StringBuilder html, Goal goal)
@@ -486,11 +718,6 @@ public static partial class DashboardRenderer
 
     private static List<Goal> GetDisplayedGoals(IReadOnlyList<Goal> goals, DashboardRenderOptions options)
     {
-        if (!options.EnableOperatorControls)
-        {
-            return goals.ToList();
-        }
-
         var displayed = goals.Take(8).ToList();
         var focus = options.FocusGoalPrefix?.Trim();
         if (string.IsNullOrWhiteSpace(focus))
@@ -515,4 +742,3 @@ public static partial class DashboardRenderer
         evidence.TasksWithProcess == 0;
 
 }
-

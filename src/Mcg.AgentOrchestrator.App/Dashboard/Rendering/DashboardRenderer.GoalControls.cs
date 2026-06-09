@@ -67,21 +67,6 @@ public static partial class DashboardRenderer
         html.AppendLine("</section>");
         html.AppendLine("</div>");
         html.AppendLine("</div>");
-
-        var pending = kernel.HumanInputRequests
-            .Where(request => request.GoalId == goal.Id && !request.IsCompleted)
-            .OrderBy(request => request.RequestedAt)
-            .ToList();
-        if (pending.Count == 0)
-        {
-            return;
-        }
-
-        html.AppendLine("<h3>Pending Input</h3>");
-        foreach (var request in pending)
-        {
-            RenderPendingInputForm(html, goal, request);
-        }
     }
 
     private static void RenderPendingInputForm(StringBuilder html, Goal goal, HumanInputRequest request)

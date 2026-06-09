@@ -1,19 +1,25 @@
 using Microsoft.AspNetCore.Http;
 using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
+using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardEndpoints
 {
-    private static async Task<IResult> RenderDashboardAsync(HttpContext context, DashboardEndpointServices services)
+    private static async Task<IResult> RenderDashboardAsync(
+        HttpContext context,
+        DashboardEndpointServices services,
+        DashboardView view,
+        string? goalPrefix = null)
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var health = BuildHealthReport(services);
         var browserUrl = DashboardHost.GetBrowserUrl(services.HostArgs);
         var hostedUrlPrefixes = DashboardHost.GetHostedUrlPrefixes(services.HostArgs);
-        var focusGoalPrefix = context.Request.Query.TryGetValue("goal", out var focusGoalValues)
-            ? focusGoalValues.FirstOrDefault()
-            : null;
+        var focusGoalPrefix = goalPrefix
+            ?? (context.Request.Query.TryGetValue("goal", out var focusGoalValues)
+                ? focusGoalValues.FirstOrDefault()
+                : null);
         var html = DashboardRenderer.Render(
             current,
             new DashboardRenderOptions(
@@ -43,7 +49,8 @@ internal static partial class DashboardEndpoints
                     DashboardHost.GetHostedAccessNote(services.HostArgs.UrlPrefix, hostedUrlPrefixes),
                     BuildTestRuns(services)),
                 services.Continuations.GetStatuses(),
-                focusGoalPrefix));
+                focusGoalPrefix,
+                view));
         return Text(html, "text/html; charset=utf-8");
     }
 }

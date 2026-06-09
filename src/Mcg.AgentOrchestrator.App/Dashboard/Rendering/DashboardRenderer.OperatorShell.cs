@@ -8,13 +8,27 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 public static partial class DashboardRenderer
 {
-    private static void RenderGlobalOperatorControls(
+    private static void RenderCreateGoalForm(StringBuilder html)
+    {
+        html.AppendLine("<section>");
+        html.AppendLine("<h2>Create Goal</h2>");
+        html.AppendLine("<form class=\"controls compact\" data-action=\"/api/goals\">");
+        html.AppendLine("<div class=\"field\"><label for=\"new-goal\">Goal</label><input id=\"new-goal\" class=\"wide\" name=\"objective\" required></div>");
+        html.AppendLine("<div class=\"field\"><label for=\"new-goal-workflow\">Workflow</label><select id=\"new-goal-workflow\" name=\"workflow\"><option value=\"simple\">Simple task</option><option value=\"sdlc\">Full SDLC workflow</option></select></div>");
+        html.AppendLine("<input type=\"hidden\" name=\"autoHandoff\" value=\"false\">");
+        html.AppendLine("<label class=\"checkrow\" for=\"new-goal-auto-handoff\"><input id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\" checked>Automatically start subscription handoff</label>");
+        html.AppendLine("<button class=\"primary\" type=\"submit\">Create Goal</button>");
+        html.AppendLine("</form>");
+        html.AppendLine("</section>");
+    }
+
+    private static void RenderSystemDiagnostics(
         StringBuilder html,
         DashboardWorkspaceContext? workspace,
         IReadOnlyList<DashboardContinuationStatusDto> continuationWatches)
     {
         html.AppendLine("<section>");
-        html.AppendLine("<h2>Operator</h2>");
+        html.AppendLine("<h2>System</h2>");
         if (workspace is not null)
         {
             var workspaceLabel = GetWorkspaceLabel(workspace);
@@ -44,6 +58,11 @@ public static partial class DashboardRenderer
                 html.AppendLine($"<dt>Hosted URLs</dt><dd>{RenderHostedDashboardLinks(workspace.HostedDashboardPageUrls)}</dd>");
             }
 
+            if (!string.IsNullOrWhiteSpace(workspace.HostedAccessNote))
+            {
+                html.AppendLine($"<dt>Hosted access</dt><dd>{Encode(workspace.HostedAccessNote)}</dd>");
+            }
+
             if (!string.IsNullOrWhiteSpace(workspace.SourceSurveyUrl))
             {
                 html.AppendLine($"<dt>Source survey</dt><dd><a href=\"{Encode(workspace.SourceSurveyUrl)}\" target=\"_blank\" rel=\"noreferrer\">{Encode(workspace.SourceSurveyUrl)}</a></dd>");
@@ -52,11 +71,6 @@ public static partial class DashboardRenderer
             if (workspace.HostedSourceSurveyUrls is { Count: > 0 })
             {
                 html.AppendLine($"<dt>Hosted source survey</dt><dd>{RenderHostedDashboardLinks(workspace.HostedSourceSurveyUrls)}</dd>");
-            }
-
-            if (!string.IsNullOrWhiteSpace(workspace.HostedAccessNote))
-            {
-                html.AppendLine($"<dt>Hosted access</dt><dd>{Encode(workspace.HostedAccessNote)}</dd>");
             }
 
             html.AppendLine($"<dt>Restart command</dt><dd><code>{Encode(workspace.DashboardRestartCommand)}</code></dd>");
@@ -74,14 +88,6 @@ public static partial class DashboardRenderer
             html.AppendLine("</div>");
         }
 
-        html.AppendLine("<form class=\"controls compact\" data-action=\"/api/goals\">");
-        html.AppendLine("<div class=\"field\"><label for=\"new-goal\">Goal</label><input id=\"new-goal\" class=\"wide\" name=\"objective\" required></div>");
-        html.AppendLine("<div class=\"field\"><label for=\"new-goal-workflow\">Workflow</label><select id=\"new-goal-workflow\" name=\"workflow\"><option value=\"simple\">Simple task</option><option value=\"sdlc\">Full SDLC workflow</option></select></div>");
-        html.AppendLine("<input type=\"hidden\" name=\"autoHandoff\" value=\"false\">");
-        html.AppendLine("<label class=\"checkrow\" for=\"new-goal-auto-handoff\"><input id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\" checked>Automatically start subscription handoff</label>");
-        html.AppendLine("<button class=\"primary\" type=\"submit\">Create Goal</button>");
-        html.AppendLine("</form>");
-        html.AppendLine("<p class=\"section-note\">PowerShell: quote filters that contain | so they stay command arguments.</p>");
         RenderContinuationWatches(html, continuationWatches);
         html.AppendLine("<div id=\"op-status\" class=\"statusline\" aria-live=\"polite\"></div>");
         html.AppendLine("</section>");
@@ -424,8 +430,8 @@ public static partial class DashboardRenderer
         {
             html.AppendLine("<tr>");
             html.AppendLine($"<td>{Encode(profile.Name)}</td><td>{Encode(profile.Executable)}</td>");
-        html.AppendLine($"<td><code>{Encode(profile.CommandTemplate)}</code></td>");
-        html.AppendLine($"<td>{(profile.IsOptional ? "Optional" : "Required")}</td>");
+            html.AppendLine($"<td><code>{Encode(profile.CommandTemplate)}</code></td>");
+            html.AppendLine($"<td>{(profile.IsOptional ? "Optional" : "Required")}</td>");
             html.AppendLine($"<td class=\"{(profile.IsPatchCapable ? "ok" : "bad")}\">{(profile.IsPatchCapable ? "Patch-capable" : "No patching")}</td>");
             var profileOk = profile.IsResolvable &&
                 (!profile.IsEchoOnly || profile.Name.Equals("local-echo", StringComparison.OrdinalIgnoreCase));
@@ -643,5 +649,3 @@ public static partial class DashboardRenderer
         return html.ToString();
     }
 }
-
-

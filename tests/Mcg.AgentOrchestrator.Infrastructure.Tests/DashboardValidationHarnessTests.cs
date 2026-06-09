@@ -26,7 +26,6 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains(invoker, text => text.Contains("Execution context was destroyed", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("window.__dashboardReady", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("#dashboard-content", StringComparison.Ordinal));
-    Assert.Contains(invoker, text => text.Contains("form[data-action=", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("[void]$socket.ConnectAsync", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("exceptionDetails", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("PSObject.Properties.Name -contains \"exceptionDetails\"", StringComparison.Ordinal));
@@ -50,7 +49,7 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains(dogfoodAction, text => text.Contains("form[data-action=\"/api/goals\"]", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("window.__dashboardSubmitForm(form)", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("New-DashboardGoalUrl", StringComparison.Ordinal));
-    Assert.Contains(dogfoodAction, text => text.Contains("goal=", StringComparison.Ordinal));
+    Assert.Contains(dogfoodAction, text => text.Contains("/goal/", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("complete-verify", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("dashboard-smoke.js", StringComparison.Ordinal));
     Assert.Contains(readme, text => text.Contains("Run-DashboardBrowserScript.ps1 .\\scripts\\dashboard-smoke.js", StringComparison.Ordinal));

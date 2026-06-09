@@ -35,8 +35,8 @@ function Invoke-DashboardExpression {
 
 function New-DashboardGoalUrl {
     param([string]$GoalPrefix)
-    $separator = if ($Url.Contains("?")) { "&" } else { "?" }
-    return "$Url$separator`goal=$([Uri]::EscapeDataString($GoalPrefix))"
+    $baseUrl = $Url.TrimEnd('/')
+    return "$baseUrl/goal/$([Uri]::EscapeDataString($GoalPrefix))"
 }
 
 switch ($Action) {
