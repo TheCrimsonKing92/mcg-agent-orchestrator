@@ -200,7 +200,7 @@ public static partial class DashboardRenderer
             html.AppendLine($"<p>Prepared handoff for {Encode(task.LastDispatch.WorkerName)}.</p>");
             html.AppendLine($"<p class=\"meta\"><code>{Encode(task.LastDispatch.Command)}</code></p>");
             html.AppendLine("<div class=\"buttonbar\">");
-            html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"{prefix}/start\">Start prepared work</button>");
+            html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"{prefix}/start?confirmDispatchStart=true\">Start prepared work</button>");
             html.AppendLine($"<a href=\"{prefix}/brief\" target=\"_blank\" rel=\"noreferrer\">Review brief</a>");
             html.AppendLine("</div>");
         }
@@ -238,7 +238,7 @@ public static partial class DashboardRenderer
             html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/api-run?confirmTaskRun=true\">Explicit API run</button>");
         }
 
-        RenderAdvancedProcessAction(html, prefix, "start", "Start prepared work", GetStartDispatchReadiness(task));
+        RenderAdvancedProcessAction(html, prefix, "start?confirmDispatchStart=true", "Start prepared work", GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "cancel", "Cancel process", GetCancelProcessReadiness(task));
         if (task.LastProcess is not null)

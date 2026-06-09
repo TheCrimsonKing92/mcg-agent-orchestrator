@@ -115,7 +115,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 
         case "execute-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "execute-dispatch <task-number>");
+            CliArgumentParser.RequirePartCount(parts, 2, "execute-dispatch <task-number> --confirm-dispatch-start");
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-dispatch-start",
+                "execute-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var executeTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             new LocalDispatchRunner()
@@ -126,7 +130,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return true;
 
         case "start-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "start-dispatch <task-number>");
+            CliArgumentParser.RequirePartCount(parts, 2, "start-dispatch <task-number> --confirm-dispatch-start");
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-dispatch-start",
+                "start-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var startTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             new BackgroundDispatchRunner().StartLatestDispatch(context.Kernel, context.CurrentGoal.Id, startTask.Id, context.Workspace.LogDirectory);

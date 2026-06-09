@@ -145,8 +145,8 @@ profile-dispatch-ready <profile-name>
 subscription-dispatch <task-number>
 subscription-dispatch-ready
 start-subscription-ready --confirm-batch-start
-execute-dispatch <task-number>
-start-dispatch <task-number>
+execute-dispatch <task-number> --confirm-dispatch-start
+start-dispatch <task-number> --confirm-dispatch-start
 start-dispatches --confirm-batch-start
 refresh-dispatch <task-number>
 refresh-dispatches
@@ -212,8 +212,8 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch-ready
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-subscription-ready --confirm-batch-start
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- execute-dispatch 3
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatch 3
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- execute-dispatch 3 --confirm-dispatch-start
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatch 3 --confirm-dispatch-start
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatches --confirm-batch-start
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatch 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatches
@@ -235,13 +235,13 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 
 `ask <task-number> <question>` opens a task-scoped human input request. `ask-goal <question>` opens a goal-scoped request when the orchestrator needs clarification that is not tied to one task. `input-needed` lists only pending human input for the current or selected goal, including task context when available, and prints the `answer <request-id> <answer>` command for each open request. `pending` keeps the broader all-goals pending-input view. Model-backed agents, foreground dispatches, and refreshed background dispatches can request operator input by emitting a line that starts with `HUMAN_INPUT:` followed by the exact question; the task and goal pause until the request is answered.
 
-`dispatch` records work intent and marks the task running. `execute-dispatch` runs the latest dispatch command synchronously from the recorded working directory, records stdout/stderr/exit code, and marks the task completed on exit code `0` or failed otherwise, unless stdout or stderr includes `HUMAN_INPUT:` and pauses the task for operator input.
+`dispatch` records work intent and marks the task running. `execute-dispatch <task-number> --confirm-dispatch-start` runs the latest dispatch command synchronously from the recorded working directory, records stdout/stderr/exit code, and marks the task completed on exit code `0` or failed otherwise, unless stdout or stderr includes `HUMAN_INPUT:` and pauses the task for operator input.
 
 `brief` prints a role-specific prompt for the selected task, including the verification plan and the `HUMAN_INPUT:` directive agents should use when they cannot proceed without operator input. `worker-dispatch` writes that brief under `.orchestrator/prompts` and expands a command template. Supported placeholders are `{promptPath}`, `{goalId}`, `{taskId}`, `{role}`, and `{title}`. This is the generic bridge for local coding-agent CLIs; configure the template for the tool you actually use.
 
 `worker-profile` saves a reusable template by name. `worker-profile-check [name]` validates that saved profile commands are locally resolvable. `worker-profile-export <path>` writes the current profile catalog to a JSON file. `worker-profile-import <path> [merge|replace]` imports another catalog, merging by default or replacing the current catalog when requested. `profile-dispatch` uses a saved profile to create a prompt file and dispatch command. `profile-dispatch-ready` creates dispatches for all currently assigned tasks using one saved profile and reports the generated prompt paths. `subscription-plan` shows each task's effective complexity/model choice, how it maps to `codex-cli` or `claude-cli`, whether the profile exists, whether the executable resolves locally, and whether the task is ready to prepare. `subscription-dispatch` chooses `codex-cli` for assigned OpenAI agents and `claude-cli` for assigned Anthropic agents. `subscription-dispatch-ready` applies that mapping to all assigned tasks. `start-subscription-ready --confirm-batch-start` combines subscription dispatch preparation with starting every eligible background worker process. The default profile is `local-echo`.
 
-`start-dispatch` starts the latest dispatch command in a hidden PowerShell process, writes stdout/stderr/exit code under `.orchestrator/logs`, and records the process id. `start-dispatches --confirm-batch-start` starts every running task that has a recorded dispatch and no currently running process, allowing local workers to run concurrently, and reports ready/skipped task reasons. `refresh-dispatch` checks whether one process has exited; `refresh-dispatches` checks every running background process and reports ready/skipped task reasons. Completed background dispatches record the same verification evidence and task completion/failure as foreground execution, including `HUMAN_INPUT:` pause detection from captured stdout or stderr. Use `logs <task-number> [stdout|stderr|exit|all]` to inspect captured process output through the orchestrator.
+`start-dispatch <task-number> --confirm-dispatch-start` starts the latest dispatch command in a hidden PowerShell process, writes stdout/stderr/exit code under `.orchestrator/logs`, and records the process id. `start-dispatches --confirm-batch-start` starts every running task that has a recorded dispatch and no currently running process, allowing local workers to run concurrently, and reports ready/skipped task reasons. `refresh-dispatch` checks whether one process has exited; `refresh-dispatches` checks every running background process and reports ready/skipped task reasons. Completed background dispatches record the same verification evidence and task completion/failure as foreground execution, including `HUMAN_INPUT:` pause detection from captured stdout or stderr. Use `logs <task-number> [stdout|stderr|exit|all]` to inspect captured process output through the orchestrator.
 
 `cancel-dispatch` terminates the tracked background process tree and marks the task cancelled.
 
@@ -392,7 +392,7 @@ The dashboard host also exposes local JSON endpoints for scripted monitoring and
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/dispatch` with JSON like `{ "workerName": "local", "command": "Write-Output ok" }`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/profile-dispatch` with either a raw profile name body or JSON like `{ "profileName": "codex-cli" }`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/subscription-dispatch`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/start`
+- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/start?confirmDispatchStart=true`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/refresh`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/cancel`
 - `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/brief`

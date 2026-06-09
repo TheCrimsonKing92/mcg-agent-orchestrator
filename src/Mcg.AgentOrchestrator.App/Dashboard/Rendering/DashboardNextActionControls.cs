@@ -22,7 +22,7 @@ public static class DashboardNextActionControls
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
-                new DashboardNextActionControl("Start prepared work", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start"),
+                new DashboardNextActionControl("Start prepared work", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true"),
             NextActionKind.DelegatePendingTask =>
                 new DashboardNextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
             NextActionKind.InspectFailedTask when taskNumber is not null =>

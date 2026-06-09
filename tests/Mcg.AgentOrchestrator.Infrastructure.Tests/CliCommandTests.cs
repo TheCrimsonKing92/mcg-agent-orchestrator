@@ -336,6 +336,100 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_execute_dispatch_requires_confirm_flag")]
+    public void CliExecuteDispatchRequiresConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Avoid accidental foreground process start", [task]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("local", "Write-Output ok", root, DateTimeOffset.UtcNow));
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["execute-dispatch", "1"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-dispatch-start", ex!.Message);
+        Xunit.Assert.Empty(goal.Tasks.Single().VerificationHistory);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_start_dispatch_requires_confirm_flag")]
+    public void CliStartDispatchRequiresConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Avoid accidental background process start", [task]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("local", "Write-Output ok", root, DateTimeOffset.UtcNow));
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["start-dispatch", "1"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-dispatch-start", ex!.Message);
+        Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_start_dispatches_requires_confirm_flag")]
     public void CliStartDispatchesRequiresConfirmFlag()
     {

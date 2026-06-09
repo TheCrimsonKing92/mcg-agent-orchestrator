@@ -169,6 +169,7 @@ internal static partial class DashboardEndpoints
         var body = await ReadRequestBodyAsync(context.Request);
         var agents = services.LoadAgentCatalog().Agents;
         var confirmation = RequireTaskRunConfirmation(context, operation);
+        confirmation ??= RequireDispatchStartConfirmation(context, operation);
         if (confirmation is not null)
         {
             return confirmation;
@@ -351,6 +352,23 @@ internal static partial class DashboardEndpoints
             ? null
             : Text(
                 "dashboard invalid request: task run operations require confirmTaskRun=true because they can invoke model-backed work.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
+    }
+
+    private static IResult? RequireDispatchStartConfirmation(HttpContext context, string operation)
+    {
+        if (!operation.Equals("start", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var confirmed = context.Request.Query.TryGetValue("confirmDispatchStart", out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+        return confirmed
+            ? null
+            : Text(
+                "dashboard invalid request: prepared work start requires confirmDispatchStart=true because it can start a worker process.",
                 "text/plain; charset=utf-8",
                 StatusCodes.Status400BadRequest);
     }

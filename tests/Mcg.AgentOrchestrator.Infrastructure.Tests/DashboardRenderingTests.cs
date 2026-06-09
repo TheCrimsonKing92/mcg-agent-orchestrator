@@ -29,7 +29,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("Running dispatch", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("dotnet test", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Recommended next steps", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("execute-dispatch 3", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("execute-dispatch 3 --confirm-dispatch-start", StringComparison.Ordinal));
     Assert.False(html.Contains("data-next-action=", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Goal completion", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Accepted: False", StringComparison.Ordinal));
@@ -867,7 +867,7 @@ public sealed class DashboardRenderingTests
         new NextActionItem(NextActionKind.ExecuteRecordedDispatch, task.Id, null, "Start it"),
         "Start prepared work",
         "POST",
-        $"/api/goals/{goalPrefix}/tasks/3/start");
+        $"/api/goals/{goalPrefix}/tasks/3/start?confirmDispatchStart=true");
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.DelegatePendingTask, null, null, "Delegate"),
@@ -974,7 +974,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Contains(html, text => text.Contains("Prepared handoff for codex-cli.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>codex exec prompt.md</code>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/start\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Start prepared work", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"href=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/brief\"", StringComparison.Ordinal));
 }
@@ -1107,7 +1107,7 @@ public sealed class DashboardRenderingTests
     var runningControls = ExtractTaskControls(html, 2);
     var noProcessControls = ExtractTaskControls(html, 3);
 
-    Assert.Contains(preparedControls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start\"", StringComparison.Ordinal));
+    Assert.Contains(preparedControls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.False(preparedControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/refresh\"", StringComparison.Ordinal));
     Assert.False(preparedControls.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/cancel\"", StringComparison.Ordinal));
     Assert.Contains(preparedControls, text => text.Contains("Task has no background process to refresh.", StringComparison.Ordinal));
