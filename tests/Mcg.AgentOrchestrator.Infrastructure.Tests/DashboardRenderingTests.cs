@@ -89,6 +89,17 @@ public sealed class DashboardRenderingTests
     Assert.Equal("gpt-5.5", agent.ComplexModel!.ModelName);
     Assert.Equal("high", agent.ComplexModel.ReasoningEffort);
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_defaults_goal_creation_to_manual_handoff")]
+    public void DashboardRequestParserDefaultsGoalCreationToManualHandoff()
+{
+    var omitted = DashboardRequestParser.ParseCreateGoalSubmission(
+        "{\"objective\":\"Inspect plan before spending credits\",\"workflow\":\"simple\"}");
+    var explicitAutomatic = DashboardRequestParser.ParseCreateGoalSubmission(
+        "{\"objective\":\"Start now\",\"workflow\":\"simple\",\"autoHandoff\":true}");
+
+    Assert.False(omitted.AutoHandoff);
+    Assert.True(explicitAutomatic.AutoHandoff);
+}
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_operator_controls")]
     public void DashboardRendererCanEmitOperatorControls()
 {
@@ -231,6 +242,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(opsHtml, text => text.Contains("<option value=\"simple\">Simple task</option>", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("name=\"autoHandoff\" value=\"false\"", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\"", StringComparison.Ordinal));
+    Assert.False(opsHtml.Contains("id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\" checked", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("Automatically start subscription handoff", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("data-next-action=\"RefreshRunningProcess\"", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("data-next-action=\"DelegatePendingTask\"", StringComparison.Ordinal));

@@ -39,10 +39,17 @@ public sealed class DashboardHostTests
         using var simpleGoalResponse = await client.PostAsync(
             new Uri(new Uri(url), "api/goals"),
             new StringContent(
-                "{\"objective\":\"Simple hosted dashboard goal\",\"workflow\":\"simple\"}",
+                "{\"objective\":\"Simple hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":true}",
                 System.Text.Encoding.UTF8,
                 "application/json"));
         var simpleGoal = await simpleGoalResponse.Content.ReadAsStringAsync();
+        using var defaultManualGoalResponse = await client.PostAsync(
+            new Uri(new Uri(url), "api/goals"),
+            new StringContent(
+                "{\"objective\":\"Default manual hosted dashboard goal\",\"workflow\":\"simple\"}",
+                System.Text.Encoding.UTF8,
+                "application/json"));
+        var defaultManualGoal = await defaultManualGoalResponse.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.Created, simpleGoalResponse.StatusCode);
         var simpleGoalId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
         var simpleGoalDetail = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}"));
@@ -90,12 +97,16 @@ public sealed class DashboardHostTests
                 dispatch.ValueKind == JsonValueKind.Object));
         }
         Assert.Equal(HttpStatusCode.Created, manualGoalResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, defaultManualGoalResponse.StatusCode);
         Assert.Contains(simpleGoal, text => text.Contains("\"Status\": \"Running\"", StringComparison.Ordinal));
         Assert.True(GoalResponseContainsDispatch(simpleGoal));
         Assert.True(GoalResponseContainsProcess(simpleGoal));
         Assert.Contains(manualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
         Assert.False(GoalResponseContainsDispatch(manualGoal));
         Assert.False(GoalResponseContainsProcess(manualGoal));
+        Assert.Contains(defaultManualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
+        Assert.False(GoalResponseContainsDispatch(defaultManualGoal));
+        Assert.False(GoalResponseContainsProcess(defaultManualGoal));
         Assert.Equal("no-store", cssResponse.Headers.CacheControl?.ToString());
         Assert.Equal(HttpStatusCode.NotFound, missingTaskResponse.StatusCode);
         Assert.Contains(missingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));

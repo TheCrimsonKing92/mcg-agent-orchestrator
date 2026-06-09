@@ -58,6 +58,8 @@ When the task involves subscription/dogfood execution:
 - Treat `Write-Output {promptPath}` profiles as echo-only, not real execution.
 - After dispatch, confirm evidence, process logs, exit code, and verification records; never trust task status alone.
 - When credits are constrained, inspect existing continuations/evidence/logs and cancel stale work before starting new agents.
+- Prefer focused checks such as `/api/goals/{goalPrefix}/work-summary` and `Invoke-DashboardApi.ps1 -Path api/goals/<prefix>/work-summary` before broad dashboard JSON or HTML reads.
+- Prefer checked-in helpers (`Invoke-DashboardApi.ps1`, `Run-DashboardBrowserScript.ps1`, `Invoke-DashboardDogfoodAction.ps1`) over one-off browser/API scripts.
 
 ## Safety
 
@@ -69,6 +71,6 @@ Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalo
 
 ## Evidence
 
-Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durable product friction. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up.
+Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durable product friction. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up. For subscription/API-authored work, also record the selected model or launcher and whether it was adequate, overkill, or underpowered for the task so future model-selection tuning has evidence.
 
 Do not paste full dashboard responses, full prompts, full logs, or long API payloads.

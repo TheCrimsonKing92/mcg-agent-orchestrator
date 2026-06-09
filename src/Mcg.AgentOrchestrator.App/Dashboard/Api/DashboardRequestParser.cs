@@ -61,7 +61,7 @@ public static CreateGoalSubmissionDto ParseCreateGoalSubmission(string body)
     return new CreateGoalSubmissionDto(
         submission.Objective.Trim(),
         workflow?.ToLowerInvariant(),
-        hasAutoHandoff ? submission.AutoHandoff : true);
+        hasAutoHandoff && submission.AutoHandoff);
 }
 
 public static AddTaskSubmissionDto ParseAddTaskSubmission(string body)

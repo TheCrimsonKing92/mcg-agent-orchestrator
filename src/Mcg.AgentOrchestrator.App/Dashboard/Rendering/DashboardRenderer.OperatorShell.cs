@@ -16,7 +16,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<div class=\"field\"><label for=\"new-goal\">Goal</label><input id=\"new-goal\" class=\"wide\" name=\"objective\" required></div>");
         html.AppendLine("<div class=\"field\"><label for=\"new-goal-workflow\">Workflow</label><select id=\"new-goal-workflow\" name=\"workflow\"><option value=\"simple\">Simple task</option><option value=\"sdlc\">Full SDLC workflow</option></select></div>");
         html.AppendLine("<input type=\"hidden\" name=\"autoHandoff\" value=\"false\">");
-        html.AppendLine("<label class=\"checkrow\" for=\"new-goal-auto-handoff\"><input id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\" checked>Automatically start subscription handoff</label>");
+        html.AppendLine("<label class=\"checkrow\" for=\"new-goal-auto-handoff\"><input id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\">Automatically start subscription handoff</label>");
         html.AppendLine("<button class=\"primary\" type=\"submit\">Create Goal</button>");
         html.AppendLine("</form>");
         html.AppendLine("</section>");
