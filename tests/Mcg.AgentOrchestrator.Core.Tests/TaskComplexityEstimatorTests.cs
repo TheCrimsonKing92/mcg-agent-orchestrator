@@ -24,6 +24,17 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Complex, complexity);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_requires_task_text_to_drive_complexity")]
+    public void TaskComplexityEstimatorRequiresTaskTextToDriveComplexity()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Update the production integration test label.",
+            ComplexGoalObjective,
+            AgentRole.Tester);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_uses_complex_model_only_for_complex_task_text")]
     public void TaskComplexityEstimatorUsesComplexModelOnlyForComplexTaskText()
     {

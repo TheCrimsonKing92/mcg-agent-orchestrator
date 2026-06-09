@@ -17,7 +17,7 @@ public static class TaskComplexityEstimator
         var goalContextScore = Math.Min(ScoreText(goalObjective), 2);
         var score = taskScore + goalContextScore;
 
-        return score >= 4 ? TaskComplexity.Complex : TaskComplexity.Simple;
+        return taskScore >= 3 && score >= 4 ? TaskComplexity.Complex : TaskComplexity.Simple;
     }
 
     public static ModelProfile ResolveModel(AgentDefinition agent, TaskComplexity complexity, string taskDescription, string goalObjective)
