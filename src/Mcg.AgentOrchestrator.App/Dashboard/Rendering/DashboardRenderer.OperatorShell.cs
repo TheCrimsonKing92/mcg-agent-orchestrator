@@ -407,7 +407,7 @@ public static partial class DashboardRenderer
             html.AppendLine("<tr>");
             var subscription = string.IsNullOrWhiteSpace(agent.SubscriptionProfileName)
                 ? "<span class=\"meta\">none</span>"
-                : $"{Encode(agent.SubscriptionProfileName)}<br><span class=\"meta\">{Encode(agent.SubscriptionModelAlias ?? "default CLI model")}</span>";
+                : $"{Encode(agent.SubscriptionProfileName)}<br><span class=\"meta\">{Encode(agent.SubscriptionModelAlias ?? "API model")}</span>";
             var complexLabel = agent.ComplexModelName is not null
                 ? $"<br><span class=\"meta\">complex: {Encode(agent.ComplexModelName)} reasoning {Encode(agent.ComplexReasoningEffort ?? "default")} @ {DisplayMaxTokens(agent.ComplexProviderName ?? providerForDefaults, agent.ComplexMaxOutputTokens, complex: true)}</span>"
                 : "";
@@ -511,7 +511,7 @@ public static partial class DashboardRenderer
         RenderSubscriptionProfileOptions(html, provider, subscriptionProfile, workerProfiles);
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>CLI model alias</label><select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\">");
-        RenderProviderSelectOptions(html, provider, agent.SubscriptionModelAlias, SubscriptionModelOptions);
+        RenderProviderSelectOptions(html, provider, agent.SubscriptionModelAlias ?? DefaultSubscriptionModelAlias(provider), SubscriptionModelOptions);
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>CLI reasoning</label><select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\">");
         RenderProviderSelectOptions(html, provider, agent.SubscriptionReasoningEffort, SubscriptionReasoningOptions);
@@ -560,6 +560,21 @@ public static partial class DashboardRenderer
         if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
         {
             return "claude-cli";
+        }
+
+        return string.Empty;
+    }
+
+    private static string DefaultSubscriptionModelAlias(string provider)
+    {
+        if (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+        {
+            return "gpt-5.3-codex";
+        }
+
+        if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-sonnet";
         }
 
         return string.Empty;
@@ -641,8 +656,8 @@ public static partial class DashboardRenderer
         }
 
         return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-            ? [("", "Default CLI model"), ("claude-sonnet", "Claude Sonnet"), ("claude-opus", "Claude Opus")]
-            : [("", "Default CLI model"), ("gpt-5.3-codex", "GPT-5.3-Codex"), ("gpt-5.5", "GPT-5.5")];
+            ? [("claude-sonnet", "Claude Sonnet"), ("", "Use API model"), ("claude-opus", "Claude Opus (complex)")]
+            : [("gpt-5.3-codex", "GPT-5.3-Codex"), ("", "Use API model"), ("gpt-5.5", "GPT-5.5 (complex)")];
     }
 
     private static IReadOnlyList<(string Value, string Label)> SubscriptionReasoningOptions(string provider)

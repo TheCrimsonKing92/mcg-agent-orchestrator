@@ -65,15 +65,17 @@ const agentProviderOptions = {
   OpenAI: {
     apiModels: [['gpt-5.4-mini','GPT-5.4 mini'], ['gpt-5.4','GPT-5.4'], ['gpt-5.4-pro','GPT-5.4 pro'], ['gpt-5.5','GPT-5.5'], ['gpt-5.5-pro','GPT-5.5 pro'], ['gpt-5.4-nano','GPT-5.4 nano'], ['gpt-5.3-codex','GPT-5.3-Codex'], ['gpt-5-mini','GPT-5 mini'], ['gpt-5-nano','GPT-5 nano'], ['gpt-5.2','GPT-5.2 (previous)']],
     apiReasoning: [['','Default'], ['none','None'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high']],
-    subscriptionModels: [['','Default CLI model'], ['gpt-5.3-codex','GPT-5.3-Codex'], ['gpt-5.5','GPT-5.5']],
+    subscriptionModels: [['gpt-5.3-codex','GPT-5.3-Codex'], ['','Use API model'], ['gpt-5.5','GPT-5.5 (complex)']],
     subscriptionReasoning: [['','Default'], ['none','None'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high']],
+    defaultSubscriptionModel: 'gpt-5.3-codex',
     preferredProfile: 'codex-cli'
   },
   Anthropic: {
     apiModels: [['claude-sonnet-4-20250514','Claude Sonnet 4'], ['claude-opus-4-20250514','Claude Opus 4']],
     apiReasoning: [['','Default']],
-    subscriptionModels: [['','Default CLI model'], ['claude-sonnet','Claude Sonnet'], ['claude-opus','Claude Opus']],
+    subscriptionModels: [['claude-sonnet','Claude Sonnet'], ['','Use API model'], ['claude-opus','Claude Opus (complex)']],
     subscriptionReasoning: [['','Default']],
+    defaultSubscriptionModel: 'claude-sonnet',
     preferredProfile: 'claude-cli'
   },
   Ollama: {
@@ -81,6 +83,7 @@ const agentProviderOptions = {
     apiReasoning: [['','Default']],
     subscriptionModels: [['','No subscription model']],
     subscriptionReasoning: [['','Default']],
+    defaultSubscriptionModel: '',
     preferredProfile: ''
   }
 };
@@ -124,7 +127,7 @@ function syncAgentConfig(form, preserve){
   setOptions(form.querySelector('select[name="modelName"]'), options.apiModels, keep ? form.querySelector('select[name="modelName"]')?.value : options.apiModels[0]?.[0], keep);
   setOptions(form.querySelector('select[name="reasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="reasoningEffort"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="subscriptionProfileName"]'), profileOptions(form, options.preferredProfile), keep ? form.querySelector('select[name="subscriptionProfileName"]')?.value : options.preferredProfile, keep);
-  setOptions(form.querySelector('select[name="subscriptionModelAlias"]'), options.subscriptionModels, keep ? form.querySelector('select[name="subscriptionModelAlias"]')?.value : '', keep);
+  setOptions(form.querySelector('select[name="subscriptionModelAlias"]'), options.subscriptionModels, keep ? form.querySelector('select[name="subscriptionModelAlias"]')?.value : options.defaultSubscriptionModel || '', keep);
   setOptions(form.querySelector('select[name="subscriptionReasoningEffort"]'), options.subscriptionReasoning, keep ? form.querySelector('select[name="subscriptionReasoningEffort"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="complexReasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="complexReasoningEffort"]')?.value : '', keep);
   const maxTokens = form.querySelector('input[name="maxOutputTokens"]');

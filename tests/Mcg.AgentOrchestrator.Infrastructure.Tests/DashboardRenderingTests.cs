@@ -641,12 +641,18 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("<option value=\"gpt-5.3-codex\" selected>GPT-5.3-Codex</option>", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("<option value=\"\">Use API model</option>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"1024\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"1200\"", StringComparison.Ordinal));
     AssertOpenAiModelOrderIsCostAware(configHtml);
     AssertOpenAiModelOrderIsCostAware(DashboardAssets.OperatorControlsScript);
+    Assert.False(configHtml.Contains("Default CLI model", StringComparison.Ordinal));
+    Assert.False(DashboardAssets.OperatorControlsScript.Contains("Default CLI model", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("defaultSubscriptionModel: 'gpt-5.3-codex'", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("defaultSubscriptionModel: 'claude-sonnet'", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("maxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexMaxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexProviderName", StringComparison.Ordinal));
