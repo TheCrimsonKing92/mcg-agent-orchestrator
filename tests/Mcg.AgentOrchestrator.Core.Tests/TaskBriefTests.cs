@@ -96,6 +96,24 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('x', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_verification_plan")]
+    public void BuildTaskBriefTrimsNoisyVerificationPlan()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Trim noisy verification plan");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var plan = $"plan-start {new string('p', 1600)} plan-tail";
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, plan);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("plan-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("plan-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('p', 1600), StringComparison.Ordinal));
+    Assert.Equal(plan, task.VerificationPlan);
+}
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {

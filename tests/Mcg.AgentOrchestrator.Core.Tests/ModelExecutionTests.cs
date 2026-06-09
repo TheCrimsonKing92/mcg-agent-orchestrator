@@ -171,6 +171,30 @@ public sealed class ModelExecutionTests
     Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!prompt.Contains(new string('z', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_verification_plan_in_prompt")]
+    public async Task ExecuteAssignedTaskTrimsNoisyVerificationPlanInPrompt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Trim noisy API verification plan");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var plan = $"api-plan-start {new string('v', 1600)} api-plan-tail";
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, plan);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("api-plan-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("api-plan-tail", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains(new string('v', 1600), StringComparison.Ordinal));
+    Assert.Equal(plan, task.VerificationPlan);
+}
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_excludes_unrelated_task_timeline_from_prompt")]
     public async Task ExecuteAssignedTaskExcludesUnrelatedTaskTimelineFromPrompt()
 {

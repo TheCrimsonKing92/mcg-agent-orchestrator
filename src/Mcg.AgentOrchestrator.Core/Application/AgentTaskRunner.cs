@@ -123,7 +123,7 @@ public sealed class AgentTaskRunner
             $"Task: {task.Description}{Environment.NewLine}" +
             $"Task role: {task.RequiredRole}{Environment.NewLine}" +
             $"Current task status: {task.Status}{Environment.NewLine}" +
-            $"Verification plan: {task.VerificationPlan ?? "none"}{Environment.NewLine}" +
+            $"Verification plan: {FormatVerificationPlan(task.VerificationPlan)}{Environment.NewLine}" +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role)}{Environment.NewLine}" +
             $"Recent timeline:{Environment.NewLine}{timeline}";
 
@@ -136,6 +136,13 @@ public sealed class AgentTaskRunner
             systemPrompt,
             [new ModelMessage("user", userPrompt)],
             new ModelOptions(Temperature: 0.2, MaxOutputTokens: resolvedModel.MaxOutputTokens ?? 1200, ReasoningEffort: resolvedModel.ReasoningEffort, ModelName: resolvedModel.ModelName));
+    }
+
+    private static string FormatVerificationPlan(string? verificationPlan)
+    {
+        return string.IsNullOrWhiteSpace(verificationPlan)
+            ? "none"
+            : PromptContextFormatter.TrimPromptBlock(verificationPlan);
     }
 
     private static string TrimForTimeline(string value)

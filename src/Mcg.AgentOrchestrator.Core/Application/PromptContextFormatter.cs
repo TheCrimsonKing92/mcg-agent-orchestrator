@@ -2,9 +2,26 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class PromptContextFormatter
 {
+    private const int PromptBlockMaxChars = 1200;
+    private const int PromptBlockHeadChars = 800;
+    private const int PromptBlockTailChars = 400;
     private const int TimelineMessageMaxChars = 240;
     private const int TimelineMessageHeadChars = 170;
     private const int TimelineMessageTailChars = 60;
+
+    public static string TrimPromptBlock(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length <= PromptBlockMaxChars)
+        {
+            return trimmed;
+        }
+
+        var omitted = trimmed.Length - PromptBlockHeadChars - PromptBlockTailChars;
+        return trimmed[..PromptBlockHeadChars] +
+            $"{Environment.NewLine}...[truncated {omitted} chars for prompt budget]...{Environment.NewLine}" +
+            trimmed[^PromptBlockTailChars..];
+    }
 
     public static string FormatTimelineEvent(ProgressEvent evt, bool includeTimestamp)
     {

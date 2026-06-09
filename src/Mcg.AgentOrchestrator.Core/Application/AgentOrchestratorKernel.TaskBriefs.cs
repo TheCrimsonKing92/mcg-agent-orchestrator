@@ -2,10 +2,6 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
-    private const int BriefEvidenceMaxChars = 1200;
-    private const int BriefEvidenceHeadChars = 800;
-    private const int BriefEvidenceTailChars = 400;
-
     public HumanInputRequest GetHumanInputRequest(HumanInputRequestId requestId)
     {
         return _humanInputRequests.TryGetValue(requestId, out var request)
@@ -55,7 +51,7 @@ public sealed partial class AgentOrchestratorKernel
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
             lines.Add("## Verification Plan");
-            lines.Add(task.VerificationPlan);
+            lines.Add(PromptContextFormatter.TrimPromptBlock(task.VerificationPlan));
             lines.Add(string.Empty);
         }
 
@@ -72,7 +68,7 @@ public sealed partial class AgentOrchestratorKernel
         if (task.LastExecution is not null)
         {
             lines.Add("## Last Model Output");
-            lines.Add(TrimBriefEvidence(task.LastExecution.Output));
+            lines.Add(PromptContextFormatter.TrimPromptBlock(task.LastExecution.Output));
             lines.Add(string.Empty);
         }
 
@@ -91,8 +87,8 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"Command: {task.LastVerification.Command}");
             lines.Add($"Exit code: {task.LastVerification.ExitCode}");
             lines.Add($"Verification history count: {task.VerificationHistory.Count}");
-            lines.Add($"Stdout: {TrimBriefEvidence(task.LastVerification.StandardOutput)}");
-            lines.Add($"Stderr: {TrimBriefEvidence(task.LastVerification.StandardError)}");
+            lines.Add($"Stdout: {PromptContextFormatter.TrimPromptBlock(task.LastVerification.StandardOutput)}");
+            lines.Add($"Stderr: {PromptContextFormatter.TrimPromptBlock(task.LastVerification.StandardError)}");
             lines.Add(string.Empty);
         }
 
@@ -109,19 +105,4 @@ public sealed partial class AgentOrchestratorKernel
             $"{task.RequiredRole}: {task.Description}",
             string.Join(Environment.NewLine, lines));
     }
-
-    private static string TrimBriefEvidence(string value)
-    {
-        var trimmed = value.Trim();
-        if (trimmed.Length <= BriefEvidenceMaxChars)
-        {
-            return trimmed;
-        }
-
-        var omitted = trimmed.Length - BriefEvidenceHeadChars - BriefEvidenceTailChars;
-        return trimmed[..BriefEvidenceHeadChars] +
-            $"{Environment.NewLine}...[truncated {omitted} chars for prompt budget]...{Environment.NewLine}" +
-            trimmed[^BriefEvidenceTailChars..];
-    }
-
 }
