@@ -1,5 +1,7 @@
 # AGENTS
 
+**Attention is scarce and must be preserved.** This is fundamentally different from "the more information the better." This principle applies everywhere, but it matters most in the dashboard — the operator's primary interface for monitoring and steering orchestration. Dashboard panels, status lines, evidence summaries, and API responses must be organized and sized so the operator can scan them in seconds, not minutes. Show what changed, what's blocked, and what needs a decision; suppress everything else. A dense wall of status text is worse than no status at all, because it trains the operator to stop looking. The same discipline applies to agent outputs, code comments, diagnostic dumps, and evidence records: emit only what changes a decision or unblocks the next step. When in doubt, prefer a short, precise result over a comprehensive one.
+
 - Prefer `rg --files -g "!**/bin/**" -g "!**/obj/**" -g "!**/.scratch/**"` or equivalent filters when surveying source. Build outputs, browser profiles, and scratch artifacts from earlier runs may exist locally and should not be treated as source structure.
 - Core and Infrastructure intentionally keep flat public namespaces (`Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`) while using folders for human navigation. Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
 
