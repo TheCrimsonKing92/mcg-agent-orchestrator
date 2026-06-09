@@ -171,6 +171,27 @@ public sealed class ModelExecutionTests
     Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!prompt.Contains(new string('z', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_excludes_unrelated_task_timeline_from_prompt")]
+    public async Task ExecuteAssignedTaskExcludesUnrelatedTaskTimelineFromPrompt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Keep API prompt focused");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var tester = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+    kernel.SetTaskVerificationPlan(goal.Id, tester.Id, $"unrelated-tester-noise {new string('q', 400)}");
+    kernel.SetTaskVerificationPlan(goal.Id, developer.Id, "developer-specific-plan");
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, developer.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("developer-specific-plan", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("unrelated-tester-noise", StringComparison.Ordinal));
+}
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_complex_model_only_for_complex_tasks")]
     public async Task ExecuteAssignedTaskUsesComplexModelOnlyForComplexTasks()
