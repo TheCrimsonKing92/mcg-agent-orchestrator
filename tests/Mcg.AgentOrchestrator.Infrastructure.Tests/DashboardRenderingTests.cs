@@ -871,15 +871,19 @@ public sealed class DashboardRenderingTests
         [
             new TaskSpec(TaskId.New(), "Subscription preferred", AgentRole.Developer),
             new TaskSpec(TaskId.New(), "Flexible execution", AgentRole.Tester),
-            new TaskSpec(TaskId.New(), "API execution", AgentRole.Reviewer)
+            new TaskSpec(TaskId.New(), "API execution", AgentRole.Reviewer),
+            new TaskSpec(TaskId.New(), "Flexible execution with dispatch evidence", AgentRole.Researcher)
         ]);
     var agents = new[]
     {
         Agent(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription),
         Agent(AgentRole.Tester, AgentExecutionPolicy.AnyAvailable),
-        Agent(AgentRole.Reviewer, AgentExecutionPolicy.ApiOnly)
+        Agent(AgentRole.Reviewer, AgentExecutionPolicy.ApiOnly),
+        Agent(AgentRole.Researcher, AgentExecutionPolicy.AnyAvailable)
     };
     kernel.ActivateGoal(goal.Id, agents);
+    var dispatchedTask = goal.Tasks[3];
+    kernel.RecordTaskDispatch(goal.Id, dispatchedTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", DateTimeOffset.UtcNow));
 
     var goalPrefix = goal.Id.Value[..8];
     var health = new OrchestratorHealthReport(
@@ -887,7 +891,8 @@ public sealed class DashboardRenderingTests
         [
             Validation(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription),
             Validation(AgentRole.Tester, AgentExecutionPolicy.AnyAvailable),
-            Validation(AgentRole.Reviewer, AgentExecutionPolicy.ApiOnly)
+            Validation(AgentRole.Reviewer, AgentExecutionPolicy.ApiOnly),
+            Validation(AgentRole.Researcher, AgentExecutionPolicy.AnyAvailable)
         ],
         []);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
@@ -902,6 +907,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run\">Explicit API run</button>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run\">Run task</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 3</code>", StringComparison.Ordinal));

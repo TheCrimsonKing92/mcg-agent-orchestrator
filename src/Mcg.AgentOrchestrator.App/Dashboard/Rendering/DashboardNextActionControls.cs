@@ -67,7 +67,19 @@ public static class DashboardNextActionControls
         TaskId? taskId,
         IReadOnlyList<AgentConfigurationValidation>? agents = null)
     {
-        return ResolveTaskExecutionPolicy(goal, taskId, agents) is AgentExecutionPolicy.AnyAvailable;
+        if (ResolveTaskExecutionPolicy(goal, taskId, agents) is not AgentExecutionPolicy.AnyAvailable || taskId is null)
+        {
+            return false;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        return task is not null &&
+            task.Status == WorkTaskStatus.Assigned &&
+            task.LastDispatch is null &&
+            task.LastProcess is null &&
+            task.LastExecution is null &&
+            task.LastVerification is null &&
+            task.SubscriptionRetryAfter is null;
     }
 
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
