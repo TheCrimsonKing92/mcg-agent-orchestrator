@@ -356,6 +356,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
+    AssertOpenAiModelOrderIsCostAware(configHtml);
+    AssertOpenAiModelOrderIsCostAware(DashboardAssets.OperatorControlsScript);
     Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/worker-profiles\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"commandTemplate\"", StringComparison.Ordinal));
 
@@ -826,5 +828,15 @@ static string ExtractTaskControls(string html, int taskNumber)
     readyKernel.ActivateGoal(readyGoal.Id, AgentCatalog.Default().Agents);
     var readyTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal);
     Assert.Contains(readyTranscript, text => text.Contains("subscription-dispatch", StringComparison.Ordinal));
+}
+
+private static void AssertOpenAiModelOrderIsCostAware(string text)
+{
+    var miniIndex = text.IndexOf("gpt-5.4-mini", StringComparison.Ordinal);
+    var expensiveIndex = text.IndexOf("gpt-5.5", StringComparison.Ordinal);
+
+    Assert.True(miniIndex >= 0);
+    Assert.True(expensiveIndex >= 0);
+    Assert.True(miniIndex < expensiveIndex);
 }
 }
