@@ -39,7 +39,7 @@ public sealed class DashboardHostTests
         using var simpleGoalResponse = await client.PostAsync(
             new Uri(new Uri(url), "api/goals"),
             new StringContent(
-                "{\"objective\":\"Simple hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":true}",
+                "{\"objective\":\"Simple hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":true,\"confirmAutoHandoff\":true}",
                 System.Text.Encoding.UTF8,
                 "application/json"));
         var simpleGoal = await simpleGoalResponse.Content.ReadAsStringAsync();

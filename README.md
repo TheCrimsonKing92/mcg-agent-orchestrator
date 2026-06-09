@@ -360,7 +360,7 @@ The dashboard host also exposes local JSON endpoints for scripted monitoring and
 - `/api/worker-profiles` returns saved worker profiles plus `executable`, `isResolvable`, `isOptional`, and `detail` availability fields
 - `POST /api/worker-profiles` with JSON like `{ "name": "codex", "commandTemplate": "codex exec {promptPath}" }`
 - `/api/goals`
-- `POST /api/goals` with either a raw objective body or JSON like `{ "objective": "Build feature X" }`
+- `POST /api/goals` with either a raw objective body or JSON like `{ "objective": "Build feature X" }`; include `{ "autoHandoff": true, "confirmAutoHandoff": true }` only when deliberately starting subscription handoff during goal creation
 - `/api/monitor?goal=<goal-id-prefix>`
 - `/api/acceptance?goal=<goal-id-prefix>` returns the goal acceptance summary, blocker list, and suggested commands
 - `/api/evidence?goal=<goal-id-prefix>` returns the goal evidence summary with per-task latest evidence and rollup counts

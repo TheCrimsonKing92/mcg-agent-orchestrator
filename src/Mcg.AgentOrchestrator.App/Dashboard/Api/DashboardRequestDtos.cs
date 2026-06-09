@@ -3,7 +3,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
-internal sealed record CreateGoalSubmissionDto(string Objective, string? Workflow = null, bool AutoHandoff = false);
+internal sealed record CreateGoalSubmissionDto(
+    string Objective,
+    string? Workflow = null,
+    bool AutoHandoff = false,
+    bool ConfirmAutoHandoff = false);
 
 internal sealed record AddTaskRequestDto(string? Role, string? Description, bool? Delegate = true, string? VerificationPlan = null);
 

@@ -58,10 +58,16 @@ public static CreateGoalSubmissionDto ParseCreateGoalSubmission(string body)
         throw new ArgumentException("Goal workflow must be 'simple' or 'sdlc'.");
     }
 
+    if (hasAutoHandoff && submission.AutoHandoff && !submission.ConfirmAutoHandoff)
+    {
+        throw new ArgumentException("Automatic subscription handoff requires confirmAutoHandoff=true because it can start worker processes.");
+    }
+
     return new CreateGoalSubmissionDto(
         submission.Objective.Trim(),
         workflow?.ToLowerInvariant(),
-        hasAutoHandoff && submission.AutoHandoff);
+        hasAutoHandoff && submission.AutoHandoff,
+        submission.ConfirmAutoHandoff);
 }
 
 public static AddTaskSubmissionDto ParseAddTaskSubmission(string body)
