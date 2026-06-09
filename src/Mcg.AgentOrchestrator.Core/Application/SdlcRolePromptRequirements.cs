@@ -59,8 +59,60 @@ internal static class SdlcRolePromptRequirements
         };
     }
 
+    public static IReadOnlyList<string> Build(AgentRole role, TaskComplexity complexity)
+    {
+        return complexity == TaskComplexity.Complex ? Build(role) : BuildCompact(role);
+    }
+
     public static string BuildPlainText(AgentRole role)
     {
         return string.Join(Environment.NewLine, Build(role));
+    }
+
+    public static string BuildPlainText(AgentRole role, TaskComplexity complexity)
+    {
+        return string.Join(Environment.NewLine, Build(role, complexity));
+    }
+
+    private static IReadOnlyList<string> BuildCompact(AgentRole role)
+    {
+        return role switch
+        {
+            AgentRole.Planner =>
+            [
+                "## Planner Requirements",
+                "- Produce a concrete plan with likely files or modules, smallest viable change boundary, assumptions, and stop conditions.",
+                "- Define falsifiable proof for downstream roles; do not return a generic checklist."
+            ],
+            AgentRole.Researcher =>
+            [
+                "## Researcher Requirements",
+                "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
+                "- Exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
+                "- Separate confirmed facts from inferences, risks, and unknowns."
+            ],
+            AgentRole.Developer =>
+            [
+                "## Developer Requirements",
+                "- Keep edits scoped and report changed files plus behavior enabled.",
+                "- Run focused verification when practical and name exact commands.",
+                "- Call out blockers or follow-up work explicitly."
+            ],
+            AgentRole.Tester =>
+            [
+                "## Tester Requirements",
+                "- Derive focused checks from the requested behavior and report concrete evidence.",
+                "- Run or attempt exact commands; include exit code and concise output summary.",
+                "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source."
+            ],
+            AgentRole.Reviewer =>
+            [
+                "## Reviewer Requirements",
+                "- Review in code-review form: findings first, ordered by severity, with file/evidence references.",
+                "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
+                "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation."
+            ],
+            _ => []
+        };
     }
 }

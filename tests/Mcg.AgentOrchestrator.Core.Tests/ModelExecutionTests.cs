@@ -268,17 +268,22 @@ public sealed class ModelExecutionTests
 
     await runner.RunAsync(goal.Id, goal.Tasks[0].Id);
 
+    var simplePrompt = provider.LastRequest!.Messages.Single().Content;
     Assert.Equal("gpt-5.4-mini", provider.LastRequest!.Options.ModelName);
     Assert.Equal("medium", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(1024, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.4-mini", goal.Tasks[0].LastExecution!.ModelName);
+    Assert.Contains(simplePrompt, text => text.Contains("Call out blockers or follow-up work explicitly", StringComparison.Ordinal));
+    Assert.True(!simplePrompt.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
 
     await runner.RunAsync(goal.Id, goal.Tasks[1].Id);
 
+    var complexPrompt = provider.LastRequest!.Messages.Single().Content;
     Assert.Equal("gpt-5.5", provider.LastRequest!.Options.ModelName);
     Assert.Equal("high", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(1200, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
+    Assert.Contains(complexPrompt, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]
     public async Task ExecuteAssignedTaskPausesForAgentRequestedHumanInput()

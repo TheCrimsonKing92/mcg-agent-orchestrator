@@ -23,6 +23,7 @@ public sealed partial class AgentOrchestratorKernel
             .OrderBy(evt => evt.OccurredAt)
             .TakeLast(20)
             .ToList();
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
 
         var lines = new List<string>
         {
@@ -45,7 +46,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty
         };
 
-        lines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole));
+        lines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
         lines.Add(string.Empty);
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))

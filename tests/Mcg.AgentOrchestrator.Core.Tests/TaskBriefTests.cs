@@ -26,6 +26,25 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_full_role_requirements_for_complex_tasks")]
+    public void BuildTaskBriefUsesFullRoleRequirementsForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Maintain dashboard views",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("Developer Requirements", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]
     public void BuildTaskBriefIncludesPendingHumanInputAndVerification()
 {

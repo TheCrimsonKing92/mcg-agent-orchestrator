@@ -57,14 +57,15 @@ public sealed class AgentTaskRunner
             throw new InvalidOperationException($"Agent '{agent.Name}' is configured for subscription execution only.");
         }
 
-        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, TaskComplexity.Auto, task.Description, goal.Objective);
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
         _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started task (model: {resolvedModel.ModelName}).");
 
         ModelResponse response;
         try
         {
-            response = await provider.CompleteAsync(BuildRequest(goal, task, agent, resolvedModel), cancellationToken).ConfigureAwait(false);
+            response = await provider.CompleteAsync(BuildRequest(goal, task, agent, resolvedModel, complexity), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -97,7 +98,7 @@ public sealed class AgentTaskRunner
         return new AgentTaskRunResult(goal, task, execution);
     }
 
-    private static ModelRequest BuildRequest(Goal goal, TaskSpec task, AgentDefinition agent, ModelProfile resolvedModel)
+    private static ModelRequest BuildRequest(Goal goal, TaskSpec task, AgentDefinition agent, ModelProfile resolvedModel, TaskComplexity complexity)
     {
         var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName);
 
@@ -124,7 +125,7 @@ public sealed class AgentTaskRunner
             $"Task role: {task.RequiredRole}{Environment.NewLine}" +
             $"Current task status: {task.Status}{Environment.NewLine}" +
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan)}{Environment.NewLine}" +
-            $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role)}{Environment.NewLine}" +
+            $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}{Environment.NewLine}" +
             $"Recent timeline:{Environment.NewLine}{timeline}";
 
         if (isLocal)
