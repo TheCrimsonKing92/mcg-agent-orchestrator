@@ -56,6 +56,28 @@ public sealed class ModelExecutionTests
     Assert.Equal(0, provider.CallCount);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
 }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_rejects_verified_task_without_calling_provider")]
+    public async Task ExecuteAssignedTaskRejectsVerifiedTaskWithoutCallingProvider()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Avoid repeated model spending");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", string.Empty, clock.UtcNow));
+    var provider = new FakeModelProvider("OpenAI", "unused");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]));
+
+    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
+
+    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.Equal(0, provider.CallCount);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.True(task.LastVerification?.Succeeded is true);
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_provider_from_assigned_agent_profile")]
     public async Task ExecuteAssignedTaskUsesProviderFromAssignedAgentProfile()
 {

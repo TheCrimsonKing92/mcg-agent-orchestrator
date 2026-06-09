@@ -65,6 +65,31 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_task_dispatch")]
+    public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Avoid repeated worker dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", root, 0, "ok", string.Empty, DateTimeOffset.UtcNow));
+    var profile = new WorkerProfile("custom", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        task,
+        profile,
+        Path.Combine(root, "prompts"),
+        root,
+        DateTimeOffset.UtcNow));
+
+    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_complex_model_only_for_complex_subscription_tasks")]
     public void WorkerProfileDispatcherUsesComplexModelOnlyForComplexSubscriptionTasks()
 {
@@ -125,6 +150,37 @@ public sealed class WorkerDispatchTests
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5.5'", StringComparison.Ordinal));
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--complexity 'Complex'", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_subscription_dispatch")]
+    public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Avoid repeated subscription dispatch");
+    var agent = new AgentDefinition(
+        new AgentId("verified-developer"),
+        "Verified Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", root, 0, "ok", string.Empty, DateTimeOffset.UtcNow));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        Path.Combine(root, "prompts"),
+        root,
+        DateTimeOffset.UtcNow));
+
+    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_subscription_alias_when_complex_model_is_absent")]
     public void WorkerProfileDispatcherKeepsSubscriptionAliasWhenComplexModelIsAbsent()

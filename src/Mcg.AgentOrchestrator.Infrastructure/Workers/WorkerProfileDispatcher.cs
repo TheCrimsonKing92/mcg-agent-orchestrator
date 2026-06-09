@@ -19,6 +19,8 @@ public static class WorkerProfileDispatcher
         DateTimeOffset dispatchedAt,
         IReadOnlyDictionary<string, string?>? variables = null)
     {
+        EnsureTaskNeedsExecution(task);
+
         var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
         var preparation = WorkerCommandTemplate.Prepare(
             brief,
@@ -57,6 +59,8 @@ public static class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset dispatchedAt)
     {
+        EnsureTaskNeedsExecution(task);
+
         var agent = ResolveAssignedAgent(task, agents);
         var selection = ResolveSubscriptionModel(agent, goal, task);
         var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
@@ -106,6 +110,14 @@ public static class WorkerProfileDispatcher
         }
 
         return results;
+    }
+
+    private static void EnsureTaskNeedsExecution(TaskSpec task)
+    {
+        if (task.LastVerification?.Succeeded is true)
+        {
+            throw new InvalidOperationException($"Task '{task.Id}' already has passing verification; retry the task before dispatching it again.");
+        }
     }
 
     public static WorkerProfile ResolveSubscriptionProfile(TaskSpec task, IReadOnlyList<AgentDefinition> agents, WorkerProfileCatalog profiles)
