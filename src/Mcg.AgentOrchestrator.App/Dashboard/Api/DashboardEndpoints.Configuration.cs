@@ -7,9 +7,15 @@ internal static partial class DashboardEndpoints
 {
     private static async Task<IResult> HandleProviderSmokeAsync(HttpContext context)
     {
-        var target = context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
+        var isPost = context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase);
+        var target = isPost
             ? DashboardRequestParser.ParseProviderSmokeSubmission(await ReadRequestBodyAsync(context.Request))
             : DashboardRequestParser.GetQueryValue(context.Request, "target") ?? ProviderSmokeRunner.DefaultTarget;
+        if (!isPost && target.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Smoking all providers requires POST so broad paid smoke tests are deliberate.");
+        }
+
         return Json(await ProviderSmokeRunner.RunProviderSmokeReportAsync(target));
     }
 

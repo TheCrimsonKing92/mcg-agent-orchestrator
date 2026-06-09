@@ -65,6 +65,8 @@ public sealed class DashboardHostTests
         var processDiagnostic = await client.GetStringAsync(new Uri(new Uri(url), "api/system/processes"));
         var cleanupPlan = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-cleanup"));
         var buildTestRuns = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-runs"));
+        using var broadSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=all"));
+        var broadSmokeGet = await broadSmokeGetResponse.Content.ReadAsStringAsync();
         using var invalidGoalResponse = await client.PostAsync(
             new Uri(new Uri(url), "api/goals"),
             new StringContent(
@@ -143,6 +145,8 @@ public sealed class DashboardHostTests
             Assert.Contains(cleanupPlan, text => text.Contains("Invoke-DashboardBuildTestCycle.ps1", StringComparison.Ordinal));
         }
         Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(buildTestRuns).RootElement.ValueKind);
+        Assert.Equal(HttpStatusCode.BadRequest, broadSmokeGetResponse.StatusCode);
+        Assert.Contains(broadSmokeGet, text => text.Contains("broad paid smoke tests are deliberate", StringComparison.Ordinal));
         Assert.Equal(HttpStatusCode.BadRequest, invalidGoalResponse.StatusCode);
         Assert.Contains(invalidGoal, text => text.Contains("dashboard invalid request", StringComparison.Ordinal));
         Assert.Contains(css, text => text.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", StringComparison.Ordinal));
