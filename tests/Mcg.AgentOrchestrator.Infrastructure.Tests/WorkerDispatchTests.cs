@@ -65,6 +65,106 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_complex_model_only_for_complex_subscription_tasks")]
+    public void WorkerProfileDispatcherUsesComplexModelOnlyForComplexSubscriptionTasks()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-model {apiModelName} --api-reasoning {apiReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var simpleGoal = kernel.CreateGoal(
+        "Fix a dashboard typo",
+        [new TaskSpec(TaskId.New(), "Update the button label copy.", AgentRole.Developer)]);
+    kernel.ActivateGoal(simpleGoal.Id, [agent]);
+    var simpleTask = simpleGoal.Tasks.Single();
+    var complexGoal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    kernel.ActivateGoal(complexGoal.Id, [agent]);
+    var complexTask = complexGoal.Tasks.Single();
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        simpleGoal,
+        simpleTask,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        complexGoal,
+        complexTask,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Contains(simpleTask.LastDispatch!.Command, text => text.Contains("--model 'gpt-5-mini-codex'", StringComparison.Ordinal));
+    Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+    Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5-mini'", StringComparison.Ordinal));
+    Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'low'", StringComparison.Ordinal));
+    Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--complexity 'Simple'", StringComparison.Ordinal));
+    Assert.Contains(complexTask.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
+    Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--complexity 'Complex'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_subscription_alias_when_complex_model_is_absent")]
+    public void WorkerProfileDispatcherKeepsSubscriptionAliasWhenComplexModelIsAbsent()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("aliased-developer"),
+        "Aliased Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} --api-model {apiModelName} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Contains(task.LastDispatch!.Command, text => text.Contains("--model 'gpt-5-mini-codex'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5-mini'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--complexity 'Complex'", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_ready_tasks_and_returns_prompt_paths")]
     public void WorkerProfileDispatcherPreparesReadyTasksAndReturnsPromptPaths()
 {

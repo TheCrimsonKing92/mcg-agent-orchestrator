@@ -58,10 +58,11 @@ public static class WorkerProfileDispatcher
         DateTimeOffset dispatchedAt)
     {
         var agent = ResolveAssignedAgent(task, agents);
-        var profile = ResolveSubscriptionProfile(agent, profiles);
+        var selection = ResolveSubscriptionModel(agent, goal, task);
+        var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
         EnsureSubscriptionProfileCanExecuteTask(profile, task);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
-        return PrepareTask(kernel, goal, task, profile, promptRoot, workingDirectory, dispatchedAt, BuildSubscriptionTemplateVariables(agent));
+        return PrepareTask(kernel, goal, task, profile, promptRoot, workingDirectory, dispatchedAt, BuildSubscriptionTemplateVariables(agent, selection));
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareSubscriptionReadyTasks(
@@ -90,7 +91,8 @@ public static class WorkerProfileDispatcher
                 continue;
             }
 
-            var profile = ResolveSubscriptionProfile(selection.Agent, profiles);
+            var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
+            var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
             EnsureSubscriptionProfileCanExecuteTask(profile, selection.Task);
             results.Add(PrepareTask(
                 kernel,
@@ -100,7 +102,7 @@ public static class WorkerProfileDispatcher
                 promptRoot,
                 workingDirectory,
                 dispatchedAt,
-                BuildSubscriptionTemplateVariables(selection.Agent)));
+                BuildSubscriptionTemplateVariables(selection.Agent, subscriptionModel)));
         }
 
         return results;
@@ -114,32 +116,42 @@ public static class WorkerProfileDispatcher
 
     public static WorkerProfile ResolveSubscriptionProfile(AgentDefinition agent, WorkerProfileCatalog profiles)
     {
+        return ResolveSubscriptionProfile(agent, agent.Model, profiles);
+    }
+
+    private static WorkerProfile ResolveSubscriptionProfile(AgentDefinition agent, ModelProfile model, WorkerProfileCatalog profiles)
+    {
         if (!AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
         {
             throw new InvalidOperationException($"Agent '{agent.Name}' is configured for API execution only.");
         }
 
-        return profiles.GetRequired(ResolveSubscriptionProfileName(agent));
+        return profiles.GetRequired(ResolveSubscriptionProfileName(agent, model));
     }
 
     public static string ResolveSubscriptionProfileName(AgentDefinition agent)
+    {
+        return ResolveSubscriptionProfileName(agent, agent.Model);
+    }
+
+    private static string ResolveSubscriptionProfileName(AgentDefinition agent, ModelProfile model)
     {
         if (!string.IsNullOrWhiteSpace(agent.Subscription?.WorkerProfileName))
         {
             return agent.Subscription.WorkerProfileName;
         }
 
-        if (agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+        if (model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
         {
             return OpenAiSubscriptionProfileName;
         }
 
-        if (agent.Model.ProviderName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+        if (model.ProviderName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
         {
             return AnthropicSubscriptionProfileName;
         }
 
-        throw new InvalidOperationException($"Provider '{agent.Model.ProviderName}' does not have a default subscription worker profile.");
+        throw new InvalidOperationException($"Provider '{model.ProviderName}' does not have a default subscription worker profile.");
     }
 
     private static void EnsureSubscriptionRetryWindowHasPassed(TaskSpec task, DateTimeOffset dispatchedAt)
@@ -154,16 +166,45 @@ public static class WorkerProfileDispatcher
 
     public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(AgentDefinition agent)
     {
+        return BuildSubscriptionTemplateVariables(agent, new SubscriptionModelSelection(TaskComplexity.Simple, agent.Model, UsesComplexModel: false));
+    }
+
+    public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task)
+    {
+        return BuildSubscriptionTemplateVariables(agent, ResolveSubscriptionModel(agent, goal, task));
+    }
+
+    private static Dictionary<string, string?> BuildSubscriptionTemplateVariables(
+        AgentDefinition agent,
+        SubscriptionModelSelection selection)
+    {
         return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["providerName"] = agent.Model.ProviderName,
-            ["apiModelName"] = agent.Model.ModelName,
-            ["apiReasoningEffort"] = agent.Model.ReasoningEffort,
-            ["subscriptionModelName"] = agent.Subscription?.ModelAlias ?? agent.Model.ModelName,
-            ["subscriptionReasoningEffort"] = agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort,
+            ["providerName"] = selection.Model.ProviderName,
+            ["apiModelName"] = selection.Model.ModelName,
+            ["apiReasoningEffort"] = selection.Model.ReasoningEffort,
+            ["subscriptionModelName"] = selection.UsesComplexModel
+                ? selection.Model.ModelName
+                : agent.Subscription?.ModelAlias ?? selection.Model.ModelName,
+            ["subscriptionReasoningEffort"] = selection.UsesComplexModel
+                ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
+                : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort,
+            ["taskComplexity"] = selection.Complexity.ToString(),
             ["executionPolicy"] = agent.ExecutionPolicy.ToString()
         };
     }
+
+    private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
+    {
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+        var model = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
+        return new SubscriptionModelSelection(complexity, model, complexity == TaskComplexity.Complex && agent.ComplexModel is not null);
+    }
+
+    private sealed record SubscriptionModelSelection(TaskComplexity Complexity, ModelProfile Model, bool UsesComplexModel);
 
     private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
     {
