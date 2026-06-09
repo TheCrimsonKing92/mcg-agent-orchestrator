@@ -34,6 +34,11 @@ public sealed class AgentTaskRunner
             throw new InvalidOperationException($"Task '{taskId}' already has passing verification; retry the task before running it again.");
         }
 
+        if (task.LastExecution is not null)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' already has model output; verify it or retry the task before running it again.");
+        }
+
         if (task.AssignedAgentId is null)
         {
             throw new InvalidOperationException($"Task '{taskId}' is not assigned to an agent.");

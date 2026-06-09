@@ -78,6 +78,35 @@ public sealed class ModelExecutionTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(task.LastVerification?.Succeeded is true);
 }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_rejects_existing_model_output_without_retry")]
+    public async Task ExecuteAssignedTaskRejectsExistingModelOutputWithoutRetry()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Avoid duplicate model output");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+        var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+        var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
+
+        Assert.Contains(ex.Message, text => text.Contains("already has model output", StringComparison.Ordinal));
+        Assert.Equal(1, provider.CallCount);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.True(task.LastExecution is not null);
+
+        kernel.RetryTask(goal.Id, task.Id, "Retry with new instructions.");
+        Assert.True(task.LastExecution is null);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(2, provider.CallCount);
+        Assert.True(task.LastExecution is not null);
+    }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_provider_from_assigned_agent_profile")]
     public async Task ExecuteAssignedTaskUsesProviderFromAssignedAgentProfile()
 {

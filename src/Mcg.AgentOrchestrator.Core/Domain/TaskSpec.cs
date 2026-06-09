@@ -191,6 +191,8 @@ public sealed class TaskSpec
 
     internal void RecordExecution(TaskExecutionRecord execution) => LastExecution = execution;
 
+    internal void ClearLastExecution() => LastExecution = null;
+
     internal void SetVerificationPlan(string verificationPlan) => VerificationPlan = RequireText(verificationPlan, nameof(verificationPlan));
 
     internal void RecordVerification(TaskVerificationRecord verification)
