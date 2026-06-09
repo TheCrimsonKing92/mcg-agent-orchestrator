@@ -6,6 +6,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
+    public const int RoutineApiMaxOutputTokens = 1024;
+    public const int ComplexApiMaxOutputTokens = 1200;
+
     public AgentDefinition GetRequired(AgentRole role)
     {
         return Agents.FirstOrDefault(agent => agent.Role == role)
@@ -26,10 +29,10 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
     public static AgentCatalog Default()
     {
         static ModelProfile OpenAiBase(string reasoningEffort) =>
-            new("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
+            new("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort, RoutineApiMaxOutputTokens);
 
         static ModelProfile OpenAiComplex(string reasoningEffort) =>
-            new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
+            new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort, ComplexApiMaxOutputTokens);
 
         static SubscriptionLaunchProfile Codex(string reasoningEffort) =>
             new("codex-cli", "gpt-5.3-codex", reasoningEffort);

@@ -18,11 +18,13 @@ public sealed class AgentCatalogTests
         var agent = catalog.GetRequired(role);
         Assert.Equal("OpenAI", agent.Model.ProviderName);
         Assert.Equal("gpt-5.4-mini", agent.Model.ModelName);
+        Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, agent.Model.MaxOutputTokens);
         Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
         Assert.Equal("gpt-5.3-codex", agent.Subscription.ModelAlias);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
         Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
+        Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 
     Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).Model.ReasoningEffort);

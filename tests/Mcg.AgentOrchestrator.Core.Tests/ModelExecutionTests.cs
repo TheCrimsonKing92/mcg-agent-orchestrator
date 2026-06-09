@@ -115,8 +115,8 @@ public sealed class ModelExecutionTests
         AgentId.New(),
         "Cost-aware Developer",
         AgentRole.Developer,
-        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var provider = new FakeModelProvider("OpenAI", "done");
     var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]));
@@ -125,12 +125,14 @@ public sealed class ModelExecutionTests
 
     Assert.Equal("gpt-5.4-mini", provider.LastRequest!.Options.ModelName);
     Assert.Equal("medium", provider.LastRequest.Options.ReasoningEffort);
+    Assert.Equal(1024, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.4-mini", goal.Tasks[0].LastExecution!.ModelName);
 
     await runner.RunAsync(goal.Id, goal.Tasks[1].Id);
 
     Assert.Equal("gpt-5.5", provider.LastRequest!.Options.ModelName);
     Assert.Equal("high", provider.LastRequest.Options.ReasoningEffort);
+    Assert.Equal(1200, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]

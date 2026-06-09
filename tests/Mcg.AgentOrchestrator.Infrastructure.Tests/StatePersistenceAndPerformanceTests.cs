@@ -130,9 +130,10 @@ public sealed class StatePersistenceAndPerformanceTests
         new AgentId("custom-openai-planner"),
         "Custom OpenAI planner",
         AgentRole.Planner,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high"),
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high"),
         ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "high"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.3-codex", "high"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", AgentCatalog.ComplexApiMaxOutputTokens));
 
     AgentCatalogStore.Save(
         agentPath,
@@ -275,6 +276,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Equal("OpenAI", agent.Model.ProviderName);
     Assert.Equal("gpt-5.4-mini", agent.Model.ModelName);
     Assert.Equal(expectedReasoningEffort, agent.Model.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, agent.Model.MaxOutputTokens);
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
     Assert.True(agent.Subscription is not null);
     var subscription = agent.Subscription!;
@@ -285,6 +287,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
     Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
     Assert.Equal(expectedReasoningEffort, agent.ComplexModel.ReasoningEffort);
+    Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
 }
 }
 

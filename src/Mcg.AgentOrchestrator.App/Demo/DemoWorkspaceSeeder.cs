@@ -85,6 +85,7 @@ public static class PrototypeWorkspaceSeeder
         return !EqualsIgnoreCase(current.Model.ProviderName, desired.Model.ProviderName) ||
             !EqualsIgnoreCase(current.Model.ModelName, desired.Model.ModelName) ||
             !EqualsIgnoreCase(current.Model.ReasoningEffort, desired.Model.ReasoningEffort) ||
+            current.Model.MaxOutputTokens != desired.Model.MaxOutputTokens ||
             current.ExecutionPolicy != AgentExecutionPolicy.PreferSubscription ||
             current.Subscription is null ||
             !EqualsIgnoreCase(current.Subscription.WorkerProfileName, desired.Subscription!.WorkerProfileName) ||
