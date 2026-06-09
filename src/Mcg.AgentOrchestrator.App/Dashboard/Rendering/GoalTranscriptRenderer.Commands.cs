@@ -22,7 +22,7 @@ private static string BuildSuggestedCommand(Goal goal, NextActionItem item)
         NextActionKind.RefreshRunningProcess => taskNumber is null ? "monitor" : $"refresh-dispatch {taskNumber}",
         NextActionKind.ExecuteRecordedDispatch => taskNumber is null ? "monitor" : $"execute-dispatch {taskNumber}",
         NextActionKind.VerifyCompletedTask => taskNumber is null ? "monitor" : $"verify {taskNumber} <command> | verify-manual {taskNumber} passed <note>",
-        NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"run {taskNumber} | subscription-dispatch {taskNumber}",
+        NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"subscription-dispatch {taskNumber} | api-run {taskNumber}",
         NextActionKind.DelegatePendingTask => "delegate",
         NextActionKind.MonitorGoal => "monitor",
         _ => "monitor"
@@ -51,7 +51,7 @@ private static string BuildStageSuggestedCommand(int taskNumber, TaskStageReadin
     return stage.StageStatus switch
     {
         StageReadinessStatus.NeedsDelegation => "delegate",
-        StageReadinessStatus.ReadyToRun => $"run {taskNumber} | subscription-dispatch {taskNumber} | profile-dispatch {taskNumber} <profile-name>",
+        StageReadinessStatus.ReadyToRun => $"subscription-dispatch {taskNumber} | api-run {taskNumber} | profile-dispatch {taskNumber} <profile-name>",
         StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.RunningProcess => $"refresh-dispatch {taskNumber}",
         StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.Dispatch => $"execute-dispatch {taskNumber}",
         StageReadinessStatus.InProgress => $"task {taskNumber}",

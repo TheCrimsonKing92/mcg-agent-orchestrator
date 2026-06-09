@@ -33,7 +33,7 @@ public static string BuildSuggestedCommand(NextActionItem item, int? taskNumber)
         NextActionKind.RefreshRunningProcess => taskNumber is null ? "monitor" : $"refresh-dispatch {taskNumber}",
         NextActionKind.ExecuteRecordedDispatch => taskNumber is null ? "monitor" : $"execute-dispatch {taskNumber}",
         NextActionKind.VerifyCompletedTask => taskNumber is null ? "monitor" : $"verify {taskNumber} <command> | verify-manual {taskNumber} passed <note>",
-        NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"run {taskNumber} | subscription-dispatch {taskNumber}",
+        NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"subscription-dispatch {taskNumber} | api-run {taskNumber}",
         NextActionKind.DelegatePendingTask => "delegate",
         NextActionKind.MonitorGoal => "monitor",
         _ => "monitor"

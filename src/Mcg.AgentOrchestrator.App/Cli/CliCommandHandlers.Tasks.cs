@@ -67,9 +67,21 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 2, "run <task-number>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var runTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var runner = new AgentTaskRunner(context.Kernel, context.Agents, context.Providers);
-            var result = runner.RunAsync(context.CurrentGoal.Id, runTask.Id).GetAwaiter().GetResult();
-            ConsoleViews.PrintTask(result.Goal, result.Task);
+            var runAgent = ResolveAssignedAgent(runTask, context.Agents);
+            if (AgentExecutionPolicies.AllowsSubscription(runAgent.ExecutionPolicy))
+            {
+                throw new InvalidOperationException(
+                    $"Task '{runTask.Id}' is assigned to '{runAgent.Name}' with execution policy {runAgent.ExecutionPolicy}; use subscription-dispatch {parts[1]} first, or api-run {parts[1]} for explicit API execution.");
+            }
+
+            RunApiTask(context, runTask);
+            return true;
+
+        case "api-run":
+            CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number>");
+            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            var apiRunTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            RunApiTask(context, apiRunTask);
             return true;
 
         case "retry":
@@ -156,5 +168,23 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
         default:
             return null;
     }
+}
+
+private static void RunApiTask(CliExecutionContext context, TaskSpec task)
+{
+    var runner = new AgentTaskRunner(context.Kernel, context.Agents, context.Providers);
+    var result = runner.RunAsync(context.CurrentGoal!.Id, task.Id).GetAwaiter().GetResult();
+    ConsoleViews.PrintTask(result.Goal, result.Task);
+}
+
+private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+{
+    if (task.AssignedAgentId is null)
+    {
+        throw new InvalidOperationException($"Task '{task.Id}' is not assigned to an agent.");
+    }
+
+    return agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId)
+        ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found.");
 }
 }
