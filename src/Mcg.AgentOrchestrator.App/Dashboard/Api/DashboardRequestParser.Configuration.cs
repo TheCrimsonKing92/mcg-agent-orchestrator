@@ -54,16 +54,27 @@ public static AgentSubmissionDto ParseAgentSubmission(string body)
 public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submission)
 {
     var role = CliArgumentParser.ParseAgentRole(submission.Role);
-    var executionPolicy = ParseExecutionPolicy(submission.ExecutionPolicy);
+    var providerName = submission.ProviderName.Trim();
+    var modelName = submission.ModelName.Trim();
+    var executionPolicy = ParseExecutionPolicy(submission.ExecutionPolicy, providerName);
     var name = string.IsNullOrWhiteSpace(submission.Name)
-        ? $"{submission.ProviderName} {role.ToString().ToLowerInvariant()}"
+        ? $"{providerName} {role.ToString().ToLowerInvariant()}"
         : submission.Name;
-    var subscription = string.IsNullOrWhiteSpace(submission.SubscriptionProfileName)
+    var subscriptionProfileName = string.IsNullOrWhiteSpace(submission.SubscriptionProfileName)
+        ? DefaultSubscriptionProfileName(providerName, executionPolicy)
+        : submission.SubscriptionProfileName;
+    var subscriptionModelAlias = string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias)
+        ? DefaultSubscriptionModelAlias(providerName, executionPolicy)
+        : submission.SubscriptionModelAlias;
+    var subscriptionReasoningEffort = string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort)
+        ? DefaultSubscriptionReasoningEffort(providerName, executionPolicy)
+        : submission.SubscriptionReasoningEffort;
+    var subscription = string.IsNullOrWhiteSpace(subscriptionProfileName)
         ? null
         : new SubscriptionLaunchProfile(
-            submission.SubscriptionProfileName,
-            string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias) ? null : submission.SubscriptionModelAlias,
-            string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort) ? null : submission.SubscriptionReasoningEffort);
+            subscriptionProfileName,
+            string.IsNullOrWhiteSpace(subscriptionModelAlias) ? null : subscriptionModelAlias,
+            string.IsNullOrWhiteSpace(subscriptionReasoningEffort) ? null : subscriptionReasoningEffort);
     var complexModel = !string.IsNullOrWhiteSpace(submission.ComplexProviderName) && !string.IsNullOrWhiteSpace(submission.ComplexModelName)
         ? new ModelProfile(
             submission.ComplexProviderName,
@@ -75,26 +86,26 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
         : null;
 
     return new AgentDefinition(
-        new AgentId($"{submission.ProviderName.ToLowerInvariant()}-{role.ToString().ToLowerInvariant()}"),
+        new AgentId($"{providerName.ToLowerInvariant()}-{role.ToString().ToLowerInvariant()}"),
         name,
         role,
         new ModelProfile(
-            submission.ProviderName,
-            submission.ModelName,
+            providerName,
+            modelName,
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
             SubscriptionMode.ApiKey,
-            string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? null : submission.ReasoningEffort,
-            submission.MaxOutputTokens),
+            string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? DefaultReasoningEffort(providerName) : submission.ReasoningEffort,
+            submission.MaxOutputTokens ?? DefaultMaxOutputTokens(providerName)),
         ExecutionPolicy: executionPolicy,
         Subscription: subscription,
         ComplexModel: complexModel);
 }
 
-private static AgentExecutionPolicy ParseExecutionPolicy(string? value)
+private static AgentExecutionPolicy ParseExecutionPolicy(string? value, string providerName)
 {
     if (string.IsNullOrWhiteSpace(value))
     {
-        return AgentExecutionPolicy.ApiOnly;
+        return IsPaidProvider(providerName) ? AgentExecutionPolicy.PreferSubscription : AgentExecutionPolicy.ApiOnly;
     }
 
     if (Enum.TryParse<AgentExecutionPolicy>(value, ignoreCase: true, out var policy))
@@ -103,6 +114,60 @@ private static AgentExecutionPolicy ParseExecutionPolicy(string? value)
     }
 
     throw new ArgumentException("Execution policy must be ApiOnly, SubscriptionOnly, PreferSubscription, or AnyAvailable.");
+}
+
+private static string? DefaultSubscriptionProfileName(string providerName, AgentExecutionPolicy executionPolicy)
+{
+    if (!AgentExecutionPolicies.AllowsSubscription(executionPolicy))
+    {
+        return null;
+    }
+
+    if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+    {
+        return "codex-cli";
+    }
+
+    if (providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+    {
+        return "claude-cli";
+    }
+
+    return null;
+}
+
+private static string? DefaultSubscriptionModelAlias(string providerName, AgentExecutionPolicy executionPolicy)
+{
+    return AgentExecutionPolicies.AllowsSubscription(executionPolicy) &&
+        providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
+            ? "gpt-5.3-codex"
+            : null;
+}
+
+private static string? DefaultSubscriptionReasoningEffort(string providerName, AgentExecutionPolicy executionPolicy)
+{
+    return AgentExecutionPolicies.AllowsSubscription(executionPolicy) &&
+        providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
+            ? AgentCatalog.RoutineReasoningEffort
+            : null;
+}
+
+private static string? DefaultReasoningEffort(string providerName)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
+        ? AgentCatalog.RoutineReasoningEffort
+        : null;
+}
+
+private static int? DefaultMaxOutputTokens(string providerName)
+{
+    return IsPaidProvider(providerName) ? AgentCatalog.RoutineApiMaxOutputTokens : null;
+}
+
+private static bool IsPaidProvider(string providerName)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
 }
 
 public static WorkerProfileSubmissionDto ParseWorkerProfileSubmission(string body)

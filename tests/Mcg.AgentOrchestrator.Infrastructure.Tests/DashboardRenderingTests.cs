@@ -122,6 +122,53 @@ public sealed class DashboardRenderingTests
     Assert.Equal("gpt-5.5", agent.ComplexModel!.ModelName);
     Assert.Equal("high", agent.ComplexModel.ReasoningEffort);
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_defaults_paid_agents_to_subscription_preferred")]
+    public void DashboardRequestParserDefaultsPaidAgentsToSubscriptionPreferred()
+{
+    var openAi = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Developer",
+        "OpenAI",
+        "gpt-5.4-mini",
+        null));
+    var anthropic = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Reviewer",
+        "Anthropic",
+        "claude-sonnet-4-20250514",
+        null));
+    var ollama = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Tester",
+        "Ollama",
+        "qwen2.5-coder:7b",
+        null));
+
+    Assert.Equal(AgentExecutionPolicy.PreferSubscription, openAi.ExecutionPolicy);
+    Assert.Equal("codex-cli", openAi.Subscription!.WorkerProfileName);
+    Assert.Equal("gpt-5.3-codex", openAi.Subscription.ModelAlias);
+    Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Subscription.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Model.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
+
+    Assert.Equal(AgentExecutionPolicy.PreferSubscription, anthropic.ExecutionPolicy);
+    Assert.Equal("claude-cli", anthropic.Subscription!.WorkerProfileName);
+    Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, anthropic.Model.MaxOutputTokens);
+
+    Assert.Equal(AgentExecutionPolicy.ApiOnly, ollama.ExecutionPolicy);
+    Assert.True(ollama.Subscription is null);
+    Assert.True(ollama.Model.MaxOutputTokens is null);
+}
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_respects_explicit_api_only_agent_policy")]
+    public void DashboardRequestParserRespectsExplicitApiOnlyAgentPolicy()
+{
+    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Developer",
+        "OpenAI",
+        "gpt-5.4-mini",
+        null,
+        ExecutionPolicy: "ApiOnly"));
+
+    Assert.Equal(AgentExecutionPolicy.ApiOnly, agent.ExecutionPolicy);
+    Assert.True(agent.Subscription is null);
+}
     [Xunit.Fact(DisplayName = "DashboardRequestParser_defaults_goal_creation_to_manual_handoff")]
     public void DashboardRequestParserDefaultsGoalCreationToManualHandoff()
 {
