@@ -60,6 +60,14 @@ internal static class PromptContextFormatter
         return $"- {timestamp}{evt.Kind}: {TrimTimelineMessage(evt.Message)}";
     }
 
+    public static IReadOnlyList<ProgressEvent> SelectPromptTimelineEvents(IEnumerable<ProgressEvent> events, int maxEvents)
+    {
+        var ordered = events.OrderBy(evt => evt.OccurredAt).ToList();
+        var decisionEvents = ordered.Where(IsDecisionRelevantTimelineEvent).ToList();
+        var selected = decisionEvents.Count > 0 ? decisionEvents : ordered;
+        return selected.TakeLast(maxEvents).ToList();
+    }
+
     private static string TrimTimelineMessage(string message)
     {
         var trimmed = message.Trim();
@@ -72,5 +80,20 @@ internal static class PromptContextFormatter
         return trimmed[..TimelineMessageHeadChars] +
             $" ...[truncated {omitted} chars]... " +
             trimmed[^TimelineMessageTailChars..];
+    }
+
+    private static bool IsDecisionRelevantTimelineEvent(ProgressEvent evt)
+    {
+        return evt.Kind is
+            ProgressKind.HumanInputRequested or
+            ProgressKind.HumanInputReceived or
+            ProgressKind.TaskFailed or
+            ProgressKind.TaskOutputRecorded or
+            ProgressKind.TaskVerificationRecorded or
+            ProgressKind.TaskDispatchRecorded or
+            ProgressKind.TaskProcessStarted or
+            ProgressKind.TaskCancelled or
+            ProgressKind.TaskRetried or
+            ProgressKind.TaskVerificationPlanUpdated;
     }
 }

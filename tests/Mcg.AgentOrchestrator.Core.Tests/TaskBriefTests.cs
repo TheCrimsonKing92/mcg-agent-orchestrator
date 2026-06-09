@@ -139,6 +139,21 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('x', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_decision_timeline_events_over_lifecycle_noise")]
+    public void BuildTaskBriefPrefersDecisionTimelineEventsOverLifecycleNoise()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Focus brief timeline");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "routine completed lifecycle noise");
+    kernel.RetryTask(goal.Id, task.Id, "retry-critical-note");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("routine completed lifecycle noise", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_verification_plan")]
     public void BuildTaskBriefTrimsNoisyVerificationPlan()
 {

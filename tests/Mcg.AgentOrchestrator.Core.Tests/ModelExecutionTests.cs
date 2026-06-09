@@ -236,6 +236,26 @@ public sealed class ModelExecutionTests
     Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!prompt.Contains(new string('z', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_prefers_decision_timeline_events_over_lifecycle_noise")]
+    public async Task ExecuteAssignedTaskPrefersDecisionTimelineEventsOverLifecycleNoise()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Focus API prompt timeline");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "routine completed lifecycle noise");
+    kernel.RetryTask(goal.Id, task.Id, "retry-critical-note");
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("routine completed lifecycle noise", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_verification_plan_in_prompt")]
     public async Task ExecuteAssignedTaskTrimsNoisyVerificationPlanInPrompt()
 {

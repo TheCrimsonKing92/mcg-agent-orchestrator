@@ -115,9 +115,9 @@ public sealed class AgentTaskRunner
 
         var timeline = string.Join(
             Environment.NewLine,
-            goal.Timeline
-                .Where(evt => evt.TaskId == task.Id || evt.TaskId is null)
-                .TakeLast(12)
+            PromptContextFormatter.SelectPromptTimelineEvents(
+                    goal.Timeline.Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
+                    maxEvents: 12)
                 .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false)));
 
         var userPrompt =

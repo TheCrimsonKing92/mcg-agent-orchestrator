@@ -18,11 +18,9 @@ public sealed partial class AgentOrchestratorKernel
         var pendingInput = GetPendingHumanInput(goalId)
             .Where(request => request.TaskId == taskId || request.TaskId is null)
             .ToList();
-        var timeline = goal.Timeline
-            .Where(evt => evt.TaskId == taskId || evt.TaskId is null)
-            .OrderBy(evt => evt.OccurredAt)
-            .TakeLast(20)
-            .ToList();
+        var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
+            goal.Timeline.Where(evt => evt.TaskId == taskId || evt.TaskId is null),
+            maxEvents: 20);
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
 
         var lines = new List<string>
