@@ -26,8 +26,8 @@ public static partial class DashboardRenderer
         html.AppendLine("<p class=\"section-note\">Use these when you want the orchestrator to choose or assign the next goal-level step.</p>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance\">Run next safe action</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription\">Run next subscription action</button>");
-        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked\">Continue subscription handoff</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true\">Run next subscription action</button>");
+        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true\">Continue subscription handoff</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-until-blocked\">Continue non-API actions</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/delegate\">Assign tasks to agents</button>");
         html.AppendLine("</div>");

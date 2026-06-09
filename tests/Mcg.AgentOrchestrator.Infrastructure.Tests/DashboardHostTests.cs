@@ -41,6 +41,10 @@ public sealed class DashboardHostTests
             new Uri(new Uri(url), $"api/goals/{manualGoalId}/start-dispatches"),
             new StringContent(string.Empty));
         var batchStartMissingConfirm = await batchStartMissingConfirmResponse.Content.ReadAsStringAsync();
+        using var subscriptionAdvanceMissingConfirmResponse = await client.PostAsync(
+            new Uri(new Uri(url), $"api/goals/{manualGoalId}/advance-subscription"),
+            new StringContent(string.Empty));
+        var subscriptionAdvanceMissingConfirm = await subscriptionAdvanceMissingConfirmResponse.Content.ReadAsStringAsync();
         using var simpleGoalResponse = await client.PostAsync(
             new Uri(new Uri(url), "api/goals"),
             new StringContent(
@@ -163,6 +167,8 @@ public sealed class DashboardHostTests
         Assert.Contains(broadSmokePost, text => text.Contains("confirmAll=true", StringComparison.Ordinal));
         Assert.Equal(HttpStatusCode.BadRequest, batchStartMissingConfirmResponse.StatusCode);
         Assert.Contains(batchStartMissingConfirm, text => text.Contains("confirmBatchStart=true", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.BadRequest, subscriptionAdvanceMissingConfirmResponse.StatusCode);
+        Assert.Contains(subscriptionAdvanceMissingConfirm, text => text.Contains("confirmSubscriptionAdvance=true", StringComparison.Ordinal));
         Assert.Equal(HttpStatusCode.BadRequest, invalidGoalResponse.StatusCode);
         Assert.Contains(invalidGoal, text => text.Contains("dashboard invalid request", StringComparison.Ordinal));
         Assert.Contains(css, text => text.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", StringComparison.Ordinal));

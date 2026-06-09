@@ -214,8 +214,14 @@ internal static partial class DashboardEndpoints
             });
     }
 
-    private static async Task<IResult> AdvanceGoalWithSubscriptionsAsync(string goalId, DashboardEndpointServices services)
+    private static async Task<IResult> AdvanceGoalWithSubscriptionsAsync(HttpContext context, string goalId, DashboardEndpointServices services)
     {
+        var confirmation = RequireSubscriptionAdvanceConfirmation(context);
+        if (confirmation is not null)
+        {
+            return confirmation;
+        }
+
         var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         return await MutateIfChangedAsync(
@@ -241,8 +247,14 @@ internal static partial class DashboardEndpoints
             });
     }
 
-    private static async Task<IResult> AdvanceGoalWithSubscriptionsUntilBlockedAsync(string goalId, DashboardEndpointServices services)
+    private static async Task<IResult> AdvanceGoalWithSubscriptionsUntilBlockedAsync(HttpContext context, string goalId, DashboardEndpointServices services)
     {
+        var confirmation = RequireSubscriptionAdvanceConfirmation(context);
+        if (confirmation is not null)
+        {
+            return confirmation;
+        }
+
         var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var result = await services.State.MutateValueIfChangedAsync(
@@ -305,5 +317,17 @@ internal static partial class DashboardEndpoints
     {
         return operation.Equals("start-subscription-ready", StringComparison.OrdinalIgnoreCase) ||
             operation.Equals("start-dispatches", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IResult? RequireSubscriptionAdvanceConfirmation(HttpContext context)
+    {
+        var confirmed = context.Request.Query.TryGetValue("confirmSubscriptionAdvance", out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+        return confirmed
+            ? null
+            : Text(
+                "dashboard invalid request: subscription advance requires confirmSubscriptionAdvance=true because it can prepare or start worker processes.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
     }
 }

@@ -378,7 +378,8 @@ The dashboard host also exposes local JSON endpoints for scripted monitoring and
 - `/api/goals/<goal-id-prefix>/subscription-plan`
 - `POST /api/goals/<goal-id-prefix>/ask` with either a raw question body or JSON like `{ "question": "Which repository should this goal target?" }`
 - `POST /api/goals/<goal-id-prefix>/advance`
-- `POST /api/goals/<goal-id-prefix>/advance-subscription`
+- `POST /api/goals/<goal-id-prefix>/advance-subscription?confirmSubscriptionAdvance=true`
+- `POST /api/goals/<goal-id-prefix>/advance-subscription-until-blocked?confirmSubscriptionAdvance=true`
 - `POST /api/goals/<goal-id-prefix>/delegate`
 - `POST /api/goals/<goal-id-prefix>/profile-dispatch-ready` with either a raw profile name body or JSON like `{ "profileName": "local-echo" }`; the response includes `Dispatches` entries with `Task`, generated `PromptPath`, and `LastDispatch` values
 - `POST /api/goals/<goal-id-prefix>/subscription-dispatch-ready`; the response includes provider-selected `Dispatches` entries with `Task`, generated `PromptPath`, and `LastDispatch` values

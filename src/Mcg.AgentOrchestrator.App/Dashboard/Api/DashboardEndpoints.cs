@@ -78,9 +78,9 @@ internal static partial class DashboardEndpoints
                 await Safe(() => HandleTaskOperationAsync(context, goalId, taskId, operation, services)));
             goals.MapPost("/delegate", (string goalId) => Safe(() => DelegateGoalAsync(goalId, services)));
             goals.MapPost("/advance", (string goalId) => Safe(() => AdvanceGoalAsync(goalId, services)));
-            goals.MapPost("/advance-subscription", (string goalId) => Safe(() => AdvanceGoalWithSubscriptionsAsync(goalId, services)));
+            goals.MapPost("/advance-subscription", (HttpContext context, string goalId) => Safe(() => AdvanceGoalWithSubscriptionsAsync(context, goalId, services)));
             goals.MapPost("/advance-until-blocked", (string goalId) => Safe(() => AdvanceGoalUntilBlockedAsync(goalId, services)));
-            goals.MapPost("/advance-subscription-until-blocked", (string goalId) => Safe(() => AdvanceGoalWithSubscriptionsUntilBlockedAsync(goalId, services)));
+            goals.MapPost("/advance-subscription-until-blocked", (HttpContext context, string goalId) => Safe(() => AdvanceGoalWithSubscriptionsUntilBlockedAsync(context, goalId, services)));
             goals.MapPost("/{operation}", async Task<IResult> (HttpContext context, string goalId, string operation) =>
                 await Safe(() => HandleGoalBatchOperationAsync(context, goalId, operation, services)));
         }
