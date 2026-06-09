@@ -95,7 +95,7 @@ public sealed class HealthInspectorTests
     ]);
 
     var report = OrchestratorHealthInspector.Inspect(
-        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
         catalog,
         WorkerProfileCatalog.Default(),
         command => true);
@@ -105,6 +105,52 @@ public sealed class HealthInspectorTests
     Assert.False(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).IsValid);
     Assert.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Developer).Detail, text => text.Contains("not registered", StringComparison.Ordinal));
     Assert.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).Detail, text => text.Contains("No agent", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_local_bridge_for_api_only_agent")]
+    public void OrchestratorHealthInspectorRejectsLocalBridgeForApiOnlyAgent()
+{
+    var catalog = new AgentCatalog(
+    [
+        new AgentDefinition(
+            new AgentId("openai-planner"),
+            "OpenAI planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly)
+    ]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        catalog,
+        WorkerProfileCatalog.Default(),
+        command => command == "codex");
+
+    var planner = report.Agents.Single(agent => agent.Role == AgentRole.Planner);
+    Assert.False(planner.IsValid);
+    Assert.Contains(planner.Detail, text => text.Contains("local subscription bridge", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_echo_only_subscription_routes")]
+    public void OrchestratorHealthInspectorRejectsEchoOnlySubscriptionRoutes()
+{
+    var agent = new AgentDefinition(
+        new AgentId("subscription-tester"),
+        "Subscription Tester",
+        AgentRole.Tester,
+        new ModelProfile("OpenAI", "gpt", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    var catalog = new AgentCatalog([agent]);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        catalog,
+        profiles,
+        command => command == "Write-Output");
+
+    var tester = report.Agents.Single(agent => agent.Role == AgentRole.Tester);
+    Assert.False(tester.IsValid);
+    Assert.Contains(tester.Detail, text => text.Contains("only echoes", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_worker_profile_commands")]
     public void OrchestratorHealthInspectorValidatesWorkerProfileCommands()

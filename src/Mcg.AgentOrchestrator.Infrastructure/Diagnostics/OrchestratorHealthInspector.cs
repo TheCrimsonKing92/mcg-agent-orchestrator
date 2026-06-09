@@ -62,7 +62,7 @@ public static class OrchestratorHealthInspector
         var profiles = workerProfiles.Profiles
             .Select(profile => InspectProfile(profile, commandExists))
             .ToList();
-        var agentValidations = InspectAgents(agents, providers, workerProfiles).ToList();
+        var agentValidations = InspectAgents(agents, providers, profiles).ToList();
 
         return new OrchestratorHealthReport(providers, agentValidations, profiles);
     }
@@ -128,10 +128,10 @@ public static class OrchestratorHealthInspector
     private static IEnumerable<AgentConfigurationValidation> InspectAgents(
         AgentCatalog agents,
         IReadOnlyList<ProviderConfigurationStatus> providers,
-        WorkerProfileCatalog workerProfiles)
+        IReadOnlyList<WorkerProfileValidation> workerProfiles)
     {
-        var knownProviders = providers.Select(provider => provider.ProviderName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var knownProfiles = workerProfiles.Profiles.Select(profile => profile.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var providersByName = providers.ToDictionary(provider => provider.ProviderName, StringComparer.OrdinalIgnoreCase);
+        var profilesByName = workerProfiles.ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
         var roles = Enum.GetValues<AgentRole>();
 
         foreach (var role in roles)
@@ -155,18 +155,21 @@ public static class OrchestratorHealthInspector
                 continue;
             }
 
-            var providerKnown = knownProviders.Contains(agent.Model.ProviderName);
+            providersByName.TryGetValue(agent.Model.ProviderName, out var provider);
             var profileName = ResolveSubscriptionProfileName(agent);
-            var profileKnown = profileName is not null && knownProfiles.Contains(profileName);
+            WorkerProfileValidation? profile = null;
+            var profileKnown = profileName is not null && profilesByName.TryGetValue(profileName, out profile);
             var apiAllowed = AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy);
             var subscriptionAllowed = AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy);
+            var apiUsable = apiAllowed && IsApiRouteUsable(provider);
+            var subscriptionUsable = subscriptionAllowed && IsSubscriptionRouteUsable(agent, profileKnown ? profile : null);
             var isValid = agent.ExecutionPolicy switch
             {
-                AgentExecutionPolicy.ApiOnly => providerKnown,
-                AgentExecutionPolicy.SubscriptionOnly => profileKnown,
-                AgentExecutionPolicy.PreferSubscription => profileKnown || providerKnown,
-                AgentExecutionPolicy.AnyAvailable => profileKnown || providerKnown,
-                _ => providerKnown
+                AgentExecutionPolicy.ApiOnly => apiUsable,
+                AgentExecutionPolicy.SubscriptionOnly => subscriptionUsable,
+                AgentExecutionPolicy.PreferSubscription => subscriptionUsable || apiUsable,
+                AgentExecutionPolicy.AnyAvailable => subscriptionUsable || apiUsable,
+                _ => apiUsable
             };
             yield return new AgentConfigurationValidation(
                 role,
@@ -180,7 +183,7 @@ public static class OrchestratorHealthInspector
                 agent.Subscription?.ModelAlias,
                 agent.Subscription?.ReasoningEffort,
                 isValid,
-                BuildAgentValidationDetail(agent, providerKnown, profileKnown, apiAllowed, subscriptionAllowed, profileName),
+                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName),
                 agent.ComplexModel?.ProviderName,
                 agent.ComplexModel?.ModelName,
                 agent.ComplexModel?.MaxOutputTokens,
@@ -188,25 +191,97 @@ public static class OrchestratorHealthInspector
         }
     }
 
+    private static bool IsApiRouteUsable(ProviderConfigurationStatus? provider)
+    {
+        if (provider is null || !provider.IsConfigured)
+        {
+            return false;
+        }
+
+        if (provider.Mode.Equals("ApiKey", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) &&
+            provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSubscriptionRouteUsable(AgentDefinition agent, WorkerProfileValidation? profile)
+    {
+        if (profile is null || !profile.IsResolvable || profile.IsEchoOnly)
+        {
+            return false;
+        }
+
+        return agent.Role != AgentRole.Developer || profile.IsPatchCapable;
+    }
+
     private static string BuildAgentValidationDetail(
         AgentDefinition agent,
-        bool providerKnown,
-        bool profileKnown,
+        ProviderConfigurationStatus? provider,
+        WorkerProfileValidation? profile,
         bool apiAllowed,
         bool subscriptionAllowed,
         string? profileName)
     {
         var api = apiAllowed
-            ? providerKnown
-                ? $"API provider '{agent.Model.ProviderName}' is registered"
-                : $"API provider '{agent.Model.ProviderName}' is not registered"
+            ? BuildApiValidationDetail(agent, provider)
             : "API execution disabled";
         var subscription = subscriptionAllowed
-            ? profileKnown
-                ? $"subscription profile '{profileName}' is configured"
-                : $"subscription profile '{profileName ?? "none"}' is not configured"
+            ? BuildSubscriptionValidationDetail(agent, profile, profileName)
             : "subscription execution disabled";
         return $"{api}; {subscription}.";
+    }
+
+    private static string BuildApiValidationDetail(AgentDefinition agent, ProviderConfigurationStatus? provider)
+    {
+        if (provider is null)
+        {
+            return $"API provider '{agent.Model.ProviderName}' is not registered";
+        }
+
+        if (IsApiRouteUsable(provider))
+        {
+            return provider.Mode.Equals("ApiKey", StringComparison.OrdinalIgnoreCase)
+                ? $"API provider '{provider.ProviderName}' is configured with an API key"
+                : $"API provider '{provider.ProviderName}' is reachable locally";
+        }
+
+        if (!provider.IsConfigured)
+        {
+            return $"API provider '{provider.ProviderName}' is registered but offline";
+        }
+
+        return $"API provider '{provider.ProviderName}' is registered as a local subscription bridge, not API execution";
+    }
+
+    private static string BuildSubscriptionValidationDetail(
+        AgentDefinition agent,
+        WorkerProfileValidation? profile,
+        string? profileName)
+    {
+        if (profile is null)
+        {
+            return $"subscription profile '{profileName ?? "none"}' is not configured";
+        }
+
+        if (!profile.IsResolvable)
+        {
+            return $"subscription profile '{profile.Name}' is not executable";
+        }
+
+        if (profile.IsEchoOnly)
+        {
+            return $"subscription profile '{profile.Name}' only echoes the prompt path";
+        }
+
+        if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)
+        {
+            return $"subscription profile '{profile.Name}' cannot patch Developer tasks";
+        }
+
+        return $"subscription profile '{profile.Name}' is executable";
     }
 
     private static string? ResolveSubscriptionProfileName(AgentDefinition agent)
