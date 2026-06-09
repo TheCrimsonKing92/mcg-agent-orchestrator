@@ -874,6 +874,10 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run\">Run API task</button>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run\">Run task</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>run 3</code>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_prepared_dispatch_as_primary_task_action")]
@@ -1193,7 +1197,8 @@ static string ExtractTaskControls(string html, int taskNumber)
     var readyGoal = readyKernel.CreateGoal("Ready transcript");
     readyKernel.ActivateGoal(readyGoal.Id, AgentCatalog.Default().Agents);
     var readyTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal);
-    Assert.Contains(readyTranscript, text => text.Contains("subscription-dispatch", StringComparison.Ordinal));
+    Assert.Contains(readyTranscript, text => text.Contains("Suggested command: run", StringComparison.Ordinal));
+    Assert.False(readyTranscript.Contains("subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
 }
 
 private static void AssertOpenAiModelOrderIsCostAware(string text)

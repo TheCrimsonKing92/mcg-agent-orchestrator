@@ -145,7 +145,7 @@ public static partial class DashboardRenderer
             NextActionKind.RefreshRunningProcess => taskNumber is null ? "monitor" : $"refresh-dispatch {taskNumber}",
             NextActionKind.ExecuteRecordedDispatch => taskNumber is null ? "monitor" : $"execute-dispatch {taskNumber}",
             NextActionKind.VerifyCompletedTask => taskNumber is null ? "monitor" : $"verify {taskNumber} <command> | verify-manual {taskNumber} passed <note>",
-            NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"subscription-dispatch {taskNumber} | api-run {taskNumber}",
+            NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"run {taskNumber}",
             NextActionKind.DelegatePendingTask => "delegate",
             NextActionKind.MonitorGoal => "monitor",
             _ => "monitor"
@@ -179,7 +179,7 @@ public static partial class DashboardRenderer
         return stage.StageStatus switch
         {
             StageReadinessStatus.NeedsDelegation => "delegate",
-            StageReadinessStatus.ReadyToRun => $"subscription-dispatch {taskNumber} | api-run {taskNumber} | profile-dispatch {taskNumber} <profile-name>",
+            StageReadinessStatus.ReadyToRun => $"run {taskNumber} | profile-dispatch {taskNumber} <profile-name>",
             StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.RunningProcess => $"refresh-dispatch {taskNumber}",
             StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.Dispatch => $"execute-dispatch {taskNumber}",
             StageReadinessStatus.InProgress => $"task {taskNumber}",

@@ -54,7 +54,7 @@ public static string BuildStageSuggestedCommand(int taskNumber, TaskStageReadine
     return stage.StageStatus switch
     {
         StageReadinessStatus.NeedsDelegation => "delegate",
-        StageReadinessStatus.ReadyToRun => $"subscription-dispatch {taskNumber} | api-run {taskNumber} | profile-dispatch {taskNumber} <profile-name>",
+        StageReadinessStatus.ReadyToRun => $"run {taskNumber} | profile-dispatch {taskNumber} <profile-name>",
         StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.RunningProcess => $"refresh-dispatch {taskNumber}",
         StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.Dispatch => $"execute-dispatch {taskNumber}",
         StageReadinessStatus.InProgress => $"task {taskNumber}",
