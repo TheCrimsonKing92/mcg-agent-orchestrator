@@ -59,7 +59,9 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 task.LastExecution.Usage?.InputTokens,
                 task.LastExecution.Usage?.OutputTokens,
                 task.LastExecution.CompletedAt,
-                task.LastExecution.TaskComplexity),
+                task.LastExecution.TaskComplexity,
+                task.LastExecution.MaxOutputTokens,
+                HasOutputTokenLimitHit(task.LastExecution)),
         task.LastDispatch is null
             ? null
             : new DispatchDto(task.LastDispatch.WorkerName, task.LastDispatch.Command, task.LastDispatch.WorkingDirectory, task.LastDispatch.DispatchedAt),
@@ -213,5 +215,12 @@ private sealed record ResponseTextPreview(string Text, bool IsTruncated, int Ori
             true,
             text.Length);
     }
+}
+
+private static bool HasOutputTokenLimitHit(TaskExecutionRecord execution)
+{
+    return execution.MaxOutputTokens is > 0 &&
+        execution.Usage?.OutputTokens is { } outputTokens &&
+        outputTokens >= execution.MaxOutputTokens.Value;
 }
 }

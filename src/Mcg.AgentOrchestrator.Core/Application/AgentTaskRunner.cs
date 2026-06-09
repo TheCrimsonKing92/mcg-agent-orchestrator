@@ -66,10 +66,11 @@ public sealed class AgentTaskRunner
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
         _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started task (model: {resolvedModel.ModelName}).");
 
+        var request = BuildRequest(goal, task, agent, resolvedModel, complexity);
         ModelResponse response;
         try
         {
-            response = await provider.CompleteAsync(BuildRequest(goal, task, agent, resolvedModel, complexity), cancellationToken).ConfigureAwait(false);
+            response = await provider.CompleteAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -86,7 +87,8 @@ public sealed class AgentTaskRunner
             response.StopReason,
             response.Usage,
             _clock.UtcNow,
-            complexity);
+            complexity,
+            request.Options.MaxOutputTokens);
 
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));

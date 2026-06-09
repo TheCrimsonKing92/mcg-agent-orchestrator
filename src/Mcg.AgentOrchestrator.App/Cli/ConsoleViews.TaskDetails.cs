@@ -30,7 +30,11 @@ public static void PrintTask(Goal goal, TaskSpec task)
     {
         Console.WriteLine($"Last execution: {task.LastExecution.ProviderName}/{task.LastExecution.ModelName} by {task.LastExecution.AgentName}");
         Console.WriteLine($"Stop reason: {task.LastExecution.StopReason}");
-        Console.WriteLine($"Usage: input={task.LastExecution.Usage?.InputTokens?.ToString() ?? "n/a"} output={task.LastExecution.Usage?.OutputTokens?.ToString() ?? "n/a"}");
+        Console.WriteLine($"Usage: input={task.LastExecution.Usage?.InputTokens?.ToString() ?? "n/a"} output={task.LastExecution.Usage?.OutputTokens?.ToString() ?? "n/a"} maxOutput={task.LastExecution.MaxOutputTokens?.ToString() ?? "n/a"}");
+        if (IsOutputTokenLimitHit(task.LastExecution))
+        {
+            Console.WriteLine("Model note: possible output token cap hit.");
+        }
         Console.WriteLine("Output:");
         Console.WriteLine(task.LastExecution.Output);
     }
@@ -120,6 +124,13 @@ public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
         var task = request.TaskId is null ? "goal" : request.TaskId.Value[..8];
         Console.WriteLine($"{request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={task}: {request.Question}");
     }
+}
+
+private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
+{
+    return execution.MaxOutputTokens is > 0 &&
+        execution.Usage?.OutputTokens is { } outputTokens &&
+        outputTokens >= execution.MaxOutputTokens.Value;
 }
 
 }

@@ -190,6 +190,8 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, modelUsage.ExecutionCount);
     Assert.Equal(100, modelUsage.InputTokens);
     Assert.Equal(25, modelUsage.OutputTokens);
+    Assert.Equal(0, modelUsage.OutputTokenLimitHitCount);
+    Assert.Equal(1024, modelUsage.MaxOutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
     Assert.Equal(TaskEvidenceKind.None, summary.Tasks.Single(item => item.TaskId == inputTask.Id).LatestEvidence);

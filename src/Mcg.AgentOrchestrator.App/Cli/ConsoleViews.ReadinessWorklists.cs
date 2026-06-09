@@ -17,7 +17,10 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
     foreach (var usage in summary.ModelUsage)
     {
         var paid = usage.IsPotentiallyPaidProvider ? " potentially paid" : string.Empty;
-        Console.WriteLine($"  model: {usage.ProviderName}/{usage.ModelName}{paid}: {usage.ExecutionCount} run(s), {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}");
+        var limitHits = usage.OutputTokenLimitHitCount > 0
+            ? $", cap hits {usage.OutputTokenLimitHitCount}{FormatMaxOutputTokens(usage.MaxOutputTokens)}"
+            : string.Empty;
+        Console.WriteLine($"  model: {usage.ProviderName}/{usage.ModelName}{paid}: {usage.ExecutionCount} run(s), {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}");
     }
     Console.WriteLine($"Verification: {summary.TasksWithVerification}; passed={summary.PassedVerifications}; failed={summary.FailedVerifications}");
     Console.WriteLine($"Pending human input: {summary.PendingHumanInputCount}");
@@ -34,6 +37,11 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
 private static string FormatTokenUsage(int? inputTokens, int? outputTokens)
 {
     return $"{inputTokens?.ToString() ?? "n/a"} in / {outputTokens?.ToString() ?? "n/a"} out";
+}
+
+private static string FormatMaxOutputTokens(int? maxOutputTokens)
+{
+    return maxOutputTokens is null ? string.Empty : $" of {maxOutputTokens}";
 }
 
 public static void PrintStageReadinessReport(Goal goal, GoalStageReadinessReport report)

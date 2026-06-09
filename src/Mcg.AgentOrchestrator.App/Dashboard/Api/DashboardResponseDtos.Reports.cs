@@ -92,6 +92,8 @@ internal sealed record ModelUsageSummaryDto(
     int ExecutionCount,
     int? InputTokens,
     int? OutputTokens,
+    int OutputTokenLimitHitCount = 0,
+    int? MaxOutputTokens = null,
     TaskComplexity? TaskComplexity = null,
     bool IsPotentiallyPaidProvider = false);
 

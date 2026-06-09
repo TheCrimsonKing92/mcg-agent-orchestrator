@@ -82,6 +82,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Model usage:", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out", StringComparison.Ordinal));
     Assert.Equal(TaskComplexity.Simple, taskDto.LastExecution!.TaskComplexity);
+    Assert.Equal(1024, taskDto.LastExecution.MaxOutputTokens);
+    Assert.False(taskDto.LastExecution.OutputTokenLimitHit);
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
     Assert.Equal(1, evidenceDto.PotentiallyPaidInputTokens);
@@ -94,6 +96,46 @@ public sealed class DashboardRenderingTests
     Assert.Equal(2, modelUsage.OutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_possible_output_token_cap_hits")]
+    public async Task DashboardRendererSurfacesPossibleOutputTokenCapHits()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render cap pressure");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-small", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: 2),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var runner = new AgentTaskRunner(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([new FakeSmokeProvider("Done", new ModelUsage(5, 2), "length", "OpenAI")]));
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var goalPrefix = goal.Id.Value[..8];
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
+    var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+
+    Assert.Contains(html, text => text.Contains("max 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("possible output cap hit", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("cap hits 1 of 2", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("maxOutput=2", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Model note: possible output token cap hit.", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("cap hits 1 of 2", StringComparison.Ordinal));
+    Assert.Equal(2, taskDto.LastExecution!.MaxOutputTokens);
+    Assert.True(taskDto.LastExecution.OutputTokenLimitHit);
+    Assert.Contains(evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value).Message, text => text.Contains("possible output cap hit at 2 tokens", StringComparison.Ordinal));
+    var modelUsage = evidenceDto.ModelUsage.Single();
+    Assert.Equal(1, modelUsage.OutputTokenLimitHitCount);
+    Assert.Equal(2, modelUsage.MaxOutputTokens);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_execution_output_without_mutating_task_record")]

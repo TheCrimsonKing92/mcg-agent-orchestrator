@@ -43,7 +43,9 @@ internal sealed record ExecutionDto(
     int? InputTokens,
     int? OutputTokens,
     DateTimeOffset CompletedAt,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    int? MaxOutputTokens = null,
+    bool OutputTokenLimitHit = false);
 
 internal sealed record DispatchDto(string WorkerName, string Command, string WorkingDirectory, DateTimeOffset DispatchedAt);
 

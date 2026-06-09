@@ -35,7 +35,8 @@ public sealed record TaskExecutionSnapshot(
     int? InputTokens,
     int? OutputTokens,
     DateTimeOffset CompletedAt,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    int? MaxOutputTokens = null);
 
 public sealed record TaskVerificationSnapshot(
     string Command,

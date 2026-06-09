@@ -64,7 +64,8 @@ public sealed class TaskSpec
                     LastExecution.Usage?.InputTokens,
                     LastExecution.Usage?.OutputTokens,
                     LastExecution.CompletedAt,
-                    LastExecution.TaskComplexity),
+                    LastExecution.TaskComplexity,
+                    LastExecution.MaxOutputTokens),
             LastVerification is null
                 ? null
                 : new TaskVerificationSnapshot(
@@ -129,7 +130,8 @@ public sealed class TaskSpec
                 snapshot.LastExecution.StopReason,
                 new ModelUsage(snapshot.LastExecution.InputTokens, snapshot.LastExecution.OutputTokens),
                 snapshot.LastExecution.CompletedAt,
-                snapshot.LastExecution.TaskComplexity));
+                snapshot.LastExecution.TaskComplexity,
+                snapshot.LastExecution.MaxOutputTokens));
         }
 
         if (snapshot.VerificationHistory is { Count: > 0 })

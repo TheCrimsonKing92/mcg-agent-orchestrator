@@ -101,6 +101,8 @@ public sealed partial class AgentOrchestratorKernel
                 group.Count(),
                 SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.InputTokens)),
                 SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.OutputTokens)),
+                group.Count(HasOutputTokenLimitHit),
+                ResolveSharedMaxOutputTokens(group.Select(task => task.LastExecution!.MaxOutputTokens)),
                 group.Key.TaskComplexity,
                 IsPotentiallyPaidProvider(group.Key.ProviderName)))
             .ToList();
@@ -133,6 +135,41 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return hasValue ? total : null;
+    }
+
+    private static int? ResolveSharedMaxOutputTokens(IEnumerable<int?> values)
+    {
+        int? shared = null;
+        var hasValue = false;
+        foreach (var value in values)
+        {
+            if (value is null)
+            {
+                continue;
+            }
+
+            if (!hasValue)
+            {
+                shared = value;
+                hasValue = true;
+                continue;
+            }
+
+            if (shared != value)
+            {
+                return null;
+            }
+        }
+
+        return shared;
+    }
+
+    private static bool HasOutputTokenLimitHit(TaskSpec task)
+    {
+        var execution = task.LastExecution;
+        return execution?.MaxOutputTokens is > 0 &&
+            execution.Usage?.OutputTokens is { } outputTokens &&
+            outputTokens >= execution.MaxOutputTokens.Value;
     }
 
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)
@@ -363,6 +400,8 @@ public sealed partial class AgentOrchestratorKernel
             TaskEvidenceKind.CompletedProcess => $"Process completed exit={task.LastProcess!.ExitCode?.ToString() ?? "n/a"}: {task.LastProcess.Command}",
             TaskEvidenceKind.Process => $"Process recorded: {task.LastProcess!.Command}",
             TaskEvidenceKind.Dispatch => $"Dispatch recorded for {task.LastDispatch!.WorkerName}: {task.LastDispatch.Command}",
+            TaskEvidenceKind.Execution when HasOutputTokenLimitHit(task) =>
+                $"Model output recorded by {task.LastExecution!.AgentName}; possible output cap hit at {task.LastExecution.MaxOutputTokens} tokens.",
             TaskEvidenceKind.Execution => $"Model output recorded by {task.LastExecution!.AgentName}.",
             _ => "No execution, dispatch, process, or verification evidence recorded."
         };
