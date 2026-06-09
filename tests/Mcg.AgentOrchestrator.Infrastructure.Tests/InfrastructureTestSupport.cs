@@ -190,18 +190,20 @@ internal sealed class CapturingHandler : HttpMessageHandler
 
 internal sealed class FakeSmokeProvider : IModelProvider
 {
+    private readonly string _providerName;
     private readonly string _text;
     private readonly ModelUsage? _usage;
     private readonly string _stopReason;
 
-    public FakeSmokeProvider(string text = "OK", ModelUsage? usage = null, string stopReason = "stop")
+    public FakeSmokeProvider(string text = "OK", ModelUsage? usage = null, string stopReason = "stop", string providerName = "Fake")
     {
+        _providerName = providerName;
         _text = text;
         _usage = usage ?? new ModelUsage(1, 2);
         _stopReason = stopReason;
     }
 
-    public string ProviderName => "Fake";
+    public string ProviderName => _providerName;
 
     public ModelRequest? LastRequest { get; private set; }
 

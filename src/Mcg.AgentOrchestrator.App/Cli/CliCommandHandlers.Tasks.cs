@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -64,7 +65,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "run":
-            CliArgumentParser.RequirePartCount(parts, 2, "run <task-number>");
+            CliArgumentParser.RequirePartCount(parts, 2, "run <task-number> [--confirm-paid-api-run]");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var runTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var runAgent = ResolveAssignedAgent(runTask, context.Agents);
@@ -74,14 +75,17 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     $"Task '{runTask.Id}' is assigned to '{runAgent.Name}' with execution policy {runAgent.ExecutionPolicy}; use subscription-dispatch {parts[1]} first, or api-run {parts[1]} for explicit API execution.");
             }
 
+            EnsurePaidApiRunConfirmed(context.CurrentGoal, runTask, runAgent, parts);
             RunApiTask(context, runTask);
             return true;
 
         case "api-run":
-            CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number>");
+            CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number> [--confirm-paid-api-run]");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var apiRunTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            EnsureExplicitApiRunAllowed(apiRunTask, ResolveAssignedAgent(apiRunTask, context.Agents));
+            var apiRunAgent = ResolveAssignedAgent(apiRunTask, context.Agents);
+            EnsureExplicitApiRunAllowed(apiRunTask, apiRunAgent);
+            EnsurePaidApiRunConfirmed(context.CurrentGoal, apiRunTask, apiRunAgent, parts);
             RunApiTask(context, apiRunTask);
             return true;
 
@@ -190,6 +194,24 @@ private static void EnsureExplicitApiRunAllowed(TaskSpec task, AgentDefinition a
         throw new InvalidOperationException(
             $"Explicit API execution for task {task.Id.Value[..8]} is only available before subscription work, model output, or verification evidence exists.");
     }
+}
+
+private static void EnsurePaidApiRunConfirmed(Goal goal, TaskSpec task, AgentDefinition agent, IReadOnlyList<string> parts)
+{
+    var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+    var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
+    if (!ProviderSmokeRunner.IsPaidProviderName(resolvedModel.ProviderName))
+    {
+        return;
+    }
+
+    if (parts.Any(part => part.Equals("--confirm-paid-api-run", StringComparison.OrdinalIgnoreCase)))
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(
+        $"Paid API execution for provider '{resolvedModel.ProviderName}' requires --confirm-paid-api-run because it can make a live billable request.");
 }
 
 private static bool IsCleanExplicitApiRun(TaskSpec task)

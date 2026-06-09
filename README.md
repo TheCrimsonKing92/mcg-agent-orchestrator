@@ -130,8 +130,8 @@ timeline
 timeline [goal-id]
 task-timeline <task-number>
 pending
-run <task-number>
-api-run <task-number>
+run <task-number> [--confirm-paid-api-run]
+api-run <task-number> [--confirm-paid-api-run]
 retry <task-number> <message>
 dispatch <task-number> <worker-name> <command>
 worker-profiles
@@ -261,7 +261,7 @@ Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. 
 
 ## Model Providers
 
-Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists.
+Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists. Add `--confirm-paid-api-run` when intentionally running an OpenAI or Anthropic task through the API; local Ollama execution does not require that flag.
 
 Set these environment variables to use live API providers:
 
