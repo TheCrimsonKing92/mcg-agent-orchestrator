@@ -133,6 +133,24 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains(new string('d', 1600), StringComparison.Ordinal));
     Assert.Equal(command, task.LastDispatch!.Command);
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_pending_human_input")]
+    public void BuildTaskBriefTrimsNoisyPendingHumanInput()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Trim noisy pending input");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var question = $"question-start {new string('h', 1600)} question-tail";
+    var request = kernel.RequestHumanInput(goal.Id, task.Id, question);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("question-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("question-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('h', 1600), StringComparison.Ordinal));
+    Assert.Equal(question, kernel.GetHumanInputRequest(request.Id).Question);
+}
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {

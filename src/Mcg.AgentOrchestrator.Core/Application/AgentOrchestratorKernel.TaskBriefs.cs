@@ -60,7 +60,7 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add("## Pending Human Input");
             foreach (var request in pendingInput)
             {
-                lines.Add($"- {request.Id}: {request.Question}");
+                lines.Add($"- {request.Id}: {PromptContextFormatter.TrimPromptBlock(request.Question)}");
             }
             lines.Add(string.Empty);
         }
