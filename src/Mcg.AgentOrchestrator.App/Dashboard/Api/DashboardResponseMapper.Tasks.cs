@@ -64,7 +64,7 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 task.VerificationHistory.Count),
         goal.Timeline
             .Where(evt => evt.TaskId == task.Id)
-            .Select(evt => new TimelineDto(evt.Kind, evt.Message, evt.OccurredAt))
+            .Select(ToTimelineDto)
             .ToList());
 }
 
@@ -149,27 +149,50 @@ public static TaskTimelineDto ToTaskTimelineDto(Goal goal, TaskSpec task)
         goal.Timeline
             .Where(evt => evt.TaskId == task.Id)
             .OrderBy(evt => evt.OccurredAt)
-            .Select(evt => new TimelineDto(evt.Kind, evt.Message, evt.OccurredAt))
+            .Select(ToTimelineDto)
             .ToList());
+}
+
+private static TimelineDto ToTimelineDto(ProgressEvent evt)
+{
+    var message = ResponseTextPreview.CreateTimeline(evt.Message);
+    return new TimelineDto(
+        evt.Kind,
+        message.Text,
+        message.IsTruncated,
+        message.OriginalLength,
+        evt.OccurredAt);
 }
 
 private sealed record ResponseTextPreview(string Text, bool IsTruncated, int OriginalLength)
 {
-    private const int MaxChars = 4000;
-    private const int TailChars = 1200;
+    private const int PayloadMaxChars = 4000;
+    private const int PayloadTailChars = 1200;
+    private const int TimelineMaxChars = 600;
+    private const int TimelineTailChars = 180;
 
     public static ResponseTextPreview Create(string text)
     {
-        if (text.Length <= MaxChars)
+        return Create(text, PayloadMaxChars, PayloadTailChars);
+    }
+
+    public static ResponseTextPreview CreateTimeline(string text)
+    {
+        return Create(text, TimelineMaxChars, TimelineTailChars);
+    }
+
+    private static ResponseTextPreview Create(string text, int maxChars, int tailChars)
+    {
+        if (text.Length <= maxChars)
         {
             return new ResponseTextPreview(text, false, text.Length);
         }
 
-        var headChars = MaxChars - TailChars;
-        var omittedChars = text.Length - headChars - TailChars;
+        var headChars = maxChars - tailChars;
+        var omittedChars = text.Length - headChars - tailChars;
         var marker = $"{Environment.NewLine}{Environment.NewLine}[truncated {omittedChars} chars]{Environment.NewLine}{Environment.NewLine}";
         return new ResponseTextPreview(
-            text[..headChars] + marker + text[^TailChars..],
+            text[..headChars] + marker + text[^tailChars..],
             true,
             text.Length);
     }

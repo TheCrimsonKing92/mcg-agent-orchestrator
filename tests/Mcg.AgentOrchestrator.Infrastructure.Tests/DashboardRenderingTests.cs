@@ -143,6 +143,39 @@ public sealed class DashboardRenderingTests
     Assert.Equal(stderr, task.VerificationHistory.Single().StandardError);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_timeline_messages_without_mutating_events")]
+    public void DashboardResponseMapperTrimsVerboseTimelineMessagesWithoutMutatingEvents()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Trim timeline response");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var message = "timeline-start " + new string('t', 2000) + " timeline-tail";
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, message);
+
+    var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+    var timeline = DashboardResponseMapper.ToTaskTimelineDto(goal, task);
+    var detailEvent = detail.Timeline.Single(evt => evt.Message.Contains("timeline-start", StringComparison.Ordinal));
+    var timelineEvent = timeline.Timeline.Single(evt => evt.Message.Contains("timeline-start", StringComparison.Ordinal));
+
+    Assert.True(detailEvent.MessageTruncated);
+    Assert.True(timelineEvent.MessageTruncated);
+    Assert.Equal(message.Length, detailEvent.MessageLength);
+    Assert.Equal(message.Length, timelineEvent.MessageLength);
+    Assert.Contains(detailEvent.Message, text => text.Contains("timeline-tail", StringComparison.Ordinal));
+    Assert.Contains(detailEvent.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains(timelineEvent.Message, text => text.Contains("timeline-tail", StringComparison.Ordinal));
+    Assert.Contains(timelineEvent.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(detailEvent.Message.Length < message.Length);
+    Assert.True(timelineEvent.Message.Length < message.Length);
+    Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("timeline-start", StringComparison.Ordinal)).Message);
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
     public void DashboardRendererCanEmitAutoRefreshMetadata()
 {

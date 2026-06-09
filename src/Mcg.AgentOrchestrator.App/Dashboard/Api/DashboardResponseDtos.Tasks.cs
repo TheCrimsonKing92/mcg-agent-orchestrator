@@ -102,4 +102,9 @@ internal sealed record TaskTimelineDto(
 
 internal sealed record VerificationDto(string Command, int ExitCode, bool Succeeded, DateTimeOffset CompletedAt, int HistoryCount);
 
-internal sealed record TimelineDto(ProgressKind Kind, string Message, DateTimeOffset OccurredAt);
+internal sealed record TimelineDto(
+    ProgressKind Kind,
+    string Message,
+    bool MessageTruncated,
+    int MessageLength,
+    DateTimeOffset OccurredAt);
