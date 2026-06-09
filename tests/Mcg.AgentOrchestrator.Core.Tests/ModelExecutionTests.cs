@@ -78,6 +78,39 @@ public sealed class ModelExecutionTests
     Assert.Contains(openAi.LastRequest.Messages, message => message.Content.Contains("Challenge generic summaries", StringComparison.Ordinal));
     Assert.Equal("high", openAi.LastRequest.Options.ReasoningEffort);
 }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_complex_model_only_for_complex_tasks")]
+    public async Task ExecuteAssignedTaskUsesComplexModelOnlyForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture with end-to-end distributed integration, horizontal scaling, real-time processing, system design, security, observability, and concurrent workflows.",
+        [
+            new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.", AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var provider = new FakeModelProvider("OpenAI", "done");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]));
+
+    await runner.RunAsync(goal.Id, goal.Tasks[0].Id);
+
+    Assert.Equal("gpt-5.4-mini", provider.LastRequest!.Options.ModelName);
+    Assert.Equal("medium", provider.LastRequest.Options.ReasoningEffort);
+    Assert.Equal("gpt-5.4-mini", goal.Tasks[0].LastExecution!.ModelName);
+
+    await runner.RunAsync(goal.Id, goal.Tasks[1].Id);
+
+    Assert.Equal("gpt-5.5", provider.LastRequest!.Options.ModelName);
+    Assert.Equal("high", provider.LastRequest.Options.ReasoningEffort);
+    Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]
     public async Task ExecuteAssignedTaskPausesForAgentRequestedHumanInput()
 {
