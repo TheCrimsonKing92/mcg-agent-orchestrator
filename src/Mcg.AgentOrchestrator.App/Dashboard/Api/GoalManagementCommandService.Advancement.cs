@@ -31,7 +31,7 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     object? result;
     try
     {
-        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false);
+        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false);
     }
     catch (InvalidOperationException ex)
     {
@@ -55,7 +55,7 @@ public static async Task<AdvanceLoopResultDto> AdvanceGoalUntilBlockedAsync(
     return await AdvanceUntilBlockedAsync(
         kernel,
         goal,
-        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false),
+        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false),
         automation => automation.Message);
 }
 
@@ -311,7 +311,8 @@ private static async Task<object?> ExecuteAutomationAsync(
     OrchestratorWorkspace workspace,
     Goal goal,
     NextActionAutomationPlan automation,
-    bool allowApiExecution = true)
+    bool allowApiExecution = true,
+    bool allowProcessStart = true)
 {
     return automation.Kind switch
     {
@@ -320,7 +321,10 @@ private static async Task<object?> ExecuteAutomationAsync(
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>
-            AdvanceStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!),
+            allowProcessStart
+                ? AdvanceStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!)
+                : throw new InvalidOperationException(
+                    $"Automatic continuation stopped before starting recorded dispatch for task {automation.TaskId!.Value[..8]}; use Start prepared work or subscription advance for an explicit worker process start."),
         NextActionAutomationKind.DelegatePendingTask =>
             DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
         _ => null

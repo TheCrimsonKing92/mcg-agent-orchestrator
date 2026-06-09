@@ -117,6 +117,43 @@ public sealed class AdvanceLoopTests
     Assert.True(task.LastExecution is null);
     Assert.True(provider.LastRequest is null);
 }
+
+    [Xunit.Fact(DisplayName = "AdvanceGoalAsync_stops_before_starting_recorded_dispatch")]
+    public async Task AdvanceGoalAsyncStopsBeforeStartingRecordedDispatch()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Run prepared subscription work", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Advance should not start worker processes", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", "Write-Output ok", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+
+    var result = await GoalManagementCommandService.AdvanceGoalAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([]),
+        workspace,
+        goal);
+
+    Assert.False(result.Executed);
+    Assert.Equal(NextActionAutomationKind.StartRecordedDispatch, result.AutomationKind);
+    Assert.Contains(result.Message, text => text.Contains("stopped before starting recorded dispatch", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.True(task.LastDispatch is not null);
+    Assert.True(task.LastProcess is null);
+}
+
     [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_blocks_prefer_subscription_before_api_fallback")]
     public async Task AdvanceGoalUntilBlockedBlocksPreferSubscriptionBeforeApiFallback()
 {
