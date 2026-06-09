@@ -26,6 +26,31 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
+    public void BuildTaskBriefTrimsNoisyGoalAndTaskPrimaryContext()
+{
+    var objective = $"goal-start {new string('g', 1700)} goal-middle-omitted {new string('h', 1200)} goal-tail";
+    var description = $"task-start {new string('t', 1700)} task-middle-omitted {new string('u', 1200)} task-tail";
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
+
+    Assert.Contains(brief.Content, text => text.Contains("goal-start", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("goal-tail", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("task-start", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("task-tail", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Content.Contains("goal-middle-omitted", StringComparison.Ordinal));
+    Assert.True(!brief.Content.Contains("task-middle-omitted", StringComparison.Ordinal));
+    Assert.True(brief.Title.Length < description.Length);
+    Assert.True(!brief.Title.Contains("task-tail", StringComparison.Ordinal));
+    Assert.Equal(objective, goal.Objective);
+    Assert.Equal(description, task.Description);
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_full_role_requirements_for_complex_tasks")]
     public void BuildTaskBriefUsesFullRoleRequirementsForComplexTasks()
 {

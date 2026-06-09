@@ -33,6 +33,40 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_goal_and_task_primary_context_in_prompt")]
+    public async Task ExecuteAssignedTaskTrimsNoisyGoalAndTaskPrimaryContextInPrompt()
+{
+    var clock = new FakeClock();
+    var objective = $"goal-start {new string('g', 1700)} goal-middle-omitted {new string('h', 1200)} goal-tail";
+    var description = $"task-start {new string('t', 1700)} task-middle-omitted {new string('u', 1200)} task-tail";
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("goal-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("goal-tail", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("task-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("task-tail", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("goal-middle-omitted", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("task-middle-omitted", StringComparison.Ordinal));
+    Assert.Equal(objective, goal.Objective);
+    Assert.Equal(description, task.Description);
+    Assert.Equal("gpt-5.4-mini", provider.LastRequest.Options.ModelName);
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_avoids_repeating_task_description_in_lifecycle_events")]
     public async Task ExecuteAssignedTaskAvoidsRepeatingTaskDescriptionInLifecycleEvents()
 {

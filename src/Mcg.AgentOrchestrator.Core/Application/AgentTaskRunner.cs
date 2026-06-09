@@ -120,8 +120,8 @@ public sealed class AgentTaskRunner
                 .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false)));
 
         var userPrompt =
-            $"Goal: {goal.Objective}{Environment.NewLine}" +
-            $"Task: {task.Description}{Environment.NewLine}" +
+            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective)}{Environment.NewLine}" +
+            $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description)}{Environment.NewLine}" +
             $"Task role: {task.RequiredRole}{Environment.NewLine}" +
             $"Current task status: {task.Status}{Environment.NewLine}" +
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan)}{Environment.NewLine}" +
