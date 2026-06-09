@@ -71,6 +71,12 @@ public static partial class DashboardRenderer
         return $"{inputTokens?.ToString() ?? "n/a"} in / {outputTokens?.ToString() ?? "n/a"} out";
     }
 
+    private static string RenderModelUsageSummary(ModelUsageSummary usage)
+    {
+        var runs = usage.ExecutionCount == 1 ? "1 run" : $"{usage.ExecutionCount} runs";
+        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
+    }
+
     private static string RenderTaskGate(TaskVerificationGate gate)
     {
         var cls = gate.GateStatus == VerificationGateStatus.Passed ? "ok" : "bad";

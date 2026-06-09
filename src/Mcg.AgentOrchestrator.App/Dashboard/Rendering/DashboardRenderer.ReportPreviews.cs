@@ -66,12 +66,7 @@ public static partial class DashboardRenderer
             html,
             "Recorded proof",
             $"{evidence.TasksWithVerification}/{evidence.TotalTasks} task(s) verified",
-            [
-                $"Execution: {evidence.TasksWithExecution}",
-                $"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}",
-                $"Dispatch: {evidence.TasksWithDispatch}",
-                $"Running processes: {evidence.RunningProcesses}"
-            ],
+            BuildRecordedProofPreviewDetails(evidence),
             $"/api/evidence?goal={goalPrefix}",
             "Open raw JSON");
 
@@ -152,6 +147,25 @@ public static partial class DashboardRenderer
             "Open full log",
             "report-preview-card-wide");
         html.AppendLine("</div>");
+    }
+
+    private static List<string> BuildRecordedProofPreviewDetails(GoalEvidenceSummary evidence)
+    {
+        var details = new List<string>
+        {
+            $"Execution: {evidence.TasksWithExecution}",
+            $"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}",
+            $"Dispatch: {evidence.TasksWithDispatch}",
+            $"Running processes: {evidence.RunningProcesses}"
+        };
+
+        details.AddRange(evidence.ModelUsage.Take(2).Select(usage => $"Model: {RenderModelUsageSummary(usage)}"));
+        if (evidence.ModelUsage.Count > 2)
+        {
+            details.Add($"Models: +{evidence.ModelUsage.Count - 2} more");
+        }
+
+        return details;
     }
 
     private static void RenderReportPreview(

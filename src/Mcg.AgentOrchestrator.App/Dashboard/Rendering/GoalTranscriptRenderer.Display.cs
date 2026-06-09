@@ -110,4 +110,10 @@ public static partial class GoalTranscriptRenderer
     {
         return $"{inputTokens?.ToString() ?? "n/a"} in / {outputTokens?.ToString() ?? "n/a"} out";
     }
+
+    private static string FormatModelUsage(ModelUsageSummary usage)
+    {
+        var runs = usage.ExecutionCount == 1 ? "1 run" : $"{usage.ExecutionCount} runs";
+        return $"{usage.ProviderName}/{usage.ModelName}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
+    }
 }

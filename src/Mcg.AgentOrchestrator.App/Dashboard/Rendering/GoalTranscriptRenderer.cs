@@ -104,6 +104,14 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine($"Tasks: {evidence.TotalTasks}");
         text.AppendLine($"Execution: {evidence.TasksWithExecution}; dispatch: {evidence.TasksWithDispatch}; process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses})");
         text.AppendLine($"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}");
+        if (evidence.ModelUsage.Count > 0)
+        {
+            text.AppendLine("Model usage:");
+            foreach (var usage in evidence.ModelUsage)
+            {
+                text.AppendLine($"- {FormatModelUsage(usage)}");
+            }
+        }
         text.AppendLine($"Verification: {evidence.TasksWithVerification}; passed={evidence.PassedVerifications}; failed={evidence.FailedVerifications}");
         text.AppendLine($"Pending human input: {evidence.PendingHumanInputCount}");
         foreach (var item in evidence.Tasks)
