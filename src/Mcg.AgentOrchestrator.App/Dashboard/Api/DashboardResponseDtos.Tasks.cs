@@ -14,8 +14,12 @@ internal sealed record TaskSummaryDto(
     AgentRole Role,
     WorkTaskStatus Status,
     string Description,
+    bool DescriptionTruncated,
+    int DescriptionLength,
     string Evidence,
     string? VerificationPlan,
+    bool VerificationPlanTruncated,
+    int VerificationPlanLength,
     string? AssignedAgentId,
     DateTimeOffset? SubscriptionRetryAfter = null);
 

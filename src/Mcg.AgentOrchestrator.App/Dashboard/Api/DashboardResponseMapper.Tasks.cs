@@ -16,14 +16,23 @@ public static TaskQueryDto ToTaskQueryDto(Goal goal, TaskQueryResult result)
 
 public static TaskSummaryDto ToTaskSummaryDto(Goal goal, TaskSpec task)
 {
+    var description = ResponseTextPreview.CreateSummary(task.Description);
+    var verificationPlan = task.VerificationPlan is null
+        ? null
+        : ResponseTextPreview.CreateSummary(task.VerificationPlan);
+
     return new TaskSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
         task.Id.Value,
         task.RequiredRole,
         task.Status,
-        task.Description,
+        description.Text,
+        description.IsTruncated,
+        description.OriginalLength,
         ConsoleViews.FormatTaskEvidence(task),
-        task.VerificationPlan,
+        verificationPlan?.Text,
+        verificationPlan?.IsTruncated ?? false,
+        verificationPlan?.OriginalLength ?? 0,
         task.AssignedAgentId?.Value,
         task.SubscriptionRetryAfter);
 }
@@ -170,6 +179,8 @@ private sealed record ResponseTextPreview(string Text, bool IsTruncated, int Ori
     private const int PayloadTailChars = 1200;
     private const int TimelineMaxChars = 600;
     private const int TimelineTailChars = 180;
+    private const int SummaryMaxChars = 600;
+    private const int SummaryTailChars = 180;
 
     public static ResponseTextPreview Create(string text)
     {
@@ -179,6 +190,11 @@ private sealed record ResponseTextPreview(string Text, bool IsTruncated, int Ori
     public static ResponseTextPreview CreateTimeline(string text)
     {
         return Create(text, TimelineMaxChars, TimelineTailChars);
+    }
+
+    public static ResponseTextPreview CreateSummary(string text)
+    {
+        return Create(text, SummaryMaxChars, SummaryTailChars);
     }
 
     private static ResponseTextPreview Create(string text, int maxChars, int tailChars)

@@ -176,6 +176,59 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("timeline-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_task_summary_fields_without_mutating_task")]
+    public void DashboardResponseMapperTrimsVerboseTaskSummaryFieldsWithoutMutatingTask()
+{
+    var description = "description-start " + new string('d', 2000) + " description-tail";
+    var verificationPlan = "plan-start " + new string('p', 2000) + " plan-tail";
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Trim task summary response",
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer, verificationPlan)]);
+    var task = goal.Tasks.Single();
+
+    var summary = DashboardResponseMapper.ToTaskSummaryDto(goal, task);
+    var fullPlan = DashboardResponseMapper.ToTaskVerificationPlanDto(goal, task);
+
+    Assert.True(summary.DescriptionTruncated);
+    Assert.True(summary.VerificationPlanTruncated);
+    Assert.Equal(description.Length, summary.DescriptionLength);
+    Assert.Equal(verificationPlan.Length, summary.VerificationPlanLength);
+    Assert.Contains(summary.Description, text => text.Contains("description-start", StringComparison.Ordinal));
+    Assert.Contains(summary.Description, text => text.Contains("description-tail", StringComparison.Ordinal));
+    Assert.Contains(summary.Description, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains(summary.VerificationPlan!, text => text.Contains("plan-start", StringComparison.Ordinal));
+    Assert.Contains(summary.VerificationPlan!, text => text.Contains("plan-tail", StringComparison.Ordinal));
+    Assert.Contains(summary.VerificationPlan!, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(summary.Description.Length < description.Length);
+    Assert.True(summary.VerificationPlan!.Length < verificationPlan.Length);
+    Assert.Equal(description, task.Description);
+    Assert.Equal(verificationPlan, task.VerificationPlan);
+    Assert.Equal(verificationPlan, fullPlan.Plan);
+}
+
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_process_batch_plan_descriptions_without_mutating_plan")]
+    public void DashboardResponseMapperTrimsVerboseProcessBatchPlanDescriptionsWithoutMutatingPlan()
+{
+    var description = "batch-start " + new string('b', 2000) + " batch-tail";
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Trim batch plan response",
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
+
+    var dto = DashboardResponseMapper.ToProcessBatchPlanDto(goal, plan);
+    var item = dto.Items.Single();
+
+    Assert.True(item.DescriptionTruncated);
+    Assert.Equal(description.Length, item.DescriptionLength);
+    Assert.Contains(item.Description, text => text.Contains("batch-start", StringComparison.Ordinal));
+    Assert.Contains(item.Description, text => text.Contains("batch-tail", StringComparison.Ordinal));
+    Assert.Contains(item.Description, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(item.Description.Length < description.Length);
+    Assert.Equal(description, plan.Items.Single().Description);
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
     public void DashboardRendererCanEmitAutoRefreshMetadata()
 {

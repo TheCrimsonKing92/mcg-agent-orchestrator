@@ -24,6 +24,8 @@ internal sealed record ProcessBatchPlanItemDto(
     string TaskId,
     AgentRole Role,
     string Description,
+    bool DescriptionTruncated,
+    int DescriptionLength,
     WorkTaskStatus TaskStatus,
     ProcessBatchItemStatus Status,
     string Reason);

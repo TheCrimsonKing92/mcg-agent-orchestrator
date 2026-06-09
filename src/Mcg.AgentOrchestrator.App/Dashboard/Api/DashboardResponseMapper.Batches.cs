@@ -61,14 +61,20 @@ public static ProcessBatchPlanDto ToProcessBatchPlanDto(Goal goal, ProcessBatchP
         plan.Action,
         plan.ReadyCount,
         plan.SkippedCount,
-        plan.Items.Select(item => new ProcessBatchPlanItemDto(
-            ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId),
-            item.TaskId.Value,
-            item.Role,
-            item.Description,
-            item.TaskStatus,
-            item.Status,
-            item.Reason)).ToList());
+        plan.Items.Select(item =>
+        {
+            var description = ResponseTextPreview.CreateSummary(item.Description);
+            return new ProcessBatchPlanItemDto(
+                ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId),
+                item.TaskId.Value,
+                item.Role,
+                description.Text,
+                description.IsTruncated,
+                description.OriginalLength,
+                item.TaskStatus,
+                item.Status,
+                item.Reason);
+        }).ToList());
 }
 
 public static ProfileDispatchDto ToProfileDispatchDto(Goal goal, WorkerProfileDispatchResult result)
