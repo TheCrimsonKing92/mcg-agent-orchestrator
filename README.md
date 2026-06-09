@@ -97,7 +97,7 @@ Commands:
 
 ```text
 doctor
-provider-smoke [openai|anthropic|all] [task-number]
+provider-smoke [openai|anthropic|ollama] [task-number]
 prototype-ui [url] [--refresh seconds] [--no-open]
 dashboard [path] [--refresh seconds]
 serve-dashboard [url] [--refresh seconds]
@@ -131,6 +131,7 @@ timeline [goal-id]
 task-timeline <task-number>
 pending
 run <task-number>
+api-run <task-number>
 retry <task-number> [message]
 dispatch <task-number> <worker-name> <command>
 worker-profiles
@@ -166,7 +167,6 @@ The same commands can be run as one-shot CLI commands:
 ```powershell
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- goal "Build feature X"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- doctor
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- provider-smoke all
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- provider-smoke openai 4
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- prototype-ui http://localhost:5087/ --refresh 5
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dashboard
@@ -198,6 +198,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- task-timeline 6
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- brief 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- run 3
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- api-run 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- retry 3 "Retry after failed verification"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dispatch 3 local "dotnet --version"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-profiles
@@ -256,11 +257,11 @@ Example:
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Developer Anthropic claude-sonnet-4-20250514 "Claude developer"
 ```
 
-Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. Providers must match a registered model provider such as `OpenAI`, `Anthropic`, or `Ollama` for `run <task-number>` to execute successfully.
+Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. Providers must match a registered model provider such as `OpenAI`, `Anthropic`, or `Ollama` for API-backed execution to succeed.
 
 ## Model Providers
 
-Without credentials, `run <task-number>` uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access.
+Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists.
 
 Set these environment variables to use live API providers:
 
@@ -294,7 +295,7 @@ The Ollama adapter uses the OpenAI-compatible chat completions API, so it also w
 
 ### Smoke Testing
 
-Use `provider-smoke [openai|anthropic|ollama|all]` after configuring providers to make a live, minimal request and print the provider response, stop reason, and token usage. The command skips unconfigured providers and fails if no live provider is available. Add a task number, for example `provider-smoke openai 4`, to append the successful smoke result to that task's verification history.
+Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to make a live, minimal request and print the provider response, stop reason, and token usage. The command skips unconfigured providers and fails if no live provider is available. Add a task number, for example `provider-smoke openai 4`, to append the successful smoke result to that task's verification history. Use `provider-smoke all` only when intentionally comparing every configured provider.
 
 ## Setup Doctor
 

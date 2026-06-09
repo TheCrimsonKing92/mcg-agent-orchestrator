@@ -100,7 +100,7 @@ public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target)
         "openai" => ["OpenAI"],
         "anthropic" => ["Anthropic"],
         "ollama" => ["Ollama"],
-        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama|all]")
+        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [task-number]; use provider-smoke all only for deliberate broad checks.")
     };
 }
 
