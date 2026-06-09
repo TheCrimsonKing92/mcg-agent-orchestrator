@@ -134,6 +134,11 @@ public static class WorkerProfileDispatcher
         return ResolveSubscriptionProfileName(agent, agent.Model);
     }
 
+    public static string ResolveSubscriptionProfileName(AgentDefinition agent, Goal goal, TaskSpec task)
+    {
+        return ResolveSubscriptionProfileName(agent, ResolveSubscriptionModel(agent, goal, task).Model);
+    }
+
     private static string ResolveSubscriptionProfileName(AgentDefinition agent, ModelProfile model)
     {
         if (!string.IsNullOrWhiteSpace(agent.Subscription?.WorkerProfileName))

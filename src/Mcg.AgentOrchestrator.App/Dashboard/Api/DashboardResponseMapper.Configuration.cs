@@ -132,9 +132,16 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             $"Assigned agent '{task.AssignedAgentId.Value}' was not found in the agent catalog.");
     }
 
+    var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
+    var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
+    var effectiveModelName = GetTemplateValue(templateVariables, "apiModelName") ?? agent.Model.ModelName;
+    var subscriptionModelName = GetTemplateValue(templateVariables, "subscriptionModelName");
+    var subscriptionReasoningEffort = GetTemplateValue(templateVariables, "subscriptionReasoningEffort");
+    var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
+
     try
     {
-        var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent);
+        var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task);
         var profile = profiles.Profiles.FirstOrDefault(candidate => candidate.Name.Equals(profileName, StringComparison.OrdinalIgnoreCase));
         validations.TryGetValue(profileName, out var validation);
         var hasProfile = profile is not null;
@@ -176,8 +183,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             task.Description,
             agent.Id.Value,
             agent.Name,
-            agent.Model.ProviderName,
-            agent.Model.ModelName,
+            effectiveProviderName,
+            effectiveModelName,
             agent.ExecutionPolicy,
             profileName,
             agent.Subscription?.ModelAlias,
@@ -188,7 +195,10 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             canPrepare,
             detail,
             retryDeferred ? retryAfter : null,
-            retryDelaySeconds);
+            retryDelaySeconds,
+            taskComplexity,
+            subscriptionModelName,
+            subscriptionReasoningEffort);
     }
     catch (InvalidOperationException ex)
     {
@@ -200,8 +210,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             task.Description,
             agent.Id.Value,
             agent.Name,
-            agent.Model.ProviderName,
-            agent.Model.ModelName,
+            effectiveProviderName,
+            effectiveModelName,
             agent.ExecutionPolicy,
             null,
             agent.Subscription?.ModelAlias,
@@ -210,7 +220,24 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             false,
             false,
             false,
-            ex.Message);
+            ex.Message,
+            TaskComplexity: taskComplexity,
+            SubscriptionModelName: subscriptionModelName,
+            SubscriptionReasoningEffort: subscriptionReasoningEffort);
     }
+}
+
+private static string? GetTemplateValue(IReadOnlyDictionary<string, string?> variables, string name)
+{
+    return variables.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
+        ? value
+        : null;
+}
+
+private static TaskComplexity? TryParseTaskComplexity(string? value)
+{
+    return Enum.TryParse<TaskComplexity>(value, ignoreCase: true, out var parsed)
+        ? parsed
+        : null;
 }
 }

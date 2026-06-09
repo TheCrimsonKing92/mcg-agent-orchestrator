@@ -49,12 +49,15 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
     Console.WriteLine($"Status: {plan.Status}");
     foreach (var item in plan.Items)
     {
+        var complexity = item.TaskComplexity is null ? string.Empty : $", {item.TaskComplexity}";
         var agent = item.AgentName is null
             ? "unassigned"
-            : $"{item.AgentName} ({item.ProviderName}/{item.ModelName}, {item.ExecutionPolicy})";
+            : $"{item.AgentName} ({item.ProviderName}/{item.ModelName}{complexity}, {item.ExecutionPolicy})";
+        var subscriptionModel = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? "default";
+        var subscriptionReasoning = item.SubscriptionReasoningEffort is null ? string.Empty : $" reasoning={item.SubscriptionReasoningEffort}";
         var profile = item.ProfileName is null
             ? "none"
-            : $"{item.ProfileName} model={item.SubscriptionModelAlias ?? "default"} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
+            : $"{item.ProfileName} model={subscriptionModel}{subscriptionReasoning} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
         Console.WriteLine($"  {item.TaskNumber}. [{item.TaskStatus}] {item.Role}: {item.Description}");
         Console.WriteLine($"     agent: {agent}");
         Console.WriteLine($"     subscription: {profile}");

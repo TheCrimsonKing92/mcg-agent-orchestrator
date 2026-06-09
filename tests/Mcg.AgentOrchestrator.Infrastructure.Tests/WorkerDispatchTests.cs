@@ -365,6 +365,42 @@ public sealed class WorkerDispatchTests
     Assert.Contains(developer.Detail, text => text.Contains("not patch-capable", StringComparison.Ordinal));
     Assert.True(planner.CanPrepare);
 }
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_reports_effective_models_before_subscription_dispatch")]
+    public void SubscriptionPlanReportsEffectiveModelsBeforeSubscriptionDispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Maintain dashboard views",
+        [
+            new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.", AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        ComplexModel: new ModelProfile("Anthropic", "claude-opus-4.1", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, [agent], WorkerProfileCatalog.Default());
+
+    var simple = plan.Items.First(item => item.Description.Contains("tooltip", StringComparison.Ordinal));
+    var complex = plan.Items.First(item => item.Description.Contains("multi-tenant", StringComparison.Ordinal));
+    Assert.Equal(TaskComplexity.Simple, simple.TaskComplexity);
+    Assert.Equal("OpenAI", simple.ProviderName);
+    Assert.Equal("gpt-5-mini", simple.ModelName);
+    Assert.Equal("codex-cli", simple.ProfileName);
+    Assert.Equal("gpt-5-mini", simple.SubscriptionModelName);
+    Assert.Equal("low", simple.SubscriptionReasoningEffort);
+    Assert.Equal(TaskComplexity.Complex, complex.TaskComplexity);
+    Assert.Equal("Anthropic", complex.ProviderName);
+    Assert.Equal("claude-opus-4.1", complex.ModelName);
+    Assert.Equal("claude-cli", complex.ProfileName);
+    Assert.Equal("claude-opus-4.1", complex.SubscriptionModelName);
+    Assert.Equal("high", complex.SubscriptionReasoningEffort);
+}
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
     public void SubscriptionPlanMarksUsageLimitedTasksNotPreparableUntilRetryTime()
 {

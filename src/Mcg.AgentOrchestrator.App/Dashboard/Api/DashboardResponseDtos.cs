@@ -60,7 +60,10 @@ internal sealed record SubscriptionPlanItemDto(
     bool CanPrepare,
     string Detail,
     DateTimeOffset? RetryAfter = null,
-    int? RetryDelaySeconds = null);
+    int? RetryDelaySeconds = null,
+    TaskComplexity? TaskComplexity = null,
+    string? SubscriptionModelName = null,
+    string? SubscriptionReasoningEffort = null);
 
 internal sealed record ProviderSmokeReportDto(
     string Target,
@@ -152,5 +155,4 @@ internal enum WorkerProfileImportMode
     Merge,
     Replace
 }
-
 
