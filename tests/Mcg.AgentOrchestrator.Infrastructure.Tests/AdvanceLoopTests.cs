@@ -182,12 +182,16 @@ public sealed class AdvanceLoopTests
         goal);
 
     Assert.True(result.Executed);
-    Assert.Equal(1, result.StepCount);
+    Assert.Equal(2, result.StepCount);
     Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
-    Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
-    Assert.Contains(result.StopReason, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
-    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.Steps[1].AutomationKind);
+    Assert.Equal(NextActionKind.ExecuteRecordedDispatch, result.BlockingAction!.Kind);
+    Assert.Contains(result.StopReason, text => text.Contains("stopped before starting recorded dispatch", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.True(task.LastDispatch is not null);
+    Assert.True(task.LastProcess is null);
     Assert.True(task.LastExecution is null);
+    Assert.True(provider.LastRequest is null);
 }
     [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_stops_before_any_available_api_fallback")]
     public async Task AdvanceGoalUntilBlockedStopsBeforeAnyAvailableApiFallback()
@@ -218,11 +222,14 @@ public sealed class AdvanceLoopTests
         goal);
 
     Assert.True(result.Executed);
-    Assert.Equal(1, result.StepCount);
+    Assert.Equal(2, result.StepCount);
     Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
-    Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
-    Assert.Contains(result.StopReason, text => text.Contains("stopped before API fallback", StringComparison.Ordinal));
-    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.Steps[1].AutomationKind);
+    Assert.Equal(NextActionKind.ExecuteRecordedDispatch, result.BlockingAction!.Kind);
+    Assert.Contains(result.StopReason, text => text.Contains("stopped before starting recorded dispatch", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.True(task.LastDispatch is not null);
+    Assert.True(task.LastProcess is null);
     Assert.True(task.LastExecution is null);
     Assert.True(provider.LastRequest is null);
 }
@@ -255,10 +262,12 @@ public sealed class AdvanceLoopTests
         workspace,
         goal);
 
-    Assert.False(result.Executed);
+    Assert.True(result.Executed);
     Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.AutomationKind);
-    Assert.Contains(result.Message, text => text.Contains("stopped before API fallback", StringComparison.Ordinal));
-    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Contains(result.Message, text => text.Contains("Run the assigned model-backed task", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.True(task.LastDispatch is not null);
+    Assert.True(task.LastProcess is null);
     Assert.True(task.LastExecution is null);
     Assert.True(provider.LastRequest is null);
 }

@@ -145,10 +145,19 @@ private static string? DefaultSubscriptionProfileName(string providerName, Agent
 
 private static string? DefaultSubscriptionModelAlias(string providerName, AgentExecutionPolicy executionPolicy)
 {
-    return AgentExecutionPolicies.AllowsSubscription(executionPolicy) &&
-        providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
-            ? "gpt-5.3-codex"
-            : null;
+    if (!AgentExecutionPolicies.AllowsSubscription(executionPolicy))
+    {
+        return null;
+    }
+
+    if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+    {
+        return "gpt-5.3-codex";
+    }
+
+    return providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
+        ? "claude-sonnet"
+        : null;
 }
 
 private static string? DefaultSubscriptionReasoningEffort(string providerName, AgentExecutionPolicy executionPolicy)

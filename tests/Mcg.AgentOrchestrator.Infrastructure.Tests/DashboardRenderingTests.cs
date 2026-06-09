@@ -320,6 +320,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, anthropic.ExecutionPolicy);
     Assert.Equal("claude-cli", anthropic.Subscription!.WorkerProfileName);
+    Assert.Equal("claude-sonnet", anthropic.Subscription.ModelAlias);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, anthropic.Model.MaxOutputTokens);
 
     Assert.Equal(AgentExecutionPolicy.ApiOnly, ollama.ExecutionPolicy);

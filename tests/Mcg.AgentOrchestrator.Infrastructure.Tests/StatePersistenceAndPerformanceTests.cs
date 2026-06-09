@@ -44,7 +44,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
     Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
     Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-    Assert.Contains(restoredWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude -p", StringComparison.Ordinal));
+    Assert.Contains(restoredWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} -p", StringComparison.Ordinal));
 
     File.Delete(workerPath);
     File.Delete(Path.Combine(workspace, ".orchestrator", "agents.json"));
@@ -61,7 +61,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
     Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
     Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-    Assert.Contains(repairedWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude -p", StringComparison.Ordinal));
+    Assert.Contains(repairedWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} -p", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_uses_local_agent_fallback_when_supplied")]
     public void PrototypeWorkspaceSeederUsesLocalAgentFallbackWhenSupplied()

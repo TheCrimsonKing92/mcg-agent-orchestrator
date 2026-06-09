@@ -131,17 +131,21 @@ public static class PrototypeWorkspaceSeeder
 
     private static bool ShouldRepairPrototypeSubscriptionProfile(WorkerProfile profile)
     {
-        if (profile.CommandTemplate.StartsWith("Write-Output", StringComparison.OrdinalIgnoreCase) &&
-            profile.CommandTemplate.Contains("{promptPath}", StringComparison.Ordinal))
+        if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
         {
             return true;
         }
 
-        return profile.Name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase) &&
-            (!profile.CommandTemplate.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
+        if (profile.Name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return !profile.CommandTemplate.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
-                !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase));
+                !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return profile.Name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) &&
+            !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void SeedGoal(AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents, string workspace)

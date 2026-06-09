@@ -138,7 +138,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
             new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("claude-cli", "claude -p (Get-Content -Raw {promptPath})")
+            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})")
         ]);
     }
 }
@@ -153,9 +153,10 @@ public static class WorkerProfileStore
         }
 
         var catalog = JsonSerializer.Deserialize<WorkerProfileCatalog>(File.ReadAllText(path), JsonOptions());
-        return catalog?.Profiles is null || catalog.Profiles.Count == 0
+        var merged = catalog?.Profiles is null || catalog.Profiles.Count == 0
             ? WorkerProfileCatalog.Default()
             : WorkerProfileCatalog.Default().Merge(catalog);
+        return RepairBuiltInSubscriptionProfiles(merged);
     }
 
     public static WorkerProfileCatalog LoadRequired(string path)
@@ -188,5 +189,40 @@ public static class WorkerProfileStore
     private static JsonSerializerOptions JsonOptions()
     {
         return new JsonSerializerOptions { PropertyNameCaseInsensitive = true, WriteIndented = true };
+    }
+
+    private static WorkerProfileCatalog RepairBuiltInSubscriptionProfiles(WorkerProfileCatalog catalog)
+    {
+        var repaired = catalog;
+        var defaults = WorkerProfileCatalog.Default();
+        foreach (var profileName in new[] { "codex-cli", "claude-cli" })
+        {
+            var current = repaired.GetRequired(profileName);
+            if (ShouldRepairBuiltInSubscriptionProfile(current))
+            {
+                repaired = repaired.Upsert(defaults.GetRequired(profileName));
+            }
+        }
+
+        return repaired;
+    }
+
+    private static bool ShouldRepairBuiltInSubscriptionProfile(WorkerProfile profile)
+    {
+        if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
+        {
+            return true;
+        }
+
+        if (profile.Name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return !profile.CommandTemplate.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return profile.Name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) &&
+            !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase);
     }
 }
