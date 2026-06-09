@@ -88,6 +88,8 @@ public sealed partial class AgentOrchestratorKernel
 
         task.ClearLatestVerification();
         task.ClearLastExecution();
+        task.ClearLastDispatch();
+        task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, string.IsNullOrWhiteSpace(message) ? "Retry requested." : message.Trim());

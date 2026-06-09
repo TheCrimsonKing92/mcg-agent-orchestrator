@@ -21,6 +21,11 @@ public sealed class LocalDispatchRunner
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to execute.");
 
+        if (task.Status != WorkTaskStatus.Running)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; prepare or retry the dispatch before executing it.");
+        }
+
         var verification = await _processVerifier
             .RunAsync(dispatch.Command, dispatch.WorkingDirectory, cancellationToken)
             .ConfigureAwait(false);

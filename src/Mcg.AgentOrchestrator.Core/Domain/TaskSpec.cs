@@ -193,6 +193,10 @@ public sealed class TaskSpec
 
     internal void ClearLastExecution() => LastExecution = null;
 
+    internal void ClearLastDispatch() => LastDispatch = null;
+
+    internal void ClearLastProcess() => LastProcess = null;
+
     internal void SetVerificationPlan(string verificationPlan) => VerificationPlan = RequireText(verificationPlan, nameof(verificationPlan));
 
     internal void RecordVerification(TaskVerificationRecord verification)
@@ -214,6 +218,7 @@ public sealed class TaskSpec
     {
         SubscriptionRetryAfter = null;
         LastDispatch = dispatch;
+        LastProcess = null;
     }
 
     internal void RecordProcess(TaskProcessRecord process) => LastProcess = process;

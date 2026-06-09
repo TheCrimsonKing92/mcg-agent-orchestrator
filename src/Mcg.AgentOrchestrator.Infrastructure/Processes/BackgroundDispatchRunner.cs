@@ -11,6 +11,16 @@ public sealed class BackgroundDispatchRunner
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
 
+        if (task.Status != WorkTaskStatus.Running)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; prepare or retry the dispatch before starting it.");
+        }
+
+        if (task.LastProcess is not null)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' already has a dispatch process record; refresh, cancel, or retry before starting it again.");
+        }
+
         Directory.CreateDirectory(logRoot);
         var prefix = $"{goalId.Value[..8]}-{taskId.Value[..8]}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
         var stdoutPath = Path.Combine(logRoot, $"{prefix}.out.log");

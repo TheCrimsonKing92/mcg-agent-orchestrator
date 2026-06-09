@@ -117,6 +117,25 @@ public sealed class TaskProcessTests
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskProcessStarted);
 }
+    [Xunit.Fact(DisplayName = "RetryTask_clears_dispatch_and_process_records")]
+    public void RetryTaskClearsDispatchAndProcessRecords()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry background process");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
+    kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, new TaskProcessRecord(1234, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, clock.UtcNow, 1), null);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Dispatch failed.");
+
+    kernel.RetryTask(goal.Id, task.Id, "Retry cleanly.");
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastDispatch is null);
+    Assert.True(task.LastProcess is null);
+}
     [Xunit.Fact(DisplayName = "RecordTaskProcessRefreshed_records_completion_evidence")]
     public void RecordTaskProcessRefreshedRecordsCompletionEvidence()
 {

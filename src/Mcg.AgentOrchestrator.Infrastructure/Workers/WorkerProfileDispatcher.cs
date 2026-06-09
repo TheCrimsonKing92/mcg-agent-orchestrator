@@ -118,6 +118,11 @@ public static class WorkerProfileDispatcher
         {
             throw new InvalidOperationException($"Task '{task.Id}' already has passing verification; retry the task before dispatching it again.");
         }
+
+        if (task.Status != WorkTaskStatus.Assigned)
+        {
+            throw new InvalidOperationException($"Task '{task.Id}' status is {task.Status}; retry or assign it before dispatching it again.");
+        }
     }
 
     public static WorkerProfile ResolveSubscriptionProfile(TaskSpec task, IReadOnlyList<AgentDefinition> agents, WorkerProfileCatalog profiles)

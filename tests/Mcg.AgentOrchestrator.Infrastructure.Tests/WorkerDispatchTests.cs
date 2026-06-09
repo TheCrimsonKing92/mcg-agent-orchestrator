@@ -66,6 +66,48 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_already_running_subscription_dispatch")]
+    public void WorkerProfileDispatcherRejectsAlreadyRunningSubscriptionDispatch()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Avoid duplicate subscription handoff");
+    var agent = new AgentDefinition(
+        new AgentId("configured-developer"),
+        "Configured Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt.AddMinutes(1)));
+
+    Assert.Contains(ex.Message, text => text.Contains("status is Running", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_task_dispatch")]
     public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 {
@@ -561,6 +603,38 @@ public sealed class WorkerDispatchTests
         failureAt.AddMinutes(30)));
     Assert.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_rejects_duplicate_process_start")]
+    public void BackgroundDispatchRunnerRejectsDuplicateProcessStart()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Avoid duplicate process start");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output ok", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "Write-Output ok", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
+
+    Assert.Contains(ex.Message, text => text.Contains("already has a dispatch process record", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "LocalDispatchRunner_rejects_inactive_dispatch_execution")]
+    public async Task LocalDispatchRunnerRejectsInactiveDispatchExecution()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Avoid duplicate local dispatch execution");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output should-not-run", root, DateTimeOffset.UtcNow));
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Already handled.");
+
+    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await new LocalDispatchRunner().ExecuteLatestDispatchAsync(kernel, goal.Id, task.Id));
+
+    Assert.Contains(ex.Message, text => text.Contains("status is Completed", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_dispatch_without_supported_assignment")]
     public void WorkerProfileDispatcherRejectsSubscriptionDispatchWithoutSupportedAssignment()
 {
