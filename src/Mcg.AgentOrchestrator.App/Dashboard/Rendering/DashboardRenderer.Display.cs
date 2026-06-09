@@ -121,7 +121,7 @@ public static partial class DashboardRenderer
     {
         AgentExecutionPolicy.ApiOnly => "API only",
         AgentExecutionPolicy.SubscriptionOnly => "Subscription only",
-        AgentExecutionPolicy.PreferSubscription => "Prefer subscription, fall back to API",
+        AgentExecutionPolicy.PreferSubscription => "Prefer subscription",
         AgentExecutionPolicy.AnyAvailable => "Use anything available",
         _ => policy.ToString()
     };

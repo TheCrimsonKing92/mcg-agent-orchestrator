@@ -84,6 +84,74 @@ public sealed class AdvanceLoopTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(task.LastExecution is not null);
 }
+    [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_blocks_prefer_subscription_before_api_fallback")]
+    public async Task AdvanceGoalUntilBlockedBlocksPreferSubscriptionBeforeApiFallback()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    WorkerProfileStore.Save(
+        workspace.WorkerProfilePath,
+        WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Avoid surprise API spend", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Prefer subscription should not fall back automatically", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("prefer-subscription-developer"),
+        "Prefer Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    var provider = new FakeSmokeProvider();
+
+    var result = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([provider]),
+        workspace,
+        goal);
+
+    Assert.True(result.Executed);
+    Assert.Equal(1, result.StepCount);
+    Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
+    Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
+    Assert.Contains(result.StopReason, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastExecution is null);
+}
+    [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_allows_any_available_api_fallback")]
+    public async Task AdvanceGoalUntilBlockedAllowsAnyAvailableApiFallback()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    WorkerProfileStore.Save(
+        workspace.WorkerProfilePath,
+        WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Any available may fall back", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("any-available-developer"),
+        "Any Available developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+
+    var result = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([new FakeSmokeProvider()]),
+        workspace,
+        goal);
+
+    Assert.True(result.Executed);
+    Assert.Equal(2, result.StepCount);
+    Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
+    Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.Steps[1].AutomationKind);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.True(task.LastExecution is not null);
+}
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_uses_workspace_execution_directory")]
     public async Task SubscriptionDispatchUsesWorkspaceExecutionDirectory()
 {

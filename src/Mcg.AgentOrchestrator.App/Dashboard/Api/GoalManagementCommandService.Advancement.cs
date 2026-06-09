@@ -57,14 +57,14 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
     var agent = ResolveAssignedAgent(task, agents);
-    if (agent.ExecutionPolicy == AgentExecutionPolicy.SubscriptionOnly)
+    if (agent.ExecutionPolicy is AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription)
     {
         return DashboardResponseMapper.ToProfileDispatchDto(
             goal,
             SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath)));
     }
 
-    if (agent.ExecutionPolicy is AgentExecutionPolicy.PreferSubscription or AgentExecutionPolicy.AnyAvailable)
+    if (agent.ExecutionPolicy == AgentExecutionPolicy.AnyAvailable)
     {
         try
         {
