@@ -365,19 +365,26 @@ public sealed class DashboardRenderingTests
     public void DashboardRendererCanEmitOperatorControls()
 {
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Operate from browser");
+    var goal = kernel.CreateGoal(
+        "Operate from browser",
+        [
+            new TaskSpec(TaskId.New(), "Ask operator", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Run process", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Assign later", AgentRole.Tester)
+        ]);
     var agent = new AgentDefinition(
         AgentId.New(),
         "Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Should we use main?");
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output ok", Environment.CurrentDirectory, DateTimeOffset.UtcNow));
+    var inputTask = goal.Tasks[0];
+    var processTask = goal.Tasks[1];
+    var request = kernel.RequestHumanInput(goal.Id, inputTask.Id, "Should we use main?");
+    kernel.RecordTaskDispatch(goal.Id, processTask.Id, new TaskDispatchRecord("local", "Write-Output ok", Environment.CurrentDirectory, DateTimeOffset.UtcNow));
     kernel.RecordTaskProcessStarted(
         goal.Id,
-        task.Id,
+        processTask.Id,
         new TaskProcessRecord(
             1234,
             "Write-Output ok",
@@ -594,7 +601,7 @@ public sealed class DashboardRenderingTests
     // Goal detail view: operator controls, pending input, task actions, reports
     Assert.Contains(goalHtml, text => text.Contains("Human decisions", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("<th>Work item</th>", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains("Task 3: Developer", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Task 1: Developer", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/monitor?goal={goalPrefix}", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Source survey", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Low-noise repository map", StringComparison.Ordinal));
@@ -649,7 +656,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/run", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Current next action", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Background process is running: pid 1234", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/refresh", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/2/refresh", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Advanced task controls", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/retry", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Retry note", StringComparison.Ordinal));
@@ -668,7 +675,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("PowerShell: quote filters that contain |", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/verify-manual", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("<option value=\"false\">Failed</option>", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/logs", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/2/logs", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/human-input-worklist?goal={goalPrefix}", StringComparison.Ordinal));
 
     // Script assertions (view-independent)
@@ -1164,8 +1171,9 @@ static string ExtractTaskControls(string html, int taskNumber)
         AgentRole.Developer,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
+    var inputTask = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
+    var request = kernel.RequestHumanInput(goal.Id, inputTask.Id, "Which branch?");
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", DateTimeOffset.UtcNow));
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("provider-smoke openai", "C:\\repo", 0, "OpenAI: ok", "", DateTimeOffset.UtcNow));
     var testerTask = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);

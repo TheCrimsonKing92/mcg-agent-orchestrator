@@ -23,6 +23,44 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("codex", StringComparison.Ordinal) &&
         evt.Message.Contains("implement feature", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "RecordTaskDispatch_rejects_unassigned_task")]
+    public void RecordTaskDispatchRejectsUnassignedTask()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Do not dispatch pending work directly", [new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
+
+    Assert.Contains(ex.Message, text => text.Contains("status is Pending", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+    Assert.Equal(WorkTaskStatus.Pending, task.Status);
+}
+
+    [Xunit.Fact(DisplayName = "RecordTaskDispatch_rejects_verified_task_without_retry")]
+    public void RecordTaskDispatchRejectsVerifiedTaskWithoutRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Do not repeat verified work");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implemented.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", string.Empty, clock.UtcNow));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
+
+    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+}
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_task_dispatch")]
     public void SnapshotRoundtripPreservesTaskDispatch()
 {

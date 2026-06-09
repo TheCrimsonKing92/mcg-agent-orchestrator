@@ -74,6 +74,17 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
+
+        if (task.LastVerification?.Succeeded is true)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' already has passing verification; retry the task before dispatching it again.");
+        }
+
+        if (task.Status != WorkTaskStatus.Assigned)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before dispatching it again.");
+        }
+
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
