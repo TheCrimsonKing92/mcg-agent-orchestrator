@@ -2,6 +2,9 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class AgentTaskRunner
 {
+    private const int PaidProviderFallbackMaxOutputTokens = 1200;
+    private const int LocalProviderFallbackMaxOutputTokens = 8192;
+
     private readonly AgentOrchestratorKernel _kernel;
     private readonly IReadOnlyList<AgentDefinition> _agents;
     private readonly IModelProviderRegistry _providers;
@@ -137,7 +140,23 @@ public sealed class AgentTaskRunner
         return new ModelRequest(
             systemPrompt,
             [new ModelMessage("user", userPrompt)],
-            new ModelOptions(Temperature: 0.2, MaxOutputTokens: resolvedModel.MaxOutputTokens ?? 1200, ReasoningEffort: resolvedModel.ReasoningEffort, ModelName: resolvedModel.ModelName));
+            new ModelOptions(
+                Temperature: 0.2,
+                MaxOutputTokens: ResolveMaxOutputTokens(resolvedModel),
+                ReasoningEffort: resolvedModel.ReasoningEffort,
+                ModelName: resolvedModel.ModelName));
+    }
+
+    private static int ResolveMaxOutputTokens(ModelProfile resolvedModel)
+    {
+        if (resolvedModel.MaxOutputTokens is { } maxOutputTokens)
+        {
+            return maxOutputTokens;
+        }
+
+        return LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName)
+            ? LocalProviderFallbackMaxOutputTokens
+            : PaidProviderFallbackMaxOutputTokens;
     }
 
     private static string FormatVerificationPlan(string? verificationPlan)

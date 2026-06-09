@@ -58,6 +58,48 @@ public sealed class ProviderDefaultTests
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget, () => false));
     }
 
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_conservative_paid_output_fallback")]
+    public async Task AgentTaskRunnerUsesConservativePaidOutputFallback()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Run paid model with default budget");
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var provider = new FakeSmokeProvider(providerName: "OpenAI");
+
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))
+            .RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(1200, provider.LastRequest!.Options.MaxOutputTokens);
+    }
+
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_larger_local_output_fallback")]
+    public async Task AgentTaskRunnerUsesLargerLocalOutputFallback()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Run local model with quality headroom");
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Ollama developer",
+            AgentRole.Developer,
+            new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var provider = new FakeSmokeProvider(providerName: "Ollama");
+
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))
+            .RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(8192, provider.LastRequest!.Options.MaxOutputTokens);
+    }
+
     [Xunit.Fact(DisplayName = "Scripted_provider_requests_configuration_instead_of_fake_completion")]
     public async Task ScriptedProviderRequestsConfigurationInsteadOfFakeCompletion()
     {
