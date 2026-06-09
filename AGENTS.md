@@ -1,31 +1,74 @@
 # AGENTS
 
-**Attention is scarce and must be preserved.** This is fundamentally different from "the more information the better." This principle applies everywhere, but it matters most in the dashboard — the operator's primary interface for monitoring and steering orchestration. Dashboard panels, status lines, evidence summaries, and API responses must be organized and sized so the operator can scan them in seconds, not minutes. Show what changed, what's blocked, and what needs a decision; suppress everything else. A dense wall of status text is worse than no status at all, because it trains the operator to stop looking. The same discipline applies to agent outputs, code comments, diagnostic dumps, and evidence records: emit only what changes a decision or unblocks the next step. When in doubt, prefer a short, precise result over a comprehensive one.
+Attention is scarce. Preserve it.
 
-- Prefer `rg --files -g "!**/bin/**" -g "!**/obj/**" -g "!**/.scratch/**"` or equivalent filters when surveying source. Build outputs, browser profiles, and scratch artifacts from earlier runs may exist locally and should not be treated as source structure.
-- Core and Infrastructure intentionally keep flat public namespaces (`Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`) while using folders for human navigation. Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
+Prefer short, decision-changing output over comprehensive dumps. Show what changed, what is blocked, what was verified, and what needs a decision. Suppress everything else.
 
-## Dashboard and Prototype Dogfood Directives
+## Output Discipline
 
-- For live dogfood dashboard work, use `.\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open` when browser launch is not needed. Treat `demo-ui` language as stale unless the task explicitly asks for legacy demo behavior.
-- Keep prototype state isolated from repository state. The prototype dashboard persists under `src/Mcg.AgentOrchestrator.App\.orchestrator-prototype\workspace`, while launcher-backed task execution should run from the repository root through `MCG_ORCHESTRATOR_REPOSITORY_ROOT`.
-- Create a dashboard goal before source changes. Use dashboard forms/buttons for goal creation, task addition, role/profile configuration, subscription dispatch, refresh, cancel, evidence inspection, and human-input answers. Use direct source edits only when the orchestrator cannot perform the work, the task explicitly requires implementation, or the orchestrator is blocked by its own bug; then return to the dashboard workflow immediately.
-- Before running subscription tasks, inspect `/api/worker-profiles` or the dashboard worker-profile panel. Treat `Write-Output {promptPath}` for `codex-cli` or `claude-cli` as an echo-only profile, not real execution. Confirm `codex-cli` includes `--model {subscriptionModelName}`, `model_reasoning_effort={subscriptionReasoningEffort}`, `--sandbox workspace-write`, and `--cd {workingDirectory}`.
-- Do not trust task status alone. Inspect evidence, process logs, exit code, and verification records to confirm a subscription task actually changed files or ran verification; an echo-only dispatch can otherwise look completed. A task with passing test evidence may still remain `Running` if the worker process is stuck.
-- For handoff dogfood, use the dashboard controls (`Continue subscription handoff`, `Start prepared work`, `Refresh process`, `Cancel process`) when practical, and record equivalent API evidence only when browser automation or the dashboard blocks the ideal path.
-- `Continue subscription handoff` now starts a server-side continuation watch when it stops only because background work is still running. Inspect the dashboard `Server continuation` panel or `/api/continuations` before assuming another manual click is needed.
-- For routine dashboard dogfood actions, prefer `.\scripts\Invoke-DashboardDogfoodAction.ps1` with `create-goal`, `complete-task`, or `smoke` before adding a one-off scratch browser script. Use `.\scripts\Run-DashboardBrowserScript.ps1 .\scripts\dashboard-smoke.js` or a checked-in/scratch JavaScript script only for custom browser validation.
-- Use dashboard cancel/refresh controls or known process ids for stuck workers. Never run broad cleanup such as `Get-Process codex | Stop-Process`; it can kill the active Codex session.
-- On Windows, a running dashboard can lock app binaries. Prefer `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/` for the coordinated stop/build/test/restart path. If doing it manually, use the dashboard build/test cleanup plan and stop only exact known `Mcg.AgentOrchestrator.App` PIDs.
-- Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalog|PrototypeWorkspaceSeeder|WorkerProfile|WorkerDispatch'`, so the shell does not treat filter alternatives as pipelines.
-- Keep the dogfood log current after each goal: record goal id, objective, what worked, blockers, direct interventions, dashboard/API friction, verification, and the next product follow-up.
+All commands must minimize output by default.
 
-## Low-Token Dashboard/API Testing
+- Narrow by path, pattern, and glob before running commands. Do not rely on PowerShell pipeline caps such as `| Select-Object -First N`; they create extra Codex permission prompts.
+- Prefer bounded `rg`/`rg --files` for discovery. Use exact paths or symbols once known.
+- Exclude generated/noisy trees when surveying source using `-g "!**/bin/**"` style globs for `bin`, `obj`, `.scratch`, `.orchestrator-prototype`, `TestResults`, and `playwright-report`.
+- Do not run broad repo-root `rg` unless the path and pattern are tight.
+- Avoid `rg -C` until match count is known. Prefer `rg -n --count PATTERN path`, then inspect exact files/symbols.
+- Do not dump full files unless known small. Prefer targeted search or narrow line windows.
+- For `git diff`, use `git diff --stat` first, then inspect one file at a time.
+- For build/test commands, use minimal verbosity and expand only failing output.
+- For dashboard/API checks, use focused endpoints or helpers that return exact fields, not broad HTML/JSON/log payloads.
+- If a command returns more than about 100 lines, stop, summarize the signal, and narrow the next command.
 
-- When API/subscription credits are constrained, pause new `codex exec` subscription handoffs unless the task explicitly requires live subscription validation. Inspect `/api/continuations`, task evidence, and worker logs first, and cancel or prune stale running work before starting more agents.
-- Avoid broad dashboard HTML reads and broad goal/API JSON dumps for routine checks. The hosted dashboard can be very large after many dogfood goals. Prefer focused endpoints, focused tests, or small helper-script results that return the exact field or status needed. For goal/task state, use `/api/goals/{goalPrefix}/work-summary` before broader `/api/goals/{goalPrefix}`, `/api/evidence`, or task log endpoints.
-- Prefer checked-in helpers before ad hoc browser/API scripts: `.\scripts\Invoke-DashboardApi.ps1 -Path api/goals/<prefix>/work-summary`, `.\scripts\Invoke-DashboardApi.ps1 -Path api/continuations/summary -Select Total,Running,NextCheckAt`, `.\scripts\Invoke-DashboardDogfoodAction.ps1 -Action smoke`, `create-goal`, or `complete-task`; `.\scripts\Run-DashboardBrowserScript.ps1 .\scripts\dashboard-smoke.js`; and `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/`.
-- Do not use ad hoc `Invoke-WebRequest | Select-Object | Select-String` pipelines for routine validation. They create noisy permission prompts and large outputs. If a focused dashboard/API check is missing, add a small endpoint or helper action as product work.
-- For repository reads, prefer `rg`/`rg --files` with exclusions over `Get-Content`, `Select-String`, or recursive PowerShell enumeration. Use `rg -n -C <small-number>` for targeted context instead of dumping full files.
-- Keep scratch/browser automation bounded: checked-in smoke scripts first, scratch scripts only for custom UI flows, and remove or ignore generated browser profiles and logs from source surveys.
-- Record only high-signal evidence in `DOGFOOD_LOG.md`: command, exit code, focused result, goal/task id, and the product friction discovered. Do not paste full dashboard responses, full task prompts, or long logs.
+Good shape: `rg -n --count "DashboardHost" src/Mcg.AgentOrchestrator.App tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g "!**/bin/**" -g "!**/obj/**"`
+
+Bad shape: `rg -n "dashboard|goal|task|hosted|source-survey" .. -C 4`
+
+## Retry and Loop Control
+
+Before repeating a command, state what changed or what is being narrowed.
+
+Do not repeatedly run broad searches, diffs, dashboard reads, browser scripts, build/test cycles, or dogfood actions hoping for a different result. If two attempts do not produce useful signal, switch strategy or ask for direction.
+
+This repository implements an AI agent orchestrator. Avoid recursive or high-fanout behavior.
+
+- Do not start Codex/orchestrator/subscription handoffs unless explicitly required.
+- Do not run multiple agent tasks for work that can be inspected locally.
+- Do not spawn workers to verify work until local evidence indicates the change is ready.
+- Prefer one narrow verification command per change.
+
+## Repository Rules
+
+- Treat version-controlled files as source. Build outputs, browser profiles, prototype workspace files, logs, scratch scripts, and previous run artifacts are not source structure.
+- Core and Infrastructure intentionally keep flat public namespaces: `Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`.
+- Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
+
+## Dashboard / Dogfood Boundary
+
+For ordinary implementation or debugging, inspect and edit source directly.
+
+Use dashboard workflow controls only when the task explicitly involves dogfood validation, dashboard orchestration, subscription handoff behavior, or prototype workflow testing.
+
+For live prototype dashboard work, prefer `.\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open`.
+
+Keep prototype state isolated from repository state. Prototype dashboard state lives under `src/Mcg.AgentOrchestrator.App\.orchestrator-prototype\workspace`; launcher-backed task execution should run from the repository root through `MCG_ORCHESTRATOR_REPOSITORY_ROOT`.
+
+When the task involves subscription/dogfood execution:
+
+- Verify worker profiles before starting subscription tasks.
+- Treat `Write-Output {promptPath}` profiles as echo-only, not real execution.
+- After dispatch, confirm evidence, process logs, exit code, and verification records; never trust task status alone.
+- When credits are constrained, inspect existing continuations/evidence/logs and cancel stale work before starting new agents.
+
+## Safety
+
+Use dashboard cancel/refresh controls or exact known process ids for stuck workers. Never run broad cleanup such as `Get-Process codex | Stop-Process`; it can kill the active Codex session.
+
+On Windows, a running dashboard can lock app binaries. Prefer `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/`.
+
+Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalog|PrototypeWorkspaceSeeder|WorkerProfile|WorkerDispatch'`.
+
+## Evidence
+
+Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durable product friction. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up.
+
+Do not paste full dashboard responses, full prompts, full logs, or long API payloads.
