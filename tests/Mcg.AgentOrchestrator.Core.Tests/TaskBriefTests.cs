@@ -86,8 +86,7 @@ public sealed class TaskBriefTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var noisyMessage = $"event-start {new string('x', 900)} event-tail";
-    kernel.SetTaskVerificationPlan(goal.Id, task.Id, noisyMessage);
-    kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run focused tests.");
+    kernel.RetryTask(goal.Id, task.Id, noisyMessage);
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 

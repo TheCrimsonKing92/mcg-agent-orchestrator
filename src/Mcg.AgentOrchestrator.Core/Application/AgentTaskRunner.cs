@@ -59,7 +59,7 @@ public sealed class AgentTaskRunner
 
         var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, TaskComplexity.Auto, task.Description, goal.Objective);
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
-        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started '{task.Description}' (model: {resolvedModel.ModelName}).");
+        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started task (model: {resolvedModel.ModelName}).");
 
         ModelResponse response;
         try
@@ -92,7 +92,7 @@ public sealed class AgentTaskRunner
             return new AgentTaskRunResult(goal, task, execution);
         }
 
-        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed '{task.Description}'.");
+        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed task.");
 
         return new AgentTaskRunResult(goal, task, execution);
     }

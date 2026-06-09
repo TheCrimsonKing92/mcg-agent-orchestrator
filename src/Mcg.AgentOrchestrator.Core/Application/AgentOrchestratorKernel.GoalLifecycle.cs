@@ -6,7 +6,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = new Goal(GoalId.New(), objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
         _goals.Add(goal.Id, goal);
-        Append(goal, null, ProgressKind.GoalCreated, $"Goal created: {goal.Objective}");
+        Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
         return goal;
     }
 
@@ -27,7 +27,7 @@ public sealed partial class AgentOrchestratorKernel
 
             task.AssignTo(agent.Id);
             assignments.Add(new TaskAssignment(task.Id, agent.Id, agent.Role));
-            Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated '{task.Description}' to {agent.Name}.");
+            Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated {task.RequiredRole} task to {agent.Name}.");
         }
 
         if (assignments.Count > 0)
@@ -43,7 +43,7 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var task = new TaskSpec(TaskId.New(), description, requiredRole, verificationPlan);
         goal.AddTask(task);
-        Append(goal, task.Id, ProgressKind.TaskAdded, $"Added {requiredRole} task: {task.Description}");
+        Append(goal, task.Id, ProgressKind.TaskAdded, $"Added {requiredRole} task.");
 
         if (availableAgents is not null)
         {
@@ -54,7 +54,7 @@ public sealed partial class AgentOrchestratorKernel
             {
                 task.AssignTo(agent.Id);
                 goal.SetStatus(GoalStatus.Active);
-                Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated '{task.Description}' to {agent.Name}.");
+                Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated {task.RequiredRole} task to {agent.Name}.");
             }
         }
 
@@ -66,7 +66,7 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
         task.SetVerificationPlan(verificationPlan);
-        Append(goal, taskId, ProgressKind.TaskVerificationPlanUpdated, $"Verification plan updated: {task.VerificationPlan}");
+        Append(goal, taskId, ProgressKind.TaskVerificationPlanUpdated, "Verification plan updated.");
         return task;
     }
 

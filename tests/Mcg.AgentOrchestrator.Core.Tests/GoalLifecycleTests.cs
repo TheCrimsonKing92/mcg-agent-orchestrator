@@ -53,7 +53,8 @@ public sealed class GoalLifecycleTests
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskAdded &&
-        evt.Message.Contains("Implement a custom integration", StringComparison.Ordinal));
+        evt.Message.Contains("Added Developer task", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Message.Contains(task.Description, StringComparison.Ordinal)));
 }
     [Xunit.Fact(DisplayName = "AddTask_delegates_to_matching_agent_when_available")]
     public void AddTaskDelegatesToMatchingAgentWhenAvailable()
@@ -111,7 +112,8 @@ public sealed class GoalLifecycleTests
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskVerificationPlanUpdated &&
-        evt.Message.Contains("focused tests", StringComparison.Ordinal));
+        evt.Message.Contains("Verification plan updated", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Message.Contains(task.VerificationPlan!, StringComparison.Ordinal)));
 }
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
     public void SnapshotRoundtripPreservesAddedTask()

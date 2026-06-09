@@ -33,6 +33,36 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_avoids_repeating_task_description_in_lifecycle_events")]
+    public async Task ExecuteAssignedTaskAvoidsRepeatingTaskDescriptionInLifecycleEvents()
+{
+    var clock = new FakeClock();
+    var description = "unique-task-start " + new string('u', 900) + " unique-task-tail";
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Avoid repeated task text",
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    var firstDescription = prompt.IndexOf(description, StringComparison.Ordinal);
+    Assert.True(firstDescription >= 0);
+    Assert.Equal(firstDescription, prompt.LastIndexOf(description, StringComparison.Ordinal));
+    Assert.Equal(description, task.Description);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskStarted && evt.Message.Contains("started task", StringComparison.Ordinal));
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted && evt.Message.Contains("completed task", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Message.Contains(description, StringComparison.Ordinal)));
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_rejects_subscription_only_agent_without_calling_provider")]
     public async Task ExecuteAssignedTaskRejectsSubscriptionOnlyAgentWithoutCallingProvider()
 {
@@ -158,8 +188,7 @@ public sealed class ModelExecutionTests
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var noisyMessage = $"api-event-start {new string('z', 900)} api-event-tail";
-    kernel.SetTaskVerificationPlan(goal.Id, task.Id, noisyMessage);
-    kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run focused tests.");
+    kernel.RetryTask(goal.Id, task.Id, noisyMessage);
     var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
     var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
 
