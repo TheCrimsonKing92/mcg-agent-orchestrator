@@ -64,7 +64,15 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 HasOutputTokenLimitHit(task.LastExecution)),
         task.LastDispatch is null
             ? null
-            : new DispatchDto(task.LastDispatch.WorkerName, task.LastDispatch.Command, task.LastDispatch.WorkingDirectory, task.LastDispatch.DispatchedAt),
+            : new DispatchDto(
+                task.LastDispatch.WorkerName,
+                task.LastDispatch.Command,
+                task.LastDispatch.WorkingDirectory,
+                task.LastDispatch.DispatchedAt,
+                task.LastDispatch.ProviderName,
+                task.LastDispatch.ModelName,
+                task.LastDispatch.ReasoningEffort,
+                task.LastDispatch.TaskComplexity),
         ToProcessDto(task.LastProcess),
         task.LastVerification is null
             ? null

@@ -88,6 +88,10 @@ public static ProfileDispatchDto ToProfileDispatchDto(Goal goal, WorkerProfileDi
                 result.Task.LastDispatch.WorkerName,
                 result.Task.LastDispatch.Command,
                 result.Task.LastDispatch.WorkingDirectory,
-                result.Task.LastDispatch.DispatchedAt));
+                result.Task.LastDispatch.DispatchedAt,
+                result.Task.LastDispatch.ProviderName,
+                result.Task.LastDispatch.ModelName,
+                result.Task.LastDispatch.ReasoningEffort,
+                result.Task.LastDispatch.TaskComplexity));
 }
 }

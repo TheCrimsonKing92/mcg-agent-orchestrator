@@ -399,11 +399,25 @@ public sealed partial class AgentOrchestratorKernel
             TaskEvidenceKind.RunningProcess => $"Process running pid={task.LastProcess!.ProcessId}: {task.LastProcess.Command}",
             TaskEvidenceKind.CompletedProcess => $"Process completed exit={task.LastProcess!.ExitCode?.ToString() ?? "n/a"}: {task.LastProcess.Command}",
             TaskEvidenceKind.Process => $"Process recorded: {task.LastProcess!.Command}",
-            TaskEvidenceKind.Dispatch => $"Dispatch recorded for {task.LastDispatch!.WorkerName}: {task.LastDispatch.Command}",
+            TaskEvidenceKind.Dispatch => $"Dispatch recorded for {task.LastDispatch!.WorkerName}{FormatDispatchModelSelection(task.LastDispatch)}: {task.LastDispatch.Command}",
             TaskEvidenceKind.Execution when HasOutputTokenLimitHit(task) =>
                 $"Model output recorded by {task.LastExecution!.AgentName}; possible output cap hit at {task.LastExecution.MaxOutputTokens} tokens.",
             TaskEvidenceKind.Execution => $"Model output recorded by {task.LastExecution!.AgentName}.",
             _ => "No execution, dispatch, process, or verification evidence recorded."
         };
+    }
+
+    private static string FormatDispatchModelSelection(TaskDispatchRecord dispatch)
+    {
+        if (string.IsNullOrWhiteSpace(dispatch.ProviderName) || string.IsNullOrWhiteSpace(dispatch.ModelName))
+        {
+            return string.Empty;
+        }
+
+        var complexity = dispatch.TaskComplexity is null ? string.Empty : $" {dispatch.TaskComplexity.Value}";
+        var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
+            ? string.Empty
+            : $" reasoning {dispatch.ReasoningEffort}";
+        return $" using {dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}";
     }
 }

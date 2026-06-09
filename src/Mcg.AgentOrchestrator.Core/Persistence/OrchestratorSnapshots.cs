@@ -50,7 +50,11 @@ public sealed record TaskDispatchSnapshot(
     string WorkerName,
     string Command,
     string WorkingDirectory,
-    DateTimeOffset DispatchedAt);
+    DateTimeOffset DispatchedAt,
+    string? ProviderName = null,
+    string? ModelName = null,
+    string? ReasoningEffort = null,
+    TaskComplexity? TaskComplexity = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

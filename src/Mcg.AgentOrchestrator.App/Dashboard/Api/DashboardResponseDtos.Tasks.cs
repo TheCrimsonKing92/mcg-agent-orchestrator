@@ -47,7 +47,15 @@ internal sealed record ExecutionDto(
     int? MaxOutputTokens = null,
     bool OutputTokenLimitHit = false);
 
-internal sealed record DispatchDto(string WorkerName, string Command, string WorkingDirectory, DateTimeOffset DispatchedAt);
+internal sealed record DispatchDto(
+    string WorkerName,
+    string Command,
+    string WorkingDirectory,
+    DateTimeOffset DispatchedAt,
+    string? ProviderName = null,
+    string? ModelName = null,
+    string? ReasoningEffort = null,
+    TaskComplexity? TaskComplexity = null);
 
 internal sealed record ProcessDto(
     int ProcessId,

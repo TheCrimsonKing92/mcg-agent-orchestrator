@@ -17,7 +17,11 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        IReadOnlyDictionary<string, string?>? variables = null)
+        IReadOnlyDictionary<string, string?>? variables = null,
+        string? providerName = null,
+        string? modelName = null,
+        string? reasoningEffort = null,
+        TaskComplexity? taskComplexity = null)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -28,7 +32,15 @@ public static class WorkerProfileDispatcher
             profile.CommandTemplate,
             promptRoot,
             AddWorkingDirectoryVariable(workingDirectory, variables));
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(profile.Name, preparation.Command, workingDirectory, dispatchedAt));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            profile.Name,
+            preparation.Command,
+            workingDirectory,
+            dispatchedAt,
+            providerName,
+            modelName,
+            reasoningEffort,
+            taskComplexity));
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 
@@ -66,7 +78,19 @@ public static class WorkerProfileDispatcher
         var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
         EnsureSubscriptionProfileCanExecuteTask(profile, task);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
-        return PrepareTask(kernel, goal, task, profile, promptRoot, workingDirectory, dispatchedAt, BuildSubscriptionTemplateVariables(agent, selection));
+        return PrepareTask(
+            kernel,
+            goal,
+            task,
+            profile,
+            promptRoot,
+            workingDirectory,
+            dispatchedAt,
+            BuildSubscriptionTemplateVariables(agent, selection),
+            selection.Model.ProviderName,
+            ResolveEffectiveSubscriptionModelName(agent, selection),
+            ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
+            selection.Complexity);
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareSubscriptionReadyTasks(
@@ -106,7 +130,11 @@ public static class WorkerProfileDispatcher
                 promptRoot,
                 workingDirectory,
                 dispatchedAt,
-                BuildSubscriptionTemplateVariables(selection.Agent, subscriptionModel)));
+                BuildSubscriptionTemplateVariables(selection.Agent, subscriptionModel),
+                subscriptionModel.Model.ProviderName,
+                ResolveEffectiveSubscriptionModelName(selection.Agent, subscriptionModel),
+                ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel),
+                subscriptionModel.Complexity));
         }
 
         return results;
@@ -208,15 +236,25 @@ public static class WorkerProfileDispatcher
             ["providerName"] = selection.Model.ProviderName,
             ["apiModelName"] = selection.Model.ModelName,
             ["apiReasoningEffort"] = selection.Model.ReasoningEffort,
-            ["subscriptionModelName"] = selection.UsesComplexModel
-                ? selection.Model.ModelName
-                : agent.Subscription?.ModelAlias ?? selection.Model.ModelName,
-            ["subscriptionReasoningEffort"] = selection.UsesComplexModel
-                ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
-                : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort,
+            ["subscriptionModelName"] = ResolveEffectiveSubscriptionModelName(agent, selection),
+            ["subscriptionReasoningEffort"] = ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
             ["taskComplexity"] = selection.Complexity.ToString(),
             ["executionPolicy"] = agent.ExecutionPolicy.ToString()
         };
+    }
+
+    private static string ResolveEffectiveSubscriptionModelName(AgentDefinition agent, SubscriptionModelSelection selection)
+    {
+        return selection.UsesComplexModel
+            ? selection.Model.ModelName
+            : agent.Subscription?.ModelAlias ?? selection.Model.ModelName;
+    }
+
+    private static string? ResolveEffectiveSubscriptionReasoningEffort(AgentDefinition agent, SubscriptionModelSelection selection)
+    {
+        return selection.UsesComplexModel
+            ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
+            : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)

@@ -31,6 +31,10 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
     if (task.LastDispatch is not null)
     {
         text.AppendLine($"Last dispatch: worker={task.LastDispatch.WorkerName} command={task.LastDispatch.Command}");
+        if (!string.IsNullOrWhiteSpace(task.LastDispatch.ProviderName) && !string.IsNullOrWhiteSpace(task.LastDispatch.ModelName))
+        {
+            text.AppendLine($"Dispatch model: {task.LastDispatch.ProviderName}/{task.LastDispatch.ModelName} complexity={task.LastDispatch.TaskComplexity?.ToString() ?? "unknown"} reasoning={task.LastDispatch.ReasoningEffort ?? "default"}");
+        }
         text.AppendLine($"Working directory: {task.LastDispatch.WorkingDirectory}");
         text.AppendLine($"Dispatched: {task.LastDispatch.DispatchedAt:u}");
     }

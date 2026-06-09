@@ -39,7 +39,11 @@ public sealed record TaskDispatchRecord(
     string WorkerName,
     string Command,
     string WorkingDirectory,
-    DateTimeOffset DispatchedAt);
+    DateTimeOffset DispatchedAt,
+    string? ProviderName = null,
+    string? ModelName = null,
+    string? ReasoningEffort = null,
+    TaskComplexity? TaskComplexity = null);
 
 public sealed record TaskProcessRecord(
     int ProcessId,

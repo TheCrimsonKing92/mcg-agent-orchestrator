@@ -40,7 +40,7 @@ public static partial class DashboardRenderer
 
         if (task.LastDispatch is not null)
         {
-            return $"<div>Dispatch: {Encode(task.LastDispatch.WorkerName)} &middot; {Encode(task.LastDispatch.Command)}</div>";
+            return $"<div>Dispatch: {Encode(task.LastDispatch.WorkerName)}{RenderDispatchModelSelection(task.LastDispatch)} &middot; {Encode(task.LastDispatch.Command)}</div>";
         }
 
         if (task.LastExecution is not null)
@@ -96,6 +96,20 @@ public static partial class DashboardRenderer
     private static string FormatMaxOutputTokens(int? maxOutputTokens)
     {
         return maxOutputTokens is null ? string.Empty : $" of {maxOutputTokens}";
+    }
+
+    private static string RenderDispatchModelSelection(TaskDispatchRecord dispatch)
+    {
+        if (string.IsNullOrWhiteSpace(dispatch.ProviderName) || string.IsNullOrWhiteSpace(dispatch.ModelName))
+        {
+            return string.Empty;
+        }
+
+        var complexity = dispatch.TaskComplexity is null ? string.Empty : $" {Encode(dispatch.TaskComplexity.Value.ToString())}";
+        var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
+            ? string.Empty
+            : $" reasoning {Encode(dispatch.ReasoningEffort)}";
+        return $" <span class=\"meta\">{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}</span>";
     }
 
     private static string RenderTaskGate(TaskVerificationGate gate)

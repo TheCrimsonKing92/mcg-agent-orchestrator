@@ -90,7 +90,11 @@ public sealed class TaskSpec
                     LastDispatch.WorkerName,
                     LastDispatch.Command,
                     LastDispatch.WorkingDirectory,
-                    LastDispatch.DispatchedAt),
+                    LastDispatch.DispatchedAt,
+                    LastDispatch.ProviderName,
+                    LastDispatch.ModelName,
+                    LastDispatch.ReasoningEffort,
+                    LastDispatch.TaskComplexity),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -171,7 +175,11 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.WorkerName,
                 snapshot.LastDispatch.Command,
                 snapshot.LastDispatch.WorkingDirectory,
-                snapshot.LastDispatch.DispatchedAt));
+                snapshot.LastDispatch.DispatchedAt,
+                snapshot.LastDispatch.ProviderName,
+                snapshot.LastDispatch.ModelName,
+                snapshot.LastDispatch.ReasoningEffort,
+                snapshot.LastDispatch.TaskComplexity));
         }
 
         if (snapshot.LastProcess is not null)

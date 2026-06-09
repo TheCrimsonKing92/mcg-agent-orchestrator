@@ -64,6 +64,10 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.3-codex", task.LastDispatch.ModelName);
+    Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
+    Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_already_running_subscription_dispatch")]
@@ -187,11 +191,19 @@ public sealed class WorkerDispatchTests
     Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5-mini'", StringComparison.Ordinal));
     Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'low'", StringComparison.Ordinal));
     Assert.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--complexity 'Simple'", StringComparison.Ordinal));
+    Assert.Equal("OpenAI", simpleTask.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5-mini-codex", simpleTask.LastDispatch.ModelName);
+    Assert.Equal("low", simpleTask.LastDispatch.ReasoningEffort);
+    Assert.Equal(TaskComplexity.Simple, simpleTask.LastDispatch.TaskComplexity);
     Assert.Contains(complexTask.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5.5'", StringComparison.Ordinal));
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
     Assert.Contains(complexTask.LastDispatch.Command, text => text.Contains("--complexity 'Complex'", StringComparison.Ordinal));
+    Assert.Equal("OpenAI", complexTask.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.5", complexTask.LastDispatch.ModelName);
+    Assert.Equal("high", complexTask.LastDispatch.ReasoningEffort);
+    Assert.Equal(TaskComplexity.Complex, complexTask.LastDispatch.TaskComplexity);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_subscription_dispatch")]

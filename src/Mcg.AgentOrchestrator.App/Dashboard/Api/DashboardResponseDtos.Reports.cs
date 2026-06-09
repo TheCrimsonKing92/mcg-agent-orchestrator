@@ -136,7 +136,13 @@ internal sealed record TaskWorkSummaryDto(
     VerificationSummaryDto? LastVerification,
     DateTimeOffset? SubscriptionRetryAfter);
 
-internal sealed record DispatchSummaryDto(string WorkerName, DateTimeOffset DispatchedAt);
+internal sealed record DispatchSummaryDto(
+    string WorkerName,
+    DateTimeOffset DispatchedAt,
+    string? ProviderName = null,
+    string? ModelName = null,
+    string? ReasoningEffort = null,
+    TaskComplexity? TaskComplexity = null);
 
 internal sealed record ProcessSummaryDto(
     int ProcessId,

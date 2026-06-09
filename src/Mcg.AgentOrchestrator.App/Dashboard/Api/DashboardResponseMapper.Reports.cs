@@ -125,7 +125,13 @@ private static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
         task.AssignedAgentId?.Value,
         task.LastDispatch is null
             ? null
-            : new DispatchSummaryDto(task.LastDispatch.WorkerName, task.LastDispatch.DispatchedAt),
+            : new DispatchSummaryDto(
+                task.LastDispatch.WorkerName,
+                task.LastDispatch.DispatchedAt,
+                task.LastDispatch.ProviderName,
+                task.LastDispatch.ModelName,
+                task.LastDispatch.ReasoningEffort,
+                task.LastDispatch.TaskComplexity),
         task.LastProcess is null
             ? null
             : new ProcessSummaryDto(

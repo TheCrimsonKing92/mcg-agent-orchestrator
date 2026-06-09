@@ -42,6 +42,10 @@ public static void PrintTask(Goal goal, TaskSpec task)
     if (task.LastDispatch is not null)
     {
         Console.WriteLine($"Last dispatch: worker={task.LastDispatch.WorkerName} command={task.LastDispatch.Command}");
+        if (!string.IsNullOrWhiteSpace(task.LastDispatch.ProviderName) && !string.IsNullOrWhiteSpace(task.LastDispatch.ModelName))
+        {
+            Console.WriteLine($"Dispatch model: {task.LastDispatch.ProviderName}/{task.LastDispatch.ModelName} complexity={task.LastDispatch.TaskComplexity?.ToString() ?? "unknown"} reasoning={task.LastDispatch.ReasoningEffort ?? "default"}");
+        }
         Console.WriteLine($"Working directory: {task.LastDispatch.WorkingDirectory}");
         Console.WriteLine($"Dispatched: {task.LastDispatch.DispatchedAt:u}");
     }

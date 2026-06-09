@@ -70,7 +70,15 @@ public sealed class DispatchExecutionTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("worker-a", "do work", "C:\\repo", clock.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "worker-a",
+        "do work",
+        "C:\\repo",
+        clock.UtcNow,
+        "OpenAI",
+        "gpt-5.3-codex",
+        "medium",
+        TaskComplexity.Simple));
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
@@ -79,6 +87,10 @@ public sealed class DispatchExecutionTests
     Assert.Equal("do work", restoredTask.LastDispatch.Command);
     Assert.Equal("C:\\repo", restoredTask.LastDispatch.WorkingDirectory);
     Assert.Equal(clock.UtcNow, restoredTask.LastDispatch.DispatchedAt);
+    Assert.Equal("OpenAI", restoredTask.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.3-codex", restoredTask.LastDispatch.ModelName);
+    Assert.Equal("medium", restoredTask.LastDispatch.ReasoningEffort);
+    Assert.Equal(TaskComplexity.Simple, restoredTask.LastDispatch.TaskComplexity);
     Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_task_on_success")]
