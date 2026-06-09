@@ -58,6 +58,33 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal("high", complexModel.ReasoningEffort);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_requires_stronger_signals_for_review_and_test_roles")]
+    public void TaskComplexityEstimatorRequiresStrongerSignalsForReviewAndTestRoles()
+    {
+        const string borderlineVerification =
+            "Review production end-to-end integration architecture rollout notes and report any obvious gaps.";
+
+        Assert.Equal(
+            TaskComplexity.Complex,
+            TaskComplexityEstimator.Estimate(borderlineVerification, "Maintain dashboard views.", AgentRole.Developer));
+        Assert.Equal(
+            TaskComplexity.Simple,
+            TaskComplexityEstimator.Estimate(borderlineVerification, ComplexGoalObjective, AgentRole.Reviewer));
+        Assert.Equal(
+            TaskComplexity.Simple,
+            TaskComplexityEstimator.Estimate(borderlineVerification, ComplexGoalObjective, AgentRole.Tester));
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_still_escalates_dense_high_risk_review_and_test_tasks")]
+    public void TaskComplexityEstimatorStillEscalatesDenseHighRiskReviewAndTestTasks()
+    {
+        const string denseRiskTask =
+            "Review production multi-tenant distributed end-to-end integration architecture for horizontal scaling and concurrent workflow risks.";
+
+        Assert.Equal(TaskComplexity.Complex, TaskComplexityEstimator.Estimate(denseRiskTask, ComplexGoalObjective, AgentRole.Reviewer));
+        Assert.Equal(TaskComplexity.Complex, TaskComplexityEstimator.Estimate(denseRiskTask, ComplexGoalObjective, AgentRole.Tester));
+    }
+
     private const string ComplexGoalObjective =
         "Design and implement a production multi-tenant architecture with end-to-end distributed integration, " +
         "horizontal scaling, real-time processing, system design, security, observability, concurrent workflows, " +

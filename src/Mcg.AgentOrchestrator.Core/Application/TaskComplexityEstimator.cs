@@ -16,8 +16,10 @@ public static class TaskComplexityEstimator
         var taskScore = ScoreText(taskDescription);
         var goalContextScore = Math.Min(ScoreText(goalObjective), 2);
         var score = taskScore + goalContextScore;
+        var taskThreshold = RoleTaskScoreThreshold(role);
+        var totalThreshold = RoleTotalScoreThreshold(role);
 
-        return taskScore >= 3 && score >= 4 ? TaskComplexity.Complex : TaskComplexity.Simple;
+        return taskScore >= taskThreshold && score >= totalThreshold ? TaskComplexity.Complex : TaskComplexity.Simple;
     }
 
     public static ModelProfile ResolveModel(AgentDefinition agent, TaskComplexity complexity, string taskDescription, string goalObjective)
@@ -61,6 +63,16 @@ public static class TaskComplexityEstimator
         else if (requirementCount >= 7) score += 1;
 
         return score;
+    }
+
+    private static int RoleTaskScoreThreshold(AgentRole role)
+    {
+        return role is AgentRole.Tester or AgentRole.Reviewer ? 5 : 3;
+    }
+
+    private static int RoleTotalScoreThreshold(AgentRole role)
+    {
+        return role is AgentRole.Tester or AgentRole.Reviewer ? 6 : 4;
     }
 
     private static int CountOccurrences(string text, string pattern)
