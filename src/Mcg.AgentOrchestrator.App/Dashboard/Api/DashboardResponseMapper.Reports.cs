@@ -62,6 +62,12 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
         summary.PendingHumanInputCount,
         summary.InputTokens,
         summary.OutputTokens,
+        summary.ModelUsage.Select(item => new ModelUsageSummaryDto(
+            item.ProviderName,
+            item.ModelName,
+            item.ExecutionCount,
+            item.InputTokens,
+            item.OutputTokens)).ToList(),
         summary.Tasks.Select(item => ToTaskEvidenceSummaryDto(goal, item)).ToList());
 }
 

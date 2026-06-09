@@ -75,7 +75,29 @@ public sealed partial class AgentOrchestratorKernel
             pendingInput.Count,
             SumKnownUsage(goal.Tasks.Select(task => task.LastExecution?.Usage?.InputTokens)),
             SumKnownUsage(goal.Tasks.Select(task => task.LastExecution?.Usage?.OutputTokens)),
+            BuildModelUsageSummary(goal.Tasks),
             items);
+    }
+
+    private static List<ModelUsageSummary> BuildModelUsageSummary(IReadOnlyList<TaskSpec> tasks)
+    {
+        return tasks
+            .Where(task => task.LastExecution is not null)
+            .GroupBy(
+                task => new
+                {
+                    task.LastExecution!.ProviderName,
+                    task.LastExecution.ModelName
+                })
+            .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ModelUsageSummary(
+                group.Key.ProviderName,
+                group.Key.ModelName,
+                group.Count(),
+                SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.InputTokens)),
+                SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.OutputTokens))))
+            .ToList();
     }
 
     private static int? SumKnownUsage(IEnumerable<int?> values)

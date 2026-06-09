@@ -81,7 +81,15 @@ internal sealed record GoalEvidenceSummaryDto(
     int PendingHumanInputCount,
     int? InputTokens,
     int? OutputTokens,
+    IReadOnlyList<ModelUsageSummaryDto> ModelUsage,
     IReadOnlyList<TaskEvidenceSummaryDto> Tasks);
+
+internal sealed record ModelUsageSummaryDto(
+    string ProviderName,
+    string ModelName,
+    int ExecutionCount,
+    int? InputTokens,
+    int? OutputTokens);
 
 internal sealed record TaskEvidenceSummaryDto(
     int TaskNumber,

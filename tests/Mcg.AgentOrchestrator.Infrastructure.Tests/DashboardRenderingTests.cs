@@ -76,6 +76,12 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
+    var modelUsage = evidenceDto.ModelUsage.Single();
+    Assert.Equal("Fake", modelUsage.ProviderName);
+    Assert.Equal("fake-model", modelUsage.ModelName);
+    Assert.Equal(1, modelUsage.ExecutionCount);
+    Assert.Equal(1, modelUsage.InputTokens);
+    Assert.Equal(2, modelUsage.OutputTokens);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_execution_output_without_mutating_task_record")]
