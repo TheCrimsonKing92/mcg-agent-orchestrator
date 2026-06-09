@@ -41,8 +41,8 @@ public static partial class DashboardRenderer
         html.AppendLine("</form>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/subscription-dispatch-ready\">Prepare subscription handoffs</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready\">Start subscription work</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches\">Start prepared work</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true\">Start subscription work</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true\">Start prepared work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/refresh-dispatches\">Refresh running work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/cancel-dispatches\">Cancel running work</button>");
         html.AppendLine("</div>");

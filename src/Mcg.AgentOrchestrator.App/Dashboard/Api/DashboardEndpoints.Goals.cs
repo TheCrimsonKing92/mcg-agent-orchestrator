@@ -271,6 +271,17 @@ internal static partial class DashboardEndpoints
             return Text("not found", "text/plain; charset=utf-8", StatusCodes.Status404NotFound);
         }
 
+        var requiresBatchStartConfirmation = RequiresBatchStartConfirmation(operation);
+        var batchStartConfirmed = context.Request.Query.TryGetValue("confirmBatchStart", out var confirmBatchStart) &&
+            confirmBatchStart.Any(value => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+        if (requiresBatchStartConfirmation && !batchStartConfirmed)
+        {
+            return Text(
+                "dashboard invalid request: batch start operations require confirmBatchStart=true because they can start multiple worker processes.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
+        }
+
         var body = await ReadRequestBodyAsync(context.Request);
         var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
         return await MutateAsync(
@@ -288,5 +299,11 @@ internal static partial class DashboardEndpoints
                 return Task.FromResult(Json(result));
             },
             context.RequestAborted);
+    }
+
+    private static bool RequiresBatchStartConfirmation(string operation)
+    {
+        return operation.Equals("start-subscription-ready", StringComparison.OrdinalIgnoreCase) ||
+            operation.Equals("start-dispatches", StringComparison.OrdinalIgnoreCase);
     }
 }

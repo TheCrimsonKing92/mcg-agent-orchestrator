@@ -669,7 +669,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("Continue non-API actions", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/profile-dispatch-ready", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/subscription-dispatch-ready", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/cancel-dispatches", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"data-action=\"/api/goals/{goalPrefix}/tasks\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"data-action=\"/api/goals/{goalPrefix}/ask\"", StringComparison.Ordinal));
@@ -677,7 +677,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("name=\"delegate\" value=\"false\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("name=\"verificationPlan\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Goal question", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/start-dispatches", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/input/{request.Id.Value[..8]}/answer", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/brief", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/tasks/3/timeline", StringComparison.Ordinal));
