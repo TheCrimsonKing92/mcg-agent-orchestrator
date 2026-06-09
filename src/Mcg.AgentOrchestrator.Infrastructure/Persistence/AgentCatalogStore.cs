@@ -76,11 +76,11 @@ public static class AgentCatalogStore
 
         if (!File.Exists(path))
         {
-            return defaultCatalog;
+            return NormalizePaidProviderCaps(defaultCatalog);
         }
 
         var catalog = JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), JsonOptions());
-        return catalog is null || catalog.Agents.Count == 0 ? defaultCatalog : catalog;
+        return NormalizePaidProviderCaps(catalog is null || catalog.Agents.Count == 0 ? defaultCatalog : catalog);
     }
 
     public static void Save(string path, AgentCatalog catalog)
@@ -94,5 +94,34 @@ public static class AgentCatalogStore
         var options = new JsonSerializerOptions { WriteIndented = true };
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
+    }
+
+    private static AgentCatalog NormalizePaidProviderCaps(AgentCatalog catalog)
+    {
+        return new AgentCatalog(catalog.Agents.Select(NormalizeAgent).ToList());
+    }
+
+    private static AgentDefinition NormalizeAgent(AgentDefinition agent)
+    {
+        return agent with
+        {
+            Model = NormalizeModel(agent.Model, AgentCatalog.RoutineApiMaxOutputTokens),
+            ComplexModel = agent.ComplexModel is null
+                ? null
+                : NormalizeModel(agent.ComplexModel, AgentCatalog.ComplexApiMaxOutputTokens)
+        };
+    }
+
+    private static ModelProfile NormalizeModel(ModelProfile model, int defaultMaxOutputTokens)
+    {
+        return model.MaxOutputTokens is null && IsPaidProvider(model.ProviderName)
+            ? model with { MaxOutputTokens = defaultMaxOutputTokens }
+            : model;
+    }
+
+    private static bool IsPaidProvider(string providerName)
+    {
+        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
     }
 }

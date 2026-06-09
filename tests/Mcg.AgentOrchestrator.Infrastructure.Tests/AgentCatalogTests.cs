@@ -67,5 +67,41 @@ public sealed class AgentCatalogTests
     Assert.Equal("OpenAI reviewer", restored.GetRequired(AgentRole.Reviewer).Name);
     Assert.Equal("gpt-review", restored.GetRequired(AgentRole.Reviewer).Model.ModelName);
 }
-}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_load_adds_missing_paid_provider_caps_without_overriding_explicit_values")]
+    public void AgentCatalogStoreLoadAddsMissingPaidProviderCapsWithoutOverridingExplicitValues()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var catalog = new AgentCatalog(
+    [
+        new AgentDefinition(
+            new AgentId("openai-developer"),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ComplexModel: new ModelProfile("OpenAI", "gpt-complex", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey)),
+        new AgentDefinition(
+            new AgentId("anthropic-reviewer"),
+            "Anthropic reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("Anthropic", "claude-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey, MaxOutputTokens: 4096)),
+        new AgentDefinition(
+            new AgentId("ollama-tester"),
+            "Ollama tester",
+            AgentRole.Tester,
+            new ModelProfile("Ollama", "qwen-local", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.LocalBridge))
+    ]);
 
+    AgentCatalogStore.Save(path, catalog);
+
+    var restored = AgentCatalogStore.Load(path);
+    var openAi = restored.GetRequired(AgentRole.Developer);
+    var anthropic = restored.GetRequired(AgentRole.Reviewer);
+    var ollama = restored.GetRequired(AgentRole.Tester);
+
+    Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
+    Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, openAi.ComplexModel!.MaxOutputTokens);
+    Assert.Equal(4096, anthropic.Model.MaxOutputTokens);
+    Assert.True(ollama.Model.MaxOutputTokens is null);
+}
+}
