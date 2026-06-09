@@ -192,6 +192,50 @@ public sealed class AdvanceLoopTests
     Assert.True(task.LastExecution is not null);
     Assert.True(provider.LastRequest is not null);
 }
+    [Xunit.Fact(DisplayName = "TaskRun_blocks_any_available_api_fallback_after_subscription_dispatch")]
+    public async Task TaskRunBlocksAnyAvailableApiFallbackAfterSubscriptionDispatch()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Avoid duplicate fallback", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Any available should not duplicate active subscription work", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("any-available-developer"),
+        "Any Available developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var provider = new FakeSmokeProvider();
+
+    GoalManagementCommandService.SubscriptionDispatchTask(
+        kernel,
+        workspace,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default());
+
+    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await GoalManagementCommandService.ApplyTaskActionAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([provider]),
+        workspace,
+        goal,
+        task,
+        "run",
+        string.Empty));
+
+    Assert.Contains(ex.Message, text => text.Contains("stopped before API fallback", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("status is Running", StringComparison.Ordinal));
+    Assert.True(provider.LastRequest is null);
+    Assert.True(task.LastDispatch is not null);
+    Assert.True(task.LastExecution is null);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_uses_workspace_execution_directory")]
     public async Task SubscriptionDispatchUsesWorkspaceExecutionDirectory()
 {

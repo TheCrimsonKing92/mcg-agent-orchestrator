@@ -75,7 +75,7 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
         }
         catch (InvalidOperationException ex)
         {
-            if (!allowApiExecution)
+            if (!allowApiExecution || !CanFallBackToApiAfterSubscriptionFailure(task))
             {
                 throw new InvalidOperationException(
                     $"Automatic continuation stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
@@ -86,7 +86,7 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
         }
         catch (KeyNotFoundException ex)
         {
-            if (!allowApiExecution)
+            if (!allowApiExecution || !CanFallBackToApiAfterSubscriptionFailure(task))
             {
                 throw new InvalidOperationException(
                     $"Automatic continuation stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
@@ -318,6 +318,16 @@ private static object? ExecuteSubscriptionAutomation(
             DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
         _ => null
     };
+}
+
+private static bool CanFallBackToApiAfterSubscriptionFailure(TaskSpec task)
+{
+    return task.Status == WorkTaskStatus.Assigned &&
+        task.LastDispatch is null &&
+        task.LastProcess is null &&
+        task.LastExecution is null &&
+        task.LastVerification is null &&
+        task.SubscriptionRetryAfter is null;
 }
 
 private static string GetSubscriptionAutomationMessage(NextActionAutomationPlan automation)

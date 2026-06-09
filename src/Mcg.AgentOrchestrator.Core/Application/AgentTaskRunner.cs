@@ -39,6 +39,11 @@ public sealed class AgentTaskRunner
             throw new InvalidOperationException($"Task '{taskId}' already has model output; verify it or retry the task before running it again.");
         }
 
+        if (task.Status != WorkTaskStatus.Assigned)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before running it again.");
+        }
+
         if (task.AssignedAgentId is null)
         {
             throw new InvalidOperationException($"Task '{taskId}' is not assigned to an agent.");

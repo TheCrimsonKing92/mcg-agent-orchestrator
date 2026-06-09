@@ -107,6 +107,25 @@ public sealed class ModelExecutionTests
         Assert.Equal(2, provider.CallCount);
         Assert.True(task.LastExecution is not null);
     }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_rejects_non_assigned_task_without_calling_provider")]
+    public async Task ExecuteAssignedTaskRejectsNonAssignedTaskWithoutCallingProvider()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Avoid direct rerun of active task");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Already running elsewhere.");
+    var provider = new FakeModelProvider("OpenAI", "unused");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]));
+
+    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
+
+    Assert.Contains(ex.Message, text => text.Contains("status is Running", StringComparison.Ordinal));
+    Assert.Equal(0, provider.CallCount);
+}
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_provider_from_assigned_agent_profile")]
     public async Task ExecuteAssignedTaskUsesProviderFromAssignedAgentProfile()
 {
