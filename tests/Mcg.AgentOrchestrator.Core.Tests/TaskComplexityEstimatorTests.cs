@@ -35,6 +35,28 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Simple, complexity);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_broad_cross_surface_tasks")]
+    public void TaskComplexityEstimatorEscalatesBroadCrossSurfaceTasks()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Update provider smoke behavior across the CLI, dashboard API, tests, and docs.",
+            "Make the orchestrator less costly to run without sacrificing accuracy.",
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_keeps_small_two_surface_tasks_simple")]
+    public void TaskComplexityEstimatorKeepsSmallTwoSurfaceTasksSimple()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Update a dashboard label and the matching test.",
+            ComplexGoalObjective,
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_uses_complex_model_only_for_complex_task_text")]
     public void TaskComplexityEstimatorUsesComplexModelOnlyForComplexTaskText()
     {

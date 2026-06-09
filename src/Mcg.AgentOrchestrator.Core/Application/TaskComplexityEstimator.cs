@@ -11,6 +11,12 @@ public static class TaskComplexityEstimator
         "architecture", "design and implement", "system design"
     ];
 
+    private static readonly string[] SurfaceSignals =
+    [
+        "api", "cli", "dashboard", "provider", "subscription",
+        "worker", "persistence", "state", "tests", "docs"
+    ];
+
     public static TaskComplexity Estimate(string taskDescription, string goalObjective, AgentRole role)
     {
         var taskScore = ScoreText(taskDescription);
@@ -62,7 +68,38 @@ public static class TaskComplexityEstimator
         if (requirementCount >= 10) score += 2;
         else if (requirementCount >= 7) score += 1;
 
+        var tokens = BuildTokenSet(lower);
+        var surfaceCount = SurfaceSignals.Count(tokens.Contains);
+        if (surfaceCount >= 4) score += 4;
+        else if (surfaceCount >= 3) score += 1;
+
         return score;
+    }
+
+    private static HashSet<string> BuildTokenSet(string text)
+    {
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var start = -1;
+        for (var index = 0; index <= text.Length; index++)
+        {
+            if (index < text.Length && char.IsLetterOrDigit(text[index]))
+            {
+                if (start < 0)
+                {
+                    start = index;
+                }
+
+                continue;
+            }
+
+            if (start >= 0)
+            {
+                tokens.Add(text[start..index]);
+                start = -1;
+            }
+        }
+
+        return tokens;
     }
 
     private static int RoleTaskScoreThreshold(AgentRole role)
