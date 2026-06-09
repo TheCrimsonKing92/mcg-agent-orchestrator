@@ -15,7 +15,10 @@ internal sealed record AgentDto(
     AgentExecutionPolicy ExecutionPolicy,
     string? SubscriptionProfileName,
     string? SubscriptionModelAlias,
-    string? SubscriptionReasoningEffort);
+    string? SubscriptionReasoningEffort,
+    string? ComplexProviderName,
+    string? ComplexModelName,
+    int? ComplexMaxOutputTokens);
 
 internal sealed record WorkerProfileDto(
     string Name,

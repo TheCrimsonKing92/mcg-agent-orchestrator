@@ -25,6 +25,7 @@ internal static class SourceSurvey
         ".scratch",
         "artifacts",
         "bin",
+        "TestResults",
         "obj",
         "node_modules"
     ];
@@ -140,7 +141,7 @@ internal static class SourceSurvey
 
     private static string BuildRecommendedCommand()
     {
-        return "rg --files -g \"!**/artifacts/**\" -g \"!**/bin/**\" -g \"!**/obj/**\" -g \"!**/.scratch/**\" " +
+        return "rg --files -g \"!**/artifacts/**\" -g \"!**/bin/**\" -g \"!**/TestResults/**\" -g \"!**/obj/**\" -g \"!**/.scratch/**\" " +
             "-g \"!**/.orchestrator/**\" -g \"!**/.orchestrator-demo/**\" -g \"!**/.orchestrator-prototype/**\" " +
             "-g \"!**/node_modules/**\"";
     }

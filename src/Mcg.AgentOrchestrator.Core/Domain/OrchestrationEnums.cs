@@ -166,3 +166,10 @@ public enum AgentExecutionPolicy
     PreferSubscription,
     AnyAvailable
 }
+
+public enum TaskComplexity
+{
+    Auto,
+    Simple,
+    Complex
+}

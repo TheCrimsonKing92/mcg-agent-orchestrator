@@ -25,8 +25,19 @@ internal static class LocalModelPromptOptimizer
             _ => basePrompt
         };
 
-        return roleDirective +
-            " Respond with: ## Results, ## Evidence, ## Blockers, ## Human Input Needed (if any)." +
+        var outputTemplate = role switch
+        {
+            AgentRole.Tester =>
+                " Respond with: ## Test Code (complete, executable [Fact] methods — this is the primary deliverable)," +
+                " ## Coverage Summary (which scenarios are covered), ## Blockers.",
+            AgentRole.Developer =>
+                " Respond with: ## Implementation (complete source code — this is the primary deliverable)," +
+                " ## Changed Files, ## Verification Steps, ## Blockers.",
+            _ =>
+                " Respond with: ## Results, ## Evidence, ## Blockers, ## Human Input Needed (if any)."
+        };
+
+        return roleDirective + outputTemplate +
             " If you need operator input, include a line starting with HUMAN_INPUT: followed by the question." +
             " Be direct and concrete. Do not summarize generically.";
     }

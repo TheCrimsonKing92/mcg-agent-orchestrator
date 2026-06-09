@@ -17,7 +17,10 @@ public sealed record AgentConfigurationValidation(
     string? SubscriptionModelAlias,
     string? SubscriptionReasoningEffort,
     bool IsValid,
-    string Detail);
+    string Detail,
+    string? ComplexProviderName = null,
+    string? ComplexModelName = null,
+    int? ComplexMaxOutputTokens = null);
 
 public sealed record WorkerProfileValidation(
     string Name,
@@ -176,7 +179,10 @@ public static class OrchestratorHealthInspector
                 agent.Subscription?.ModelAlias,
                 agent.Subscription?.ReasoningEffort,
                 isValid,
-                BuildAgentValidationDetail(agent, providerKnown, profileKnown, apiAllowed, subscriptionAllowed, profileName));
+                BuildAgentValidationDetail(agent, providerKnown, profileKnown, apiAllowed, subscriptionAllowed, profileName),
+                agent.ComplexModel?.ProviderName,
+                agent.ComplexModel?.ModelName,
+                agent.ComplexModel?.MaxOutputTokens);
         }
     }
 

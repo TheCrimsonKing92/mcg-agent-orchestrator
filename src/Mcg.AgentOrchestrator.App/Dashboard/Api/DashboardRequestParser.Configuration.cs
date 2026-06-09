@@ -44,7 +44,10 @@ public static AgentSubmissionDto ParseAgentSubmission(string body)
         string.IsNullOrWhiteSpace(submission.ExecutionPolicy) ? null : submission.ExecutionPolicy.Trim(),
         string.IsNullOrWhiteSpace(submission.SubscriptionProfileName) ? null : submission.SubscriptionProfileName.Trim(),
         string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias) ? null : submission.SubscriptionModelAlias.Trim(),
-        string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort) ? null : submission.SubscriptionReasoningEffort.Trim());
+        string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort) ? null : submission.SubscriptionReasoningEffort.Trim(),
+        string.IsNullOrWhiteSpace(submission.ComplexProviderName) ? null : submission.ComplexProviderName.Trim(),
+        string.IsNullOrWhiteSpace(submission.ComplexModelName) ? null : submission.ComplexModelName.Trim(),
+        submission.ComplexMaxOutputTokens);
 }
 
 public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submission)
@@ -60,6 +63,15 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             submission.SubscriptionProfileName,
             string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias) ? null : submission.SubscriptionModelAlias,
             string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort) ? null : submission.SubscriptionReasoningEffort);
+    var complexModel = !string.IsNullOrWhiteSpace(submission.ComplexProviderName) && !string.IsNullOrWhiteSpace(submission.ComplexModelName)
+        ? new ModelProfile(
+            submission.ComplexProviderName,
+            submission.ComplexModelName,
+            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
+            SubscriptionMode.ApiKey,
+            MaxOutputTokens: submission.ComplexMaxOutputTokens)
+        : null;
+
     return new AgentDefinition(
         new AgentId($"{submission.ProviderName.ToLowerInvariant()}-{role.ToString().ToLowerInvariant()}"),
         name,
@@ -72,7 +84,8 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? null : submission.ReasoningEffort,
             submission.MaxOutputTokens),
         ExecutionPolicy: executionPolicy,
-        Subscription: subscription);
+        Subscription: subscription,
+        ComplexModel: complexModel);
 }
 
 private static AgentExecutionPolicy ParseExecutionPolicy(string? value)

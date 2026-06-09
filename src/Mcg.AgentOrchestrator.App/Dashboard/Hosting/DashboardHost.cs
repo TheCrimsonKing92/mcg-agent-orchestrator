@@ -192,6 +192,11 @@ public static DashboardUrlPrefixes NormalizeUrlPrefix(string value, bool hosted,
             null);
     }
 
+    if (trimmed.StartsWith("-", StringComparison.Ordinal))
+    {
+        throw new ArgumentException($"Unknown dashboard option '{trimmed}'.");
+    }
+
     if (!trimmed.Contains("://", StringComparison.Ordinal))
     {
         trimmed = "http://" + trimmed;
@@ -320,6 +325,12 @@ private static bool IsLoopbackHost(string host)
         host.Equals("[::1]", StringComparison.OrdinalIgnoreCase);
 }
 
+private static bool IsLoopbackUrlPrefix(string urlPrefix)
+{
+    return Uri.TryCreate(urlPrefix, UriKind.Absolute, out var uri) &&
+        IsLoopbackHost(uri.Host);
+}
+
 public static async Task RunDashboardHostAsync(
     OrchestratorWorkspace workspace,
     IModelProviderRegistry providers,
@@ -425,7 +436,8 @@ public static string GetRestartUrl(DashboardHostArgs args)
         return args.PublicUrlPrefix ?? args.UrlPrefix;
     }
 
-    if (!string.IsNullOrWhiteSpace(args.PublicUrlPrefix))
+    if (!string.IsNullOrWhiteSpace(args.PublicUrlPrefix) &&
+        !IsLoopbackUrlPrefix(args.PublicUrlPrefix))
     {
         return args.PublicUrlPrefix;
     }
@@ -500,7 +512,8 @@ public static List<string> GetHostedUrlPrefixes(string urlPrefix)
 
 public static List<string> GetHostedUrlPrefixes(DashboardHostArgs args)
 {
-    return string.IsNullOrWhiteSpace(args.PublicUrlPrefix)
+    return string.IsNullOrWhiteSpace(args.PublicUrlPrefix) ||
+        IsLoopbackUrlPrefix(args.PublicUrlPrefix)
         ? GetHostedUrlPrefixes(args.UrlPrefix)
         : [args.PublicUrlPrefix];
 }

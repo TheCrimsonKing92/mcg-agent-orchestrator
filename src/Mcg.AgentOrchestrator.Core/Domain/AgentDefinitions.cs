@@ -20,7 +20,8 @@ public sealed record AgentDefinition(
     ModelProfile Model,
     AgentStatus Status = AgentStatus.Available,
     AgentExecutionPolicy ExecutionPolicy = AgentExecutionPolicy.ApiOnly,
-    SubscriptionLaunchProfile? Subscription = null);
+    SubscriptionLaunchProfile? Subscription = null,
+    ModelProfile? ComplexModel = null);
 
 public static class AgentExecutionPolicies
 {

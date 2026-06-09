@@ -19,7 +19,10 @@ internal sealed record AgentSubmissionDto(
     string? ExecutionPolicy = null,
     string? SubscriptionProfileName = null,
     string? SubscriptionModelAlias = null,
-    string? SubscriptionReasoningEffort = null);
+    string? SubscriptionReasoningEffort = null,
+    string? ComplexProviderName = null,
+    string? ComplexModelName = null,
+    int? ComplexMaxOutputTokens = null);
 
 internal sealed record WorkerProfileSubmissionDto(string Name, string CommandTemplate);
 

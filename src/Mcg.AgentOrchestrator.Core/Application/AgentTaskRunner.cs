@@ -42,13 +42,14 @@ public sealed class AgentTaskRunner
             throw new InvalidOperationException($"Agent '{agent.Name}' is configured for subscription execution only.");
         }
 
-        var provider = _providers.GetRequired(agent.Model.ProviderName);
-        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started '{task.Description}'.");
+        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, TaskComplexity.Auto, task.Description, goal.Objective);
+        var provider = _providers.GetRequired(resolvedModel.ProviderName);
+        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started '{task.Description}' (model: {resolvedModel.ModelName}).");
 
         ModelResponse response;
         try
         {
-            response = await provider.CompleteAsync(BuildRequest(goal, task, agent), cancellationToken).ConfigureAwait(false);
+            response = await provider.CompleteAsync(BuildRequest(goal, task, agent, resolvedModel), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -59,8 +60,8 @@ public sealed class AgentTaskRunner
         var execution = new TaskExecutionRecord(
             agent.Id,
             agent.Name,
-            agent.Model.ProviderName,
-            agent.Model.ModelName,
+            resolvedModel.ProviderName,
+            resolvedModel.ModelName,
             response.Text.Trim(),
             response.StopReason,
             response.Usage,
@@ -81,9 +82,9 @@ public sealed class AgentTaskRunner
         return new AgentTaskRunResult(goal, task, execution);
     }
 
-    private static ModelRequest BuildRequest(Goal goal, TaskSpec task, AgentDefinition agent)
+    private static ModelRequest BuildRequest(Goal goal, TaskSpec task, AgentDefinition agent, ModelProfile resolvedModel)
     {
-        var isLocal = LocalModelPromptOptimizer.IsLocalProvider(agent.Model.ProviderName);
+        var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName);
 
         var baseSystemPrompt =
             $"You are the {agent.Role} agent in a software-development orchestrator. " +
@@ -116,7 +117,7 @@ public sealed class AgentTaskRunner
         return new ModelRequest(
             systemPrompt,
             [new ModelMessage("user", userPrompt)],
-            new ModelOptions(Temperature: 0.2, MaxOutputTokens: agent.Model.MaxOutputTokens ?? 1200, ReasoningEffort: agent.Model.ReasoningEffort, ModelName: agent.Model.ModelName));
+            new ModelOptions(Temperature: 0.2, MaxOutputTokens: resolvedModel.MaxOutputTokens ?? 1200, ReasoningEffort: resolvedModel.ReasoningEffort, ModelName: resolvedModel.ModelName));
     }
 
     private static string TrimForTimeline(string value)
