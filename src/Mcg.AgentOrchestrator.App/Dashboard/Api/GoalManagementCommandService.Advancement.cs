@@ -43,7 +43,7 @@ public static async Task<AdvanceLoopResultDto> AdvanceGoalUntilBlockedAsync(
     return await AdvanceUntilBlockedAsync(
         kernel,
         goal,
-        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation),
+        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false),
         automation => automation.Message);
 }
 
@@ -53,7 +53,8 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     IModelProviderRegistry providers,
     OrchestratorWorkspace workspace,
     Goal goal,
-    TaskId taskId)
+    TaskId taskId,
+    bool allowApiExecution = true)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
     var agent = ResolveAssignedAgent(task, agents);
@@ -72,14 +73,34 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
                 goal,
                 SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath)));
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            if (!allowApiExecution)
+            {
+                throw new InvalidOperationException(
+                    $"Automatic continuation stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
+                    ex);
+            }
+
             // Fall back to API-backed execution below.
         }
-        catch (KeyNotFoundException)
+        catch (KeyNotFoundException ex)
         {
+            if (!allowApiExecution)
+            {
+                throw new InvalidOperationException(
+                    $"Automatic continuation stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
+                    ex);
+            }
+
             // Fall back to API-backed execution below.
         }
+    }
+
+    if (!allowApiExecution)
+    {
+        throw new InvalidOperationException(
+            $"Automatic continuation stopped before API-backed execution for task {task.Id.Value[..8]}; use the task Run control for an explicit model call.");
     }
 
     var result = await new AgentTaskRunner(kernel, agents, providers).RunAsync(goal.Id, taskId);
@@ -252,12 +273,13 @@ private static async Task<object?> ExecuteAutomationAsync(
     IModelProviderRegistry providers,
     OrchestratorWorkspace workspace,
     Goal goal,
-    NextActionAutomationPlan automation)
+    NextActionAutomationPlan automation,
+    bool allowApiExecution = true)
 {
     return automation.Kind switch
     {
         NextActionAutomationKind.RunAssignedTask =>
-            await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, automation.TaskId!),
+            await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, automation.TaskId!, allowApiExecution),
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>

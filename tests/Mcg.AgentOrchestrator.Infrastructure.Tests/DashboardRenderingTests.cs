@@ -398,7 +398,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/advance-until-blocked", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Continue subscription handoff", StringComparison.Ordinal));
-    Assert.Contains(goalHtml, text => text.Contains("Continue safe actions", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Continue non-API actions", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/profile-dispatch-ready", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/subscription-dispatch-ready", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready", StringComparison.Ordinal));
