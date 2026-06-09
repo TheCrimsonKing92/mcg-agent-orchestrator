@@ -790,7 +790,7 @@ public sealed class DashboardRenderingTests
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
-        "Run or prepare handoff",
+        "Prepare subscription handoff",
         "POST",
         $"/api/goals/{goalPrefix}/tasks/3/run",
         [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)]);
@@ -869,8 +869,10 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goalPrefix));
 
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run\">Run or prepare handoff</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run\">Prepare subscription handoff</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run\">Run API task</button>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run\">Run task</button>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run\"", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_prepared_dispatch_as_primary_task_action")]

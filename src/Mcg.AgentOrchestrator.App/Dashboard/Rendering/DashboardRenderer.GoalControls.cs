@@ -233,6 +233,11 @@ public static partial class DashboardRenderer
         html.AppendLine($"<a href=\"{prefix}/verification-plan\" target=\"_blank\" rel=\"noreferrer\">Verification plan</a>");
         html.AppendLine($"<a href=\"{prefix}/verifications\" target=\"_blank\" rel=\"noreferrer\">Verification records</a>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/run\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents))}</button>");
+        if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents))
+        {
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/api-run\">Run API task</button>");
+        }
+
         RenderAdvancedProcessAction(html, prefix, "start", "Start prepared work", GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "cancel", "Cancel process", GetCancelProcessReadiness(task));

@@ -20,6 +20,9 @@ public static async Task<object?> ApplyTaskActionAsync(
         case "run":
             return await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
 
+        case "api-run":
+            return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, goal, task.Id);
+
         case "dispatch":
             var dispatch = DashboardRequestParser.ParseDispatchSubmission(body);
             kernel.RecordTaskDispatch(
@@ -99,7 +102,7 @@ public static async Task<object?> ApplyTaskActionAsync(
             return DashboardResponseMapper.ToHumanInputDto(kernel, request);
 
         default:
-            throw new ArgumentException("Task operation must be run, retry, verification-plan, dispatch, profile-dispatch, subscription-dispatch, start, refresh, cancel, verify, verify-manual, complete-verify, progress, or ask.");
+            throw new ArgumentException("Task operation must be run, api-run, retry, verification-plan, dispatch, profile-dispatch, subscription-dispatch, start, refresh, cancel, verify, verify-manual, complete-verify, progress, or ask.");
     }
 }
 }

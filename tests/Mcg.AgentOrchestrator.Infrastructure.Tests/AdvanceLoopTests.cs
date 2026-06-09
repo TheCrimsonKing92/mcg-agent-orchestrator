@@ -158,8 +158,8 @@ public sealed class AdvanceLoopTests
     Assert.True(provider.LastRequest is null);
 }
 
-    [Xunit.Fact(DisplayName = "AdvanceGoalAsync_allows_any_available_api_fallback_for_explicit_single_step")]
-    public async Task AdvanceGoalAsyncAllowsAnyAvailableApiFallbackForExplicitSingleStep()
+    [Xunit.Fact(DisplayName = "AdvanceGoalAsync_blocks_any_available_api_fallback_without_explicit_api_run")]
+    public async Task AdvanceGoalAsyncBlocksAnyAvailableApiFallbackWithoutExplicitApiRun()
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -186,8 +186,44 @@ public sealed class AdvanceLoopTests
         workspace,
         goal);
 
-    Assert.True(result.Executed);
+    Assert.False(result.Executed);
     Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.AutomationKind);
+    Assert.Contains(result.Message, text => text.Contains("stopped before API fallback", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastExecution is null);
+    Assert.True(provider.LastRequest is null);
+}
+    [Xunit.Fact(DisplayName = "TaskApiRun_allows_any_available_api_fallback_when_explicit")]
+    public async Task TaskApiRunAllowsAnyAvailableApiFallbackWhenExplicit()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    WorkerProfileStore.Save(
+        workspace.WorkerProfilePath,
+        WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Any available may fall back when API run is explicit", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("any-available-developer"),
+        "Any Available developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var provider = new FakeSmokeProvider();
+
+    await GoalManagementCommandService.ApplyTaskActionAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([provider]),
+        workspace,
+        goal,
+        task,
+        "api-run",
+        string.Empty);
+
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(task.LastExecution is not null);
     Assert.True(provider.LastRequest is not null);

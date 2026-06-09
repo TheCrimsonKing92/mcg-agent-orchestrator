@@ -28,7 +28,19 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, automation.Message, null);
     }
 
-    object? result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation);
+    object? result;
+    try
+    {
+        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, ex.Message, null);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, ex.Message, null);
+    }
 
     return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, automation.Message, result);
 }
@@ -54,7 +66,8 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     OrchestratorWorkspace workspace,
     Goal goal,
     TaskId taskId,
-    bool allowApiExecution = true)
+    bool allowApiExecution = true,
+    bool allowApiFallback = false)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
     var agent = ResolveAssignedAgent(task, agents);
@@ -75,10 +88,10 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
         }
         catch (InvalidOperationException ex)
         {
-            if (!allowApiExecution || !CanFallBackToApiAfterSubscriptionFailure(task))
+            if (!allowApiExecution || !allowApiFallback || !CanFallBackToApiAfterSubscriptionFailure(task))
             {
                 throw new InvalidOperationException(
-                    $"Automatic continuation stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
+                    $"Task run stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
                     ex);
             }
 
@@ -86,10 +99,10 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
         }
         catch (KeyNotFoundException ex)
         {
-            if (!allowApiExecution || !CanFallBackToApiAfterSubscriptionFailure(task))
+            if (!allowApiExecution || !allowApiFallback || !CanFallBackToApiAfterSubscriptionFailure(task))
             {
                 throw new InvalidOperationException(
-                    $"Automatic continuation stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
+                    $"Task run stopped before API fallback for task {task.Id.Value[..8]}; subscription handoff was unavailable: {ex.Message}",
                     ex);
             }
 
@@ -101,6 +114,30 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     {
         throw new InvalidOperationException(
             $"Automatic continuation stopped before API-backed execution for task {task.Id.Value[..8]}; use the task Run control for an explicit model call.");
+    }
+
+    var result = await new AgentTaskRunner(kernel, agents, providers).RunAsync(goal.Id, taskId);
+    return DashboardResponseMapper.ToTaskDetailDto(result.Goal, goal.Tasks.Single(task => task.Id == taskId));
+}
+
+private static async Task<object?> AdvanceApiRunAssignedTaskAsync(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    Goal goal,
+    TaskId taskId)
+{
+    var task = goal.Tasks.Single(task => task.Id == taskId);
+    var agent = ResolveAssignedAgent(task, agents);
+    if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
+    {
+        throw new InvalidOperationException($"Agent '{agent.Name}' is configured for subscription execution only.");
+    }
+
+    if (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly && !CanFallBackToApiAfterSubscriptionFailure(task))
+    {
+        throw new InvalidOperationException(
+            $"Explicit API execution for task {task.Id.Value[..8]} is only available before subscription work, model output, or verification evidence exists.");
     }
 
     var result = await new AgentTaskRunner(kernel, agents, providers).RunAsync(goal.Id, taskId);

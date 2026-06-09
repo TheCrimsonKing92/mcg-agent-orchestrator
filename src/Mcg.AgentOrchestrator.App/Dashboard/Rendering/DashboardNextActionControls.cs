@@ -57,9 +57,17 @@ public static class DashboardNextActionControls
         return policy switch
         {
             AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription => "Prepare subscription handoff",
-            AgentExecutionPolicy.AnyAvailable => "Run or prepare handoff",
+            AgentExecutionPolicy.AnyAvailable => "Prepare subscription handoff",
             _ => "Run task"
         };
+    }
+
+    public static bool CanRunApiExplicitly(
+        Goal goal,
+        TaskId? taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+    {
+        return ResolveTaskExecutionPolicy(goal, taskId, agents) is AgentExecutionPolicy.PreferSubscription or AgentExecutionPolicy.AnyAvailable;
     }
 
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
