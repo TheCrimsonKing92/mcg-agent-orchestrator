@@ -8,6 +8,8 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
     public const int RoutineApiMaxOutputTokens = 1024;
     public const int ComplexApiMaxOutputTokens = 1200;
+    public const string RoutineReasoningEffort = "medium";
+    public const string ComplexReasoningEffort = "high";
 
     public AgentDefinition GetRequired(AgentRole role)
     {
@@ -28,22 +30,22 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
     public static AgentCatalog Default()
     {
-        static ModelProfile OpenAiBase(string reasoningEffort) =>
-            new("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort, RoutineApiMaxOutputTokens);
+        static ModelProfile OpenAiBase() =>
+            new("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, RoutineReasoningEffort, RoutineApiMaxOutputTokens);
 
-        static ModelProfile OpenAiComplex(string reasoningEffort) =>
-            new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort, ComplexApiMaxOutputTokens);
+        static ModelProfile OpenAiComplex() =>
+            new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, ComplexReasoningEffort, ComplexApiMaxOutputTokens);
 
-        static SubscriptionLaunchProfile Codex(string reasoningEffort) =>
-            new("codex-cli", "gpt-5.3-codex", reasoningEffort);
+        static SubscriptionLaunchProfile Codex() =>
+            new("codex-cli", "gpt-5.3-codex", RoutineReasoningEffort);
 
         return new AgentCatalog(
         [
-            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase("high"), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex("high"), ComplexModel: OpenAiComplex("high")),
-            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase("high"), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex("high"), ComplexModel: OpenAiComplex("high")),
-            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase("medium"), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex("medium"), ComplexModel: OpenAiComplex("medium")),
-            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase("high"), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex("high"), ComplexModel: OpenAiComplex("high")),
-            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase("high"), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex("high"), ComplexModel: OpenAiComplex("high"))
+            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
+            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
+            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
+            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
+            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex())
         ]);
     }
 

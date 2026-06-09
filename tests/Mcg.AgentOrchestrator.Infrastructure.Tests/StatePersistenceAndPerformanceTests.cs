@@ -206,11 +206,11 @@ public sealed class StatePersistenceAndPerformanceTests
     PrototypeWorkspaceSeeder.Create(root);
 
     var restored = AgentCatalogStore.Load(agentPath);
-    AssertPrototypeAgent(restored.GetRequired(AgentRole.Planner), "openai-planner", "high");
-    AssertPrototypeAgent(restored.GetRequired(AgentRole.Researcher), "openai-researcher", "high");
-    AssertPrototypeAgent(restored.GetRequired(AgentRole.Developer), "openai-developer", "medium");
-    AssertPrototypeAgent(restored.GetRequired(AgentRole.Tester), "openai-tester", "high");
-    AssertPrototypeAgent(restored.GetRequired(AgentRole.Reviewer), "openai-reviewer", "high");
+    AssertPrototypeAgent(restored.GetRequired(AgentRole.Planner), "openai-planner");
+    AssertPrototypeAgent(restored.GetRequired(AgentRole.Researcher), "openai-researcher");
+    AssertPrototypeAgent(restored.GetRequired(AgentRole.Developer), "openai-developer");
+    AssertPrototypeAgent(restored.GetRequired(AgentRole.Tester), "openai-tester");
+    AssertPrototypeAgent(restored.GetRequired(AgentRole.Reviewer), "openai-reviewer");
 }
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_roundtrips_kernel_snapshot")]
     public void OrchestratorStateStoreRoundtripsKernelSnapshot()
@@ -304,23 +304,23 @@ public sealed class StatePersistenceAndPerformanceTests
     Xunit.Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), $"Persistence/render smoke took {elapsed.Elapsed}.");
 }
 
-    private static void AssertPrototypeAgent(AgentDefinition agent, string expectedId, string expectedReasoningEffort)
+    private static void AssertPrototypeAgent(AgentDefinition agent, string expectedId)
 {
     Assert.Equal(expectedId, agent.Id.Value);
     Assert.Equal("OpenAI", agent.Model.ProviderName);
     Assert.Equal("gpt-5.4-mini", agent.Model.ModelName);
-    Assert.Equal(expectedReasoningEffort, agent.Model.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Model.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, agent.Model.MaxOutputTokens);
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
     Assert.True(agent.Subscription is not null);
     var subscription = agent.Subscription!;
     Assert.Equal("codex-cli", subscription.WorkerProfileName);
     Assert.Equal("gpt-5.3-codex", subscription.ModelAlias);
-    Assert.Equal(expectedReasoningEffort, subscription.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineReasoningEffort, subscription.ReasoningEffort);
     Assert.True(agent.ComplexModel is not null);
     Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
     Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
-    Assert.Equal(expectedReasoningEffort, agent.ComplexModel.ReasoningEffort);
+    Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel.ReasoningEffort);
     Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
 }
 }

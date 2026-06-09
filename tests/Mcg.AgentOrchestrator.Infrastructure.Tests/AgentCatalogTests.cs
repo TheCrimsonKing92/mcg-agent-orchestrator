@@ -27,23 +27,13 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).Model.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Researcher).Model.ReasoningEffort);
-    Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).Model.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).Model.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).Model.ReasoningEffort);
-
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).Subscription!.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Researcher).Subscription!.ReasoningEffort);
-    Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).Subscription!.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).Subscription!.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).Subscription!.ReasoningEffort);
-
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Planner).ComplexModel!.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Researcher).ComplexModel!.ReasoningEffort);
-    Assert.Equal("medium", catalog.GetRequired(AgentRole.Developer).ComplexModel!.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Tester).ComplexModel!.ReasoningEffort);
-    Assert.Equal("high", catalog.GetRequired(AgentRole.Reviewer).ComplexModel!.ReasoningEffort);
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        var agent = catalog.GetRequired(role);
+        Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Model.ReasoningEffort);
+        Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Subscription!.ReasoningEffort);
+        Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel!.ReasoningEffort);
+    }
 }
     [Xunit.Fact(DisplayName = "AgentCatalog_upsert_replaces_role")]
     public void AgentCatalogUpsertReplacesRole()

@@ -288,7 +288,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal("codex-cli", researcher.LastDispatch!.WorkerName);
     Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex'", StringComparison.Ordinal));
-    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
     Assert.True(File.Exists(results.Single(result => result.Task.Id == developer.Id).PromptPath));
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
@@ -319,7 +319,7 @@ public sealed class WorkerDispatchTests
         dispatchedAt);
 
     Assert.Contains(developer.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
-    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_to_api_model_settings_for_default_openai_subscription_profile")]
     public void WorkerProfileDispatcherFallsBackToApiModelSettingsForDefaultOpenAiSubscriptionProfile()
