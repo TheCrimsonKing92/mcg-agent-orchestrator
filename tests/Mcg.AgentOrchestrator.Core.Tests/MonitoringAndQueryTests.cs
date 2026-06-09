@@ -182,6 +182,8 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, summary.PendingHumanInputCount);
     Assert.Equal(100, summary.InputTokens);
     Assert.Equal(25, summary.OutputTokens);
+    Assert.Equal(100, summary.PotentiallyPaidInputTokens);
+    Assert.Equal(25, summary.PotentiallyPaidOutputTokens);
     var modelUsage = summary.ModelUsage.Single();
     Assert.Equal("OpenAI", modelUsage.ProviderName);
     Assert.Equal("gpt-5.5", modelUsage.ModelName);
@@ -189,6 +191,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(100, modelUsage.InputTokens);
     Assert.Equal(25, modelUsage.OutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
+    Assert.True(modelUsage.IsPotentiallyPaidProvider);
     Assert.Equal(TaskEvidenceKind.None, summary.Tasks.Single(item => item.TaskId == inputTask.Id).LatestEvidence);
     Assert.Equal(1, summary.Tasks.Single(item => item.TaskId == inputTask.Id).PendingHumanInputCount);
     Assert.Equal(TaskEvidenceKind.Execution, summary.Tasks.Single(item => item.TaskId == executionTask.Id).LatestEvidence);

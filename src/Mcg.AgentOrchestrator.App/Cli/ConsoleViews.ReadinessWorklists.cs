@@ -13,6 +13,12 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
     Console.WriteLine($"Status: {summary.Status}");
     Console.WriteLine($"Tasks: {summary.TotalTasks}");
     Console.WriteLine($"Execution: {summary.TasksWithExecution}; dispatch: {summary.TasksWithDispatch}; process: {summary.TasksWithProcess} (running {summary.RunningProcesses})");
+    Console.WriteLine($"Tokens: {FormatTokenUsage(summary.InputTokens, summary.OutputTokens)}; potentially paid: {FormatTokenUsage(summary.PotentiallyPaidInputTokens, summary.PotentiallyPaidOutputTokens)}");
+    foreach (var usage in summary.ModelUsage)
+    {
+        var paid = usage.IsPotentiallyPaidProvider ? " potentially paid" : string.Empty;
+        Console.WriteLine($"  model: {usage.ProviderName}/{usage.ModelName}{paid}: {usage.ExecutionCount} run(s), {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}");
+    }
     Console.WriteLine($"Verification: {summary.TasksWithVerification}; passed={summary.PassedVerifications}; failed={summary.FailedVerifications}");
     Console.WriteLine($"Pending human input: {summary.PendingHumanInputCount}");
 
@@ -23,6 +29,11 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
     }
 
     Console.WriteLine();
+}
+
+private static string FormatTokenUsage(int? inputTokens, int? outputTokens)
+{
+    return $"{inputTokens?.ToString() ?? "n/a"} in / {outputTokens?.ToString() ?? "n/a"} out";
 }
 
 public static void PrintStageReadinessReport(Goal goal, GoalStageReadinessReport report)

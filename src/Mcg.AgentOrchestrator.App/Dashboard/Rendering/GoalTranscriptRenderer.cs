@@ -104,6 +104,7 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine($"Tasks: {evidence.TotalTasks}");
         text.AppendLine($"Execution: {evidence.TasksWithExecution}; dispatch: {evidence.TasksWithDispatch}; process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses})");
         text.AppendLine($"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}");
+        text.AppendLine($"Potentially paid tokens: {FormatTokenUsage(evidence.PotentiallyPaidInputTokens, evidence.PotentiallyPaidOutputTokens)}");
         if (evidence.ModelUsage.Count > 0)
         {
             text.AppendLine("Model usage:");

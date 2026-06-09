@@ -81,6 +81,8 @@ internal sealed record GoalEvidenceSummaryDto(
     int PendingHumanInputCount,
     int? InputTokens,
     int? OutputTokens,
+    int? PotentiallyPaidInputTokens,
+    int? PotentiallyPaidOutputTokens,
     IReadOnlyList<ModelUsageSummaryDto> ModelUsage,
     IReadOnlyList<TaskEvidenceSummaryDto> Tasks);
 
@@ -90,7 +92,8 @@ internal sealed record ModelUsageSummaryDto(
     int ExecutionCount,
     int? InputTokens,
     int? OutputTokens,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    bool IsPotentiallyPaidProvider = false);
 
 internal sealed record TaskEvidenceSummaryDto(
     int TaskNumber,

@@ -43,6 +43,8 @@ public sealed record GoalEvidenceSummary(
     int PendingHumanInputCount,
     int? InputTokens,
     int? OutputTokens,
+    int? PotentiallyPaidInputTokens,
+    int? PotentiallyPaidOutputTokens,
     IReadOnlyList<ModelUsageSummary> ModelUsage,
     IReadOnlyList<TaskEvidenceSummary> Tasks);
 
@@ -52,7 +54,8 @@ public sealed record ModelUsageSummary(
     int ExecutionCount,
     int? InputTokens,
     int? OutputTokens,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    bool IsPotentiallyPaidProvider = false);
 
 public sealed record TaskEvidenceSummary(
     TaskId TaskId,

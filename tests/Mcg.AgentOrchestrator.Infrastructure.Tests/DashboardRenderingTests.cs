@@ -55,11 +55,11 @@ public sealed class DashboardRenderingTests
         AgentId.New(),
         "API developer",
         AgentRole.Developer,
-        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        new ModelProfile("OpenAI", "gpt-test", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]));
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]));
 
     await runner.RunAsync(goal.Id, task.Id);
 
@@ -69,26 +69,31 @@ public sealed class DashboardRenderingTests
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
-    Assert.Contains(html, text => text.Contains("Model: Fake/fake-model by API developer", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Model: OpenAI/gpt-test by API developer", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("tokens 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Model usage: Fake/fake-model (Simple): 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Potentially paid: 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Model usage: OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Potentially paid tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model selection: complexity=Simple", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model usage:", StringComparison.Ordinal));
-    Assert.Contains(transcript, text => text.Contains("- Fake/fake-model (Simple): 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out", StringComparison.Ordinal));
     Assert.Equal(TaskComplexity.Simple, taskDto.LastExecution!.TaskComplexity);
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
+    Assert.Equal(1, evidenceDto.PotentiallyPaidInputTokens);
+    Assert.Equal(2, evidenceDto.PotentiallyPaidOutputTokens);
     var modelUsage = evidenceDto.ModelUsage.Single();
-    Assert.Equal("Fake", modelUsage.ProviderName);
-    Assert.Equal("fake-model", modelUsage.ModelName);
+    Assert.Equal("OpenAI", modelUsage.ProviderName);
+    Assert.Equal("gpt-test", modelUsage.ModelName);
     Assert.Equal(1, modelUsage.ExecutionCount);
     Assert.Equal(1, modelUsage.InputTokens);
     Assert.Equal(2, modelUsage.OutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
+    Assert.True(modelUsage.IsPotentiallyPaidProvider);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_execution_output_without_mutating_task_record")]

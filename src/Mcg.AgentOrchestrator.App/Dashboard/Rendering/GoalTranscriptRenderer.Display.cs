@@ -115,6 +115,7 @@ public static partial class GoalTranscriptRenderer
     {
         var runs = usage.ExecutionCount == 1 ? "1 run" : $"{usage.ExecutionCount} runs";
         var complexity = usage.TaskComplexity is null ? string.Empty : $" ({usage.TaskComplexity.Value})";
-        return $"{usage.ProviderName}/{usage.ModelName}{complexity}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
+        var paid = usage.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
+        return $"{usage.ProviderName}/{usage.ModelName}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
     }
 }

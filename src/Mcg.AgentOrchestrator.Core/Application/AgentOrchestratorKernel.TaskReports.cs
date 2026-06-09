@@ -75,6 +75,8 @@ public sealed partial class AgentOrchestratorKernel
             pendingInput.Count,
             SumKnownUsage(goal.Tasks.Select(task => task.LastExecution?.Usage?.InputTokens)),
             SumKnownUsage(goal.Tasks.Select(task => task.LastExecution?.Usage?.OutputTokens)),
+            SumKnownUsage(goal.Tasks.Where(HasPotentiallyPaidExecution).Select(task => task.LastExecution?.Usage?.InputTokens)),
+            SumKnownUsage(goal.Tasks.Where(HasPotentiallyPaidExecution).Select(task => task.LastExecution?.Usage?.OutputTokens)),
             BuildModelUsageSummary(goal.Tasks),
             items);
     }
@@ -99,8 +101,20 @@ public sealed partial class AgentOrchestratorKernel
                 group.Count(),
                 SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.InputTokens)),
                 SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.OutputTokens)),
-                group.Key.TaskComplexity))
+                group.Key.TaskComplexity,
+                IsPotentiallyPaidProvider(group.Key.ProviderName)))
             .ToList();
+    }
+
+    private static bool HasPotentiallyPaidExecution(TaskSpec task)
+    {
+        return task.LastExecution is not null && IsPotentiallyPaidProvider(task.LastExecution.ProviderName);
+    }
+
+    private static bool IsPotentiallyPaidProvider(string providerName)
+    {
+        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int? SumKnownUsage(IEnumerable<int?> values)

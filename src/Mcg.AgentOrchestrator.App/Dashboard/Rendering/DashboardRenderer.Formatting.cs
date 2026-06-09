@@ -75,7 +75,8 @@ public static partial class DashboardRenderer
     {
         var runs = usage.ExecutionCount == 1 ? "1 run" : $"{usage.ExecutionCount} runs";
         var complexity = usage.TaskComplexity is null ? string.Empty : $" ({Encode(usage.TaskComplexity.Value.ToString())})";
-        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}{complexity}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
+        var paid = usage.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
+        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
     }
 
     private static string RenderTaskGate(TaskVerificationGate gate)

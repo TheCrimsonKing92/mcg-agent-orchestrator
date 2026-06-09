@@ -155,6 +155,7 @@ public static partial class DashboardRenderer
         {
             $"Execution: {evidence.TasksWithExecution}",
             $"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}",
+            $"Potentially paid: {FormatTokenUsage(evidence.PotentiallyPaidInputTokens, evidence.PotentiallyPaidOutputTokens)}",
             $"Dispatch: {evidence.TasksWithDispatch}",
             $"Running processes: {evidence.RunningProcesses}"
         };
