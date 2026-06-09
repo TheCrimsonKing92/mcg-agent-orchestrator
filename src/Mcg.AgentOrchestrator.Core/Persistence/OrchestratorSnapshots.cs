@@ -34,7 +34,8 @@ public sealed record TaskExecutionSnapshot(
     string StopReason,
     int? InputTokens,
     int? OutputTokens,
-    DateTimeOffset CompletedAt);
+    DateTimeOffset CompletedAt,
+    TaskComplexity? TaskComplexity = null);
 
 public sealed record TaskVerificationSnapshot(
     string Command,

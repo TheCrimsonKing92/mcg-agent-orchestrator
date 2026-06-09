@@ -28,7 +28,9 @@ public sealed class ModelExecutionTests
     Assert.Equal("medium", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal("Implemented requested change.", task.LastExecution!.Output);
+    Assert.Equal(TaskComplexity.Simple, task.LastExecution.TaskComplexity);
     Assert.Equal(provider.ProviderName, result.Execution.ProviderName);
+    Assert.Equal(TaskComplexity.Simple, result.Execution.TaskComplexity);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskStarted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
@@ -307,6 +309,7 @@ public sealed class ModelExecutionTests
     Assert.Equal("medium", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(1024, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.4-mini", goal.Tasks[0].LastExecution!.ModelName);
+    Assert.Equal(TaskComplexity.Simple, goal.Tasks[0].LastExecution!.TaskComplexity);
     Assert.Contains(simplePrompt, text => text.Contains("Call out blockers or follow-up work explicitly", StringComparison.Ordinal));
     Assert.True(!simplePrompt.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
 
@@ -317,6 +320,7 @@ public sealed class ModelExecutionTests
     Assert.Equal("high", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(1200, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
+    Assert.Equal(TaskComplexity.Complex, goal.Tasks[1].LastExecution!.TaskComplexity);
     Assert.Contains(complexPrompt, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]

@@ -18,7 +18,8 @@ public sealed record TaskExecutionRecord(
     string Output,
     string StopReason,
     ModelUsage? Usage,
-    DateTimeOffset CompletedAt);
+    DateTimeOffset CompletedAt,
+    TaskComplexity? TaskComplexity = null);
 
 public sealed record AgentTaskRunResult(Goal Goal, TaskSpec Task, TaskExecutionRecord Execution);
 

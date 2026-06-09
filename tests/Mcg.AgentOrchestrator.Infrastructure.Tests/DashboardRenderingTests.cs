@@ -65,6 +65,7 @@ public sealed class DashboardRenderingTests
 
     var goalPrefix = goal.Id.Value[..8];
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
@@ -75,8 +76,10 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Model selection: complexity=Simple", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model usage:", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("- Fake/fake-model: 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Equal(TaskComplexity.Simple, taskDto.LastExecution!.TaskComplexity);
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
     var modelUsage = evidenceDto.ModelUsage.Single();

@@ -58,7 +58,8 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 task.LastExecution.StopReason,
                 task.LastExecution.Usage?.InputTokens,
                 task.LastExecution.Usage?.OutputTokens,
-                task.LastExecution.CompletedAt),
+                task.LastExecution.CompletedAt,
+                task.LastExecution.TaskComplexity),
         task.LastDispatch is null
             ? null
             : new DispatchDto(task.LastDispatch.WorkerName, task.LastDispatch.Command, task.LastDispatch.WorkingDirectory, task.LastDispatch.DispatchedAt),

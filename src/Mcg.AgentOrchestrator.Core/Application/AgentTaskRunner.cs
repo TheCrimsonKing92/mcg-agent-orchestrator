@@ -81,7 +81,8 @@ public sealed class AgentTaskRunner
             response.Text.Trim(),
             response.StopReason,
             response.Usage,
-            _clock.UtcNow);
+            _clock.UtcNow,
+            complexity);
 
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));

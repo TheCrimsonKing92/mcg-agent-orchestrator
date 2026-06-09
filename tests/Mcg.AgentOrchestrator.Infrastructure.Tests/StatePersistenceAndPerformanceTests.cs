@@ -213,14 +213,23 @@ public sealed class StatePersistenceAndPerformanceTests
     AssertPrototypeAgent(restored.GetRequired(AgentRole.Reviewer), "openai-reviewer");
 }
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_roundtrips_kernel_snapshot")]
-    public void OrchestratorStateStoreRoundtripsKernelSnapshot()
+    public async Task OrchestratorStateStoreRoundtripsKernelSnapshot()
 {
     var root = CreateTempDirectory();
     var path = Path.Combine(root, "state.json");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Persist state");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run dotnet test before accepting.");
+    await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]))
+        .RunAsync(goal.Id, task.Id);
 
     OrchestratorStateStore.Save(path, kernel);
     var restored = OrchestratorStateStore.Load(path);
@@ -228,6 +237,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Equal(goal.Id, restored.Goals.Single().Id);
     Assert.Equal("Persist state", restored.Goals.Single().Objective);
     Assert.Equal("Run dotnet test before accepting.", restored.GetTask(goal.Id, task.Id).VerificationPlan);
+    Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
 }
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_handles_concurrent_atomic_saves")]
     public async Task OrchestratorStateStoreHandlesConcurrentAtomicSaves()

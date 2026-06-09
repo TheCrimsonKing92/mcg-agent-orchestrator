@@ -17,6 +17,7 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
     if (task.LastExecution is not null)
     {
         text.AppendLine($"Last execution: {task.LastExecution.ProviderName}/{task.LastExecution.ModelName} by {task.LastExecution.AgentName}");
+        text.AppendLine($"Model selection: complexity={task.LastExecution.TaskComplexity?.ToString() ?? "unknown"}");
         text.AppendLine($"Stop reason: {task.LastExecution.StopReason}");
         text.AppendLine($"Usage: input={task.LastExecution.Usage?.InputTokens?.ToString() ?? "n/a"} output={task.LastExecution.Usage?.OutputTokens?.ToString() ?? "n/a"}");
         text.AppendLine("Output:");
