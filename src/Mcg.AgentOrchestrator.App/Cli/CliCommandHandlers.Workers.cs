@@ -105,6 +105,10 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return subscriptionDispatches.Count > 0;
 
         case "start-subscription-ready":
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-batch-start",
+                "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
@@ -130,6 +134,10 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return true;
 
         case "start-dispatches":
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-batch-start",
+                "start-dispatches requires --confirm-batch-start because it can start multiple worker processes.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var started = GoalManagementCommandService.StartDispatches(context.Kernel, context.Workspace, context.CurrentGoal);
             ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, started);

@@ -104,7 +104,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return advance.Executed;
 
         case "advance-subscription":
-            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-subscription-advance",
+                "advance-subscription requires --confirm-subscription-advance because it can prepare or start subscription worker processes.");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, GetOptionalArgument(parts, "--confirm-subscription-advance"));
             var subscriptionAdvance = GoalManagementCommandService.AdvanceGoalWithSubscriptions(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, context.CurrentGoal);
             ConsoleViews.PrintAdvanceResult(subscriptionAdvance);
             return subscriptionAdvance.Executed;
@@ -118,5 +122,20 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         default:
             return null;
     }
+}
+
+private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
+{
+    return parts.Skip(1).FirstOrDefault(part => !flags.Any(flag => part.Equals(flag, StringComparison.OrdinalIgnoreCase)));
+}
+
+private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)
+{
+    if (parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase)))
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
 }
 }

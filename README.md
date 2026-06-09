@@ -119,7 +119,7 @@ input-needed [goal-id]
 next [goal-id]
 subscription-plan [goal-id]
 advance [goal-id]
-advance-subscription [goal-id]
+advance-subscription [goal-id] --confirm-subscription-advance
 delegate [goal-id]
 task <task-number|task-id-prefix>
 tasks [status <status>] [role <role>] [id <task-id-prefix>] [evidence <kind>] [event <kind>]
@@ -144,10 +144,10 @@ profile-dispatch <task-number> <profile-name>
 profile-dispatch-ready <profile-name>
 subscription-dispatch <task-number>
 subscription-dispatch-ready
-start-subscription-ready
+start-subscription-ready --confirm-batch-start
 execute-dispatch <task-number>
 start-dispatch <task-number>
-start-dispatches
+start-dispatches --confirm-batch-start
 refresh-dispatch <task-number>
 refresh-dispatches
 logs <task-number> [stdout|stderr|exit|all]
@@ -187,7 +187,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- next
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-plan
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- advance
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- advance-subscription
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- advance-subscription --confirm-subscription-advance
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- delegate
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- ask-goal "Which repository should this goal target?"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- tasks status Assigned role Developer
@@ -211,10 +211,10 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- profile-dispatch-ready local-echo
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch-ready
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-subscription-ready
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-subscription-ready --confirm-batch-start
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- execute-dispatch 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatch 3
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatches
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatches --confirm-batch-start
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatch 3
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatches
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- logs 3 all
@@ -227,7 +227,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 
 `task` accepts either a display number or a task id prefix. `tasks` lists the current goal's tasks and can filter by `status`, `role`, task `id` prefix, evidence kind, and timeline event kind. Evidence kinds include `none`, `execution`, `dispatch`, `process`, `running-process`, `completed-process`, `verification`, `passed-verification`, and `failed-verification`. Timeline event kinds match `ProgressKind` names such as `TaskDispatchRecorded` or `TaskVerificationRecorded`. `add-task` appends a custom task to the current goal and delegates it immediately when a matching available agent role exists. Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. `verification-plan <task-number>` prints the current task plan; add plan text to update the pre-work verification checklist included in task details, prompts, transcripts, and the dashboard. Use `task-timeline` to inspect only the events for one task.
 
-`next` prints prioritized recommended follow-up commands for pending human input, failed tasks, failed verification, running dispatches, missing verification, assigned work, and pending tasks. `advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task. `delegate` reruns role-based assignment for pending tasks.
+`next` prints prioritized recommended follow-up commands for pending human input, failed tasks, failed verification, running dispatches, missing verification, assigned work, and pending tasks. `advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task; add `--confirm-subscription-advance` when deliberately using that path. `delegate` reruns role-based assignment for pending tasks.
 
 `retry <task-number> <message>` reopens a failed, cancelled, or rework-needed task. The message is required so clearing execution or verification evidence has an explicit rework reason. Retry preserves prior execution and verification history, clears the latest verification gate, and moves assigned tasks back to `Assigned` so they can be run or dispatched again. Running tasks must be refreshed or cancelled before retrying, and tasks waiting for human input must be answered first.
 
@@ -239,9 +239,9 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 
 `brief` prints a role-specific prompt for the selected task, including the verification plan and the `HUMAN_INPUT:` directive agents should use when they cannot proceed without operator input. `worker-dispatch` writes that brief under `.orchestrator/prompts` and expands a command template. Supported placeholders are `{promptPath}`, `{goalId}`, `{taskId}`, `{role}`, and `{title}`. This is the generic bridge for local coding-agent CLIs; configure the template for the tool you actually use.
 
-`worker-profile` saves a reusable template by name. `worker-profile-check [name]` validates that saved profile commands are locally resolvable. `worker-profile-export <path>` writes the current profile catalog to a JSON file. `worker-profile-import <path> [merge|replace]` imports another catalog, merging by default or replacing the current catalog when requested. `profile-dispatch` uses a saved profile to create a prompt file and dispatch command. `profile-dispatch-ready` creates dispatches for all currently assigned tasks using one saved profile and reports the generated prompt paths. `subscription-plan` shows each task's effective complexity/model choice, how it maps to `codex-cli` or `claude-cli`, whether the profile exists, whether the executable resolves locally, and whether the task is ready to prepare. `subscription-dispatch` chooses `codex-cli` for assigned OpenAI agents and `claude-cli` for assigned Anthropic agents. `subscription-dispatch-ready` applies that mapping to all assigned tasks. `start-subscription-ready` combines subscription dispatch preparation with starting every eligible background worker process. The default profile is `local-echo`.
+`worker-profile` saves a reusable template by name. `worker-profile-check [name]` validates that saved profile commands are locally resolvable. `worker-profile-export <path>` writes the current profile catalog to a JSON file. `worker-profile-import <path> [merge|replace]` imports another catalog, merging by default or replacing the current catalog when requested. `profile-dispatch` uses a saved profile to create a prompt file and dispatch command. `profile-dispatch-ready` creates dispatches for all currently assigned tasks using one saved profile and reports the generated prompt paths. `subscription-plan` shows each task's effective complexity/model choice, how it maps to `codex-cli` or `claude-cli`, whether the profile exists, whether the executable resolves locally, and whether the task is ready to prepare. `subscription-dispatch` chooses `codex-cli` for assigned OpenAI agents and `claude-cli` for assigned Anthropic agents. `subscription-dispatch-ready` applies that mapping to all assigned tasks. `start-subscription-ready --confirm-batch-start` combines subscription dispatch preparation with starting every eligible background worker process. The default profile is `local-echo`.
 
-`start-dispatch` starts the latest dispatch command in a hidden PowerShell process, writes stdout/stderr/exit code under `.orchestrator/logs`, and records the process id. `start-dispatches` starts every running task that has a recorded dispatch and no currently running process, allowing local workers to run concurrently, and reports ready/skipped task reasons. `refresh-dispatch` checks whether one process has exited; `refresh-dispatches` checks every running background process and reports ready/skipped task reasons. Completed background dispatches record the same verification evidence and task completion/failure as foreground execution, including `HUMAN_INPUT:` pause detection from captured stdout or stderr. Use `logs <task-number> [stdout|stderr|exit|all]` to inspect captured process output through the orchestrator.
+`start-dispatch` starts the latest dispatch command in a hidden PowerShell process, writes stdout/stderr/exit code under `.orchestrator/logs`, and records the process id. `start-dispatches --confirm-batch-start` starts every running task that has a recorded dispatch and no currently running process, allowing local workers to run concurrently, and reports ready/skipped task reasons. `refresh-dispatch` checks whether one process has exited; `refresh-dispatches` checks every running background process and reports ready/skipped task reasons. Completed background dispatches record the same verification evidence and task completion/failure as foreground execution, including `HUMAN_INPUT:` pause detection from captured stdout or stderr. Use `logs <task-number> [stdout|stderr|exit|all]` to inspect captured process output through the orchestrator.
 
 `cancel-dispatch` terminates the tracked background process tree and marks the task cancelled.
 
