@@ -67,7 +67,7 @@ public static class DashboardNextActionControls
         TaskId? taskId,
         IReadOnlyList<AgentConfigurationValidation>? agents = null)
     {
-        return ResolveTaskExecutionPolicy(goal, taskId, agents) is AgentExecutionPolicy.PreferSubscription or AgentExecutionPolicy.AnyAvailable;
+        return ResolveTaskExecutionPolicy(goal, taskId, agents) is AgentExecutionPolicy.AnyAvailable;
     }
 
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(

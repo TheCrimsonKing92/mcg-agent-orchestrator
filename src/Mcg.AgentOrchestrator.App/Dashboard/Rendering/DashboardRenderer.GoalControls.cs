@@ -235,7 +235,7 @@ public static partial class DashboardRenderer
         html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/run\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents))}</button>");
         if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents))
         {
-            html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/api-run\">Run API task</button>");
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/api-run\">Explicit API run</button>");
         }
 
         RenderAdvancedProcessAction(html, prefix, "start", "Start prepared work", GetStartDispatchReadiness(task));
