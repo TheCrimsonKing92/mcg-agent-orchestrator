@@ -76,7 +76,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             lines.Add("## Last Dispatch");
             lines.Add($"Worker: {task.LastDispatch.WorkerName}");
-            lines.Add($"Command: {task.LastDispatch.Command}");
+            lines.Add($"Command: {PromptContextFormatter.TrimPromptBlock(task.LastDispatch.Command)}");
             lines.Add($"Working directory: {task.LastDispatch.WorkingDirectory}");
             lines.Add(string.Empty);
         }

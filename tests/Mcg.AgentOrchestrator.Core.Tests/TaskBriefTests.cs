@@ -114,6 +114,25 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains(new string('p', 1600), StringComparison.Ordinal));
     Assert.Equal(plan, task.VerificationPlan);
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_dispatch_command")]
+    public void BuildTaskBriefTrimsNoisyDispatchCommand()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Trim noisy dispatch command");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = $"cmd-start {new string('d', 1600)} cmd-tail";
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("custom", command, "C:\\repo", clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("cmd-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("cmd-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains(new string('d', 1600), StringComparison.Ordinal));
+    Assert.Equal(command, task.LastDispatch!.Command);
+}
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {
