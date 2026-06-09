@@ -14,12 +14,26 @@ private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<strin
             return false;
 
         case "provider-smoke":
-            var smokeTarget = parts.Count > 1 ? parts[1] : ProviderSmokeRunner.DefaultTarget;
+            var smokeArgs = parts.Skip(1)
+                .Where(part => !part.Equals("--confirm-all", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var confirmAllSmoke = parts.Any(part => part.Equals("--confirm-all", StringComparison.OrdinalIgnoreCase));
+            if (smokeArgs.Count > 2)
+            {
+                throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [task-number], or provider-smoke all --confirm-all [task-number].");
+            }
+
+            var smokeTarget = smokeArgs.Count > 0 ? smokeArgs[0] : ProviderSmokeRunner.DefaultTarget;
+            if (smokeTarget.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmAllSmoke)
+            {
+                throw new InvalidOperationException("provider-smoke all requires --confirm-all because broad paid smoke tests are deliberate.");
+            }
+
             TaskSpec? smokeTask = null;
-            if (parts.Count > 2)
+            if (smokeArgs.Count > 1)
             {
                 context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-                smokeTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[2]);
+                smokeTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, smokeArgs[1]);
             }
 
             var smokeEvidence = ProviderSmokeRunner.RunProviderSmoke(smokeTarget);

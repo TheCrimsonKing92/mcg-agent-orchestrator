@@ -213,10 +213,21 @@ public static string ParseProviderSmokeSubmission(string body)
 
     if (!trimmed.StartsWith("{", StringComparison.Ordinal))
     {
+        RequireBroadProviderSmokeConfirmation(trimmed, confirmed: false);
         return trimmed;
     }
 
     var submission = JsonSerializer.Deserialize<ProviderSmokeSubmissionDto>(trimmed, DashboardJson.Options());
-    return string.IsNullOrWhiteSpace(submission?.Target) ? ProviderSmokeRunner.DefaultTarget : submission.Target.Trim();
+    var target = string.IsNullOrWhiteSpace(submission?.Target) ? ProviderSmokeRunner.DefaultTarget : submission.Target.Trim();
+    RequireBroadProviderSmokeConfirmation(target, submission?.ConfirmAll is true);
+    return target;
+}
+
+private static void RequireBroadProviderSmokeConfirmation(string target, bool confirmed)
+{
+    if (target.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmed)
+    {
+        throw new ArgumentException("Smoking all providers requires confirmAll=true because broad paid smoke tests are deliberate.");
+    }
 }
 }

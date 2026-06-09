@@ -27,7 +27,7 @@ internal sealed record AgentSubmissionDto(
 
 internal sealed record WorkerProfileSubmissionDto(string Name, string CommandTemplate);
 
-internal sealed record ProviderSmokeSubmissionDto(string? Target);
+internal sealed record ProviderSmokeSubmissionDto(string? Target, bool ConfirmAll = false);
 
 internal sealed record DispatchSubmissionDto(string WorkerName, string Command);
 

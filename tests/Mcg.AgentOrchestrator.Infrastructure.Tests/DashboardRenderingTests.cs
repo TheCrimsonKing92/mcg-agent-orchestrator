@@ -361,6 +361,15 @@ public sealed class DashboardRenderingTests
     Assert.False(omitted.AutoHandoff);
     Assert.True(explicitAutomatic.AutoHandoff);
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_confirmation_for_broad_provider_smoke")]
+    public void DashboardRequestParserRequiresConfirmationForBroadProviderSmoke()
+{
+    var ex = Assert.Throws<ArgumentException>(() =>
+        DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"all\"}"));
+
+    Xunit.Assert.Contains("confirmAll=true", ex.Message);
+    Assert.Equal("all", DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"all\",\"confirmAll\":true}"));
+}
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_operator_controls")]
     public void DashboardRendererCanEmitOperatorControls()
 {

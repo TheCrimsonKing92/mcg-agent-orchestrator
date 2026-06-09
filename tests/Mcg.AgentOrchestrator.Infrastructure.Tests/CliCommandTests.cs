@@ -134,4 +134,36 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(provider.LastRequest);
         Xunit.Assert.Null(goal.Tasks.Single().LastExecution);
     }
+
+    [Xunit.Fact(DisplayName = "Cli_provider_smoke_all_requires_confirm_flag")]
+    public void CliProviderSmokeAllRequiresConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["provider-smoke", "all"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-all", ex!.Message);
+    }
 }
