@@ -531,18 +531,40 @@ public static partial class DashboardRenderer
 
     private static string DefaultSubscriptionProfile(string provider)
     {
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ? "claude-cli" : "codex-cli";
+        if (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+        {
+            return "codex-cli";
+        }
+
+        if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-cli";
+        }
+
+        return string.Empty;
     }
 
     private static IReadOnlyList<(string Value, string Label)> ApiModelOptions(string provider)
     {
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-            ?
+        if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            return
             [
                 ("claude-sonnet-4-20250514", "Claude Sonnet 4"),
                 ("claude-opus-4-20250514", "Claude Opus 4")
-            ]
-            :
+            ];
+        }
+
+        if (provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                ("qwen2.5-coder:7b", "Qwen2.5 Coder 7B"),
+                ("qwen3:8b", "Qwen3 8B")
+            ];
+        }
+
+        return
             [
                 ("gpt-5.4-mini", "GPT-5.4 mini"),
                 ("gpt-5.4", "GPT-5.4"),
@@ -559,13 +581,19 @@ public static partial class DashboardRenderer
 
     private static IReadOnlyList<(string Value, string Label)> ApiReasoningOptions(string provider)
     {
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
+        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+            provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
             ? [("", "Default")]
             : [("", "Default"), ("none", "None"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high")];
     }
 
     private static IReadOnlyList<(string Value, string Label)> SubscriptionModelOptions(string provider)
     {
+        if (provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            return [("", "No subscription model")];
+        }
+
         return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
             ? [("", "Default CLI model"), ("claude-sonnet", "Claude Sonnet"), ("claude-opus", "Claude Opus")]
             : [("", "Default CLI model"), ("gpt-5.3-codex", "GPT-5.3-Codex"), ("gpt-5.5", "GPT-5.5")];
@@ -573,7 +601,8 @@ public static partial class DashboardRenderer
 
     private static IReadOnlyList<(string Value, string Label)> SubscriptionReasoningOptions(string provider)
     {
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
+        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+            provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
             ? [("", "Default")]
             : [("", "Default"), ("none", "None"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high")];
     }
@@ -613,12 +642,17 @@ public static partial class DashboardRenderer
             names.Insert(0, preferred);
         }
 
-        foreach (var name in names)
+        if (!names.Contains(string.Empty, StringComparer.OrdinalIgnoreCase))
         {
-            html.AppendLine(RenderSelectOption(name, name, selected));
+            names.Insert(0, string.Empty);
         }
 
-        RenderUnknownSelectedOption(html, selected, names.Select(name => (Value: name, Label: name)).ToList());
+        foreach (var name in names)
+        {
+            html.AppendLine(RenderSelectOption(name, string.IsNullOrWhiteSpace(name) ? "None" : name, selected));
+        }
+
+        RenderUnknownSelectedOption(html, selected, names.Select(name => (Value: name, Label: string.IsNullOrWhiteSpace(name) ? "None" : name)).ToList());
     }
 
     private static string RenderSelectOption(string value, string label, string? selected)

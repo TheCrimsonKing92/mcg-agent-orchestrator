@@ -316,6 +316,23 @@ public sealed class DashboardRenderingTests
     Assert.True(ollama.Subscription is null);
     Assert.True(ollama.Model.MaxOutputTokens is null);
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_ignores_subscription_fields_for_api_only_agents")]
+    public void DashboardRequestParserIgnoresSubscriptionFieldsForApiOnlyAgents()
+{
+    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Tester",
+        "Ollama",
+        "qwen2.5-coder:7b",
+        null,
+        ExecutionPolicy: "ApiOnly",
+        SubscriptionProfileName: "codex-cli",
+        SubscriptionModelAlias: "gpt-5.3-codex",
+        SubscriptionReasoningEffort: "high"));
+
+    Assert.Equal(AgentExecutionPolicy.ApiOnly, agent.ExecutionPolicy);
+    Assert.True(agent.Subscription is null);
+    Assert.Equal("Ollama", agent.Model.ProviderName);
+}
     [Xunit.Fact(DisplayName = "DashboardRequestParser_respects_explicit_api_only_agent_policy")]
     public void DashboardRequestParserRespectsExplicitApiOnlyAgentPolicy()
 {
@@ -881,6 +898,54 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/start\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Start prepared work", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"href=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/brief\"", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_keeps_ollama_agent_configuration_local")]
+    public void DashboardRendererKeepsOllamaAgentConfigurationLocal()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var health = new OrchestratorHealthReport(
+        [new ProviderConfigurationStatus("Ollama", true, "LocalBridge", "Ollama is running.")],
+        [
+            new AgentConfigurationValidation(
+                AgentRole.Tester,
+                "Ollama tester",
+                "Ollama",
+                "qwen2.5-coder:7b",
+                null,
+                null,
+                AgentExecutionPolicy.ApiOnly,
+                null,
+                null,
+                null,
+                true,
+                "API provider 'Ollama' is registered; subscription execution disabled.",
+                "Ollama",
+                "qwen3:8b",
+                8192,
+                null)
+        ],
+        WorkerProfileCatalog.Default().Profiles.Select(profile => new WorkerProfileValidation(
+            profile.Name,
+            profile.CommandTemplate,
+            profile.Name,
+            true,
+            false,
+            true,
+            true,
+            "ok")).ToList());
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Config));
+
+    Assert.Contains(html, text => text.Contains("<option value=\"Ollama\" selected>Ollama</option>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<option value=\"qwen2.5-coder:7b\" selected>Qwen2.5 Coder 7B</option>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<option value=\"\" selected>None</option>", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Ollama: {", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("qwen2.5-coder:7b", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("preferredProfile: ''", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_makes_advanced_process_controls_state_aware")]

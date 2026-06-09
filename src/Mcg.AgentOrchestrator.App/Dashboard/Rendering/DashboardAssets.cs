@@ -75,6 +75,13 @@ const agentProviderOptions = {
     subscriptionModels: [['','Default CLI model'], ['claude-sonnet','Claude Sonnet'], ['claude-opus','Claude Opus']],
     subscriptionReasoning: [['','Default']],
     preferredProfile: 'claude-cli'
+  },
+  Ollama: {
+    apiModels: [['qwen2.5-coder:7b','Qwen2.5 Coder 7B'], ['qwen3:8b','Qwen3 8B']],
+    apiReasoning: [['','Default']],
+    subscriptionModels: [['','No subscription model']],
+    subscriptionReasoning: [['','Default']],
+    preferredProfile: ''
   }
 };
 function setOptions(select, options, selected, allowConfigured){
@@ -89,13 +96,16 @@ function profileOptions(form, preferred){
   const select = form.querySelector('select[name="subscriptionProfileName"]');
   const names = Array.from(select?.options || []).map(option => option.value).filter(Boolean);
   if(preferred && !names.some(name => name.toLowerCase() === preferred.toLowerCase())) names.push(preferred);
-  const unique = Array.from(new Set(names));
+  const unique = Array.from(new Set(['', ...names]));
   unique.sort((left,right) => {
+    if(!left) return -1;
+    if(!right) return 1;
+    if(!preferred) return left.localeCompare(right);
     if(left.toLowerCase() === preferred.toLowerCase()) return -1;
     if(right.toLowerCase() === preferred.toLowerCase()) return 1;
     return left.localeCompare(right);
   });
-  return unique.map(name => [name, name]);
+  return unique.map(name => [name, name || 'None']);
 }
 function syncAgentConfig(form, preserve){
   const providerSelect = form.querySelector('select[name="providerName"]');

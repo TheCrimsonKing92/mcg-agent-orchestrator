@@ -60,15 +60,22 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
     var name = string.IsNullOrWhiteSpace(submission.Name)
         ? $"{providerName} {role.ToString().ToLowerInvariant()}"
         : submission.Name;
-    var subscriptionProfileName = string.IsNullOrWhiteSpace(submission.SubscriptionProfileName)
-        ? DefaultSubscriptionProfileName(providerName, executionPolicy)
-        : submission.SubscriptionProfileName;
-    var subscriptionModelAlias = string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias)
-        ? DefaultSubscriptionModelAlias(providerName, executionPolicy)
-        : submission.SubscriptionModelAlias;
-    var subscriptionReasoningEffort = string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort)
-        ? DefaultSubscriptionReasoningEffort(providerName, executionPolicy)
-        : submission.SubscriptionReasoningEffort;
+    var allowsSubscription = AgentExecutionPolicies.AllowsSubscription(executionPolicy);
+    var subscriptionProfileName = allowsSubscription
+        ? string.IsNullOrWhiteSpace(submission.SubscriptionProfileName)
+            ? DefaultSubscriptionProfileName(providerName, executionPolicy)
+            : submission.SubscriptionProfileName
+        : null;
+    var subscriptionModelAlias = allowsSubscription
+        ? string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias)
+            ? DefaultSubscriptionModelAlias(providerName, executionPolicy)
+            : submission.SubscriptionModelAlias
+        : null;
+    var subscriptionReasoningEffort = allowsSubscription
+        ? string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort)
+            ? DefaultSubscriptionReasoningEffort(providerName, executionPolicy)
+            : submission.SubscriptionReasoningEffort
+        : null;
     var subscription = string.IsNullOrWhiteSpace(subscriptionProfileName)
         ? null
         : new SubscriptionLaunchProfile(
