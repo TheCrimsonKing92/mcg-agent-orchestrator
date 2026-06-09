@@ -26,7 +26,7 @@ public static int RunPrototypeUi(IReadOnlyList<string> parts, IModelProviderRegi
     Console.WriteLine($"Prototype execution directory: {prototypeWorkspace.ExecutionDirectory}");
     Console.WriteLine("Prototype state is persistent and isolated from the real .orchestrator directory.");
 
-    RunDashboardHostAsync(prototypeWorkspace, providers, hostArgs)
+    RunDashboardHostAsync(prototypeWorkspace, providers, hostArgs, agentFallback)
         .GetAwaiter()
         .GetResult();
     return 0;
@@ -334,14 +334,15 @@ private static bool IsLoopbackUrlPrefix(string urlPrefix)
 public static async Task RunDashboardHostAsync(
     OrchestratorWorkspace workspace,
     IModelProviderRegistry providers,
-    DashboardHostArgs args)
+    DashboardHostArgs args,
+    AgentCatalog? agentCatalogFallback = null)
 {
     var repository = new FileOrchestratorStateRepository(workspace.StatePath);
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.UseUrls(args.UrlPrefix);
 
     var app = builder.Build();
-    app.MapDashboardEndpoints(repository, workspace, providers, args);
+    app.MapDashboardEndpoints(repository, workspace, providers, args, agentCatalogFallback);
 
     if (args.OpenBrowser)
     {

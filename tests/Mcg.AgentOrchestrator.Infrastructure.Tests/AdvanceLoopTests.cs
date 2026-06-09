@@ -565,6 +565,38 @@ public sealed class AdvanceLoopTests
     Assert.False(File.Exists(Path.Combine(workspace.RootDirectory, DashboardContinuationService.StoreFileName)));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardEndpointServices_loads_agent_catalog_with_local_fallback")]
+    public void DashboardEndpointServicesLoadsAgentCatalogWithLocalFallback()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 3);
+    using var lifetime = new FakeHostLifetime();
+    var services = new DashboardEndpointServices(
+        new DashboardStateService(repository),
+        workspace,
+        new InMemoryModelProviderRegistry([]),
+        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
+        lifetime,
+        service,
+        AgentCatalog.OllamaDefault());
+
+    var loaded = services.LoadAgentCatalog();
+    var health = DashboardEndpoints.BuildHealthReport(services);
+
+    Assert.False(File.Exists(workspace.AgentCatalogPath));
+    foreach (var agent in loaded.Agents)
+    {
+        Assert.Equal("Ollama", agent.Model.ProviderName);
+    }
+
+    foreach (var agent in health.Agents)
+    {
+        Assert.Equal("Ollama", agent.ProviderName);
+    }
+}
+
 private sealed class FakeHostLifetime : IHostApplicationLifetime, IDisposable
 {
     private readonly CancellationTokenSource _started = new();

@@ -10,7 +10,7 @@ internal static partial class DashboardEndpoints
     {
         if (context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
         {
-            var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+            var agents = services.LoadAgentCatalog().Agents;
             var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
             var submission = DashboardRequestParser.ParseCreateGoalSubmission(await ReadRequestBodyAsync(context.Request));
             return await MutateAsync(
@@ -103,14 +103,14 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         return Json(DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles));
     }
 
     private static async Task<IResult> AddTaskAsync(HttpContext context, string goalId, DashboardEndpointServices services)
     {
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         var submission = DashboardRequestParser.ParseAddTaskSubmission(await ReadRequestBodyAsync(context.Request));
         return await MutateAsync(
             services,
@@ -167,7 +167,7 @@ internal static partial class DashboardEndpoints
         }
 
         var body = await ReadRequestBodyAsync(context.Request);
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         var confirmation = RequireTaskRunConfirmation(context, operation);
         if (confirmation is not null)
         {
@@ -196,7 +196,7 @@ internal static partial class DashboardEndpoints
 
     private static async Task<IResult> DelegateGoalAsync(string goalId, DashboardEndpointServices services)
     {
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         return await MutateAsync(
             services,
             current =>
@@ -209,7 +209,7 @@ internal static partial class DashboardEndpoints
 
     private static async Task<IResult> AdvanceGoalAsync(string goalId, DashboardEndpointServices services)
     {
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         return await MutateIfChangedAsync(
             services,
             async current =>
@@ -228,7 +228,7 @@ internal static partial class DashboardEndpoints
             return confirmation;
         }
 
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         return await MutateIfChangedAsync(
             services,
@@ -242,7 +242,7 @@ internal static partial class DashboardEndpoints
 
     private static async Task<IResult> AdvanceGoalUntilBlockedAsync(string goalId, DashboardEndpointServices services)
     {
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         return await MutateIfChangedAsync(
             services,
             async current =>
@@ -261,7 +261,7 @@ internal static partial class DashboardEndpoints
             return confirmation;
         }
 
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var result = await services.State.MutateValueIfChangedAsync(
             current =>
@@ -301,7 +301,7 @@ internal static partial class DashboardEndpoints
         }
 
         var body = await ReadRequestBodyAsync(context.Request);
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         return await MutateAsync(
             services,
             current =>

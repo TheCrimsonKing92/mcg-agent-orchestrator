@@ -69,22 +69,22 @@ private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<strin
 
         case "serve-dashboard":
             var serveArgs = DashboardHost.ParseDashboardHostArgs(parts, "serve-dashboard", defaultOpenBrowser: false);
-            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, serveArgs).GetAwaiter().GetResult();
+            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, serveArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
             return false;
 
         case "hosted-dashboard":
             var hostedArgs = DashboardHost.ParseDashboardHostArgs(parts, "hosted-dashboard", defaultOpenBrowser: false);
-            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedArgs).GetAwaiter().GetResult();
+            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
             return false;
 
         case "simple-hosted-dashboard":
             var simpleHostedArgs = DashboardHost.ParseDashboardHostArgs(parts, "simple-hosted-dashboard", defaultOpenBrowser: false);
-            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, simpleHostedArgs).GetAwaiter().GetResult();
+            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, simpleHostedArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
             return false;
 
         case "open-dashboard":
             var openArgs = DashboardHost.ParseDashboardHostArgs(parts, "open-dashboard", defaultOpenBrowser: true);
-            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, openArgs).GetAwaiter().GetResult();
+            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, openArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
             return false;
 
         case "transcript":

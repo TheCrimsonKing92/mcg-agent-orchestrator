@@ -16,9 +16,10 @@ internal static partial class DashboardEndpoints
         IOrchestratorStateRepository repository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        DashboardHostArgs args)
+        DashboardHostArgs args,
+        AgentCatalog? agentCatalogFallback = null)
     {
-        var services = new DashboardEndpointServices(new DashboardStateService(repository), workspace, providers, args, app.Lifetime, new DashboardContinuationService());
+        var services = new DashboardEndpointServices(new DashboardStateService(repository), workspace, providers, args, app.Lifetime, new DashboardContinuationService(), agentCatalogFallback);
         if (args.EnableOperatorControls)
         {
             services.Continuations.RestoreSubscriptionWatches(services);
@@ -128,7 +129,7 @@ internal static partial class DashboardEndpoints
     public static OrchestratorHealthReport BuildHealthReport(DashboardEndpointServices services)
     {
         return OrchestratorHealthInspector.InspectCurrentEnvironment(
-            AgentCatalogStore.Load(services.AgentCatalogPath),
+            services.LoadAgentCatalog(),
             WorkerProfileStore.Load(services.WorkerProfilePath));
     }
 

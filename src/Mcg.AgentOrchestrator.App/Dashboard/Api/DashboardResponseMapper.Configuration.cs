@@ -26,10 +26,10 @@ public static AgentDto ToAgentDto(AgentDefinition agent)
         agent.ComplexModel?.ReasoningEffort);
 }
 
-public static IReadOnlyList<WorkerProfileDto> ToWorkerProfileDtos(string agentCatalogPath, WorkerProfileCatalog catalog)
+public static IReadOnlyList<WorkerProfileDto> ToWorkerProfileDtos(AgentCatalog agents, WorkerProfileCatalog catalog)
 {
     var validations = OrchestratorHealthInspector
-        .InspectCurrentEnvironment(AgentCatalogStore.Load(agentCatalogPath), catalog)
+        .InspectCurrentEnvironment(agents, catalog)
         .WorkerProfiles
         .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 

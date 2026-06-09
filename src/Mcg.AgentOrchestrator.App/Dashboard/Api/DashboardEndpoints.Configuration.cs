@@ -23,14 +23,14 @@ internal static partial class DashboardEndpoints
     {
         if (context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
         {
-            var catalog = AgentCatalogStore.Load(services.AgentCatalogPath);
+            var catalog = services.LoadAgentCatalog();
             var submission = DashboardRequestParser.ParseAgentSubmission(await ReadRequestBodyAsync(context.Request));
             var updatedAgent = DashboardRequestParser.CreateAgentDefinition(submission);
             AgentCatalogStore.Save(services.AgentCatalogPath, catalog.UpsertRole(updatedAgent));
             return Json(DashboardResponseMapper.ToAgentDto(updatedAgent));
         }
 
-        var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+        var agents = services.LoadAgentCatalog().Agents;
         return Json(agents.Select(DashboardResponseMapper.ToAgentDto).ToList());
     }
 
@@ -42,12 +42,12 @@ internal static partial class DashboardEndpoints
             var submission = DashboardRequestParser.ParseWorkerProfileSubmission(await ReadRequestBodyAsync(context.Request));
             var updatedCatalog = catalog.Upsert(new WorkerProfile(submission.Name, submission.CommandTemplate));
             WorkerProfileStore.Save(services.WorkerProfilePath, updatedCatalog);
-            var profile = DashboardResponseMapper.ToWorkerProfileDtos(services.AgentCatalogPath, updatedCatalog)
+            var profile = DashboardResponseMapper.ToWorkerProfileDtos(services.LoadAgentCatalog(), updatedCatalog)
                 .Single(profile => profile.Name.Equals(submission.Name, StringComparison.OrdinalIgnoreCase));
             return Json(profile);
         }
 
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
-        return Json(DashboardResponseMapper.ToWorkerProfileDtos(services.AgentCatalogPath, profiles));
+        return Json(DashboardResponseMapper.ToWorkerProfileDtos(services.LoadAgentCatalog(), profiles));
     }
 }

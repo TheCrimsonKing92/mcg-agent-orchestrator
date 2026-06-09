@@ -10,11 +10,14 @@ internal sealed record DashboardEndpointServices(
     IModelProviderRegistry Providers,
     DashboardHostArgs HostArgs,
     IHostApplicationLifetime Lifetime,
-    DashboardContinuationService Continuations)
+    DashboardContinuationService Continuations,
+    AgentCatalog? AgentCatalogFallback = null)
 {
     public string AgentCatalogPath => Workspace.AgentCatalogPath;
 
     public string WorkerProfilePath => Workspace.WorkerProfilePath;
+
+    public AgentCatalog LoadAgentCatalog() => AgentCatalogStore.Load(AgentCatalogPath, AgentCatalogFallback);
 }
 
 internal sealed class DashboardStateService(IOrchestratorStateRepository repository) : IDisposable

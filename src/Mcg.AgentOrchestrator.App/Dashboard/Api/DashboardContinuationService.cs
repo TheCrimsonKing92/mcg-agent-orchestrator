@@ -134,7 +134,7 @@ internal sealed class DashboardContinuationService : IDisposable
             for (var iteration = 0; iteration < _maxIterations; iteration++)
             {
                 await Task.Delay(watch.GetDelay(_pollInterval), watch.Cancellation.Token);
-                var agents = AgentCatalogStore.Load(services.AgentCatalogPath).Agents;
+                var agents = services.LoadAgentCatalog().Agents;
                 var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
                 var result = await services.State.MutateValueIfChangedAsync(
                     current =>
