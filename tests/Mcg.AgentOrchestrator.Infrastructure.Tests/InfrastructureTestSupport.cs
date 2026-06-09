@@ -190,6 +190,17 @@ internal sealed class CapturingHandler : HttpMessageHandler
 
 internal sealed class FakeSmokeProvider : IModelProvider
 {
+    private readonly string _text;
+    private readonly ModelUsage? _usage;
+    private readonly string _stopReason;
+
+    public FakeSmokeProvider(string text = "OK", ModelUsage? usage = null, string stopReason = "stop")
+    {
+        _text = text;
+        _usage = usage ?? new ModelUsage(1, 2);
+        _stopReason = stopReason;
+    }
+
     public string ProviderName => "Fake";
 
     public ModelRequest? LastRequest { get; private set; }
@@ -197,7 +208,7 @@ internal sealed class FakeSmokeProvider : IModelProvider
     public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
     {
         LastRequest = request;
-        return Task.FromResult(new ModelResponse("OK", new ModelUsage(1, 2), "stop"));
+        return Task.FromResult(new ModelResponse(_text, _usage, _stopReason));
     }
 }
 

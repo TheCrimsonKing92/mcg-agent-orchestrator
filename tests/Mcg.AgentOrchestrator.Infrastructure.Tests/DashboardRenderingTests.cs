@@ -78,6 +78,71 @@ public sealed class DashboardRenderingTests
     Assert.Equal(2, evidenceDto.OutputTokens);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_execution_output_without_mutating_task_record")]
+    public async Task DashboardResponseMapperTrimsVerboseExecutionOutputWithoutMutatingTaskRecord()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Trim execution response");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var output = "execution-start " + new string('o', 6000) + " execution-tail";
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider(output)]));
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var dto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+
+    Assert.True(dto.LastExecution is not null);
+    Assert.True(dto.LastExecution!.OutputTruncated);
+    Assert.Equal(output.Length, dto.LastExecution.OutputLength);
+    Assert.Contains(dto.LastExecution.Output, text => text.Contains("execution-start", StringComparison.Ordinal));
+    Assert.Contains(dto.LastExecution.Output, text => text.Contains("execution-tail", StringComparison.Ordinal));
+    Assert.Contains(dto.LastExecution.Output, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(dto.LastExecution.Output.Length < output.Length);
+    Assert.Equal(output, task.LastExecution!.Output);
+}
+
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_verification_output_without_mutating_history")]
+    public void DashboardResponseMapperTrimsVerboseVerificationOutputWithoutMutatingHistory()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Trim verification response");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var stdout = "stdout-start " + new string('s', 6000) + " stdout-tail";
+    var stderr = "stderr-start " + new string('e', 6000) + " stderr-tail";
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, stdout, stderr, DateTimeOffset.UtcNow));
+
+    var dto = DashboardResponseMapper.ToVerificationHistoryDto(goal, task);
+    var verification = dto.Verifications.Single();
+
+    Assert.True(verification.StandardOutputTruncated);
+    Assert.True(verification.StandardErrorTruncated);
+    Assert.Equal(stdout.Length, verification.StandardOutputLength);
+    Assert.Equal(stderr.Length, verification.StandardErrorLength);
+    Assert.Contains(verification.StandardOutput, text => text.Contains("stdout-start", StringComparison.Ordinal));
+    Assert.Contains(verification.StandardOutput, text => text.Contains("stdout-tail", StringComparison.Ordinal));
+    Assert.Contains(verification.StandardOutput, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains(verification.StandardError, text => text.Contains("stderr-start", StringComparison.Ordinal));
+    Assert.Contains(verification.StandardError, text => text.Contains("stderr-tail", StringComparison.Ordinal));
+    Assert.Contains(verification.StandardError, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(verification.StandardOutput.Length < stdout.Length);
+    Assert.True(verification.StandardError.Length < stderr.Length);
+    Assert.Equal(stdout, task.VerificationHistory.Single().StandardOutput);
+    Assert.Equal(stderr, task.VerificationHistory.Single().StandardError);
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
     public void DashboardRendererCanEmitAutoRefreshMetadata()
 {

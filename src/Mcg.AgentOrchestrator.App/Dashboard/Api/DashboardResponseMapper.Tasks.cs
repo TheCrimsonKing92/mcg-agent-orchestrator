@@ -30,6 +30,10 @@ public static TaskSummaryDto ToTaskSummaryDto(Goal goal, TaskSpec task)
 
 public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
 {
+    var executionOutput = task.LastExecution is null
+        ? null
+        : ResponseTextPreview.Create(task.LastExecution.Output);
+
     return new TaskDetailDto(
         ToTaskSummaryDto(goal, task),
         task.LastExecution is null
@@ -39,7 +43,9 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 task.LastExecution.AgentName,
                 task.LastExecution.ProviderName,
                 task.LastExecution.ModelName,
-                task.LastExecution.Output,
+                executionOutput!.Text,
+                executionOutput.IsTruncated,
+                executionOutput.OriginalLength,
                 task.LastExecution.StopReason,
                 task.LastExecution.Usage?.InputTokens,
                 task.LastExecution.Usage?.OutputTokens,
@@ -105,15 +111,24 @@ public static TaskVerificationHistoryDto ToVerificationHistoryDto(Goal goal, Tas
         goal.Id.Value,
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
         task.Id.Value,
-        task.VerificationHistory.Select((verification, index) => new VerificationHistoryEntryDto(
-            index + 1,
-            verification.Command,
-            verification.WorkingDirectory,
-            verification.ExitCode,
-            verification.Succeeded,
-            verification.StandardOutput,
-            verification.StandardError,
-            verification.CompletedAt)).ToList());
+        task.VerificationHistory.Select((verification, index) =>
+        {
+            var stdout = ResponseTextPreview.Create(verification.StandardOutput);
+            var stderr = ResponseTextPreview.Create(verification.StandardError);
+            return new VerificationHistoryEntryDto(
+                index + 1,
+                verification.Command,
+                verification.WorkingDirectory,
+                verification.ExitCode,
+                verification.Succeeded,
+                stdout.Text,
+                stdout.IsTruncated,
+                stdout.OriginalLength,
+                stderr.Text,
+                stderr.IsTruncated,
+                stderr.OriginalLength,
+                verification.CompletedAt);
+        }).ToList());
 }
 
 public static TaskVerificationPlanDto ToTaskVerificationPlanDto(Goal goal, TaskSpec task)
@@ -136,5 +151,27 @@ public static TaskTimelineDto ToTaskTimelineDto(Goal goal, TaskSpec task)
             .OrderBy(evt => evt.OccurredAt)
             .Select(evt => new TimelineDto(evt.Kind, evt.Message, evt.OccurredAt))
             .ToList());
+}
+
+private sealed record ResponseTextPreview(string Text, bool IsTruncated, int OriginalLength)
+{
+    private const int MaxChars = 4000;
+    private const int TailChars = 1200;
+
+    public static ResponseTextPreview Create(string text)
+    {
+        if (text.Length <= MaxChars)
+        {
+            return new ResponseTextPreview(text, false, text.Length);
+        }
+
+        var headChars = MaxChars - TailChars;
+        var omittedChars = text.Length - headChars - TailChars;
+        var marker = $"{Environment.NewLine}{Environment.NewLine}[truncated {omittedChars} chars]{Environment.NewLine}{Environment.NewLine}";
+        return new ResponseTextPreview(
+            text[..headChars] + marker + text[^TailChars..],
+            true,
+            text.Length);
+    }
 }
 }

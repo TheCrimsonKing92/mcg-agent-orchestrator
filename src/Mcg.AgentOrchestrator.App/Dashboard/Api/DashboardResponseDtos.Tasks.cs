@@ -33,6 +33,8 @@ internal sealed record ExecutionDto(
     string ProviderName,
     string ModelName,
     string Output,
+    bool OutputTruncated,
+    int OutputLength,
     string StopReason,
     int? InputTokens,
     int? OutputTokens,
@@ -85,7 +87,11 @@ internal sealed record VerificationHistoryEntryDto(
     int ExitCode,
     bool Succeeded,
     string StandardOutput,
+    bool StandardOutputTruncated,
+    int StandardOutputLength,
     string StandardError,
+    bool StandardErrorTruncated,
+    int StandardErrorLength,
     DateTimeOffset CompletedAt);
 
 internal sealed record TaskTimelineDto(
