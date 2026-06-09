@@ -154,6 +154,44 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
     Assert.True(!brief.Contains("routine completed lifecycle noise", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_timeline_budget_for_simple_tasks")]
+    public void BuildTaskBriefUsesSmallerTimelineBudgetForSimpleTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep routine prompt budget small",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    AddRetryNotes(kernel, goal.Id, task.Id, "simple-brief-note", 10);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.True(!brief.Contains("simple-brief-note-02", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-brief-note-03", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-brief-note-10", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_timeline_budget_for_complex_tasks")]
+    public void BuildTaskBriefKeepsLargerTimelineBudgetForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep enough context for complex work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var task = goal.Tasks.Single();
+
+    AddRetryNotes(kernel, goal.Id, task.Id, "complex-brief-note", 10);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("complex-brief-note-01", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-brief-note-10", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_verification_plan")]
     public void BuildTaskBriefTrimsNoisyVerificationPlan()
 {
@@ -208,6 +246,14 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('h', 1600), StringComparison.Ordinal));
     Assert.Equal(question, kernel.GetHumanInputRequest(request.Id).Question);
+}
+
+static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
+{
+    for (var index = 1; index <= count; index++)
+    {
+        kernel.RetryTask(goalId, taskId, $"{prefix}-{index:00}");
+    }
 }
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()

@@ -18,10 +18,10 @@ public sealed partial class AgentOrchestratorKernel
         var pendingInput = GetPendingHumanInput(goalId)
             .Where(request => request.TaskId == taskId || request.TaskId is null)
             .ToList();
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
         var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
             goal.Timeline.Where(evt => evt.TaskId == taskId || evt.TaskId is null),
-            maxEvents: 20);
-        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
+            maxEvents: TimelineEventBudget(complexity));
 
         var lines = new List<string>
         {
@@ -103,5 +103,10 @@ public sealed partial class AgentOrchestratorKernel
             task.RequiredRole,
             $"{task.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(task.Description)}",
             string.Join(Environment.NewLine, lines));
+    }
+
+    private static int TimelineEventBudget(TaskComplexity complexity)
+    {
+        return complexity == TaskComplexity.Complex ? 20 : 8;
     }
 }

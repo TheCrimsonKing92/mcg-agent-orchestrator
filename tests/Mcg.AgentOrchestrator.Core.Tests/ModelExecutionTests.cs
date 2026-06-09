@@ -302,6 +302,66 @@ public sealed class ModelExecutionTests
     Assert.True(!prompt.Contains("unrelated-tester-noise", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_smaller_timeline_budget_for_simple_tasks")]
+    public async Task ExecuteAssignedTaskUsesSmallerTimelineBudgetForSimpleTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep routine API prompt budget small",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    AddRetryNotes(kernel, goal.Id, task.Id, "simple-api-note", 10);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.True(!prompt.Contains("simple-api-note-04", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("simple-api-note-05", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("simple-api-note-10", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_timeline_budget_for_complex_tasks")]
+    public async Task ExecuteAssignedTaskKeepsLargerTimelineBudgetForComplexTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep enough API context for complex work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    AddRetryNotes(kernel, goal.Id, task.Id, "complex-api-note", 10);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("complex-api-note-01", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("complex-api-note-10", StringComparison.Ordinal));
+    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+}
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_complex_model_only_for_complex_tasks")]
     public async Task ExecuteAssignedTaskUsesComplexModelOnlyForComplexTasks()
 {
@@ -398,6 +458,14 @@ public sealed class ModelExecutionTests
 
     Assert.Equal(0, provider.CallCount);
     Assert.Equal(WorkTaskStatus.Pending, task.Status);
+}
+
+static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
+{
+    for (var index = 1; index <= count; index++)
+    {
+        kernel.RetryTask(goalId, taskId, $"{prefix}-{index:00}");
+    }
 }
 }
 

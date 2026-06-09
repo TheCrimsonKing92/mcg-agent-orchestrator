@@ -117,7 +117,7 @@ public sealed class AgentTaskRunner
             Environment.NewLine,
             PromptContextFormatter.SelectPromptTimelineEvents(
                     goal.Timeline.Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
-                    maxEvents: 12)
+                    maxEvents: TimelineEventBudget(complexity))
                 .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false)));
 
         var userPrompt =
@@ -145,6 +145,11 @@ public sealed class AgentTaskRunner
         return string.IsNullOrWhiteSpace(verificationPlan)
             ? "none"
             : PromptContextFormatter.TrimPromptBlock(verificationPlan);
+    }
+
+    private static int TimelineEventBudget(TaskComplexity complexity)
+    {
+        return complexity == TaskComplexity.Complex ? 12 : 6;
     }
 
     private static string TrimForTimeline(string value)
