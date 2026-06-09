@@ -89,7 +89,7 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
             SubscriptionMode.ApiKey,
             string.IsNullOrWhiteSpace(submission.ComplexReasoningEffort) ? null : submission.ComplexReasoningEffort,
-            MaxOutputTokens: submission.ComplexMaxOutputTokens)
+            MaxOutputTokens: submission.ComplexMaxOutputTokens ?? DefaultComplexMaxOutputTokens(submission.ComplexProviderName))
         : null;
 
     return new AgentDefinition(
@@ -169,6 +169,11 @@ private static string? DefaultReasoningEffort(string providerName)
 private static int? DefaultMaxOutputTokens(string providerName)
 {
     return IsPaidProvider(providerName) ? AgentCatalog.RoutineApiMaxOutputTokens : null;
+}
+
+private static int? DefaultComplexMaxOutputTokens(string providerName)
+{
+    return IsPaidProvider(providerName) ? AgentCatalog.ComplexApiMaxOutputTokens : null;
 }
 
 private static bool IsPaidProvider(string providerName)

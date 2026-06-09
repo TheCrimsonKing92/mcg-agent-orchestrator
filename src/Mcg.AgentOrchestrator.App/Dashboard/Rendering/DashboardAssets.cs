@@ -107,6 +107,7 @@ function profileOptions(form, preferred){
   });
   return unique.map(name => [name, name || 'None']);
 }
+function complexMaxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '1200' : '8192'; }
 function syncAgentConfig(form, preserve){
   const providerSelect = form.querySelector('select[name="providerName"]');
   const defaultProvider = form.dataset.defaultProvider || 'OpenAI';
@@ -125,6 +126,9 @@ function syncAgentConfig(form, preserve){
   setOptions(form.querySelector('select[name="subscriptionModelAlias"]'), options.subscriptionModels, keep ? form.querySelector('select[name="subscriptionModelAlias"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="subscriptionReasoningEffort"]'), options.subscriptionReasoning, keep ? form.querySelector('select[name="subscriptionReasoningEffort"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="complexReasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="complexReasoningEffort"]')?.value : '', keep);
+  const complexProvider = form.querySelector('input[name="complexProviderName"]')?.value || provider;
+  const complexMaxTokens = form.querySelector('input[name="complexMaxOutputTokens"]');
+  if(complexMaxTokens) complexMaxTokens.placeholder = complexMaxTokenPlaceholder(complexProvider);
 }
 function syncAgentConfigs(){ document.querySelectorAll('form[data-agent-config]').forEach(form => syncAgentConfig(form, true)); }
 async function refreshContent(force){ if(!force && isEditing()) return; const current = document.getElementById('dashboard-content'); if(!current) return; const response = await fetch(location.href, { cache: 'no-store' }); if(!response.ok) return; const text = await response.text(); const doc = new DOMParser().parseFromString(text, 'text/html'); const next = doc.getElementById('dashboard-content'); if(next) current.replaceWith(next); }
@@ -132,6 +136,7 @@ async function post(url, body){ setStatus('Working...'); const options = { metho
 window.__dashboardSubmitForm = async function(form, submitter){ return post(form.dataset.action, payload(form, submitter)); };
 document.addEventListener('submit', async event => { const form = event.target.closest('form[data-action]'); if(!form) return; event.preventDefault(); try { await window.__dashboardSubmitForm(form, event.submitter); } catch(error) { setStatus(error.message); } });
 document.addEventListener('change', event => { const provider = event.target.closest('form[data-agent-config] select[name="providerName"]'); if(!provider) return; syncAgentConfig(provider.closest('form'), false); });
+document.addEventListener('input', event => { const complexProvider = event.target.closest('form[data-agent-config] input[name="complexProviderName"]'); if(!complexProvider) return; syncAgentConfig(complexProvider.closest('form'), true); });
 document.addEventListener('click', async event => { const toggle = event.target.closest('button[data-toggle-custom-answer]'); if(!toggle) return; event.preventDefault(); const form = toggle.closest('form'); const panel = form?.querySelector('.custom-answer'); const textarea = document.getElementById(toggle.dataset.toggleCustomAnswer); if(!panel) return; const opening = panel.hidden; panel.hidden = !opening; toggle.setAttribute('aria-expanded', opening ? 'true' : 'false'); toggle.textContent = opening ? 'Hide custom answer' : 'Write custom answer'; if(textarea){ textarea.disabled = !opening; if(opening) textarea.focus(); else toggle.focus(); } });
 document.addEventListener('click', async event => { const button = event.target.closest('button[data-action-button]'); if(!button) return; event.preventDefault(); try { await post(button.dataset.actionButton); } catch(error) { setStatus(error.message); } });
 syncAgentConfigs();

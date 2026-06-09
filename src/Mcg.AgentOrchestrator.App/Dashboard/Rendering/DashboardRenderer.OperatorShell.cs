@@ -481,6 +481,7 @@ public static partial class DashboardRenderer
         var subscriptionProfile = string.IsNullOrWhiteSpace(agent.SubscriptionProfileName)
             ? DefaultSubscriptionProfile(provider)
             : agent.SubscriptionProfileName;
+        var complexProvider = agent.ComplexProviderName ?? provider;
         var html = new StringBuilder();
         html.AppendLine($"<form class=\"controls compact\" data-action=\"/api/agents\" data-agent-config=\"true\" data-default-provider=\"{Encode(defaultProvider)}\">");
         html.AppendLine($"<input type=\"hidden\" name=\"role\" value=\"{Encode(role)}\">");
@@ -516,9 +517,9 @@ public static partial class DashboardRenderer
         html.AppendLine($"<div class=\"field\"><label>Complex provider</label><input type=\"text\" name=\"complexProviderName\" value=\"{Encode(agent.ComplexProviderName ?? "")}\" placeholder=\"same as above\"></div>");
         html.AppendLine($"<div class=\"field\"><label>Complex model</label><input type=\"text\" name=\"complexModelName\" value=\"{Encode(agent.ComplexModelName ?? "")}\" placeholder=\"none\"></div>");
         html.AppendLine("<div class=\"field\"><label>Complex reasoning</label><select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\">");
-        RenderProviderSelectOptions(html, agent.ComplexProviderName ?? provider, agent.ComplexReasoningEffort, ApiReasoningOptions);
+        RenderProviderSelectOptions(html, complexProvider, agent.ComplexReasoningEffort, ApiReasoningOptions);
         html.AppendLine("</select></div>");
-        html.AppendLine($"<div class=\"field\"><label>Complex max tokens</label><input type=\"number\" name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"8192\" value=\"{(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
+        html.AppendLine($"<div class=\"field\"><label>Complex max tokens</label><input type=\"number\" name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"{DefaultComplexMaxTokensPlaceholder(complexProvider)}\" value=\"{(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
         html.AppendLine("</details>");
         html.AppendLine("<button type=\"submit\">Save</button>");
         html.AppendLine("</form>");
@@ -597,6 +598,14 @@ public static partial class DashboardRenderer
     }
 
     private static string DefaultApiModel(string provider) => ApiModelOptions(provider)[0].Value;
+
+    private static int DefaultComplexMaxTokensPlaceholder(string provider)
+    {
+        return provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
+                ? AgentCatalog.ComplexApiMaxOutputTokens
+                : 8192;
+    }
 
     private static IReadOnlyList<(string Value, string Label)> ApiReasoningOptions(string provider)
     {
