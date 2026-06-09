@@ -81,6 +81,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var apiRunTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            EnsureExplicitApiRunAllowed(apiRunTask, ResolveAssignedAgent(apiRunTask, context.Agents));
             RunApiTask(context, apiRunTask);
             return true;
 
@@ -175,6 +176,30 @@ private static void RunApiTask(CliExecutionContext context, TaskSpec task)
     var runner = new AgentTaskRunner(context.Kernel, context.Agents, context.Providers);
     var result = runner.RunAsync(context.CurrentGoal!.Id, task.Id).GetAwaiter().GetResult();
     ConsoleViews.PrintTask(result.Goal, result.Task);
+}
+
+private static void EnsureExplicitApiRunAllowed(TaskSpec task, AgentDefinition agent)
+{
+    if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
+    {
+        throw new InvalidOperationException($"Agent '{agent.Name}' is configured for subscription execution only.");
+    }
+
+    if (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly && !IsCleanExplicitApiRun(task))
+    {
+        throw new InvalidOperationException(
+            $"Explicit API execution for task {task.Id.Value[..8]} is only available before subscription work, model output, or verification evidence exists.");
+    }
+}
+
+private static bool IsCleanExplicitApiRun(TaskSpec task)
+{
+    return task.Status == WorkTaskStatus.Assigned &&
+        task.LastDispatch is null &&
+        task.LastProcess is null &&
+        task.LastExecution is null &&
+        task.LastVerification is null &&
+        task.SubscriptionRetryAfter is null;
 }
 
 private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
