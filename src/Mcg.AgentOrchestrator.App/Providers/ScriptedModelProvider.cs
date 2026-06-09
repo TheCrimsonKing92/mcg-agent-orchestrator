@@ -13,13 +13,8 @@ internal sealed class ScriptedModelProvider : IModelProvider
 
     public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
     {
-        var userMessage = request.Messages.LastOrDefault()?.Content ?? string.Empty;
         var output =
-            $"[{ProviderName} offline adapter] Completed assigned orchestration task." + Environment.NewLine +
-            "Evidence: provider registry resolved this adapter, generated a model request, and recorded this output on the task." + Environment.NewLine +
-            "Next: replace this offline adapter with the live provider implementation when API credentials are configured." + Environment.NewLine +
-            Environment.NewLine +
-            userMessage;
+            $"HUMAN_INPUT: {ProviderName} is configured with the offline adapter. Configure a live provider, choose a reachable local provider, or use subscription handoff before running this task.";
 
         return Task.FromResult(new ModelResponse(output, new ModelUsage(null, null), "offline-scripted"));
     }
