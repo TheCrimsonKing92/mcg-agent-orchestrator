@@ -87,16 +87,19 @@ public sealed partial class AgentOrchestratorKernel
                 task => new
                 {
                     task.LastExecution!.ProviderName,
-                    task.LastExecution.ModelName
+                    task.LastExecution.ModelName,
+                    task.LastExecution.TaskComplexity
                 })
             .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.TaskComplexity?.ToString() ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .Select(group => new ModelUsageSummary(
                 group.Key.ProviderName,
                 group.Key.ModelName,
                 group.Count(),
                 SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.InputTokens)),
-                SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.OutputTokens))))
+                SumKnownUsage(group.Select(task => task.LastExecution!.Usage?.OutputTokens)),
+                group.Key.TaskComplexity))
             .ToList();
     }
 

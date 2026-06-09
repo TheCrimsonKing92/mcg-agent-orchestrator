@@ -188,6 +188,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, modelUsage.ExecutionCount);
     Assert.Equal(100, modelUsage.InputTokens);
     Assert.Equal(25, modelUsage.OutputTokens);
+    Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
     Assert.Equal(TaskEvidenceKind.None, summary.Tasks.Single(item => item.TaskId == inputTask.Id).LatestEvidence);
     Assert.Equal(1, summary.Tasks.Single(item => item.TaskId == inputTask.Id).PendingHumanInputCount);
     Assert.Equal(TaskEvidenceKind.Execution, summary.Tasks.Single(item => item.TaskId == executionTask.Id).LatestEvidence);

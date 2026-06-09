@@ -74,7 +74,8 @@ public static partial class DashboardRenderer
     private static string RenderModelUsageSummary(ModelUsageSummary usage)
     {
         var runs = usage.ExecutionCount == 1 ? "1 run" : $"{usage.ExecutionCount} runs";
-        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
+        var complexity = usage.TaskComplexity is null ? string.Empty : $" ({Encode(usage.TaskComplexity.Value.ToString())})";
+        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}{complexity}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
     }
 
     private static string RenderTaskGate(TaskVerificationGate gate)

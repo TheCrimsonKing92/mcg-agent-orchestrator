@@ -51,7 +51,8 @@ public sealed record ModelUsageSummary(
     string ModelName,
     int ExecutionCount,
     int? InputTokens,
-    int? OutputTokens);
+    int? OutputTokens,
+    TaskComplexity? TaskComplexity = null);
 
 public sealed record TaskEvidenceSummary(
     TaskId TaskId,

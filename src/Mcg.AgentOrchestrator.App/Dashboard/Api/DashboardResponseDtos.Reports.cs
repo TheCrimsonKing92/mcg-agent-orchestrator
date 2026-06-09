@@ -89,7 +89,8 @@ internal sealed record ModelUsageSummaryDto(
     string ModelName,
     int ExecutionCount,
     int? InputTokens,
-    int? OutputTokens);
+    int? OutputTokens,
+    TaskComplexity? TaskComplexity = null);
 
 internal sealed record TaskEvidenceSummaryDto(
     int TaskNumber,

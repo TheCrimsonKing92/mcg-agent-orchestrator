@@ -114,6 +114,7 @@ public static partial class GoalTranscriptRenderer
     private static string FormatModelUsage(ModelUsageSummary usage)
     {
         var runs = usage.ExecutionCount == 1 ? "1 run" : $"{usage.ExecutionCount} runs";
-        return $"{usage.ProviderName}/{usage.ModelName}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
+        var complexity = usage.TaskComplexity is null ? string.Empty : $" ({usage.TaskComplexity.Value})";
+        return $"{usage.ProviderName}/{usage.ModelName}{complexity}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}";
     }
 }

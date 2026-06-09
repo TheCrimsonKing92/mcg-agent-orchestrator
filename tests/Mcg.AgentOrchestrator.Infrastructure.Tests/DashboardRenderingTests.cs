@@ -72,13 +72,13 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("Model: Fake/fake-model by API developer", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("tokens 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Model usage: Fake/fake-model: 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Model usage: Fake/fake-model (Simple): 1 run, 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model selection: complexity=Simple", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model usage:", StringComparison.Ordinal));
-    Assert.Contains(transcript, text => text.Contains("- Fake/fake-model: 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("- Fake/fake-model (Simple): 1 run, 1 in / 2 out", StringComparison.Ordinal));
     Assert.Equal(TaskComplexity.Simple, taskDto.LastExecution!.TaskComplexity);
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
@@ -88,6 +88,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(1, modelUsage.ExecutionCount);
     Assert.Equal(1, modelUsage.InputTokens);
     Assert.Equal(2, modelUsage.OutputTokens);
+    Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_execution_output_without_mutating_task_record")]
