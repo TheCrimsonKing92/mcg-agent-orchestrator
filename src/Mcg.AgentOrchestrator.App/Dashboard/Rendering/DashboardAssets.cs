@@ -109,8 +109,9 @@ function profileOptions(form, preferred){
 }
 function syncAgentConfig(form, preserve){
   const providerSelect = form.querySelector('select[name="providerName"]');
-  const provider = providerSelect?.value || 'OpenAI';
-  const options = agentProviderOptions[provider] || agentProviderOptions.OpenAI;
+  const defaultProvider = form.dataset.defaultProvider || 'OpenAI';
+  const provider = providerSelect?.value || defaultProvider;
+  const options = agentProviderOptions[provider] || agentProviderOptions[defaultProvider] || agentProviderOptions.OpenAI;
   const currentProvider = form.dataset.currentProvider || provider;
   const providerChanged = currentProvider !== provider;
   form.dataset.currentProvider = provider;

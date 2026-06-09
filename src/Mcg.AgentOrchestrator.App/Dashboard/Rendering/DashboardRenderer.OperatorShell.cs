@@ -398,6 +398,7 @@ public static partial class DashboardRenderer
         html.AppendLine(enableOperatorControls
             ? "<table><thead><tr><th>Role</th><th>Agent</th><th>Execution</th><th>API model</th><th>Subscription launcher</th><th>Status</th><th>Configure</th></tr></thead><tbody>"
             : "<table><thead><tr><th>Role</th><th>Agent</th><th>Execution</th><th>API model</th><th>Subscription launcher</th><th>Status</th></tr></thead><tbody>");
+        var defaultAgentProvider = ResolveDefaultAgentProvider(report.Providers);
         foreach (var agent in report.Agents)
         {
             html.AppendLine("<tr>");
@@ -411,7 +412,7 @@ public static partial class DashboardRenderer
             html.AppendLine($"<td class=\"{(agent.IsValid ? "ok" : "bad")}\">{Encode(agent.Detail)}</td>");
             if (enableOperatorControls)
             {
-                html.AppendLine($"<td>{RenderAgentConfigurationForm(agent, report.WorkerProfiles)}</td>");
+                html.AppendLine($"<td>{RenderAgentConfigurationForm(agent, report.WorkerProfiles, defaultAgentProvider)}</td>");
             }
 
             html.AppendLine("</tr>");
@@ -461,16 +462,18 @@ public static partial class DashboardRenderer
 
     private static string RenderAgentConfigurationForm(
         AgentConfigurationValidation agent,
-        IReadOnlyList<WorkerProfileValidation> workerProfiles)
+        IReadOnlyList<WorkerProfileValidation> workerProfiles,
+        string defaultProvider)
     {
         var role = agent.Role.ToString();
-        var provider = string.IsNullOrWhiteSpace(agent.ProviderName) ? "OpenAI" : agent.ProviderName;
+        var provider = string.IsNullOrWhiteSpace(agent.ProviderName) ? defaultProvider : agent.ProviderName;
+        var modelName = string.IsNullOrWhiteSpace(agent.ModelName) ? DefaultApiModel(provider) : agent.ModelName;
         var name = string.IsNullOrWhiteSpace(agent.AgentName) ? $"{provider} {role.ToLowerInvariant()}" : agent.AgentName;
         var subscriptionProfile = string.IsNullOrWhiteSpace(agent.SubscriptionProfileName)
             ? DefaultSubscriptionProfile(provider)
             : agent.SubscriptionProfileName;
         var html = new StringBuilder();
-        html.AppendLine("<form class=\"controls compact\" data-action=\"/api/agents\" data-agent-config=\"true\">");
+        html.AppendLine($"<form class=\"controls compact\" data-action=\"/api/agents\" data-agent-config=\"true\" data-default-provider=\"{Encode(defaultProvider)}\">");
         html.AppendLine($"<input type=\"hidden\" name=\"role\" value=\"{Encode(role)}\">");
         html.AppendLine($"<input type=\"hidden\" name=\"name\" value=\"{Encode(name)}\" data-agent-name>");
         html.AppendLine("<div class=\"field\"><label>Execution</label><select name=\"executionPolicy\">");
@@ -485,7 +488,7 @@ public static partial class DashboardRenderer
         html.AppendLine(RenderProviderOption("Ollama", provider));
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>API model</label><select name=\"modelName\" data-provider-options=\"apiModels\" required>");
-        RenderProviderSelectOptions(html, provider, agent.ModelName, ApiModelOptions);
+        RenderProviderSelectOptions(html, provider, modelName, ApiModelOptions);
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>API reasoning</label><select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\">");
         RenderProviderSelectOptions(html, provider, agent.ReasoningEffort, ApiReasoningOptions);
@@ -511,6 +514,15 @@ public static partial class DashboardRenderer
         html.AppendLine("<button type=\"submit\">Save</button>");
         html.AppendLine("</form>");
         return html.ToString();
+    }
+
+    private static string ResolveDefaultAgentProvider(IReadOnlyList<ProviderConfigurationStatus> providers)
+    {
+        return providers.Any(provider =>
+            provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) &&
+            provider.IsConfigured)
+            ? "Ollama"
+            : "OpenAI";
     }
 
     private static string RenderExecutionPolicyOption(AgentExecutionPolicy option, AgentExecutionPolicy selected)
@@ -574,6 +586,8 @@ public static partial class DashboardRenderer
                 ("gpt-5.2", "GPT-5.2 (previous)")
             ];
     }
+
+    private static string DefaultApiModel(string provider) => ApiModelOptions(provider)[0].Value;
 
     private static IReadOnlyList<(string Value, string Label)> ApiReasoningOptions(string provider)
     {

@@ -1004,6 +1004,53 @@ public sealed class DashboardRenderingTests
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("preferredProfile: ''", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardRenderer_defaults_missing_agent_configuration_to_configured_ollama")]
+    public void DashboardRendererDefaultsMissingAgentConfigurationToConfiguredOllama()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var health = new OrchestratorHealthReport(
+        [
+            new ProviderConfigurationStatus("OpenAI", false, "Offline", "OPENAI_API_KEY is not set."),
+            new ProviderConfigurationStatus("Ollama", true, "LocalBridge", "Ollama is running.")
+        ],
+        [
+            new AgentConfigurationValidation(
+                AgentRole.Developer,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                null,
+                AgentExecutionPolicy.ApiOnly,
+                null,
+                null,
+                null,
+                false,
+                "No agent is configured for this role.")
+        ],
+        WorkerProfileCatalog.Default().Profiles.Select(profile => new WorkerProfileValidation(
+            profile.Name,
+            profile.CommandTemplate,
+            profile.Name,
+            true,
+            false,
+            true,
+            true,
+            "ok")).ToList());
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Config));
+
+    Assert.Contains(html, text => text.Contains("data-default-provider=\"Ollama\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("name=\"name\" value=\"Ollama developer\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<option value=\"Ollama\" selected>Ollama</option>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<option value=\"qwen2.5-coder:7b\" selected>Qwen2.5 Coder 7B</option>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<option value=\"\" selected>None</option>", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("form.dataset.defaultProvider || 'OpenAI'", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_makes_advanced_process_controls_state_aware")]
     public void DashboardRendererMakesAdvancedProcessControlsStateAware()
 {
