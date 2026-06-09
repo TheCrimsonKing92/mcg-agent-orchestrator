@@ -218,6 +218,27 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Equal(1, restored.Goals.Count);
     Assert.True(restored.Goals.Single().Objective.StartsWith("Concurrent save ", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_retries_transient_atomic_replace_access_denial")]
+    public async Task OrchestratorStateStoreRetriesTransientAtomicReplaceAccessDenial()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, ".orchestrator", "state.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    File.WriteAllText(path, "{}");
+
+    await using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+    var kernel = new AgentOrchestratorKernel();
+    kernel.CreateGoal("Retry transient destination lock");
+
+    var save = OrchestratorStateStore.SaveAsync(path, kernel);
+    await Task.Delay(125);
+    await hold.DisposeAsync();
+    await save;
+
+    var restored = OrchestratorStateStore.Load(path);
+    Assert.Equal("Retry transient destination lock", restored.Goals.Single().Objective);
+    Assert.Equal(0, Directory.EnumerateFiles(Path.GetDirectoryName(path)!, ".state.json.*.tmp").Count());
+}
     [Xunit.Fact(DisplayName = "Dashboard_and_state_persistence_have_reasonable_smoke_performance")]
     public async Task DashboardAndStatePersistenceHaveReasonableSmokePerformance()
 {

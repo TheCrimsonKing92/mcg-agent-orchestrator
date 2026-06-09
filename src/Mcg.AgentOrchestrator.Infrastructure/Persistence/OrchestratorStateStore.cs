@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class OrchestratorStateStore
 {
+    private const int AtomicWriteAttempts = 10;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public static AgentOrchestratorKernel Load(string path)
@@ -79,8 +80,34 @@ public static class OrchestratorStateStore
             directory,
             $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():n}.tmp");
 
-        await File.WriteAllTextAsync(tempPath, content, cancellationToken);
-        File.Move(tempPath, fullPath, overwrite: true);
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, cancellationToken);
+            for (var attempt = 1; attempt <= AtomicWriteAttempts; attempt++)
+            {
+                try
+                {
+                    File.Move(tempPath, fullPath, overwrite: true);
+                    return;
+                }
+                catch (Exception ex) when (IsTransientAtomicWriteException(ex) && attempt < AtomicWriteAttempts)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
+                }
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
+    private static bool IsTransientAtomicWriteException(Exception ex)
+    {
+        return ex is IOException or UnauthorizedAccessException;
     }
 
     private static JsonSerializerOptions JsonOptions()

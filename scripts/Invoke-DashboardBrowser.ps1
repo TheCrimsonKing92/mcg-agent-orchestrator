@@ -139,16 +139,17 @@ function Send-Cdp {
 function Invoke-RuntimeEvaluate {
     param([hashtable]$Params)
 
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
         try {
             return Send-Cdp "Runtime.evaluate" $Params
         } catch {
             $message = $_.Exception.Message
-            if ($message -notlike "*Execution context was destroyed*" -or $attempt -eq 3) {
+            if ($message -notlike "*Execution context was destroyed*" -or $attempt -eq 8) {
                 throw
             }
 
-            Start-Sleep -Milliseconds (250 * $attempt)
+            Start-Sleep -Milliseconds (300 * $attempt)
+            [void](Send-Cdp "Runtime.enable")
         }
     }
 }
@@ -156,7 +157,7 @@ function Invoke-RuntimeEvaluate {
 try {
     [void](Send-Cdp "Runtime.enable")
     [void](Invoke-RuntimeEvaluate @{
-        expression = "(async () => { for (let i = 0; i < 80; i++) { if (window.__dashboardReady === true && document.querySelector('#dashboard-content') && document.querySelector('form[data-action=""/api/goals""]')) return true; await new Promise(resolve => setTimeout(resolve, 125)); } return false; })()"
+        expression = "(async () => { for (let i = 0; i < 80; i++) { if (window.__dashboardReady === true && document.querySelector('#dashboard-content')) return true; await new Promise(resolve => setTimeout(resolve, 125)); } return false; })()"
         awaitPromise = $true
         returnByValue = $true
     })
