@@ -41,6 +41,8 @@ public sealed record GoalEvidenceSummary(
     int PassedVerifications,
     int FailedVerifications,
     int PendingHumanInputCount,
+    int? InputTokens,
+    int? OutputTokens,
     IReadOnlyList<TaskEvidenceSummary> Tasks);
 
 public sealed record TaskEvidenceSummary(

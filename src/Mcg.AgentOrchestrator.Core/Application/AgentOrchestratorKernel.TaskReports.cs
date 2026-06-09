@@ -73,7 +73,27 @@ public sealed partial class AgentOrchestratorKernel
             items.Count(item => item.LatestVerificationSucceeded is true),
             items.Count(item => item.LatestVerificationSucceeded is false),
             pendingInput.Count,
+            SumKnownUsage(goal.Tasks.Select(task => task.LastExecution?.Usage?.InputTokens)),
+            SumKnownUsage(goal.Tasks.Select(task => task.LastExecution?.Usage?.OutputTokens)),
             items);
+    }
+
+    private static int? SumKnownUsage(IEnumerable<int?> values)
+    {
+        var total = 0;
+        var hasValue = false;
+        foreach (var value in values)
+        {
+            if (value is null)
+            {
+                continue;
+            }
+
+            total += value.Value;
+            hasValue = true;
+        }
+
+        return hasValue ? total : null;
     }
 
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)

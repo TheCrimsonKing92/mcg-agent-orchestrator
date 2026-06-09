@@ -68,6 +68,7 @@ public static partial class DashboardRenderer
             $"{evidence.TasksWithVerification}/{evidence.TotalTasks} task(s) verified",
             [
                 $"Execution: {evidence.TasksWithExecution}",
+                $"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}",
                 $"Dispatch: {evidence.TasksWithDispatch}",
                 $"Running processes: {evidence.RunningProcesses}"
             ],

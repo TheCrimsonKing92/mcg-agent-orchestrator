@@ -103,6 +103,7 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine("## Recorded Proof");
         text.AppendLine($"Tasks: {evidence.TotalTasks}");
         text.AppendLine($"Execution: {evidence.TasksWithExecution}; dispatch: {evidence.TasksWithDispatch}; process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses})");
+        text.AppendLine($"Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)}");
         text.AppendLine($"Verification: {evidence.TasksWithVerification}; passed={evidence.PassedVerifications}; failed={evidence.FailedVerifications}");
         text.AppendLine($"Pending human input: {evidence.PendingHumanInputCount}");
         foreach (var item in evidence.Tasks)

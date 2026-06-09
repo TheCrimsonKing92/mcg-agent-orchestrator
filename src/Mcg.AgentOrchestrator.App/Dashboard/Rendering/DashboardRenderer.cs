@@ -481,7 +481,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<details>");
         html.AppendLine("<summary>Recorded proof</summary>");
         html.AppendLine("<div class=\"goal-panel\">");
-        html.AppendLine($"<p>Execution: {evidence.TasksWithExecution} &middot; Dispatch: {evidence.TasksWithDispatch} &middot; Process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses}) &middot; Verification: {evidence.TasksWithVerification} (passed {evidence.PassedVerifications}, failed {evidence.FailedVerifications}) &middot; Pending input: {evidence.PendingHumanInputCount}</p>");
+        html.AppendLine($"<p>Execution: {evidence.TasksWithExecution} &middot; Tokens: {FormatTokenUsage(evidence.InputTokens, evidence.OutputTokens)} &middot; Dispatch: {evidence.TasksWithDispatch} &middot; Process: {evidence.TasksWithProcess} (running {evidence.RunningProcesses}) &middot; Verification: {evidence.TasksWithVerification} (passed {evidence.PassedVerifications}, failed {evidence.FailedVerifications}) &middot; Pending input: {evidence.PendingHumanInputCount}</p>");
         html.AppendLine("<table><thead><tr><th>#</th><th>Evidence</th><th>Message</th></tr></thead><tbody>");
         foreach (var item in evidence.Tasks)
         {

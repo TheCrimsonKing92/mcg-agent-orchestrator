@@ -79,6 +79,8 @@ internal sealed record GoalEvidenceSummaryDto(
     int PassedVerifications,
     int FailedVerifications,
     int PendingHumanInputCount,
+    int? InputTokens,
+    int? OutputTokens,
     IReadOnlyList<TaskEvidenceSummaryDto> Tasks);
 
 internal sealed record TaskEvidenceSummaryDto(

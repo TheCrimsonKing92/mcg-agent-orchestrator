@@ -66,6 +66,11 @@ public static partial class DashboardRenderer
             : Encode(task.VerificationPlan);
     }
 
+    private static string FormatTokenUsage(int? inputTokens, int? outputTokens)
+    {
+        return $"{inputTokens?.ToString() ?? "n/a"} in / {outputTokens?.ToString() ?? "n/a"} out";
+    }
+
     private static string RenderTaskGate(TaskVerificationGate gate)
     {
         var cls = gate.GateStatus == VerificationGateStatus.Passed ? "ok" : "bad";

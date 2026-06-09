@@ -60,6 +60,8 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
         summary.PassedVerifications,
         summary.FailedVerifications,
         summary.PendingHumanInputCount,
+        summary.InputTokens,
+        summary.OutputTokens,
         summary.Tasks.Select(item => ToTaskEvidenceSummaryDto(goal, item)).ToList());
 }
 

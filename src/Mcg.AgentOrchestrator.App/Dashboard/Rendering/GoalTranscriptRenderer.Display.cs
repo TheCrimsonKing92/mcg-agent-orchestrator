@@ -105,4 +105,9 @@ public static partial class GoalTranscriptRenderer
         StageReadinessStatus.FailedOrCancelled => "Failed or cancelled",
         _ => status.ToString()
     };
+
+    private static string FormatTokenUsage(int? inputTokens, int? outputTokens)
+    {
+        return $"{inputTokens?.ToString() ?? "n/a"} in / {outputTokens?.ToString() ?? "n/a"} out";
+    }
 }

@@ -65,11 +65,17 @@ public sealed class DashboardRenderingTests
 
     var goalPrefix = goal.Id.Value[..8];
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.Contains(html, text => text.Contains("Model: Fake/fake-model by API developer", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("tokens 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Equal(1, evidenceDto.InputTokens);
+    Assert.Equal(2, evidenceDto.OutputTokens);
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
