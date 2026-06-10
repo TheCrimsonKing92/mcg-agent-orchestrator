@@ -78,7 +78,7 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
     {
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"OpenAI request failed with {(int)response.StatusCode}: {body}");
+            throw new HttpRequestException(ProviderHttpErrorFormatter.Format("OpenAI", response, body));
         }
     }
 }
@@ -144,7 +144,7 @@ public sealed class AnthropicMessagesModelProvider : IModelProvider
     {
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"Anthropic request failed with {(int)response.StatusCode}: {body}");
+            throw new HttpRequestException(ProviderHttpErrorFormatter.Format("Anthropic", response, body));
         }
     }
 }
@@ -257,8 +257,34 @@ public sealed class ChatCompletionsModelProvider : IModelProvider
     {
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"{_providerName} request failed with {(int)response.StatusCode}: {body}");
+            throw new HttpRequestException(ProviderHttpErrorFormatter.Format(_providerName, response, body));
         }
+    }
+}
+
+internal static class ProviderHttpErrorFormatter
+{
+    private const int BodyMaxChars = 600;
+    private const int BodyHeadChars = 420;
+    private const int BodyTailChars = 120;
+
+    public static string Format(string providerName, HttpResponseMessage response, string body)
+    {
+        return $"{providerName} request failed with {(int)response.StatusCode}: {TrimBody(body)}";
+    }
+
+    private static string TrimBody(string body)
+    {
+        var trimmed = body.Trim();
+        if (trimmed.Length <= BodyMaxChars)
+        {
+            return trimmed;
+        }
+
+        var omitted = trimmed.Length - BodyHeadChars - BodyTailChars;
+        return trimmed[..BodyHeadChars] +
+            $"{Environment.NewLine}...[truncated {omitted} chars from provider error]...{Environment.NewLine}" +
+            trimmed[^BodyTailChars..];
     }
 }
 

@@ -113,4 +113,45 @@ public sealed class ProviderIntegrationTests
     Assert.Contains(ex.Message, text => text.Contains("bad request", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "ModelProviders_trim_verbose_http_error_bodies")]
+    public async Task ModelProvidersTrimVerboseHttpErrorBodies()
+{
+    var body = "error-start " + new string('e', 2000) + " error-tail";
+    var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+    {
+        Content = new StringContent(body)
+    });
+    var provider = new OpenAiResponsesModelProvider(new HttpClient(handler), "openai-key", "gpt-test");
+
+    var ex = await Xunit.Assert.ThrowsAsync<HttpRequestException>(async () => await provider.CompleteAsync(TestRequest(), CancellationToken.None));
+
+    Assert.Contains(ex.Message, text => text.Contains("OpenAI request failed with 400", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("error-start", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("error-tail", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!ex.Message.Contains(new string('e', 2000), StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "ChatCompletionsModelProvider_trims_verbose_http_error_bodies")]
+    public async Task ChatCompletionsModelProviderTrimsVerboseHttpErrorBodies()
+{
+    var body = "chat-error-start " + new string('c', 2000) + " chat-error-tail";
+    var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+    {
+        Content = new StringContent(body)
+    });
+    var provider = new ChatCompletionsModelProvider(new HttpClient(handler)
+    {
+        BaseAddress = new Uri("http://localhost:11434/")
+    }, "qwen3", "Ollama");
+
+    var ex = await Xunit.Assert.ThrowsAsync<HttpRequestException>(async () => await provider.CompleteAsync(TestRequest(), CancellationToken.None));
+
+    Assert.Contains(ex.Message, text => text.Contains("Ollama request failed with 502", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("chat-error-start", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("chat-error-tail", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!ex.Message.Contains(new string('c', 2000), StringComparison.Ordinal));
+}
+
 }
