@@ -147,6 +147,11 @@ private static string? DefaultSubscriptionProfileName(string providerName, Agent
         return "claude-cli";
     }
 
+    if (providerName.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
+    {
+        return WorkerProfileDispatcher.OllamaSubscriptionProfileName;
+    }
+
     return null;
 }
 

@@ -8,6 +8,7 @@ public static class WorkerProfileDispatcher
 {
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
+    public const string OllamaSubscriptionProfileName = "codex-oss-cli";
 
     public static WorkerProfileDispatchResult PrepareTask(
         AgentOrchestratorKernel kernel,
@@ -233,6 +234,11 @@ public static class WorkerProfileDispatcher
         if (model.ProviderName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
         {
             return AnthropicSubscriptionProfileName;
+        }
+
+        if (model.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            return OllamaSubscriptionProfileName;
         }
 
         throw new InvalidOperationException($"Provider '{model.ProviderName}' does not have a default subscription worker profile.");

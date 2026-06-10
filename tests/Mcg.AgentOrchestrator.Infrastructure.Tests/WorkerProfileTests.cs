@@ -26,13 +26,36 @@ public sealed class WorkerProfileTests
     Assert.Contains(claude.CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} -p", StringComparison.Ordinal));
     Assert.Contains(claude.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_codex_oss_profile_is_patch_capable_local_bridge")]
+    public void WorkerProfileCatalogDefaultCodexOssProfileIsPatchCapableLocalBridge()
+{
+    var codexOss = WorkerProfileCatalog.Default().GetRequired("codex-oss-cli");
+
+    Assert.Contains(codexOss.CommandTemplate, text => text.Contains("--oss --local-provider ollama", StringComparison.Ordinal));
+    Assert.Contains(codexOss.CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
+    Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(codexOss.CommandTemplate).IsPatchCapable);
+}
+
+    [Xunit.Fact(DisplayName = "Ollama_agents_default_to_codex_oss_subscription_profile")]
+    public void OllamaAgentsDefaultToCodexOssSubscriptionProfile()
+{
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Local developer",
+        AgentRole.Developer,
+        new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.LocalBridge),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
+
+    Assert.Equal("codex-oss-cli", WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_upsert_replaces_existing_profile")]
     public void WorkerProfileCatalogUpsertReplacesExistingProfile()
 {
     var catalog = WorkerProfileCatalog.Default()
         .Upsert(new WorkerProfile("local-echo", "Get-Content {promptPath}"));
 
-    Assert.Equal(3, catalog.Profiles.Count);
+    Assert.Equal(4, catalog.Profiles.Count);
     Assert.Equal("Get-Content {promptPath}", catalog.GetRequired("local-echo").CommandTemplate);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_merge_upserts_imported_profiles")]
@@ -48,7 +71,7 @@ public sealed class WorkerProfileTests
 
     var merged = current.Merge(imported);
 
-    Assert.Equal(5, merged.Profiles.Count);
+    Assert.Equal(6, merged.Profiles.Count);
     Assert.Equal("codex exec --full-auto {promptPath}", merged.GetRequired("codex").CommandTemplate);
     Assert.Equal("claude --file {promptPath}", merged.GetRequired("CLAUDE").CommandTemplate);
 }
