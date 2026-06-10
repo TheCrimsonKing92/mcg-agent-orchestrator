@@ -38,8 +38,17 @@ public static partial class DashboardRenderer
         html.AppendLine("<p class=\"section-note\">Use these when you want the orchestrator to choose or assign the next goal-level step.</p>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance\">Run next safe action</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true\">Run next subscription action</button>");
-        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true\">Continue subscription handoff</button>");
+        RenderSubscriptionRiskButton(
+            html,
+            $"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true",
+            "Run next subscription action",
+            nextSubscriptionRisk);
+        RenderSubscriptionRiskButton(
+            html,
+            $"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true",
+            "Continue subscription handoff",
+            continueSubscriptionRisk,
+            primary: true);
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-until-blocked\">Continue non-API actions</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/delegate\">Assign tasks to agents</button>");
         html.AppendLine("</div>");
@@ -53,8 +62,16 @@ public static partial class DashboardRenderer
         html.AppendLine("</form>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/subscription-dispatch-ready\">Prepare subscription handoffs</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true\">Start subscription work</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true\">Start prepared work</button>");
+        RenderSubscriptionRiskButton(
+            html,
+            $"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true",
+            "Start subscription work",
+            subscriptionCost?.ReadyRisk);
+        RenderSubscriptionRiskButton(
+            html,
+            $"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true",
+            "Start prepared work",
+            subscriptionCost?.PreparedRisk);
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/refresh-dispatches\">Refresh running work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/cancel-dispatches\">Cancel running work</button>");
         html.AppendLine("</div>");
@@ -80,6 +97,31 @@ public static partial class DashboardRenderer
         html.AppendLine("</section>");
         html.AppendLine("</div>");
         html.AppendLine("</div>");
+    }
+
+    private static void RenderSubscriptionRiskButton(
+        StringBuilder html,
+        string url,
+        string label,
+        PaidSubscriptionPromptRisk? risk,
+        bool primary = false)
+    {
+        var classAttribute = primary ? " class=\"primary\"" : string.Empty;
+        var titleAttribute = risk is null
+            ? string.Empty
+            : $" title=\"{Encode(BuildSubscriptionRiskButtonTitle(risk))}\"";
+        var visibleLabel = risk is null
+            ? label
+            : $"{label} (cost gate: {SubscriptionPromptCostGuard.BuildInlineLabel(risk)})";
+        html.AppendLine($"<button{classAttribute} type=\"button\" data-action-button=\"{Encode(url)}\"{titleAttribute}>{Encode(visibleLabel)}</button>");
+    }
+
+    private static string BuildSubscriptionRiskButtonTitle(PaidSubscriptionPromptRisk risk)
+    {
+        var recommendation = SubscriptionPromptCostGuard.BuildRecommendation(risk);
+        return string.IsNullOrWhiteSpace(recommendation)
+            ? $"Cost gate: {SubscriptionPromptCostGuard.BuildInlineLabel(risk)}."
+            : $"Cost gate: {SubscriptionPromptCostGuard.BuildInlineLabel(risk)}. {recommendation}";
     }
 
     private static void RenderPendingInputForm(StringBuilder html, Goal goal, HumanInputRequest request)

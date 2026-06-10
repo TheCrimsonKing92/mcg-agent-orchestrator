@@ -1603,6 +1603,9 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Run next subscription action (cost gate: large paid subscription start)", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Continue subscription handoff (cost gate: large paid subscription start)", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Start subscription work (cost gate: large paid subscription start)", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains(SubscriptionPromptCostGuard.BuildInlineLabel(risk!), StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"{risk!.PromptCharacterCount} prompt chars across 1 task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
@@ -1643,6 +1646,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Continue subscription handoff (cost gate: large paid subscription start)", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Start prepared work (cost gate: large paid subscription start)", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Prepared starts: 12001 paid prompt chars.", StringComparison.Ordinal));
 }
 
