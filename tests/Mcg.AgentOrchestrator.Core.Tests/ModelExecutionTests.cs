@@ -40,6 +40,28 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
 }
+    [Xunit.Fact(DisplayName = "PreviewRun_matches_executed_prompt_size")]
+    public async Task PreviewRunMatchesExecutedPromptSize()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Preview API prompt size");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    var preview = AgentTaskRunner.PreviewRun(goal, task, agents);
+    await runner.RunAsync(goal.Id, task.Id);
+
+    Assert.Equal("OpenAI", preview.ProviderName);
+    Assert.Equal(task.LastExecution!.ProviderName, preview.ProviderName);
+    Assert.Equal(task.LastExecution.ModelName, preview.ModelName);
+    Assert.Equal(task.LastExecution.TaskComplexity, preview.TaskComplexity);
+    Assert.Equal(task.LastExecution.MaxOutputTokens, preview.MaxOutputTokens);
+    Assert.Equal(task.LastExecution.PromptCharacterCount, preview.PromptCharacterCount);
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_does_not_complete_when_output_cap_is_hit")]
     public async Task ExecuteAssignedTaskDoesNotCompleteWhenOutputCapIsHit()
 {

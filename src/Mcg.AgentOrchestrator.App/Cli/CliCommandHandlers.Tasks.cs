@@ -65,7 +65,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "run":
-            CliArgumentParser.RequirePartCount(parts, 2, "run <task-number> [--confirm-paid-api-run]");
+            CliArgumentParser.RequirePartCount(parts, 2, "run <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var runTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var runAgent = ResolveAssignedAgent(runTask, context.Agents);
@@ -80,7 +80,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "api-run":
-            CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number> [--confirm-paid-api-run]");
+            CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var apiRunTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var apiRunAgent = ResolveAssignedAgent(apiRunTask, context.Agents);
@@ -198,20 +198,21 @@ private static void EnsureExplicitApiRunAllowed(TaskSpec task, AgentDefinition a
 
 private static void EnsurePaidApiRunConfirmed(Goal goal, TaskSpec task, AgentDefinition agent, IReadOnlyList<string> parts)
 {
-    var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
-    var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
-    if (!ProviderSmokeRunner.IsPaidProviderName(resolvedModel.ProviderName))
+    var preview = AgentTaskRunner.PreviewRun(goal, task, [agent]);
+    if (!ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName))
     {
         return;
     }
 
-    if (parts.Any(part => part.Equals("--confirm-paid-api-run", StringComparison.OrdinalIgnoreCase)))
+    if (!HasCliConfirmation(parts, "--confirm-paid-api-run"))
     {
-        return;
+        throw new InvalidOperationException(
+            $"Paid API execution for provider '{preview.ProviderName}' requires --confirm-paid-api-run because it can make a live billable request.");
     }
 
-    throw new InvalidOperationException(
-        $"Paid API execution for provider '{resolvedModel.ProviderName}' requires --confirm-paid-api-run because it can make a live billable request.");
+    ApiPromptCostGuard.ThrowIfConfirmationRequired(
+        ApiPromptCostGuard.Evaluate(preview),
+        HasCliConfirmation(parts, ApiPromptCostGuard.CliConfirmationFlag));
 }
 
 private static bool IsCleanExplicitApiRun(TaskSpec task)

@@ -59,9 +59,7 @@ public sealed class AgentTaskRunner
             throw new InvalidOperationException($"Task '{taskId}' is not assigned to an agent.");
         }
 
-        var agent = _agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId)
-            ?? _agents.FirstOrDefault(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole)
-            ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found.");
+        var agent = ResolveAgent(task, _agents);
         if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
         {
             throw new InvalidOperationException($"Agent '{agent.Name}' is configured for subscription execution only.");
@@ -70,9 +68,16 @@ public sealed class AgentTaskRunner
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
         var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
-        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"{agent.Name} started task (model: {resolvedModel.ModelName}).");
+        var startMessage = BuildStartMessage(agent, resolvedModel);
+        var request = BuildRequest(
+            goal,
+            task,
+            agent,
+            resolvedModel,
+            complexity,
+            [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, startMessage, _clock.UtcNow)]);
+        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
-        var request = BuildRequest(goal, task, agent, resolvedModel, complexity);
         ModelResponse response;
         try
         {
@@ -122,7 +127,53 @@ public sealed class AgentTaskRunner
         return new AgentTaskRunResult(goal, task, execution);
     }
 
-    private static ModelRequest BuildRequest(Goal goal, TaskSpec task, AgentDefinition agent, ModelProfile resolvedModel, TaskComplexity complexity)
+    public static AgentTaskRunPreview PreviewRun(Goal goal, TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+    {
+        var agent = ResolveAgent(task, agents);
+        if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
+        {
+            throw new InvalidOperationException($"Agent '{agent.Name}' is configured for subscription execution only.");
+        }
+
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
+        var request = BuildRequest(
+            goal,
+            task,
+            agent,
+            resolvedModel,
+            complexity,
+            [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, BuildStartMessage(agent, resolvedModel), DateTimeOffset.MaxValue)]);
+        return new AgentTaskRunPreview(
+            agent.Id,
+            agent.Name,
+            resolvedModel.ProviderName,
+            resolvedModel.ModelName,
+            complexity,
+            request.Options.MaxOutputTokens,
+            resolvedModel.ReasoningEffort,
+            CountPromptCharacters(request));
+    }
+
+    private static AgentDefinition ResolveAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+    {
+        return agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId)
+            ?? agents.FirstOrDefault(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole)
+            ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found.");
+    }
+
+    private static string BuildStartMessage(AgentDefinition agent, ModelProfile resolvedModel)
+    {
+        return $"{agent.Name} started task (model: {resolvedModel.ModelName}).";
+    }
+
+    private static ModelRequest BuildRequest(
+        Goal goal,
+        TaskSpec task,
+        AgentDefinition agent,
+        ModelProfile resolvedModel,
+        TaskComplexity complexity,
+        IReadOnlyList<ProgressEvent>? pendingTimelineEvents = null)
     {
         var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName);
 
@@ -135,7 +186,9 @@ public sealed class AgentTaskRunner
         var timeline = string.Join(
             Environment.NewLine,
             PromptContextFormatter.SelectPromptTimelineEvents(
-                    goal.Timeline.Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
+                    goal.Timeline
+                        .Concat(pendingTimelineEvents ?? [])
+                        .Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
                     maxEvents: TimelineEventBudget(complexity),
                     complexity)
                 .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false, complexity)));

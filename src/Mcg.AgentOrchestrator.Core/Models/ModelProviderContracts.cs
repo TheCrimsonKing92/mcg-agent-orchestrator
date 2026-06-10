@@ -10,6 +10,16 @@ public sealed record ModelUsage(int? InputTokens, int? OutputTokens);
 
 public sealed record ModelResponse(string Text, ModelUsage? Usage, string StopReason);
 
+public sealed record AgentTaskRunPreview(
+    AgentId AgentId,
+    string AgentName,
+    string ProviderName,
+    string ModelName,
+    TaskComplexity TaskComplexity,
+    int? MaxOutputTokens,
+    string? ReasoningEffort,
+    int PromptCharacterCount);
+
 public sealed record TaskExecutionRecord(
     AgentId AgentId,
     string AgentName,

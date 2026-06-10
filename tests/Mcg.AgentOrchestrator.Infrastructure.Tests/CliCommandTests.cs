@@ -166,6 +166,61 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(goal.Tasks.Single().LastExecution);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_api_run_blocks_large_paid_prompt_without_confirm_flag")]
+    public void CliApiRunBlocksLargePaidPromptWithoutConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Design and implement a production multi-tenant distributed architecture " + new string('o', 5000),
+            [
+                new TaskSpec(
+                    TaskId.New(),
+                    "Build an end-to-end distributed integration with horizontal scaling across API CLI dashboard provider subscription worker persistence state tests docs " + new string('t', 5000),
+                    AgentRole.Developer,
+                    "Verify the full integration with build, tests, dashboard smoke, and focused regression evidence. " + new string('v', 5000))
+            ]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var provider = new FakeSmokeProvider(providerName: "OpenAI");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        var preview = AgentTaskRunner.PreviewRun(goal, task, agents);
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["api-run", "1", "--confirm-paid-api-run"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.True(preview.PromptCharacterCount > 6000);
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-large-paid-api-prompt", ex!.Message);
+        Xunit.Assert.Null(provider.LastRequest);
+        Xunit.Assert.Null(task.LastExecution);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_run_allows_local_provider_without_paid_confirm_flag")]
     public void CliRunAllowsLocalProviderWithoutPaidConfirmFlag()
     {

@@ -488,21 +488,33 @@ internal static partial class DashboardEndpoints
             return null;
         }
 
-        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
-        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
-        if (!ProviderSmokeRunner.IsPaidProviderName(resolvedModel.ProviderName))
+        var preview = AgentTaskRunner.PreviewRun(goal, task, [agent]);
+        if (!ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName))
         {
             return null;
         }
 
-        var confirmed = context.Request.Query.TryGetValue("confirmPaidApiRun", out var value) &&
-            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
-        return confirmed
-            ? null
-            : Text(
-                $"dashboard invalid request: paid API execution for provider '{resolvedModel.ProviderName}' requires confirmPaidApiRun=true because it can make a live billable request.",
+        if (!HasQueryConfirmation(context, "confirmPaidApiRun"))
+        {
+            return Text(
+                $"dashboard invalid request: paid API execution for provider '{preview.ProviderName}' requires confirmPaidApiRun=true because it can make a live billable request.",
                 "text/plain; charset=utf-8",
                 StatusCodes.Status400BadRequest);
+        }
+
+        var largePromptRisk = ApiPromptCostGuard.Evaluate(preview);
+        return largePromptRisk is null || HasQueryConfirmation(context, ApiPromptCostGuard.DashboardConfirmationQueryName)
+            ? null
+            : Text(
+                "dashboard invalid request: " + ApiPromptCostGuard.BuildDashboardMessage(largePromptRisk),
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
+    }
+
+    private static bool HasQueryConfirmation(HttpContext context, string name)
+    {
+        return context.Request.Query.TryGetValue(name, out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TaskOperationCanInvokeApi(string operation, TaskSpec task, AgentDefinition agent)
