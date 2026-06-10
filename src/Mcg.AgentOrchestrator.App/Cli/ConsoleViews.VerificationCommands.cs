@@ -68,6 +68,26 @@ public static string BuildStageSuggestedCommand(int taskNumber, TaskStageReadine
     };
 }
 
+public static string BuildStageSuggestedCommand(
+    Goal goal,
+    TaskStageReadiness stage,
+    IReadOnlyList<AgentDefinition>? agents = null)
+{
+    var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
+    return stage.StageStatus switch
+    {
+        StageReadinessStatus.ReadyToRun => BuildSuggestedCommand(
+            goal,
+            new NextActionItem(NextActionKind.RunAssignedTask, stage.TaskId, null, stage.SuggestedAction),
+            agents),
+        StageReadinessStatus.InProgress when stage.LatestEvidence == TaskEvidenceKind.Dispatch => BuildSuggestedCommand(
+            goal,
+            new NextActionItem(NextActionKind.ExecuteRecordedDispatch, stage.TaskId, null, stage.SuggestedAction),
+            agents),
+        _ => BuildStageSuggestedCommand(taskNumber, stage)
+    };
+}
+
 public static string BuildAcceptanceSuggestedCommand(GoalAcceptanceBlocker blocker, int? taskNumber)
 {
     return blocker.Kind switch

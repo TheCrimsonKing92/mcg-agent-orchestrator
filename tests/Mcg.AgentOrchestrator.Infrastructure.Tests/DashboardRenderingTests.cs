@@ -1137,6 +1137,7 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents));
     var flexiblePromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[1], agents).PromptCharacterCount;
     var apiPromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[2], agents).PromptCharacterCount;
+    var stages = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents);
 
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
@@ -1153,6 +1154,9 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("<code>subscription-dispatch 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>subscription-dispatch 2</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 3 --confirm-paid-api-run</code>", StringComparison.Ordinal));
+    Assert.Equal("subscription-dispatch 1", stages.Stages.Single(stage => stage.TaskNumber == 1).SuggestedCommand);
+    Assert.Equal("subscription-dispatch 2", stages.Stages.Single(stage => stage.TaskNumber == 2).SuggestedCommand);
+    Assert.Equal("run 3 --confirm-paid-api-run", stages.Stages.Single(stage => stage.TaskNumber == 3).SuggestedCommand);
     Assert.False(html.Contains($"subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
 }
 
@@ -1192,11 +1196,13 @@ public sealed class DashboardRenderingTests
     var controls = ExtractTaskControls(html, 1);
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents).Items.Single();
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, agents);
+    var stageDto = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents).Stages.Single();
 
     Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
     Assert.True(risk is not null);
     Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
     Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", workSummary.NextAction!.SuggestedCommand);
+    Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", stageDto.SuggestedCommand);
     Assert.Contains(html, text => text.Contains("<code>run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt</code>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run task</button>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));

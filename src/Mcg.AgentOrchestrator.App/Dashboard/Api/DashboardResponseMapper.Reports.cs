@@ -166,7 +166,10 @@ private static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
         task.SubscriptionRetryAfter);
 }
 
-public static GoalStageReadinessReportDto ToGoalStageReadinessReportDto(Goal goal, GoalStageReadinessReport report)
+public static GoalStageReadinessReportDto ToGoalStageReadinessReportDto(
+    Goal goal,
+    GoalStageReadinessReport report,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     return new GoalStageReadinessReportDto(
         report.GoalId.Value,
@@ -177,10 +180,13 @@ public static GoalStageReadinessReportDto ToGoalStageReadinessReportDto(Goal goa
         report.OpenStages,
         report.BlockedStages,
         report.IsReadyForAcceptance,
-        report.Stages.Select(stage => ToTaskStageReadinessDto(goal, stage)).ToList());
+        report.Stages.Select(stage => ToTaskStageReadinessDto(goal, stage, agents)).ToList());
 }
 
-public static TaskStageReadinessDto ToTaskStageReadinessDto(Goal goal, TaskStageReadiness stage)
+public static TaskStageReadinessDto ToTaskStageReadinessDto(
+    Goal goal,
+    TaskStageReadiness stage,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     var taskNumber = ConsoleViews.GetTaskDisplayNumber(goal, stage.TaskId);
     return new TaskStageReadinessDto(
@@ -196,7 +202,7 @@ public static TaskStageReadinessDto ToTaskStageReadinessDto(Goal goal, TaskStage
         stage.PendingHumanInputCount,
         TimelineText(stage.Message),
         TimelineText(stage.SuggestedAction),
-        ConsoleViews.BuildStageSuggestedCommand(taskNumber, stage));
+        ConsoleViews.BuildStageSuggestedCommand(goal, stage, agents));
 }
 
 public static VerificationGateDto ToVerificationGateDto(Goal goal, GoalVerificationGate gate)

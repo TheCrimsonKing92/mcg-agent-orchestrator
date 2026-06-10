@@ -54,7 +54,10 @@ private static string FormatMaxOutputTokens(int? maxOutputTokens)
     return maxOutputTokens is null ? string.Empty : $" of {maxOutputTokens}";
 }
 
-public static void PrintStageReadinessReport(Goal goal, GoalStageReadinessReport report)
+public static void PrintStageReadinessReport(
+    Goal goal,
+    GoalStageReadinessReport report,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {report.GoalId.Value[..8]} SDLC stages: {(report.IsReadyForAcceptance ? "ready" : "not ready")}");
@@ -69,7 +72,7 @@ public static void PrintStageReadinessReport(Goal goal, GoalStageReadinessReport
         Console.WriteLine($"     task={stage.TaskStatus}; assigned={stage.IsAssigned}; evidence={stage.LatestEvidence}; gate={stage.VerificationStatus}");
         Console.WriteLine($"     {OutputTextPreview.CreateTimeline(stage.Message).Text}");
         Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(stage.SuggestedAction).Text}");
-        Console.WriteLine($"     command: {BuildStageSuggestedCommand(taskNumber, stage)}");
+        Console.WriteLine($"     command: {BuildStageSuggestedCommand(goal, stage, agents)}");
     }
 
     Console.WriteLine();

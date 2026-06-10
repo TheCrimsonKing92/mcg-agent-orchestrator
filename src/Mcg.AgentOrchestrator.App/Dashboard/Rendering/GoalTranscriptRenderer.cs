@@ -142,7 +142,7 @@ public static partial class GoalTranscriptRenderer
         {
             var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
             text.AppendLine($"- Task {taskNumber} [{Display(stage.StageStatus)}] {stage.Stage}: {OutputTextPreview.CreateTimeline(stage.Message).Text}");
-            text.AppendLine($"  Suggested command: {BuildStageSuggestedCommand(taskNumber, stage)}");
+            text.AppendLine($"  Suggested command: {BuildStageSuggestedCommand(goal, stage, agents)}");
         }
 
         text.AppendLine();

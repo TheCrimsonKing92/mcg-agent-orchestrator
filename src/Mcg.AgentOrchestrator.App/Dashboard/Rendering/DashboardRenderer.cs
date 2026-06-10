@@ -514,7 +514,7 @@ public static partial class DashboardRenderer
         {
             var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateSummary(stage.Description).Text)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(stage.SuggestedAction).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(stage.Message).Text)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(taskNumber, stage))}</code></td>");
+            html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateSummary(stage.Description).Text)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(stage.SuggestedAction).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(stage.Message).Text)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(goal, stage, options.AgentDefinitions))}</code></td>");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");

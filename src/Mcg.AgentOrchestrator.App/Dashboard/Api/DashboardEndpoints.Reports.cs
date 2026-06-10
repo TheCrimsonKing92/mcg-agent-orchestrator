@@ -29,7 +29,8 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        return Json(DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, current.BuildStageReadinessReport(goal.Id)));
+        var agents = services.LoadAgentCatalog().Agents;
+        return Json(DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, current.BuildStageReadinessReport(goal.Id), agents));
     }
 
     private static async Task<IResult> GetGatesAsync(HttpContext context, DashboardEndpointServices services)

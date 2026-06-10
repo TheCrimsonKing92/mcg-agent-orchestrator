@@ -46,6 +46,12 @@ private static string BuildStageSuggestedCommand(int taskNumber, TaskStageReadin
     };
 }
 
+private static string BuildStageSuggestedCommand(
+    Goal goal,
+    TaskStageReadiness stage,
+    IReadOnlyList<AgentDefinition>? agents = null) =>
+    ConsoleViews.BuildStageSuggestedCommand(goal, stage, agents);
+
 private static string BuildAcceptanceSuggestedCommand(GoalAcceptanceBlocker blocker, int? taskNumber)
 {
     return blocker.Kind switch
