@@ -1035,12 +1035,22 @@ public sealed class DashboardRenderingTests
 
     Assert.Contains(html, text => text.Contains("Prepared handoff for codex-cli.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Simple reasoning medium", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Dispatch models: OpenAI/gpt-5.3-codex (Simple) reasoning medium [potentially paid]: 1 dispatch", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>codex exec prompt.md</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Start prepared work", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"href=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/brief\"", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Dispatch model: OpenAI/gpt-5.3-codex complexity=Simple reasoning=medium", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Dispatch models:", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-5.3-codex (Simple) reasoning medium [potentially paid]: 1 dispatch", StringComparison.Ordinal));
     Assert.Contains(evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value).Message, text => text.Contains("using OpenAI/gpt-5.3-codex Simple reasoning medium", StringComparison.Ordinal));
+    var dispatchModel = evidenceDto.DispatchModelUsage.Single();
+    Assert.Equal("OpenAI", dispatchModel.ProviderName);
+    Assert.Equal("gpt-5.3-codex", dispatchModel.ModelName);
+    Assert.Equal(1, dispatchModel.DispatchCount);
+    Assert.Equal(TaskComplexity.Simple, dispatchModel.TaskComplexity);
+    Assert.Equal("medium", dispatchModel.ReasoningEffort);
+    Assert.True(dispatchModel.IsPotentiallyPaidProvider);
     Assert.Equal("OpenAI", taskDto.LastDispatch!.ProviderName);
     Assert.Equal("gpt-5.3-codex", taskDto.LastDispatch.ModelName);
     Assert.Equal("medium", taskDto.LastDispatch.ReasoningEffort);

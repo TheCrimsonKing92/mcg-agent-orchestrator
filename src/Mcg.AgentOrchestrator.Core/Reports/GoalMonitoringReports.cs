@@ -46,6 +46,7 @@ public sealed record GoalEvidenceSummary(
     int? PotentiallyPaidInputTokens,
     int? PotentiallyPaidOutputTokens,
     IReadOnlyList<ModelUsageSummary> ModelUsage,
+    IReadOnlyList<DispatchModelSummary> DispatchModelUsage,
     IReadOnlyList<TaskEvidenceSummary> Tasks);
 
 public sealed record ModelUsageSummary(
@@ -57,6 +58,14 @@ public sealed record ModelUsageSummary(
     int OutputTokenLimitHitCount = 0,
     int? MaxOutputTokens = null,
     TaskComplexity? TaskComplexity = null,
+    bool IsPotentiallyPaidProvider = false);
+
+public sealed record DispatchModelSummary(
+    string ProviderName,
+    string ModelName,
+    int DispatchCount,
+    TaskComplexity? TaskComplexity = null,
+    string? ReasoningEffort = null,
     bool IsPotentiallyPaidProvider = false);
 
 public sealed record TaskEvidenceSummary(

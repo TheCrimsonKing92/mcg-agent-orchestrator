@@ -78,6 +78,7 @@ public sealed partial class AgentOrchestratorKernel
             SumKnownUsage(goal.Tasks.Where(HasPotentiallyPaidExecution).Select(task => task.LastExecution?.Usage?.InputTokens)),
             SumKnownUsage(goal.Tasks.Where(HasPotentiallyPaidExecution).Select(task => task.LastExecution?.Usage?.OutputTokens)),
             BuildModelUsageSummary(goal.Tasks),
+            BuildDispatchModelSummary(goal.Tasks),
             items);
     }
 
@@ -106,6 +107,38 @@ public sealed partial class AgentOrchestratorKernel
                 group.Key.TaskComplexity,
                 IsPotentiallyPaidProvider(group.Key.ProviderName)))
             .ToList();
+    }
+
+    private static List<DispatchModelSummary> BuildDispatchModelSummary(IReadOnlyList<TaskSpec> tasks)
+    {
+        return tasks
+            .Where(HasDispatchModelSelection)
+            .GroupBy(
+                task => new
+                {
+                    task.LastDispatch!.ProviderName,
+                    task.LastDispatch.ModelName,
+                    task.LastDispatch.TaskComplexity,
+                    task.LastDispatch.ReasoningEffort
+                })
+            .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.TaskComplexity?.ToString() ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.ReasoningEffort ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new DispatchModelSummary(
+                group.Key.ProviderName!,
+                group.Key.ModelName!,
+                group.Count(),
+                group.Key.TaskComplexity,
+                group.Key.ReasoningEffort,
+                IsPotentiallyPaidProvider(group.Key.ProviderName!)))
+            .ToList();
+    }
+
+    private static bool HasDispatchModelSelection(TaskSpec task)
+    {
+        return !string.IsNullOrWhiteSpace(task.LastDispatch?.ProviderName) &&
+            !string.IsNullOrWhiteSpace(task.LastDispatch.ModelName);
     }
 
     private static bool HasPotentiallyPaidExecution(TaskSpec task)

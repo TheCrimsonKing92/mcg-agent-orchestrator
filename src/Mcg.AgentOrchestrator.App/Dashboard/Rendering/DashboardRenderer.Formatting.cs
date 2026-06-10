@@ -86,6 +86,17 @@ public static partial class DashboardRenderer
         return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}";
     }
 
+    private static string RenderDispatchModelSummary(DispatchModelSummary dispatch)
+    {
+        var dispatches = dispatch.DispatchCount == 1 ? "1 dispatch" : $"{dispatch.DispatchCount} dispatches";
+        var complexity = dispatch.TaskComplexity is null ? string.Empty : $" ({Encode(dispatch.TaskComplexity.Value.ToString())})";
+        var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
+            ? string.Empty
+            : $" reasoning {Encode(dispatch.ReasoningEffort)}";
+        var paid = dispatch.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
+        return $"{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}{paid}: {dispatches}";
+    }
+
     private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
     {
         return execution.MaxOutputTokens is > 0 &&

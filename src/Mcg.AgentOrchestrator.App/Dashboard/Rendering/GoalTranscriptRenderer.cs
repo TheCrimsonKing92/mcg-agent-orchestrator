@@ -113,6 +113,14 @@ public static partial class GoalTranscriptRenderer
                 text.AppendLine($"- {FormatModelUsage(usage)}");
             }
         }
+        if (evidence.DispatchModelUsage.Count > 0)
+        {
+            text.AppendLine("Dispatch models:");
+            foreach (var dispatch in evidence.DispatchModelUsage)
+            {
+                text.AppendLine($"- {FormatDispatchModelUsage(dispatch)}");
+            }
+        }
         text.AppendLine($"Verification: {evidence.TasksWithVerification}; passed={evidence.PassedVerifications}; failed={evidence.FailedVerifications}");
         text.AppendLine($"Pending human input: {evidence.PendingHumanInputCount}");
         foreach (var item in evidence.Tasks)

@@ -22,6 +22,15 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
             : string.Empty;
         Console.WriteLine($"  model: {usage.ProviderName}/{usage.ModelName}{paid}: {usage.ExecutionCount} run(s), {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}");
     }
+    foreach (var dispatch in summary.DispatchModelUsage)
+    {
+        var paid = dispatch.IsPotentiallyPaidProvider ? " potentially paid" : string.Empty;
+        var complexity = dispatch.TaskComplexity is null ? string.Empty : $" {dispatch.TaskComplexity.Value}";
+        var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
+            ? string.Empty
+            : $" reasoning {dispatch.ReasoningEffort}";
+        Console.WriteLine($"  dispatch model: {dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{paid}: {dispatch.DispatchCount} dispatch(es)");
+    }
     Console.WriteLine($"Verification: {summary.TasksWithVerification}; passed={summary.PassedVerifications}; failed={summary.FailedVerifications}");
     Console.WriteLine($"Pending human input: {summary.PendingHumanInputCount}");
 

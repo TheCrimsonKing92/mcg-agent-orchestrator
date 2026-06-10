@@ -163,7 +163,15 @@ public sealed class MonitoringAndQueryTests
         new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", "Implemented change.")]),
         clock)
         .RunAsync(goal.Id, executionTask.Id);
-    kernel.RecordTaskDispatch(goal.Id, processTask.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", clock.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, processTask.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "dotnet test",
+        "C:\\repo",
+        clock.UtcNow,
+        "OpenAI",
+        "gpt-5.3-codex",
+        "medium",
+        TaskComplexity.Simple));
     kernel.RecordTaskProcessStarted(goal.Id, processTask.Id, new TaskProcessRecord(1234, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
     kernel.ReportTaskProgress(goal.Id, verificationTask.Id, WorkTaskStatus.Completed, "Review done.");
     kernel.RecordTaskVerification(goal.Id, verificationTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, "", "failed", clock.UtcNow));
@@ -194,6 +202,13 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1024, modelUsage.MaxOutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
+    var dispatchModel = summary.DispatchModelUsage.Single();
+    Assert.Equal("OpenAI", dispatchModel.ProviderName);
+    Assert.Equal("gpt-5.3-codex", dispatchModel.ModelName);
+    Assert.Equal(1, dispatchModel.DispatchCount);
+    Assert.Equal(TaskComplexity.Simple, dispatchModel.TaskComplexity);
+    Assert.Equal("medium", dispatchModel.ReasoningEffort);
+    Assert.True(dispatchModel.IsPotentiallyPaidProvider);
     Assert.Equal(TaskEvidenceKind.None, summary.Tasks.Single(item => item.TaskId == inputTask.Id).LatestEvidence);
     Assert.Equal(1, summary.Tasks.Single(item => item.TaskId == inputTask.Id).PendingHumanInputCount);
     Assert.Equal(TaskEvidenceKind.Execution, summary.Tasks.Single(item => item.TaskId == executionTask.Id).LatestEvidence);

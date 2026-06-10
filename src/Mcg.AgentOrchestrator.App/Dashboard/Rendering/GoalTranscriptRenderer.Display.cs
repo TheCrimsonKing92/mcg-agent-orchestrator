@@ -122,6 +122,17 @@ public static partial class GoalTranscriptRenderer
         return $"{usage.ProviderName}/{usage.ModelName}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}";
     }
 
+    private static string FormatDispatchModelUsage(DispatchModelSummary dispatch)
+    {
+        var dispatches = dispatch.DispatchCount == 1 ? "1 dispatch" : $"{dispatch.DispatchCount} dispatches";
+        var complexity = dispatch.TaskComplexity is null ? string.Empty : $" ({dispatch.TaskComplexity.Value})";
+        var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
+            ? string.Empty
+            : $" reasoning {dispatch.ReasoningEffort}";
+        var paid = dispatch.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
+        return $"{dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{paid}: {dispatches}";
+    }
+
     private static string FormatMaxOutputTokens(int? maxOutputTokens)
     {
         return maxOutputTokens is null ? string.Empty : $" of {maxOutputTokens}";

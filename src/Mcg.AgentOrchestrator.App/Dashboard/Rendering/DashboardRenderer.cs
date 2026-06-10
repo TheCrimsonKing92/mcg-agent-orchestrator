@@ -486,6 +486,10 @@ public static partial class DashboardRenderer
         {
             html.AppendLine("<p>Model usage: " + string.Join(" &middot; ", evidence.ModelUsage.Select(RenderModelUsageSummary)) + "</p>");
         }
+        if (evidence.DispatchModelUsage.Count > 0)
+        {
+            html.AppendLine("<p>Dispatch models: " + string.Join(" &middot; ", evidence.DispatchModelUsage.Select(RenderDispatchModelSummary)) + "</p>");
+        }
         html.AppendLine("<table><thead><tr><th>#</th><th>Evidence</th><th>Message</th></tr></thead><tbody>");
         foreach (var item in evidence.Tasks)
         {

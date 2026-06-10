@@ -165,6 +165,11 @@ public static partial class DashboardRenderer
         {
             details.Add($"Models: +{evidence.ModelUsage.Count - 2} more");
         }
+        details.AddRange(evidence.DispatchModelUsage.Take(2).Select(dispatch => $"Dispatch model: {RenderDispatchModelSummary(dispatch)}"));
+        if (evidence.DispatchModelUsage.Count > 2)
+        {
+            details.Add($"Dispatch models: +{evidence.DispatchModelUsage.Count - 2} more");
+        }
 
         return details;
     }
