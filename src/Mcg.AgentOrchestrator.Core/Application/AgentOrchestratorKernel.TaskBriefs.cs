@@ -29,11 +29,14 @@ public sealed partial class AgentOrchestratorKernel
             "# Agent Task Brief",
             string.Empty,
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
+            $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
+            $"Goal work summary: /api/goals/{goal.Id.Value[..8]}/work-summary",
+            "Dashboard host metadata: /api/system/dashboard-host",
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}",
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",
-            $"Task id: {task.Id}",
+            $"Task id: {task.Id.Value}",
             string.Empty,
             "## Instructions"
         };

@@ -17,6 +17,9 @@ public sealed class TaskBriefTests
     Assert.Equal(task.Id, brief.TaskId);
     Assert.Equal(AgentRole.Developer, brief.Role);
     Assert.Contains(brief.Content, text => text.Contains("Build worker adapter", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains($"Goal id: {goal.Id.Value}", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/work-summary", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("/api/system/dashboard-host", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.Description, StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Developer retry note.", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
