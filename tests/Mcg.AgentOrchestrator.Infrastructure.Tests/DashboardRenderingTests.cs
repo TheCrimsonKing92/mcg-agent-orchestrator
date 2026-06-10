@@ -269,6 +269,36 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_subscription_plan_detail")]
+    public void DashboardResponseMapperTrimsVerboseSubscriptionPlanDetail()
+{
+    var profileName = "profile-start-" + new string('p', 2000) + "-profile-tail";
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Trim subscription plan detail",
+        [new TaskSpec(TaskId.New(), "Prepare missing subscription profile", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-test", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile(profileName));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, [agent], WorkerProfileCatalog.Default());
+    var item = plan.Items.Single();
+
+    Assert.False(item.CanPrepare);
+    Assert.Contains(item.Detail, text => text.Contains("profile-start", StringComparison.Ordinal));
+    Assert.Contains(item.Detail, text => text.Contains("profile-tail", StringComparison.Ordinal));
+    Assert.Contains(item.Detail, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!item.Detail.Contains(new string('p', 2000), StringComparison.Ordinal));
+    Assert.Equal(profileName, agent.Subscription!.WorkerProfileName);
+    Assert.True(task.LastDispatch is null);
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_timeline_messages_without_mutating_events")]
     public void DashboardResponseMapperTrimsVerboseTimelineMessagesWithoutMutatingEvents()
 {

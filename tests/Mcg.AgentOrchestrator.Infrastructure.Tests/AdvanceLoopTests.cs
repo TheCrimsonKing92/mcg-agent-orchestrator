@@ -154,6 +154,57 @@ public sealed class AdvanceLoopTests
     Assert.True(task.LastProcess is null);
 }
 
+    [Xunit.Fact(DisplayName = "Advance_results_trim_verbose_automation_failures")]
+    public async Task AdvanceResultsTrimVerboseAutomationFailures()
+{
+    var profileName = "profile-start-" + new string('p', 2000) + "-profile-tail";
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Run missing subscription profile", AgentRole.Developer, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Trim advance automation failure", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-test", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile(profileName));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var single = await GoalManagementCommandService.AdvanceGoalAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([]),
+        workspace,
+        goal);
+
+    Assert.False(single.Executed);
+    Assert.Contains(single.Message, text => text.Contains("profile-start", StringComparison.Ordinal));
+    Assert.Contains(single.Message, text => text.Contains("profile-tail", StringComparison.Ordinal));
+    Assert.Contains(single.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!single.Message.Contains(new string('p', 2000), StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+
+    var loopKernel = new AgentOrchestratorKernel();
+    var loopTask = new TaskSpec(TaskId.New(), "Run missing subscription profile", AgentRole.Developer, "Record explicit verification.");
+    var loopGoal = loopKernel.CreateGoal("Trim advance loop automation failure", [loopTask]);
+    var loop = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+        loopKernel,
+        [agent],
+        new InMemoryModelProviderRegistry([]),
+        workspace,
+        loopGoal);
+
+    Assert.True(loop.Executed);
+    Assert.Equal(1, loop.StepCount);
+    Assert.Contains(loop.StopReason, text => text.Contains("profile-start", StringComparison.Ordinal));
+    Assert.Contains(loop.StopReason, text => text.Contains("profile-tail", StringComparison.Ordinal));
+    Assert.Contains(loop.StopReason, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!loop.StopReason.Contains(new string('p', 2000), StringComparison.Ordinal));
+    Assert.True(loopTask.LastDispatch is null);
+}
+
     [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_blocks_prefer_subscription_before_api_fallback")]
     public async Task AdvanceGoalUntilBlockedBlocksPreferSubscriptionBeforeApiFallback()
 {

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -18,14 +19,14 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     var item = actions.Items.FirstOrDefault();
     if (item is null)
     {
-        return new AdvanceResultDto(goal.Id.Value, false, null, NextActionAutomationKind.None, "No next actions are available.", null);
+        return new AdvanceResultDto(goal.Id.Value, false, null, NextActionAutomationKind.None, TimelineMessage("No next actions are available."), null);
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
     var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1);
     if (!automation.CanExecute || automation.TaskId is null)
     {
-        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, automation.Message, null);
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
     }
 
     object? result;
@@ -35,14 +36,14 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     }
     catch (InvalidOperationException ex)
     {
-        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, ex.Message, null);
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(ex.Message), null);
     }
     catch (KeyNotFoundException ex)
     {
-        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, ex.Message, null);
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(ex.Message), null);
     }
 
-    return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, automation.Message, result);
+    return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, TimelineMessage(automation.Message), result);
 }
 
 public static async Task<AdvanceLoopResultDto> AdvanceGoalUntilBlockedAsync(
@@ -166,20 +167,20 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     var item = actions.Items.FirstOrDefault();
     if (item is null)
     {
-        return new AdvanceResultDto(goal.Id.Value, false, null, NextActionAutomationKind.None, "No next actions are available.", null);
+        return new AdvanceResultDto(goal.Id.Value, false, null, NextActionAutomationKind.None, TimelineMessage("No next actions are available."), null);
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
     var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1);
     if (!automation.CanExecute || automation.TaskId is null)
     {
-        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, automation.Message, null);
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
     }
 
     var message = GetSubscriptionAutomationMessage(automation);
     object? result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation);
 
-    return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, message, result);
+    return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, TimelineMessage(message), result);
 }
 
 public static AdvanceLoopResultDto AdvanceGoalWithSubscriptionsUntilBlocked(
@@ -259,7 +260,7 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
             break;
         }
 
-        var step = new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, messageFor(automation), result);
+        var step = new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, TimelineMessage(messageFor(automation)), result);
         steps.Add(step);
 
         var pauseReason = GetAutomaticHandoffPauseReason(kernel.GetTask(goal.Id, automation.TaskId), automation.Kind);
@@ -278,8 +279,11 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
         stopReason = $"Stopped after {MaxAutomaticHandoffSteps} automated step(s); run continuation again if more safe actions remain.";
     }
 
-    return new AdvanceLoopResultDto(goal.Id.Value, steps.Count > 0, steps.Count, stopReason, blockingAction, steps, ContinueAfter: continueAfter);
+    return new AdvanceLoopResultDto(goal.Id.Value, steps.Count > 0, steps.Count, TimelineMessage(stopReason), blockingAction, steps, ContinueAfter: continueAfter);
 }
+
+private static string TimelineMessage(string message) =>
+    OutputTextPreview.CreateTimeline(message).Text;
 
 private static bool TryGetSubscriptionRetryWindow(
     Goal goal,

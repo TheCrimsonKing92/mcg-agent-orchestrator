@@ -196,7 +196,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             isEchoOnly,
             patchCapability.IsPatchCapable,
             canPrepare,
-            detail,
+            OutputTextPreview.CreateTimeline(detail).Text,
             retryDeferred ? retryAfter : null,
             retryDelaySeconds,
             taskComplexity,
@@ -223,7 +223,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             false,
             false,
             false,
-            ex.Message,
+            OutputTextPreview.CreateTimeline(ex.Message).Text,
             TaskComplexity: taskComplexity,
             SubscriptionModelName: subscriptionModelName,
             SubscriptionReasoningEffort: subscriptionReasoningEffort);
