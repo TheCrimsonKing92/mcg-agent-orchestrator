@@ -896,7 +896,8 @@ public sealed class DashboardRenderingTests
     Assert.False(configHtml.Contains("/api/provider-smoke?target=all", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/provider-smoke\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"target\" value=\"openai\"", StringComparison.Ordinal));
-    Assert.Contains(configHtml, text => text.Contains("name=\"confirmPaidSmoke\" value=\"true\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("type=\"checkbox\" name=\"confirmPaidSmoke\" value=\"true\"", StringComparison.Ordinal));
+    Assert.False(configHtml.Contains("type=\"hidden\" name=\"confirmPaidSmoke\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<button type=\"submit\">Paid smoke</button>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains(">Local smoke</a>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("data-action=\"/api/agents\"", StringComparison.Ordinal));

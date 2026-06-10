@@ -465,7 +465,7 @@ public static partial class DashboardRenderer
         {
             return "<form class=\"controls compact\" data-action=\"/api/provider-smoke\">" +
                 $"<input type=\"hidden\" name=\"target\" value=\"{Encode(smokeTarget)}\">" +
-                "<input type=\"hidden\" name=\"confirmPaidSmoke\" value=\"true\">" +
+                "<label class=\"checkrow\"><input type=\"checkbox\" name=\"confirmPaidSmoke\" value=\"true\">Confirm paid smoke</label>" +
                 "<button type=\"submit\">Paid smoke</button></form>";
         }
 
