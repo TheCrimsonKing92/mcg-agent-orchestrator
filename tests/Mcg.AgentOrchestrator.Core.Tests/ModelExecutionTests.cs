@@ -92,6 +92,44 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed && evt.Message.Contains("output may be truncated", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
+    [Xunit.Fact(DisplayName = "Verification_gate_blocks_output_cap_hits_even_after_manual_pass")]
+    public async Task VerificationGateBlocksOutputCapHitsEvenAfterManualPass()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Avoid accepting manually approved truncated output");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-small", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: 2),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var runner = new AgentTaskRunner(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", "Partial output", usage: new ModelUsage(5, 2), stopReason: "length")]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Manual override.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "manual",
+        "C:\\repo",
+        0,
+        "looks ok",
+        string.Empty,
+        clock.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    var taskGate = gate.Tasks.Single(item => item.TaskId == task.Id);
+
+    Assert.False(gate.IsSatisfied);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(VerificationGateStatus.FailedVerification, taskGate.GateStatus);
+    Assert.Contains(taskGate.Message, text => text.Contains("output may be truncated", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_goal_and_task_primary_context_in_prompt")]
     public async Task ExecuteAssignedTaskTrimsNoisyGoalAndTaskPrimaryContextInPrompt()
 {

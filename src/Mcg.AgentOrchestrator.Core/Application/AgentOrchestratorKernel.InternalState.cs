@@ -32,6 +32,17 @@ public sealed partial class AgentOrchestratorKernel
                 $"Latest verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}");
         }
 
+        if (HasOutputTokenLimitHit(task.LastExecution))
+        {
+            return new TaskVerificationGate(
+                task.Id,
+                task.RequiredRole,
+                task.Description,
+                task.Status,
+                VerificationGateStatus.FailedVerification,
+                $"Model output may be truncated at {task.LastExecution!.MaxOutputTokens} token(s); retry with narrower scope or stronger model before accepting this gate.");
+        }
+
         if (task.Status != WorkTaskStatus.Completed)
         {
             return new TaskVerificationGate(
@@ -61,6 +72,13 @@ public sealed partial class AgentOrchestratorKernel
             task.Status,
             VerificationGateStatus.Passed,
             $"Verified by {task.LastVerification.Command} at {task.LastVerification.CompletedAt:u}.");
+    }
+
+    private static bool HasOutputTokenLimitHit(TaskExecutionRecord? execution)
+    {
+        return execution?.MaxOutputTokens is > 0 &&
+            execution.Usage?.OutputTokens is { } outputTokens &&
+            outputTokens >= execution.MaxOutputTokens.Value;
     }
 
     private static string BuildVerificationSuggestedAction(VerificationGateStatus status)
