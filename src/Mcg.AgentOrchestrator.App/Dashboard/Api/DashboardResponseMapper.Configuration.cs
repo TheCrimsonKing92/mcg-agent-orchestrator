@@ -156,6 +156,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         var isEchoOnly = profile is not null && WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate);
         var pinsSelectedModel = profile is not null &&
             WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate);
+        var pinsSelectedReasoning = !RequiresSubscriptionReasoningPlaceholder(effectiveProviderName, subscriptionReasoningEffort) ||
+            (profile is not null && WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate));
         var patchCapability = profile is null
             ? new WorkerProfilePatchCapability(false, "Worker profile was not found.")
             : WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
@@ -169,6 +171,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             hasProfile &&
             !isEchoOnly &&
             pinsSelectedModel &&
+            pinsSelectedReasoning &&
             (!requiresPatchCapability || patchCapability.IsPatchCapable) &&
             AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
             !retryDeferred;
@@ -187,6 +190,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
                 ? $"Worker profile '{profileName}' only echoes the prompt path; configure a real launcher before subscription dispatch."
             : !pinsSelectedModel
                 ? $"Worker profile '{profileName}' does not include {{subscriptionModelName}}; pin the selected model before subscription dispatch."
+            : !pinsSelectedReasoning
+                ? $"Worker profile '{profileName}' does not include {{subscriptionReasoningEffort}}; pin the selected reasoning effort before subscription dispatch."
             : requiresPatchCapability && !patchCapability.IsPatchCapable
                 ? $"Worker profile '{profileName}' is not patch-capable for Developer tasks: {patchCapability.Detail}"
                 : $"Task status is {task.Status}; only assigned tasks are ready for subscription dispatch.";
@@ -303,5 +308,11 @@ private static bool IsPotentiallyPaidProvider(string providerName)
 {
     return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
         providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
+}
+
+private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(reasoningEffort);
 }
 }

@@ -79,6 +79,8 @@ public static class WorkerProfileDispatcher
         var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
         EnsureSubscriptionProfileCanExecuteTask(profile, task);
         EnsureSubscriptionProfilePinsSelectedModel(profile);
+        var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
+        EnsureSubscriptionProfilePinsSelectedReasoning(profile, selection.Model.ProviderName, reasoningEffort);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
         return PrepareTask(
             kernel,
@@ -91,7 +93,7 @@ public static class WorkerProfileDispatcher
             BuildSubscriptionTemplateVariables(agent, selection),
             selection.Model.ProviderName,
             ResolveEffectiveSubscriptionModelName(agent, selection),
-            ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
+            reasoningEffort,
             selection.Complexity);
     }
 
@@ -125,6 +127,8 @@ public static class WorkerProfileDispatcher
             var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
             EnsureSubscriptionProfileCanExecuteTask(profile, selection.Task);
             EnsureSubscriptionProfilePinsSelectedModel(profile);
+            var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel);
+            EnsureSubscriptionProfilePinsSelectedReasoning(profile, subscriptionModel.Model.ProviderName, reasoningEffort);
             results.Add(PrepareTask(
                 kernel,
                 goal,
@@ -136,7 +140,7 @@ public static class WorkerProfileDispatcher
                 BuildSubscriptionTemplateVariables(selection.Agent, subscriptionModel),
                 subscriptionModel.Model.ProviderName,
                 ResolveEffectiveSubscriptionModelName(selection.Agent, subscriptionModel),
-                ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel),
+                reasoningEffort,
                 subscriptionModel.Complexity));
         }
 
@@ -319,6 +323,24 @@ public static class WorkerProfileDispatcher
 
         throw new InvalidOperationException(
             $"Subscription worker profile '{profile.Name}' does not include {{subscriptionModelName}}; pin the selected model before subscription dispatch.");
+    }
+
+    private static void EnsureSubscriptionProfilePinsSelectedReasoning(WorkerProfile profile, string providerName, string? reasoningEffort)
+    {
+        if (!RequiresSubscriptionReasoningPlaceholder(providerName, reasoningEffort) ||
+            WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Subscription worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}; pin the selected reasoning effort before subscription dispatch.");
+    }
+
+    private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
+    {
+        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
     private static Dictionary<string, string?> AddWorkingDirectoryVariable(

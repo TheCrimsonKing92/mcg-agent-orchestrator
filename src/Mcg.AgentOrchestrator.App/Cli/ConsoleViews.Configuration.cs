@@ -95,11 +95,24 @@ private static IEnumerable<(AgentRole Role, string ProfileName, string Detail)> 
             continue;
         }
 
+        if (RequiresSubscriptionReasoningPlaceholder(agent.ProviderName, agent.SubscriptionReasoningEffort ?? agent.ReasoningEffort) &&
+            !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
+        {
+            yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile does not pin the selected reasoning effort");
+            continue;
+        }
+
         if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)
         {
             yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile cannot patch Developer tasks");
         }
     }
+}
+
+private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(reasoningEffort);
 }
 
 public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)

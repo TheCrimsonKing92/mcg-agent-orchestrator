@@ -219,6 +219,12 @@ public static class OrchestratorHealthInspector
             return false;
         }
 
+        if (RequiresSubscriptionReasoningPlaceholder(agent.Model.ProviderName, agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort) &&
+            !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
+        {
+            return false;
+        }
+
         return agent.Role != AgentRole.Developer || profile.IsPatchCapable;
     }
 
@@ -286,12 +292,24 @@ public static class OrchestratorHealthInspector
             return $"subscription profile '{profile.Name}' does not pin the selected model";
         }
 
+        if (RequiresSubscriptionReasoningPlaceholder(agent.Model.ProviderName, agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort) &&
+            !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
+        {
+            return $"subscription profile '{profile.Name}' does not pin the selected reasoning effort";
+        }
+
         if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)
         {
             return $"subscription profile '{profile.Name}' cannot patch Developer tasks";
         }
 
         return $"subscription profile '{profile.Name}' is executable";
+    }
+
+    private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
+    {
+        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
     private static string? ResolveSubscriptionProfileName(AgentDefinition agent)

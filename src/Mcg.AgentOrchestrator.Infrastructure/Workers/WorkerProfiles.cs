@@ -24,6 +24,11 @@ public static class WorkerProfileDiagnostics
         return commandTemplate.Contains("{subscriptionModelName}", StringComparison.OrdinalIgnoreCase);
     }
 
+    public static bool UsesSubscriptionReasoningPlaceholder(string commandTemplate)
+    {
+        return commandTemplate.Contains("{subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static WorkerProfilePatchCapability EvaluatePatchCapability(string commandTemplate)
     {
         var normalized = commandTemplate.Trim();

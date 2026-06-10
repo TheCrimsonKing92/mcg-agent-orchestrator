@@ -260,7 +260,7 @@ public sealed class WorkerDispatchTests
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} --api-model {apiModelName} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-model {apiModelName} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
     ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -412,6 +412,36 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' -p", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("Get-Content -Raw", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_reasoning_pinning")]
+    public void WorkerProfileDispatcherRejectsSubscriptionProfilesWithoutReasoningPinning()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Reject unpinned subscription reasoning");
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli --model {subscriptionModelName} {promptPath}")]);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        Path.Combine(root, "prompts"),
+        root,
+        DateTimeOffset.UtcNow));
+
+    Assert.Contains(ex.Message, text => text.Contains("{subscriptionReasoningEffort}", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_to_api_model_settings_for_default_openai_subscription_profile")]
     public void WorkerProfileDispatcherFallsBackToApiModelSettingsForDefaultOpenAiSubscriptionProfile()
 {
@@ -517,7 +547,7 @@ public sealed class WorkerDispatchTests
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} {promptPath}"));
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
 
     var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -576,6 +606,31 @@ public sealed class WorkerDispatchTests
     Assert.False(reviewer.CanPrepare);
     Assert.Contains(reviewer.Detail, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_unpinned_reasoning_profiles_not_preparable")]
+    public void SubscriptionPlanMarksUnpinnedReasoningProfilesNotPreparable()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Plan unpinned subscription reasoning");
+    var agents =
+        AgentCatalog.Default()
+            .UpsertRole(new AgentDefinition(
+                new AgentId("openai-reviewer"),
+                "OpenAI reviewer",
+                AgentRole.Reviewer,
+                new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex", "low")))
+            .Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("custom-agent", "agent-cli --model {subscriptionModelName} {promptPath}"));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+
+    var reviewer = plan.Items.First(item => item.Role == AgentRole.Reviewer);
+    Assert.True(reviewer.ProfileExists);
+    Assert.False(reviewer.CanPrepare);
+    Assert.Contains(reviewer.Detail, text => text.Contains("{subscriptionReasoningEffort}", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_non_patching_developer_profiles_not_preparable")]
     public void SubscriptionPlanMarksNonPatchingDeveloperProfilesNotPreparable()
 {
@@ -583,7 +638,7 @@ public sealed class WorkerDispatchTests
     var goal = kernel.CreateGoal("Plan non-patching subscription profile");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
-    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} {promptPath}"));
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
 
     var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
 

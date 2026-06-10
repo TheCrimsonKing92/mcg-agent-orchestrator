@@ -15,7 +15,7 @@ public sealed class AdvanceLoopTests
     var agents = AgentCatalog.Default().Agents;
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {promptPath}"),
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}"),
         new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output {promptPath}")
     ]);
 
@@ -454,7 +454,7 @@ public sealed class AdvanceLoopTests
         new TaskDispatchRecord("manual", "Start-Sleep -Seconds 30; Write-Output manual", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {promptPath}")
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
     ]);
 
     try
