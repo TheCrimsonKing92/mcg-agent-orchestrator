@@ -49,6 +49,11 @@ public sealed class AgentTaskRunner
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before running it again.");
         }
 
+        if (task.LastDispatch is not null || task.LastProcess is not null)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' already has dispatch evidence; retry the task before running it with a model provider.");
+        }
+
         if (task.AssignedAgentId is null)
         {
             throw new InvalidOperationException($"Task '{taskId}' is not assigned to an agent.");

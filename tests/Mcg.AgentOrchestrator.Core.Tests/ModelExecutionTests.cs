@@ -232,6 +232,36 @@ public sealed class ModelExecutionTests
         Assert.True(task.LastExecution is not null);
     }
 
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_rejects_subscription_dispatch_evidence_without_calling_provider")]
+    public async Task ExecuteAssignedTaskRejectsSubscriptionDispatchEvidenceWithoutCallingProvider()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Avoid API fallback after subscription work");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again at 4:58 PM.",
+        clock.UtcNow));
+    var provider = new FakeModelProvider("OpenAI", "unused");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
+
+    Assert.Contains(ex.Message, text => text.Contains("already has dispatch evidence", StringComparison.Ordinal));
+    Assert.Equal(0, provider.CallCount);
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastDispatch is not null);
+    Assert.True(task.LastVerification is null);
+    Assert.True(task.SubscriptionRetryAfter is not null);
+}
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_rejects_non_assigned_task_without_calling_provider")]
     public async Task ExecuteAssignedTaskRejectsNonAssignedTaskWithoutCallingProvider()
 {
