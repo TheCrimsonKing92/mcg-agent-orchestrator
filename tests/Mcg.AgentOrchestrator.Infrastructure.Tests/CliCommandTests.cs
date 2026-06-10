@@ -1121,6 +1121,7 @@ public sealed class CliCommandTests
 
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-all", ex!.Message);
+        Xunit.Assert.Contains("default local Ollama smoke first", ex.Message);
     }
 
     [Xunit.Fact(DisplayName = "Cli_paid_provider_smoke_requires_confirm_flag")]
@@ -1153,6 +1154,7 @@ public sealed class CliCommandTests
 
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-paid-smoke", ex!.Message);
+        Xunit.Assert.Contains("default local Ollama smoke first", ex.Message);
     }
 
     [Xunit.Fact(DisplayName = "Cli_worker_profile_check_validates_active_subscription_routes")]

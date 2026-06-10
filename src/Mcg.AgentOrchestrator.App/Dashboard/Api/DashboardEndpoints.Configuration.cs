@@ -13,12 +13,12 @@ internal static partial class DashboardEndpoints
             : DashboardRequestParser.GetQueryValue(context.Request, "target") ?? ProviderSmokeRunner.DefaultTarget;
         if (!isPost && target.Equals("all", StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException("Smoking all providers requires POST so broad paid smoke tests are deliberate.");
+            throw new ArgumentException(ProviderSmokeRunner.BuildBroadSmokeConfirmationMessage("POST with confirmAll=true"));
         }
 
         if (!isPost && ProviderSmokeRunner.RequiresPaidConfirmation(target))
         {
-            throw new ArgumentException("Paid provider smoke requires POST with confirmPaidSmoke=true because it can make a live billable request.");
+            throw new ArgumentException(ProviderSmokeRunner.BuildPaidSmokeConfirmationMessage("POST with confirmPaidSmoke=true"));
         }
 
         return Json(await ProviderSmokeRunner.RunProviderSmokeReportAsync(target));

@@ -28,12 +28,12 @@ private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<strin
             var smokeTarget = smokeArgs.Count > 0 ? smokeArgs[0] : ProviderSmokeRunner.DefaultTarget;
             if (smokeTarget.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmAllSmoke)
             {
-                throw new InvalidOperationException("provider-smoke all requires --confirm-all because broad paid smoke tests are deliberate.");
+                throw new InvalidOperationException(ProviderSmokeRunner.BuildBroadSmokeConfirmationMessage("--confirm-all"));
             }
 
             if (ProviderSmokeRunner.RequiresPaidConfirmation(smokeTarget) && !confirmAllSmoke && !confirmPaidSmoke)
             {
-                throw new InvalidOperationException("Paid provider smoke requires --confirm-paid-smoke because it can make a live billable request.");
+                throw new InvalidOperationException(ProviderSmokeRunner.BuildPaidSmokeConfirmationMessage("--confirm-paid-smoke"));
             }
 
             TaskSpec? smokeTask = null;

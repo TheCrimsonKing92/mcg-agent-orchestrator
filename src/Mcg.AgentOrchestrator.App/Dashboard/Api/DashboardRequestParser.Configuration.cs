@@ -262,12 +262,12 @@ internal static void RequireProviderSmokeConfirmation(string target, bool confir
 {
     if (target.Equals("all", StringComparison.OrdinalIgnoreCase) && !confirmAll)
     {
-        throw new ArgumentException("Smoking all providers requires confirmAll=true because broad paid smoke tests are deliberate.");
+        throw new ArgumentException(ProviderSmokeRunner.BuildBroadSmokeConfirmationMessage("confirmAll=true"));
     }
 
     if (ProviderSmokeRunner.RequiresPaidConfirmation(target) && !confirmAll && !confirmPaidSmoke)
     {
-        throw new ArgumentException("Paid provider smoke requires confirmPaidSmoke=true because it can make a live billable request.");
+        throw new ArgumentException(ProviderSmokeRunner.BuildPaidSmokeConfirmationMessage("confirmPaidSmoke=true"));
     }
 }
 }

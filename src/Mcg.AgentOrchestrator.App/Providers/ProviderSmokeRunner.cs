@@ -118,6 +118,16 @@ public static bool IsPaidProviderName(string providerName)
         providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
 }
 
+public static string BuildPaidSmokeConfirmationMessage(string confirmFlag)
+{
+    return $"Paid provider smoke requires {confirmFlag} because it can make a live billable request. Use the default local Ollama smoke first; add {confirmFlag} only after deciding a paid smoke request is necessary.";
+}
+
+public static string BuildBroadSmokeConfirmationMessage(string confirmFlag)
+{
+    return $"Smoking all providers requires {confirmFlag} because broad paid smoke tests are deliberate. Use the default local Ollama smoke first, or target one paid provider with explicit paid-smoke confirmation.";
+}
+
 private static IReadOnlyList<string> ResolveDefaultProviderSmokeTargets()
 {
     return ["Ollama"];

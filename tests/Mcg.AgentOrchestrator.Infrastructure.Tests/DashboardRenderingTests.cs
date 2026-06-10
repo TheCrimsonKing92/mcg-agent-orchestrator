@@ -621,6 +621,7 @@ public sealed class DashboardRenderingTests
         DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"openai\"}"));
 
     Xunit.Assert.Contains("confirmPaidSmoke=true", ex.Message);
+    Xunit.Assert.Contains("default local Ollama smoke first", ex.Message);
     Assert.Equal("ollama", DashboardRequestParser.ParseProviderSmokeSubmission("ollama"));
     Assert.Equal("openai", DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"openai\",\"confirmPaidSmoke\":true}"));
 }
@@ -631,6 +632,7 @@ public sealed class DashboardRenderingTests
         DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"all\"}"));
 
     Xunit.Assert.Contains("confirmAll=true", ex.Message);
+    Xunit.Assert.Contains("default local Ollama smoke first", ex.Message);
     Assert.Equal("all", DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"all\",\"confirmAll\":true}"));
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_retry_note")]
