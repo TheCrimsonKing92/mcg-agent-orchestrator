@@ -326,7 +326,7 @@ public sealed class StatePersistenceAndPerformanceTests
     var subscription = agent.Subscription!;
     Assert.Equal("codex-cli", subscription.WorkerProfileName);
     Assert.Equal("gpt-5.3-codex", subscription.ModelAlias);
-    Assert.Equal(AgentCatalog.RoutineReasoningEffort, subscription.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, subscription.ReasoningEffort);
     Assert.True(agent.ComplexModel is not null);
     Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
     Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);

@@ -335,14 +335,14 @@ public sealed class WorkerDispatchTests
     Assert.Equal("codex-cli", developer.LastDispatch!.WorkerName);
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex'", StringComparison.Ordinal));
-    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
     Assert.False(developer.LastDispatch.Command.Contains("{workingDirectory}", StringComparison.Ordinal));
     Assert.Equal("codex-cli", researcher.LastDispatch!.WorkerName);
     Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex'", StringComparison.Ordinal));
-    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
+    Assert.Contains(researcher.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
     Assert.True(File.Exists(results.Single(result => result.Task.Id == developer.Id).PromptPath));
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);

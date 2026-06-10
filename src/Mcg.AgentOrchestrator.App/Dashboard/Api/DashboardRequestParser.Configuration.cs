@@ -164,7 +164,7 @@ private static string? DefaultSubscriptionReasoningEffort(string providerName, A
 {
     return AgentExecutionPolicies.AllowsSubscription(executionPolicy) &&
         providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
-            ? AgentCatalog.RoutineReasoningEffort
+            ? AgentCatalog.RoutineSubscriptionReasoningEffort
             : null;
 }
 

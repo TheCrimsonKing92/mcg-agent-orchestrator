@@ -31,7 +31,7 @@ public sealed class AgentCatalogTests
     {
         var agent = catalog.GetRequired(role);
         Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Model.ReasoningEffort);
-        Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Subscription!.ReasoningEffort);
+        Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, agent.Subscription!.ReasoningEffort);
         Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel!.ReasoningEffort);
     }
 }

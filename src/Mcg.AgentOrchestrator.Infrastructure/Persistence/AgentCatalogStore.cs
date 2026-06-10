@@ -9,6 +9,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
     public const int RoutineApiMaxOutputTokens = 768;
     public const int ComplexApiMaxOutputTokens = 1200;
     public const string RoutineReasoningEffort = "medium";
+    public const string RoutineSubscriptionReasoningEffort = "low";
     public const string ComplexReasoningEffort = "high";
 
     public AgentDefinition GetRequired(AgentRole role)
@@ -37,7 +38,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, ComplexReasoningEffort, ComplexApiMaxOutputTokens);
 
         static SubscriptionLaunchProfile Codex() =>
-            new("codex-cli", "gpt-5.3-codex", RoutineReasoningEffort);
+            new("codex-cli", "gpt-5.3-codex", RoutineSubscriptionReasoningEffort);
 
         return new AgentCatalog(
         [

@@ -452,7 +452,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, openAi.ExecutionPolicy);
     Assert.Equal("codex-cli", openAi.Subscription!.WorkerProfileName);
     Assert.Equal("gpt-5.3-codex", openAi.Subscription.ModelAlias);
-    Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Subscription.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, openAi.Subscription.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Model.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
 
