@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -43,7 +44,7 @@ public static partial class DashboardRenderer
 
         if (task.LastDispatch is not null)
         {
-            return $"<div>Dispatch: {Encode(task.LastDispatch.WorkerName)}{RenderDispatchModelSelection(task.LastDispatch)} &middot; {Encode(task.LastDispatch.Command)}</div>";
+            return $"<div>Dispatch: {Encode(task.LastDispatch.WorkerName)}{RenderDispatchModelSelection(task.LastDispatch)} &middot; {Encode(task.LastDispatch.Command)}</div>{RenderDispatchCostNote(task.LastDispatch)}";
         }
 
         if (task.LastExecution is not null)
@@ -158,6 +159,14 @@ public static partial class DashboardRenderer
             ? string.Empty
             : $" prompt {dispatch.PromptCharacterCount.Value} chars";
         return $" <span class=\"meta\">{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}{prompt}</span>";
+    }
+
+    private static string RenderDispatchCostNote(TaskDispatchRecord dispatch)
+    {
+        return !string.IsNullOrWhiteSpace(dispatch.ProviderName) &&
+            ProviderSmokeRunner.IsPaidProviderName(dispatch.ProviderName)
+            ? $"<div class=\"attention\"><strong>Paid subscription handoff prepared</strong><br>Review subscription plan before start; {Encode(CostRecommendationText.LocalModelSwitchAction)} when the task is routine.</div>"
+            : string.Empty;
     }
 
     private static string RenderTaskGate(TaskVerificationGate gate)

@@ -1,5 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -50,6 +52,10 @@ public static void PrintTask(Goal goal, TaskSpec task)
         if (!string.IsNullOrWhiteSpace(task.LastDispatch.ProviderName) && !string.IsNullOrWhiteSpace(task.LastDispatch.ModelName))
         {
             Console.WriteLine($"Dispatch model: {task.LastDispatch.ProviderName}/{task.LastDispatch.ModelName} complexity={task.LastDispatch.TaskComplexity?.ToString() ?? "unknown"} reasoning={task.LastDispatch.ReasoningEffort ?? "default"}");
+            if (ProviderSmokeRunner.IsPaidProviderName(task.LastDispatch.ProviderName))
+            {
+                Console.WriteLine($"Cost note: paid subscription handoff prepared; review subscription-plan before start; {CostRecommendationText.LocalModelSwitchAction} when the task is routine.");
+            }
         }
         if (task.LastDispatch.PromptCharacterCount is { } promptCharacterCount)
         {

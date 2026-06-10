@@ -1684,6 +1684,8 @@ public sealed class DashboardRenderingTests
 
     Assert.Contains(html, text => text.Contains("Prepared handoff for codex-cli.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Simple reasoning medium prompt 321 chars", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Paid subscription handoff prepared", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("try local Ollama/qwen3:8b via agent configuration when the task is routine", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Prompt: 321 chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Dispatch models: OpenAI/gpt-5.3-codex (Simple) reasoning medium [potentially paid]: 1 dispatch, prompt 321 chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - reason.", StringComparison.Ordinal));

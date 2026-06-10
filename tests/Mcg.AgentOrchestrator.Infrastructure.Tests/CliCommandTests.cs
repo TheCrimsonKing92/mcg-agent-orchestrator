@@ -723,14 +723,27 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var task = goal.Tasks.Single();
 
-        var dispatched = CliCommandDispatcher.ExecuteCommand(
-            ["profile-dispatch", "1", "codex-cli"],
-            kernel,
-            workspace,
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal);
+        using var writer = new StringWriter();
+        var originalOut = Console.Out;
+        bool dispatched;
+        try
+        {
+            Console.SetOut(writer);
+            dispatched = CliCommandDispatcher.ExecuteCommand(
+                ["profile-dispatch", "1", "codex-cli"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var dispatchOutput = writer.ToString();
         InvalidOperationException? ex = null;
         try
         {
@@ -749,6 +762,8 @@ public sealed class CliCommandTests
         }
 
         Xunit.Assert.True(dispatched);
+        Xunit.Assert.Contains("Cost note: paid subscription handoff prepared", dispatchOutput);
+        Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration when the task is routine", dispatchOutput);
         Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
         Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
         Xunit.Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
