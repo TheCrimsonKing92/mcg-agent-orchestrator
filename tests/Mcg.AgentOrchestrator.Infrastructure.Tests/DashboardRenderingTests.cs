@@ -1215,10 +1215,13 @@ public sealed class DashboardRenderingTests
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", control!.Url);
     Assert.Equal("large paid subscription start", control.CostRisk);
+    Assert.True(control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
     Assert.True(nextDto.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Equal("large paid subscription start", nextDto.Control!.CostRisk);
+    Assert.True(nextDto.Control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
     Assert.True(workSummary.NextAction!.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Equal("large paid subscription start", workSummary.NextAction.Control!.CostRisk);
+    Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&amp;confirmLargePaidSubscriptionStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Suggested command: execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
@@ -1254,8 +1257,11 @@ public sealed class DashboardRenderingTests
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", control!.Url);
     Assert.Equal("complex paid subscription model", control.CostRisk);
+    Assert.True(control.CostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
     Assert.Equal("complex paid subscription model", nextDto.Control!.CostRisk);
+    Assert.True(nextDto.Control.CostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
     Assert.Equal("complex paid subscription model", workSummary.NextAction!.Control!.CostRisk);
+    Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_labels_run_controls_by_execution_policy")]

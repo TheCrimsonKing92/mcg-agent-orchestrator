@@ -39,7 +39,8 @@ public static class DashboardNextActionControls
                     "Start prepared work",
                     "POST",
                     $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true{BuildLargePaidSubscriptionStartSuffix(goal, item.TaskId!)}",
-                    BuildPreparedDispatchCostRiskLabel(goal, item.TaskId!)),
+                    BuildPreparedDispatchCostRiskLabel(goal, item.TaskId!),
+                    BuildPreparedDispatchCostRecommendation(goal, item.TaskId!)),
             NextActionKind.DelegatePendingTask =>
                 new DashboardNextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
             NextActionKind.InspectFailedTask when taskNumber is not null =>
@@ -332,6 +333,14 @@ public static class DashboardNextActionControls
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
         return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is { } risk
             ? SubscriptionPromptCostGuard.BuildInlineLabel(risk)
+            : null;
+    }
+
+    private static string? BuildPreparedDispatchCostRecommendation(Goal goal, TaskId taskId)
+    {
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is { } risk
+            ? SubscriptionPromptCostGuard.BuildRecommendation(risk)
             : null;
     }
 

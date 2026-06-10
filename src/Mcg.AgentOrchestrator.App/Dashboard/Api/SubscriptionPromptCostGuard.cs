@@ -165,6 +165,36 @@ public static string BuildInlineLabel(PaidSubscriptionPromptRisk risk)
     return "paid subscription start";
 }
 
+public static string? BuildRecommendation(PaidSubscriptionPromptRisk risk)
+{
+    if (risk.HasPriorUnderpoweredFit)
+    {
+        return "Prior evidence says this subscription model was underpowered; choose a stronger model before paid subscription start.";
+    }
+
+    if (risk.HasPriorOverkillFit)
+    {
+        return "Prior evidence says this subscription model was overkill; try a cheaper or local model before paid subscription start.";
+    }
+
+    if (risk.PromptExceedsBatchThreshold || risk.HasOversizedPrompt)
+    {
+        return "Inspect the generated prompt before paid subscription start; it exceeds the paid prompt threshold.";
+    }
+
+    if (risk.TaskCountExceedsThreshold)
+    {
+        return "Reduce paid subscription fanout or start a smaller batch first.";
+    }
+
+    if (risk.UsesComplexPaidModel)
+    {
+        return "Confirm this task needs the complex paid subscription model before start.";
+    }
+
+    return null;
+}
+
 private static string BuildCliMessage(PaidSubscriptionPromptRisk risk)
 {
     return BuildMessage(
