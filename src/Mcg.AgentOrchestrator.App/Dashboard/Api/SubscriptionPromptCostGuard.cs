@@ -7,6 +7,7 @@ internal sealed record PaidSubscriptionPromptRisk(
     int TaskCount,
     int PromptCharacterCount,
     int BatchPromptThreshold,
+    int BatchTaskThreshold,
     IReadOnlyList<string> Details);
 
 internal static class SubscriptionPromptCostGuard
@@ -16,6 +17,7 @@ public const string CliConfirmationFlag = "--confirm-large-paid-subscription-sta
 private const int SimplePaidPromptThreshold = 4000;
 private const int ComplexPaidPromptThreshold = 6000;
 private const int BatchPaidPromptThreshold = 12000;
+private const int BatchPaidTaskThreshold = 3;
 
 public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
     Goal goal,
@@ -117,7 +119,7 @@ private static string BuildMessage(PaidSubscriptionPromptRisk risk, string confi
     var details = risk.Details.Count == 0
         ? string.Empty
         : " " + string.Join(" ", risk.Details);
-    return $"Large paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), threshold {risk.BatchPromptThreshold}. {confirmationInstruction}.{details}";
+    return $"Large paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s). {confirmationInstruction}.{details}";
 }
 
 private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCandidate> candidates)
@@ -131,8 +133,15 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
     var oversized = candidates
         .Where(candidate => candidate.PromptCharacterCount > PromptThreshold(candidate.TaskComplexity))
         .ToList();
+    var complex = candidates
+        .Where(candidate => candidate.TaskComplexity == TaskComplexity.Complex)
+        .ToList();
+    var tooManyPaidTasks = candidates.Count > BatchPaidTaskThreshold;
 
-    if (total <= BatchPaidPromptThreshold && oversized.Count == 0)
+    if (total <= BatchPaidPromptThreshold &&
+        !tooManyPaidTasks &&
+        oversized.Count == 0 &&
+        complex.Count == 0)
     {
         return null;
     }
@@ -143,6 +152,11 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
         details.Add($"Batch prompt chars {total} exceed {BatchPaidPromptThreshold}.");
     }
 
+    if (tooManyPaidTasks)
+    {
+        details.Add($"Paid task count {candidates.Count} exceeds {BatchPaidTaskThreshold}.");
+    }
+
     details.AddRange(oversized.Take(3).Select(candidate =>
         $"Task {candidate.TaskNumber} {candidate.ProviderName}/{candidate.ModelName} prompt {candidate.PromptCharacterCount} chars exceeds {PromptThreshold(candidate.TaskComplexity)}."));
 
@@ -151,10 +165,19 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
         details.Add($"+{oversized.Count - 3} more oversized task prompt(s).");
     }
 
+    details.AddRange(complex.Take(3).Select(candidate =>
+        $"Task {candidate.TaskNumber} {candidate.ProviderName}/{candidate.ModelName} uses complex paid model selection."));
+
+    if (complex.Count > 3)
+    {
+        details.Add($"+{complex.Count - 3} more complex paid task(s).");
+    }
+
     return new PaidSubscriptionPromptRisk(
         candidates.Count,
         total,
         BatchPaidPromptThreshold,
+        BatchPaidTaskThreshold,
         details);
 }
 

@@ -1256,8 +1256,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Large paid subscription prompt", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"{risk!.PromptCharacterCount} prompt chars across 1 task(s), threshold {risk.BatchPromptThreshold}.", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Large paid subscription start", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"{risk!.PromptCharacterCount} prompt chars across 1 task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
 }
 

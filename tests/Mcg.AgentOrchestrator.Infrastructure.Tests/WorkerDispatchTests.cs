@@ -771,6 +771,48 @@ public sealed class WorkerDispatchTests
     Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_fanout_with_small_prompts")]
+    public void SubscriptionPromptCostGuardBlocksPaidBatchFanoutWithSmallPrompts()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Plan paid batch subscription start");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+
+    var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        _ => 500);
+    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
+
+    Assert.True(risk is not null);
+    Assert.Equal(5, risk!.TaskCount);
+    Assert.Equal(2500, risk.PromptCharacterCount);
+    Assert.True(risk.Details.Any(detail => detail.Contains("Paid task count 5 exceeds 3", StringComparison.Ordinal)));
+    Assert.Contains(ex.Message, text => text.Contains("thresholds 12000 chars or 3 task(s)", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_complex_paid_start_with_small_prompt")]
+    public void SubscriptionPromptCostGuardBlocksComplexPaidStartWithSmallPrompt()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan complex paid subscription start",
+        [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture with distributed rollback and data integrity checks.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+
+    var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        _ => 500);
+
+    Assert.True(risk is not null);
+    Assert.Equal(1, risk!.TaskCount);
+    Assert.Equal(500, risk.PromptCharacterCount);
+    Assert.True(risk.Details.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
     public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()
 {
