@@ -100,6 +100,31 @@ public static string BuildInlineLabel(PaidApiPromptRisk risk)
     return "complex paid API model";
 }
 
+public static string? BuildRecommendation(PaidApiPromptRisk risk)
+{
+    if (risk.HasPriorUnderpoweredFit)
+    {
+        return $"Prior evidence says {risk.ProviderName}/{risk.ModelName} was underpowered; choose a stronger model before paid API run.";
+    }
+
+    if (risk.HasPriorOverkillFit)
+    {
+        return $"Prior evidence says {risk.ProviderName}/{risk.ModelName} was overkill; try a cheaper or local model before paid API run.";
+    }
+
+    if (risk.PromptExceedsThreshold)
+    {
+        return "Inspect the generated prompt before paid API run; it exceeds the routine prompt threshold.";
+    }
+
+    if (risk.UsesComplexPaidModel)
+    {
+        return "Confirm this task needs the complex paid model before API run.";
+    }
+
+    return null;
+}
+
 private static string BuildMessage(PaidApiPromptRisk risk, string confirmationInstruction)
 {
     var reasons = new List<string>();

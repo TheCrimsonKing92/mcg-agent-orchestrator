@@ -621,11 +621,16 @@ public static partial class DashboardRenderer
         var paidLabel = ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName)
             ? " [potentially paid]"
             : string.Empty;
-        var riskLabel = ApiPromptCostGuard.Evaluate(preview, goal) is { } risk
-            ? $" [{ApiPromptCostGuard.BuildInlineLabel(risk)}]"
-            : string.Empty;
+        var risk = ApiPromptCostGuard.Evaluate(preview, goal);
+        var riskLabel = risk is null
+            ? string.Empty
+            : $" [{ApiPromptCostGuard.BuildInlineLabel(risk)}]";
+        var recommendationText = risk is null ? null : ApiPromptCostGuard.BuildRecommendation(risk);
+        var recommendation = string.IsNullOrWhiteSpace(recommendationText)
+            ? string.Empty
+            : $"; {recommendationText}";
 
-        html.AppendLine($"<p class=\"meta\">API plan: {Encode(preview.ProviderName)}/{Encode(preview.ModelName)} {Encode(preview.TaskComplexity.ToString())}{Encode(reasoningLabel)} prompt {preview.PromptCharacterCount} chars{Encode(maxLabel)}{paidLabel}{riskLabel}</p>");
+        html.AppendLine($"<p class=\"meta\">API plan: {Encode(preview.ProviderName)}/{Encode(preview.ModelName)} {Encode(preview.TaskComplexity.ToString())}{Encode(reasoningLabel)} prompt {preview.PromptCharacterCount} chars{Encode(maxLabel)}{paidLabel}{riskLabel}{Encode(recommendation)}</p>");
     }
 
     private sealed record SubscriptionCostPreview(
