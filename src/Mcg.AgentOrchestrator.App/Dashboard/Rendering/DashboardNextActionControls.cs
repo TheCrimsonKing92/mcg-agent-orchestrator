@@ -30,8 +30,8 @@ public static class DashboardNextActionControls
                     GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
                     "POST",
                     BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions),
-                    BuildApiCostRiskLabel(goal, item.TaskId!, explicitApiRun: false, agents, agentDefinitions),
-                    BuildApiCostRecommendation(goal, item.TaskId!, explicitApiRun: false, agents, agentDefinitions)),
+                    BuildRunAssignedCostRiskLabel(goal, item.TaskId!, agents, agentDefinitions),
+                    BuildRunAssignedCostRecommendation(goal, item.TaskId!, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
@@ -279,6 +279,112 @@ public static class DashboardNextActionControls
         return "paid API";
     }
 
+    private static string? BuildRunAssignedCostRiskLabel(
+        Goal goal,
+        TaskId taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        if (TryResolveSubscriptionCostContext(goal, taskId, agents, agentDefinitions) is { } context)
+        {
+            if (context.ModelFit?.UnderpoweredCount > 0)
+            {
+                return "prior underpowered subscription model";
+            }
+
+            if (context.ModelFit?.OverkillCount > 0)
+            {
+                return "prior overkill subscription model";
+            }
+
+            return "paid subscription handoff";
+        }
+
+        return BuildApiCostRiskLabel(goal, taskId, explicitApiRun: false, agents, agentDefinitions);
+    }
+
+    private static string? BuildRunAssignedCostRecommendation(
+        Goal goal,
+        TaskId taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        if (TryResolveSubscriptionCostContext(goal, taskId, agents, agentDefinitions) is { } context)
+        {
+            if (context.ModelFit?.UnderpoweredCount > 0)
+            {
+                return $"Prior evidence says {context.ProviderName}/{context.ModelName} was underpowered; choose a stronger model before paid subscription handoff.";
+            }
+
+            if (context.ModelFit?.OverkillCount > 0)
+            {
+                return CostRecommendationText.PaidStartOverkill(context.ProviderName, context.ModelName);
+            }
+
+            return $"Review subscription-plan first; {CostRecommendationText.LocalModelSwitchAction} before paid subscription handoff when the task is routine.";
+        }
+
+        return BuildApiCostRecommendation(goal, taskId, explicitApiRun: false, agents, agentDefinitions);
+    }
+
+    private static SubscriptionCostContext? TryResolveSubscriptionCostContext(
+        Goal goal,
+        TaskId taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        if (task is null)
+        {
+            return null;
+        }
+
+        if (FindAgentDefinition(task, agentDefinitions) is { } agentDefinition)
+        {
+            if (!AgentExecutionPolicies.AllowsSubscription(agentDefinition.ExecutionPolicy))
+            {
+                return null;
+            }
+
+            var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agentDefinition, goal, task);
+            var providerName = GetTemplateValue(templateVariables, "providerName") ?? agentDefinition.Model.ProviderName;
+            var modelName = GetTemplateValue(templateVariables, "subscriptionModelName") ??
+                agentDefinition.Subscription?.ModelAlias ??
+                agentDefinition.Model.ModelName;
+            return ProviderSmokeRunner.IsPaidProviderName(providerName)
+                ? new SubscriptionCostContext(providerName, modelName, FindModelFit(goal, providerName, modelName))
+                : null;
+        }
+
+        var agent = agents?.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
+        if (agent is null || !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+        {
+            return null;
+        }
+
+        var healthProvider = agent.ProviderName;
+        var healthModel = agent.SubscriptionModelAlias ?? agent.ModelName;
+        return ProviderSmokeRunner.IsPaidProviderName(healthProvider)
+            ? new SubscriptionCostContext(healthProvider, healthModel, FindModelFit(goal, healthProvider, healthModel))
+            : null;
+    }
+
+    private static string? GetTemplateValue(IReadOnlyDictionary<string, string?> variables, string name)
+    {
+        return variables.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
+    }
+
+    private static ModelFitSummary? FindModelFit(Goal goal, string providerName, string modelName)
+    {
+        return ModelFitEvidence
+            .BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes))
+            .FirstOrDefault(fit =>
+                fit.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+                fit.ModelName.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string? BuildApiCostRecommendation(
         Goal goal,
         TaskId taskId,
@@ -356,6 +462,8 @@ public static class DashboardNextActionControls
             return null;
         }
     }
+
+    private sealed record SubscriptionCostContext(string ProviderName, string ModelName, ModelFitSummary? ModelFit);
 }
 
 

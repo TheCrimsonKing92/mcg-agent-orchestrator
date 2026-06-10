@@ -1127,14 +1127,16 @@ public sealed class DashboardRenderingTests
         "Prepare subscription handoff",
         "POST",
         $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true",
-        [Validation(task.RequiredRole, AgentExecutionPolicy.PreferSubscription)]);
+        [Validation(task.RequiredRole, AgentExecutionPolicy.PreferSubscription)],
+        "paid subscription handoff");
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
         "Prepare subscription handoff",
         "POST",
         $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true",
-        [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)]);
+        [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)],
+        "paid subscription handoff");
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
@@ -1181,6 +1183,42 @@ public sealed class DashboardRenderingTests
         $"/api/monitor?goal={goalPrefix}");
 
     Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify")));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardNextActionControls_surface_prior_subscription_model_fit_before_handoff")]
+    public void DashboardNextActionControlsSurfacePriorSubscriptionModelFitBeforeHandoff()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Update the old label.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Update the next label.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Avoid repeating overkill paid subscription handoff", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - overkill - label-only change.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+    var action = kernel.BuildNextActions(goal.Id).Items.Single();
+
+    var control = DashboardNextActionControls.Build(goal, action, agentDefinitions: [agent]);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), [agent]).Items.Single();
+
+    Assert.Equal(NextActionKind.RunAssignedTask, action.Kind);
+    Assert.Equal(nextTask.Id.Value, action.TaskId!.Value);
+    Assert.Equal("prior overkill subscription model", control!.CostRisk);
+    Assert.True(control.CostRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
+    Assert.Equal("prior overkill subscription model", nextDto.Control!.CostRisk);
+    Assert.True(nextDto.Control.CostRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
 }
 
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_confirm_large_paid_prepared_dispatch")]
