@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -11,7 +12,8 @@ public static class DashboardNextActionControls
     public static DashboardNextActionControl? Build(
         Goal goal,
         NextActionItem item,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+        IReadOnlyList<AgentConfigurationValidation>? agents = null,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var goalPrefix = goal.Id.Value[..8];
         int? taskNumber = item.TaskId is null ? null : GetTaskDisplayNumber(goal, item.TaskId);
@@ -19,7 +21,10 @@ public static class DashboardNextActionControls
         return item.Kind switch
         {
             NextActionKind.RunAssignedTask when taskNumber is not null =>
-                new DashboardNextActionControl(GetRunActionLabel(goal, item.TaskId, agents), "POST", BuildTaskRunUrl(goal, item.TaskId!, agents)),
+                new DashboardNextActionControl(
+                    GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
+                    "POST",
+                    BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
@@ -52,9 +57,10 @@ public static class DashboardNextActionControls
     public static string GetRunActionLabel(
         Goal goal,
         TaskId? taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+        IReadOnlyList<AgentConfigurationValidation>? agents = null,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
-        var policy = ResolveTaskExecutionPolicy(goal, taskId, agents);
+        var policy = ResolveTaskExecutionPolicy(goal, taskId, agents, agentDefinitions);
         return policy switch
         {
             AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription => "Prepare subscription handoff",
@@ -66,9 +72,10 @@ public static class DashboardNextActionControls
     public static bool CanRunApiExplicitly(
         Goal goal,
         TaskId? taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+        IReadOnlyList<AgentConfigurationValidation>? agents = null,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
-        if (ResolveTaskExecutionPolicy(goal, taskId, agents) is not AgentExecutionPolicy.AnyAvailable || taskId is null)
+        if (ResolveTaskExecutionPolicy(goal, taskId, agents, agentDefinitions) is not AgentExecutionPolicy.AnyAvailable || taskId is null)
         {
             return false;
         }
@@ -86,11 +93,15 @@ public static class DashboardNextActionControls
     public static string BuildTaskRunUrl(
         Goal goal,
         TaskId taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+        IReadOnlyList<AgentConfigurationValidation>? agents = null,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents)
+        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
             ? "&confirmPaidApiRun=true"
+            : string.Empty;
+        suffix += RequiresLargePaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
+            ? $"&{ApiPromptCostGuard.DashboardConfirmationQueryName}=true"
             : string.Empty;
         return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true{suffix}";
     }
@@ -98,11 +109,15 @@ public static class DashboardNextActionControls
     public static string BuildExplicitApiRunUrl(
         Goal goal,
         TaskId taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+        IReadOnlyList<AgentConfigurationValidation>? agents = null,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents)
+        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
             ? "&confirmPaidApiRun=true"
+            : string.Empty;
+        suffix += RequiresLargePaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
+            ? $"&{ApiPromptCostGuard.DashboardConfirmationQueryName}=true"
             : string.Empty;
         return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true{suffix}";
     }
@@ -110,26 +125,32 @@ public static class DashboardNextActionControls
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
         Goal goal,
         TaskId? taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents)
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
-        if (taskId is null || agents is null)
+        if (taskId is null)
         {
             return null;
         }
 
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
-        return task is null
-            ? null
-            : agents.FirstOrDefault(agent => agent.Role == task.RequiredRole)?.ExecutionPolicy;
+        if (task is null)
+        {
+            return null;
+        }
+
+        return FindAgentDefinition(task, agentDefinitions)?.ExecutionPolicy
+            ?? agents?.FirstOrDefault(agent => agent.Role == task.RequiredRole)?.ExecutionPolicy;
     }
 
     private static bool RequiresPaidApiRunConfirmation(
         Goal goal,
         TaskId? taskId,
         bool explicitApiRun,
-        IReadOnlyList<AgentConfigurationValidation>? agents)
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
-        if (taskId is null || agents is null)
+        if (taskId is null)
         {
             return false;
         }
@@ -140,7 +161,25 @@ public static class DashboardNextActionControls
             return false;
         }
 
-        var agent = agents.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
+        if (FindAgentDefinition(task, agentDefinitions) is { } agentDefinition)
+        {
+            if (!explicitApiRun && agentDefinition.ExecutionPolicy != AgentExecutionPolicy.ApiOnly)
+            {
+                return false;
+            }
+
+            if (explicitApiRun &&
+                (!AgentExecutionPolicies.AllowsApi(agentDefinition.ExecutionPolicy) ||
+                    (agentDefinition.ExecutionPolicy != AgentExecutionPolicy.ApiOnly && !CanRunApiExplicitly(goal, taskId, agents, agentDefinitions))))
+            {
+                return false;
+            }
+
+            return TryPreviewApiRun(goal, task, agentDefinitions!) is { } preview &&
+                ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName);
+        }
+
+        var agent = agents?.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
         if (agent is null)
         {
             return false;
@@ -163,6 +202,46 @@ public static class DashboardNextActionControls
             ProviderSmokeRunner.IsPaidProviderName(providerName);
     }
 
+    private static bool RequiresLargePaidApiRunConfirmation(
+        Goal goal,
+        TaskId taskId,
+        bool explicitApiRun,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        if (agentDefinitions is null)
+        {
+            return false;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        if (task is null)
+        {
+            return false;
+        }
+
+        var agent = FindAgentDefinition(task, agentDefinitions);
+        if (agent is null)
+        {
+            return false;
+        }
+
+        if (!explicitApiRun && agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly)
+        {
+            return false;
+        }
+
+        if (explicitApiRun &&
+            (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
+                (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly && !CanRunApiExplicitly(goal, taskId, agents, agentDefinitions))))
+        {
+            return false;
+        }
+
+        return TryPreviewApiRun(goal, task, agentDefinitions) is { } preview &&
+            ApiPromptCostGuard.Evaluate(preview) is not null;
+    }
+
     private static string ResolveApiProviderName(Goal goal, TaskSpec task, AgentConfigurationValidation agent)
     {
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
@@ -172,6 +251,33 @@ public static class DashboardNextActionControls
         }
 
         return agent.ProviderName;
+    }
+
+    private static AgentDefinition? FindAgentDefinition(TaskSpec task, IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        if (agentDefinitions is null)
+        {
+            return null;
+        }
+
+        return agentDefinitions.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId)
+            ?? agentDefinitions.FirstOrDefault(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole);
+    }
+
+    private static AgentTaskRunPreview? TryPreviewApiRun(Goal goal, TaskSpec task, IReadOnlyList<AgentDefinition> agentDefinitions)
+    {
+        try
+        {
+            return AgentTaskRunner.PreviewRun(goal, task, agentDefinitions);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
     }
 }
 

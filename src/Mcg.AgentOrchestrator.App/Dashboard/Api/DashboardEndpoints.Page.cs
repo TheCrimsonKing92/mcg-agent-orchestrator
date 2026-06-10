@@ -13,6 +13,7 @@ internal static partial class DashboardEndpoints
         string? goalPrefix = null)
     {
         var current = await LoadAsync(services, context.RequestAborted);
+        var agentCatalog = services.LoadAgentCatalog();
         var health = BuildHealthReport(services);
         var browserUrl = DashboardHost.GetBrowserUrl(services.HostArgs);
         var hostedUrlPrefixes = DashboardHost.GetHostedUrlPrefixes(services.HostArgs);
@@ -50,7 +51,8 @@ internal static partial class DashboardEndpoints
                     BuildTestRuns(services)),
                 services.Continuations.GetStatuses(),
                 focusGoalPrefix,
-                view));
+                view,
+                agentCatalog.Agents));
         return Text(html, "text/html; charset=utf-8");
     }
 }

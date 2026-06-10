@@ -1092,7 +1092,10 @@ public sealed class DashboardRenderingTests
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Goal,
-        FocusGoalPrefix: goalPrefix));
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: agents));
+    var flexiblePromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[1], agents).PromptCharacterCount;
+    var apiPromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[2], agents).PromptCharacterCount;
 
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
@@ -1103,13 +1106,54 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 1).Contains("API plan:", StringComparison.Ordinal));
-    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 768 out [potentially paid]", StringComparison.Ordinal));
-    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 768 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {flexiblePromptChars} chars max 768 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {apiPromptChars} chars max 768 out [potentially paid]", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 4).Contains("API plan:", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 3</code>", StringComparison.Ordinal));
     Assert.False(html.Contains($"subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_api_prompt_from_exact_preview")]
+    public void DashboardRendererConfirmsLargePaidApiPromptFromExactPreview()
+{
+    var objective = "production architecture api cli dashboard provider subscription worker persistence state tests docs " + new string('o', 5000);
+    var description = "Design and implement complete integration with authentication migration rollback state persistence and dashboard api tests. " + new string('d', 5000);
+    var verificationPlan = "Run end-to-end integration tests, dashboard smoke tests, api tests, cli tests, and rollback checks. " + new string('v', 5000);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer, verificationPlan)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey, ReasoningEffort: "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    var agents = new[] { agent };
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var preview = AgentTaskRunner.PreviewRun(goal, task, agents);
+    var risk = ApiPromptCostGuard.Evaluate(preview);
+    var goalPrefix = goal.Id.Value[..8];
+    var health = new OrchestratorHealthReport(
+        [],
+        [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
+        []);
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: agents));
+    var controls = ExtractTaskControls(html, 1);
+
+    Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
+    Assert.True(risk is not null);
+    Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run task</button>", StringComparison.Ordinal));
+    Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_prepared_dispatch_as_primary_task_action")]
@@ -1349,7 +1393,7 @@ static AgentDefinition Agent(AgentRole role, AgentExecutionPolicy policy)
         AgentId.New(),
         role.ToString(),
         role,
-        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey),
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey, ReasoningEffort: "medium"),
         ExecutionPolicy: policy);
 }
 

@@ -16,7 +16,8 @@ public sealed record DashboardRenderOptions(
     DashboardWorkspaceContext? Workspace = null,
     IReadOnlyList<DashboardContinuationStatusDto>? ContinuationWatches = null,
     string? FocusGoalPrefix = null,
-    DashboardView View = DashboardView.Ops);
+    DashboardView View = DashboardView.Ops,
+    IReadOnlyList<AgentDefinition>? AgentDefinitions = null);
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
@@ -238,13 +239,13 @@ public static partial class DashboardRenderer
         html.AppendLine($"<a href=\"{prefix}/gate\" target=\"_blank\" rel=\"noreferrer\">Verification status</a>");
         html.AppendLine($"<a href=\"{prefix}/verification-plan\" target=\"_blank\" rel=\"noreferrer\">Verification plan</a>");
         html.AppendLine($"<a href=\"{prefix}/verifications\" target=\"_blank\" rel=\"noreferrer\">Verification records</a>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildTaskRunUrl(goal, task.Id, options.HealthReport?.Agents))}\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents))}</button>");
-        if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents))
+        html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildTaskRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
+        if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))
         {
-            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents))}\">Explicit API run</button>");
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">Explicit API run</button>");
         }
 
-        RenderApiRunPreview(html, goal, task, options.HealthReport?.Agents);
+        RenderApiRunPreview(html, goal, task, options.HealthReport?.Agents, options.AgentDefinitions);
         RenderAdvancedProcessAction(html, prefix, "start?confirmDispatchStart=true", "Start prepared work", GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "cancel", "Cancel process", GetCancelProcessReadiness(task));
@@ -325,10 +326,14 @@ public static partial class DashboardRenderer
             $"<span class=\"disabled-action\"><button type=\"button\" disabled title=\"{Encode(readiness.Reason)}\">{label} unavailable</button><span class=\"meta\">{Encode(readiness.Reason)}</span></span>");
     }
 
-    private static void RenderApiRunPreview(StringBuilder html, Goal goal, TaskSpec task, IReadOnlyList<AgentConfigurationValidation>? agents)
+    private static void RenderApiRunPreview(
+        StringBuilder html,
+        Goal goal,
+        TaskSpec task,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
     {
-        if (agents is null ||
-            task.Status != WorkTaskStatus.Assigned ||
+        if (task.Status != WorkTaskStatus.Assigned ||
             task.LastDispatch is not null ||
             task.LastProcess is not null ||
             task.LastExecution is not null ||
@@ -338,11 +343,18 @@ public static partial class DashboardRenderer
             return;
         }
 
-        var agent = agents.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
+        if (agentDefinitions is not null &&
+            TryBuildApiRunPreview(goal, task, agents, agentDefinitions) is { } preview)
+        {
+            RenderApiRunPreview(html, preview);
+            return;
+        }
+
+        var agent = agents?.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
         if (agent is null ||
             !AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
             (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly &&
-                !DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, agents)))
+                !DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, agents, agentDefinitions)))
         {
             return;
         }
@@ -372,6 +384,54 @@ public static partial class DashboardRenderer
             : string.Empty;
 
         html.AppendLine($"<p class=\"meta\">API plan: {Encode(providerName)}/{Encode(modelName)} {Encode(complexity.ToString())}{Encode(reasoningLabel)}{Encode(maxLabel)}{paidLabel}</p>");
+    }
+
+    private static AgentTaskRunPreview? TryBuildApiRunPreview(
+        Goal goal,
+        TaskSpec task,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition> agentDefinitions)
+    {
+        var agent = agentDefinitions.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId)
+            ?? agentDefinitions.FirstOrDefault(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole);
+        if (agent is null ||
+            !AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
+            (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly &&
+                !DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, agents, agentDefinitions)))
+        {
+            return null;
+        }
+
+        try
+        {
+            return AgentTaskRunner.PreviewRun(goal, task, agentDefinitions);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private static void RenderApiRunPreview(StringBuilder html, AgentTaskRunPreview preview)
+    {
+        var reasoningLabel = string.IsNullOrWhiteSpace(preview.ReasoningEffort)
+            ? string.Empty
+            : $" reasoning {preview.ReasoningEffort}";
+        var maxLabel = preview.MaxOutputTokens is { } max
+            ? $" max {max} out"
+            : string.Empty;
+        var paidLabel = ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName)
+            ? " [potentially paid]"
+            : string.Empty;
+        var riskLabel = ApiPromptCostGuard.Evaluate(preview) is { } risk
+            ? $" [large paid prompt: exceeds {risk.PromptThreshold}]"
+            : string.Empty;
+
+        html.AppendLine($"<p class=\"meta\">API plan: {Encode(preview.ProviderName)}/{Encode(preview.ModelName)} {Encode(preview.TaskComplexity.ToString())}{Encode(reasoningLabel)} prompt {preview.PromptCharacterCount} chars{Encode(maxLabel)}{paidLabel}{riskLabel}</p>");
     }
 
     private static TaskActionReadiness GetStartDispatchReadiness(TaskSpec task)
