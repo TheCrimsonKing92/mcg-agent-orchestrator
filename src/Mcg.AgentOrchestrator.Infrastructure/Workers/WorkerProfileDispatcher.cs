@@ -25,7 +25,7 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task);
 
-        var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id, BuildModelFitTarget(providerName, modelName));
         var preparation = WorkerCommandTemplate.Prepare(
             brief,
             profile.Name,
@@ -262,6 +262,13 @@ public static class WorkerProfileDispatcher
         return selection.UsesComplexModel
             ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
             : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
+    }
+
+    private static string? BuildModelFitTarget(string? providerName, string? modelName)
+    {
+        return string.IsNullOrWhiteSpace(providerName) || string.IsNullOrWhiteSpace(modelName)
+            ? null
+            : $"{providerName.Trim()}/{modelName.Trim()}";
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)

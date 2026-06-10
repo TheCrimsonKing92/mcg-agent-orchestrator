@@ -196,6 +196,7 @@ public sealed class AgentTaskRunner
         var responseGuidance = string.IsNullOrWhiteSpace(responseBudgetGuidance)
             ? string.Empty
             : $"Response guidance: {responseBudgetGuidance}{Environment.NewLine}";
+        var modelFitGuidance = BuildModelFitGuidance(resolvedModel);
         var timelineSection = string.IsNullOrWhiteSpace(timeline)
             ? string.Empty
             : $"{Environment.NewLine}Recent timeline:{Environment.NewLine}{timeline}";
@@ -207,6 +208,7 @@ public sealed class AgentTaskRunner
             $"Current task status: {task.Status}{Environment.NewLine}" +
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan, complexity)}{Environment.NewLine}" +
             responseGuidance +
+            modelFitGuidance +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}" +
             timelineSection;
 
@@ -242,6 +244,11 @@ public sealed class AgentTaskRunner
         return complexity == TaskComplexity.Complex
             ? ComplexPaidProviderFallbackMaxOutputTokens
             : RoutinePaidProviderFallbackMaxOutputTokens;
+    }
+
+    private static string BuildModelFitGuidance(ModelProfile resolvedModel)
+    {
+        return $"Model fit reporting: Include a final line exactly like `Model fit: {resolvedModel.ProviderName}/{resolvedModel.ModelName} - adequate|overkill|underpowered - <short reason>`.{Environment.NewLine}";
     }
 
     private static string BuildSystemPrompt(AgentRole role, TaskComplexity complexity)

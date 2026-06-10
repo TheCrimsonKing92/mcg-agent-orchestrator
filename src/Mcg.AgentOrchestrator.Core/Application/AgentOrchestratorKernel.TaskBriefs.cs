@@ -11,7 +11,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public TaskSpec GetTask(GoalId goalId, TaskId taskId) => GetGoal(goalId).FindTask(taskId);
 
-    public TaskBrief BuildTaskBrief(GoalId goalId, TaskId taskId)
+    public TaskBrief BuildTaskBrief(GoalId goalId, TaskId taskId, string? modelFitTarget = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -40,7 +40,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        lines.AddRange(BuildTaskBriefInstructions(complexity));
+        lines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
@@ -118,15 +118,17 @@ public sealed partial class AgentOrchestratorKernel
         return complexity == TaskComplexity.Complex ? 20 : 8;
     }
 
-    private static IReadOnlyList<string> BuildTaskBriefInstructions(TaskComplexity complexity)
+    private static IReadOnlyList<string> BuildTaskBriefInstructions(TaskComplexity complexity, string? modelFitTarget)
     {
+        var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
         {
             return
             [
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
-                "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state."
+                "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.",
+                modelFitInstruction
             ];
         }
 
@@ -137,8 +139,17 @@ public sealed partial class AgentOrchestratorKernel
             "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
             "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
-            "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads."
+            "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads.",
+            modelFitInstruction
         ];
+    }
+
+    private static string BuildModelFitInstruction(string? modelFitTarget)
+    {
+        var target = string.IsNullOrWhiteSpace(modelFitTarget)
+            ? "<provider>/<model or launcher>"
+            : modelFitTarget.Trim();
+        return $"Include a final model-selection note: Model fit: {target} - adequate|overkill|underpowered - <short reason>.";
     }
 
     private static bool IsRedundantBriefTimelineEvent(TaskSpec task, ProgressEvent evt)
