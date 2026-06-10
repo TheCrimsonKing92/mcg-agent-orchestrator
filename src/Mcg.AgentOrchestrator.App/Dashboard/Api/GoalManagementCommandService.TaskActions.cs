@@ -28,7 +28,7 @@ public static async Task<object?> ApplyTaskActionAsync(
             kernel.RecordTaskDispatch(
                 goal.Id,
                 task.Id,
-                new TaskDispatchRecord(dispatch.WorkerName, dispatch.Command, workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+                new TaskDispatchRecord(dispatch.WorkerName, dispatch.Command, workspace.ResolveExecutionDirectory(goal.Id), DateTimeOffset.UtcNow));
             return null;
 
         case "profile-dispatch":
@@ -56,7 +56,7 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "verify":
             var verify = DashboardRequestParser.ParseVerifySubmission(body);
-            var verification = await new LocalProcessVerifier().RunAsync(verify.Command, workspace.ExecutionDirectory);
+            var verification = await new LocalProcessVerifier().RunAsync(verify.Command, workspace.ResolveExecutionDirectory(goal.Id));
             kernel.RecordTaskVerification(goal.Id, task.Id, verification);
             return null;
 

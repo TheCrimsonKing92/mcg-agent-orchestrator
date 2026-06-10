@@ -36,7 +36,7 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         task,
         profile,
         workspace.PromptDirectory,
-        workspace.ExecutionDirectory,
+        workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         subscriptionMetadata?.Variables,
         subscriptionMetadata?.ProviderName,
@@ -116,7 +116,7 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
         agents,
         profiles,
         workspace.PromptDirectory,
-        workspace.ExecutionDirectory,
+        workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow);
 }
 
@@ -135,7 +135,7 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
         agents,
         profiles,
         workspace.PromptDirectory,
-        workspace.ExecutionDirectory,
+        workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow);
 }
 

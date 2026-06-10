@@ -1,3 +1,6 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record OrchestratorWorkspace(
@@ -26,5 +29,12 @@ internal sealed record OrchestratorWorkspace(
             Path.Combine(orchestrator, "prompts"),
             Path.Combine(orchestrator, "logs"),
             Path.Combine(orchestrator, "transcript.md"));
+    }
+
+    // Goal work runs in the goal's worktree when one exists so concurrent
+    // goals do not contend for the shared execution directory.
+    public string ResolveExecutionDirectory(GoalId goalId)
+    {
+        return GoalWorktrees.TryResolve(ExecutionDirectory, goalId) ?? ExecutionDirectory;
     }
 }

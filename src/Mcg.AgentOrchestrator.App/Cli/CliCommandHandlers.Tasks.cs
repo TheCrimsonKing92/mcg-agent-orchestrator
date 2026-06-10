@@ -101,7 +101,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 4, "dispatch <task-number> <worker-name> <command>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var dispatchTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var dispatch = new TaskDispatchRecord(parts[2], parts[3], context.Workspace.RootDirectory, DateTimeOffset.UtcNow);
+            var dispatch = new TaskDispatchRecord(parts[2], parts[3], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id), DateTimeOffset.UtcNow);
             context.Kernel.RecordTaskDispatch(context.CurrentGoal.Id, dispatchTask.Id, dispatch);
             ConsoleViews.PrintTask(context.CurrentGoal, dispatchTask);
             return true;
@@ -111,7 +111,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var verifyTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var verification = new LocalProcessVerifier()
-                .RunAsync(parts[2], context.Workspace.RootDirectory)
+                .RunAsync(parts[2], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id))
                 .GetAwaiter()
                 .GetResult();
             context.Kernel.RecordTaskVerification(context.CurrentGoal.Id, verifyTask.Id, verification);
