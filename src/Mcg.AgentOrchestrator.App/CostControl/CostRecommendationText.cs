@@ -1,4 +1,4 @@
-namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
+namespace Mcg.AgentOrchestrator.App.CostControl;
 
 internal static class CostRecommendationText
 {
