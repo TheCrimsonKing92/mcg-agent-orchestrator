@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -705,6 +706,46 @@ public sealed class CliCommandTests
 
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_ready_start_cost_risk")]
+    public void CliSubscriptionPlanPrintsReadyStartCostRisk()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan architecture work",
+            [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "medium"),
+            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+        try
+        {
+            Console.SetOut(writer);
+
+            ConsoleViews.PrintSubscriptionPlan(plan);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+        Xunit.Assert.Contains("Ready start risk: complex paid subscription model", output);
+        Xunit.Assert.Contains("--confirm-large-paid-subscription-start", output);
+        Xunit.Assert.Contains("uses complex paid model selection", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_execute_dispatch_requires_confirm_flag")]

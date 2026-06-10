@@ -39,6 +39,9 @@ internal sealed record SubscriptionPlanDto(
     int ResolvableProfileCount,
     int RetryDeferredCount,
     DateTimeOffset? NextSubscriptionRetryAfter,
+    string? ReadyStartCostRisk,
+    int? ReadyStartPromptCharacterCount,
+    IReadOnlyList<string> ReadyStartCostRiskDetails,
     IReadOnlyList<SubscriptionPlanModelSummaryDto> ReadyModelUsage,
     IReadOnlyList<SubscriptionPlanItemDto> Items);
 

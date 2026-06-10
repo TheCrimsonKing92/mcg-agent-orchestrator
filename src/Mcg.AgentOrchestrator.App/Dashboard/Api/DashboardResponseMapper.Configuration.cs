@@ -66,6 +66,7 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(
     var items = goal.Tasks
         .Select(task => BuildSubscriptionPlanItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount))
         .ToList();
+    var readyStartRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(items);
 
     return new SubscriptionPlanDto(
         goal.Id.Value,
@@ -80,6 +81,9 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(
             .Where(item => item is not null)
             .OrderBy(item => item)
             .FirstOrDefault(),
+        readyStartRisk is null ? null : SubscriptionPromptCostGuard.BuildInlineLabel(readyStartRisk),
+        readyStartRisk?.PromptCharacterCount,
+        readyStartRisk?.Details ?? [],
         BuildSubscriptionPlanModelSummary(items),
         items);
 }

@@ -757,7 +757,11 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, complexSummary.ReadyCount);
     Assert.Equal(complexPromptCharacters, complexSummary.EstimatedPromptCharacterCount);
     Assert.True(complexSummary.IsPotentiallyPaidProvider);
+    Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
+    Assert.Equal(simplePromptCharacters + complexPromptCharacters, plan.ReadyStartPromptCharacterCount);
+    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
 }
+
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
     public void SubscriptionPlanMarksUsageLimitedTasksNotPreparableUntilRetryTime()
 {

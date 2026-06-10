@@ -126,6 +126,17 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
         Console.WriteLine("Ready model usage: " + string.Join("; ", plan.ReadyModelUsage.Select(FormatSubscriptionPlanModelSummary)));
     }
 
+    if (!string.IsNullOrWhiteSpace(plan.ReadyStartCostRisk))
+    {
+        var prompt = plan.ReadyStartPromptCharacterCount is null
+            ? string.Empty
+            : $"; {plan.ReadyStartPromptCharacterCount.Value} prompt chars";
+        var details = plan.ReadyStartCostRiskDetails.Count == 0
+            ? string.Empty
+            : " " + string.Join(" ", plan.ReadyStartCostRiskDetails.Take(2));
+        Console.WriteLine($"Ready start risk: {plan.ReadyStartCostRisk}{prompt}. Inspect this plan before using {SubscriptionPromptCostGuard.CliConfirmationFlag}.{details}");
+    }
+
     foreach (var item in plan.Items)
     {
         var complexity = item.TaskComplexity is null ? string.Empty : $", {item.TaskComplexity}";

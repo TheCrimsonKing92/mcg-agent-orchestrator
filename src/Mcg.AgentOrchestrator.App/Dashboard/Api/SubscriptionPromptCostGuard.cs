@@ -48,6 +48,24 @@ public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
     return BuildRisk(candidates);
 }
 
+public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(IReadOnlyList<SubscriptionPlanItemDto> items)
+{
+    var candidates = items
+        .Where(item => item.CanPrepare &&
+            item.EstimatedPromptCharacterCount is not null &&
+            !string.IsNullOrWhiteSpace(item.ProviderName) &&
+            ProviderSmokeRunner.IsPaidProviderName(item.ProviderName))
+        .Select(item => new PaidPromptCandidate(
+            item.TaskNumber,
+            item.ProviderName!,
+            item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName ?? "default",
+            item.TaskComplexity,
+            item.EstimatedPromptCharacterCount!.Value))
+        .ToList();
+
+    return BuildRisk(candidates);
+}
+
 public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(AgentOrchestratorKernel kernel, Goal goal, TaskSpec? onlyTask = null)
 {
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
