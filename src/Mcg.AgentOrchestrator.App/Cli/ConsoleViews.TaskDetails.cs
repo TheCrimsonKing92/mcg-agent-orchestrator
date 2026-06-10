@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -22,9 +23,9 @@ public static void PrintDelegationPlan(Goal goal, DelegationPlan plan)
 
 public static void PrintTask(Goal goal, TaskSpec task)
 {
-    Console.WriteLine($"{task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {task.Description}");
+    Console.WriteLine($"{task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text}");
     Console.WriteLine($"Assigned agent: {(task.AssignedAgentId is null ? "unassigned" : task.AssignedAgentId.Value)}");
-    Console.WriteLine($"Verification plan: {task.VerificationPlan ?? "none"}");
+    Console.WriteLine($"Verification plan: {(task.VerificationPlan is null ? "none" : OutputTextPreview.CreateSummary(task.VerificationPlan).Text)}");
 
     if (task.LastExecution is not null)
     {
@@ -36,7 +37,7 @@ public static void PrintTask(Goal goal, TaskSpec task)
             Console.WriteLine("Model note: possible output token cap hit.");
         }
         Console.WriteLine("Output:");
-        Console.WriteLine(task.LastExecution.Output);
+        Console.WriteLine(OutputTextPreview.Create(task.LastExecution.Output).Text.TrimEnd());
     }
 
     if (task.LastDispatch is not null)
@@ -75,13 +76,13 @@ public static void PrintTask(Goal goal, TaskSpec task)
         if (!string.IsNullOrWhiteSpace(task.LastVerification.StandardOutput))
         {
             Console.WriteLine("stdout:");
-            Console.WriteLine(task.LastVerification.StandardOutput.TrimEnd());
+            Console.WriteLine(OutputTextPreview.Create(task.LastVerification.StandardOutput).Text.TrimEnd());
         }
 
         if (!string.IsNullOrWhiteSpace(task.LastVerification.StandardError))
         {
             Console.WriteLine("stderr:");
-            Console.WriteLine(task.LastVerification.StandardError.TrimEnd());
+            Console.WriteLine(OutputTextPreview.Create(task.LastVerification.StandardError).Text.TrimEnd());
         }
     }
 
@@ -95,7 +96,7 @@ public static void PrintTimeline(Goal goal)
     foreach (var item in goal.Timeline.OrderBy(evt => evt.OccurredAt))
     {
         var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
-        Console.WriteLine($"  {item.OccurredAt:u} {item.Kind} {task}: {item.Message}");
+        Console.WriteLine($"  {item.OccurredAt:u} {item.Kind} {task}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
     }
 }
 
@@ -110,7 +111,7 @@ public static void PrintTaskTimeline(Goal goal, TaskSpec task)
 
     foreach (var item in events)
     {
-        Console.WriteLine($"  {item.OccurredAt:u} {item.Kind}: {item.Message}");
+            Console.WriteLine($"  {item.OccurredAt:u} {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
     }
 }
 
@@ -126,7 +127,7 @@ public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
     foreach (var request in pending)
     {
         var task = request.TaskId is null ? "goal" : request.TaskId.Value[..8];
-        Console.WriteLine($"{request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={task}: {request.Question}");
+        Console.WriteLine($"{request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={task}: {OutputTextPreview.CreateSummary(request.Question).Text}");
     }
 }
 

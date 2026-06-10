@@ -1,5 +1,6 @@
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
@@ -9,10 +10,10 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
 {
     text.AppendLine();
     text.AppendLine($"### Task {taskNumber}: {task.RequiredRole}");
-    text.AppendLine($"Description: {task.Description}");
+    text.AppendLine($"Description: {OutputTextPreview.CreateSummary(task.Description).Text}");
     text.AppendLine($"Status: {Display(task.Status)}");
     text.AppendLine($"Assigned agent: {(task.AssignedAgentId is null ? "unassigned" : task.AssignedAgentId.Value)}");
-    text.AppendLine($"Verification plan: {task.VerificationPlan ?? "none"}");
+    text.AppendLine($"Verification plan: {(task.VerificationPlan is null ? "none" : OutputTextPreview.CreateSummary(task.VerificationPlan).Text)}");
 
     if (task.LastExecution is not null)
     {
@@ -25,7 +26,7 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
             text.AppendLine("Model note: possible output token cap hit.");
         }
         text.AppendLine("Output:");
-        text.AppendLine(task.LastExecution.Output.Trim());
+        text.AppendLine(OutputTextPreview.Create(task.LastExecution.Output).Text.Trim());
     }
 
     if (task.LastDispatch is not null)
@@ -59,12 +60,12 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
             text.AppendLine($"- exit={verification.ExitCode} completed={verification.CompletedAt:u} command={verification.Command}");
             if (!string.IsNullOrWhiteSpace(verification.StandardOutput))
             {
-                text.AppendLine($"  stdout: {verification.StandardOutput.Trim()}");
+                text.AppendLine($"  stdout: {OutputTextPreview.Create(verification.StandardOutput).Text.Trim()}");
             }
 
             if (!string.IsNullOrWhiteSpace(verification.StandardError))
             {
-                text.AppendLine($"  stderr: {verification.StandardError.Trim()}");
+                text.AppendLine($"  stderr: {OutputTextPreview.Create(verification.StandardError).Text.Trim()}");
             }
         }
     }
@@ -79,7 +80,7 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
     {
         foreach (var evt in taskEvents)
         {
-            text.AppendLine($"- {evt.OccurredAt:u} {Display(evt.Kind)}: {evt.Message}");
+            text.AppendLine($"- {evt.OccurredAt:u} {Display(evt.Kind)}: {OutputTextPreview.CreateTimeline(evt.Message).Text}");
         }
     }
 }

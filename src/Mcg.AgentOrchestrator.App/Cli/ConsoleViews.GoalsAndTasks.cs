@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -31,7 +32,7 @@ public static void PrintGoal(Goal goal)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {goal.Id}");
-    Console.WriteLine($"Objective: {goal.Objective}");
+    Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
     Console.WriteLine($"Status: {goal.Status}");
     Console.WriteLine("Tasks:");
 
@@ -39,7 +40,7 @@ public static void PrintGoal(Goal goal)
     {
         var task = goal.Tasks[index];
         var assignment = task.AssignedAgentId is null ? "unassigned" : task.AssignedAgentId.Value[..8];
-        Console.WriteLine($"  {index + 1}. [{task.Status}] {task.RequiredRole}: {task.Description} ({assignment})");
+        Console.WriteLine($"  {index + 1}. [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment})");
     }
 
     Console.WriteLine();
@@ -48,13 +49,13 @@ public static void PrintGoal(Goal goal)
 public static void PrintTaskQueryResult(Goal goal, TaskQueryResult result)
 {
     Console.WriteLine();
-    Console.WriteLine($"Goal {result.GoalId.Value[..8]} {result.Status}: {result.Objective}");
+    Console.WriteLine($"Goal {result.GoalId.Value[..8]} {result.Status}: {OutputTextPreview.CreateSummary(result.Objective).Text}");
     Console.WriteLine($"Tasks matched: {result.Tasks.Count}");
 
     foreach (var task in result.Tasks)
     {
         var assignment = task.AssignedAgentId is null ? "unassigned" : task.AssignedAgentId.Value[..8];
-        Console.WriteLine($"  {GetTaskDisplayNumber(goal, task.Id)}. {task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {task.Description} ({assignment}) evidence={FormatTaskEvidence(task)}");
+        Console.WriteLine($"  {GetTaskDisplayNumber(goal, task.Id)}. {task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment}) evidence={FormatTaskEvidence(task)}");
     }
 
     Console.WriteLine();

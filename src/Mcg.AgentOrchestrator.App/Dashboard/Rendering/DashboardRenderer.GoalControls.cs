@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
@@ -81,14 +82,14 @@ public static partial class DashboardRenderer
 
         html.AppendLine($"<form id=\"{formAnchor}\" class=\"answer-form\" data-action=\"/api/input/{requestPrefix}/answer\">");
         html.AppendLine($"<div class=\"meta\">Pending decision &middot; {scope} &middot; requested {Encode(request.RequestedAt.ToString("u"))}</div>");
-        html.AppendLine($"<p class=\"decision-question\">{Encode(request.Question)}</p>");
+        html.AppendLine($"<p class=\"decision-question\">{Encode(OutputTextPreview.CreateSummary(request.Question).Text)}</p>");
         html.AppendLine("<div class=\"context-grid\">");
         html.AppendLine("<div class=\"context-block\">");
         html.AppendLine("<h4>Decision Scope</h4>");
         html.AppendLine($"<div><strong>Request</strong> {requestPrefix}</div>");
         if (task is null)
         {
-            html.AppendLine($"<div><strong>Goal</strong> {Encode(goal.Objective)}</div>");
+            html.AppendLine($"<div><strong>Goal</strong> {Encode(OutputTextPreview.CreateSummary(goal.Objective).Text)}</div>");
             html.AppendLine($"<div><strong>Status</strong> {Encode(Display(goal.Status))}</div>");
             html.AppendLine("<div class=\"context-actions\">");
             html.AppendLine($"<a href=\"/api/goals/{goalPrefix}/transcript\" target=\"_blank\" rel=\"noreferrer\">Activity log</a>");
@@ -100,7 +101,7 @@ public static partial class DashboardRenderer
             var taskNumber = GetTaskDisplayNumber(goal, task.Id);
             var taskPrefix = $"/api/goals/{goalPrefix}/tasks/{taskNumber}";
             html.AppendLine($"<div><strong>Status</strong> {Encode(Display(task.Status))}</div>");
-            html.AppendLine($"<div><strong>Description</strong> {Encode(task.Description)}</div>");
+            html.AppendLine($"<div><strong>Description</strong> {Encode(OutputTextPreview.CreateSummary(task.Description).Text)}</div>");
             html.AppendLine($"<div><strong>Verification</strong> {RenderVerificationPlan(task)}</div>");
             html.AppendLine("<div class=\"context-actions\">");
             html.AppendLine($"<a href=\"{taskPrefix}/brief\" target=\"_blank\" rel=\"noreferrer\">Brief</a>");
@@ -139,7 +140,7 @@ public static partial class DashboardRenderer
                 html.AppendLine("<ul class=\"context-list\">");
                 foreach (var evt in events)
                 {
-                    html.AppendLine($"<li><span class=\"meta\">{Encode(evt.OccurredAt.ToString("u"))}</span> {Encode(Display(evt.Kind))}: {Encode(evt.Message)}</li>");
+                    html.AppendLine($"<li><span class=\"meta\">{Encode(evt.OccurredAt.ToString("u"))}</span> {Encode(Display(evt.Kind))}: {Encode(OutputTextPreview.CreateTimeline(evt.Message).Text)}</li>");
                 }
 
                 html.AppendLine("</ul>");

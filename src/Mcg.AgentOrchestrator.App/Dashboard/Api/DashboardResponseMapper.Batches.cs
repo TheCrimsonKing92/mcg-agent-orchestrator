@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -63,7 +64,7 @@ public static ProcessBatchPlanDto ToProcessBatchPlanDto(Goal goal, ProcessBatchP
         plan.SkippedCount,
         plan.Items.Select(item =>
         {
-            var description = ResponseTextPreview.CreateSummary(item.Description);
+            var description = OutputTextPreview.CreateSummary(item.Description);
             return new ProcessBatchPlanItemDto(
                 ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId),
                 item.TaskId.Value,

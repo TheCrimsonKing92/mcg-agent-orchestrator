@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -254,7 +255,7 @@ public static partial class DashboardRenderer
                 foreach (var item in monitor.AttentionItems)
                 {
                     var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
-                    html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(item.Message)}</div>");
+                    html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</div>");
                 }
                 html.AppendLine("</div>");
             }
@@ -271,7 +272,7 @@ public static partial class DashboardRenderer
                 {
                     var item = nextActions.Items[index];
                     html.AppendLine("<tr>");
-                    html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
+                    html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
                     if (options.EnableOperatorControls)
                     {
                         html.AppendLine($"<td>{RenderNextActionControl(goal, item, options)}</td>");
@@ -361,7 +362,7 @@ public static partial class DashboardRenderer
             foreach (var item in monitor.AttentionItems)
             {
                 var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
-                html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(item.Message)}</div>");
+                html.AppendLine($"<div class=\"attention\"><strong>{Encode(Display(item.Kind))}</strong> <span class=\"meta\">{Encode(task)}</span><br>{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</div>");
             }
         }
         html.AppendLine("</div>");
@@ -385,7 +386,7 @@ public static partial class DashboardRenderer
                     ? $"<br><a class=\"button-link\" href=\"#{Encode(BuildHumanInputFormAnchor(item.RequestId))}\">Answer</a>"
                     : string.Empty;
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(item.Question)}<br><span class=\"meta\">{Encode(item.SuggestedAction)}</span></td><td><code>{Encode(BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
+                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(OutputTextPreview.CreateSummary(item.Question).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</span></td><td><code>{Encode(BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
                 html.AppendLine("</tr>");
             }
         }
@@ -402,7 +403,7 @@ public static partial class DashboardRenderer
         {
             var item = nextActions.Items[index];
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
+            html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
             if (options.EnableOperatorControls)
             {
                 html.AppendLine($"<td>{RenderNextActionControl(goal, item, options)}</td>");
@@ -446,7 +447,7 @@ public static partial class DashboardRenderer
                 int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
                 var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{Encode(scope)}</td><td>{Encode(Display(blocker.Kind))}<br><span class=\"meta\">{Encode(blocker.Message)}</span></td><td>{Encode(blocker.SuggestedAction)}</td><td><code>{Encode(BuildAcceptanceSuggestedCommand(blocker, taskNumber))}</code></td>");
+                html.AppendLine($"<td>{Encode(scope)}</td><td>{Encode(Display(blocker.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(blocker.Message).Text)}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(blocker.SuggestedAction).Text)}</td><td><code>{Encode(BuildAcceptanceSuggestedCommand(blocker, taskNumber))}</code></td>");
                 html.AppendLine("</tr>");
             }
             html.AppendLine("</tbody></table>");
@@ -470,7 +471,7 @@ public static partial class DashboardRenderer
             {
                 var taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{taskNumber}</td><td>{Encode(Display(item.GateStatus))}<br><span class=\"meta\">{Encode(item.Message)}</span></td><td>{Encode(item.SuggestedAction)}</td><td><code>{Encode(BuildVerificationSuggestedCommand(taskNumber, item.GateStatus))}</code></td>");
+                html.AppendLine($"<td>{taskNumber}</td><td>{Encode(Display(item.GateStatus))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</td><td><code>{Encode(BuildVerificationSuggestedCommand(taskNumber, item.GateStatus))}</code></td>");
                 html.AppendLine("</tr>");
             }
         }
@@ -494,7 +495,7 @@ public static partial class DashboardRenderer
         foreach (var item in evidence.Tasks)
         {
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.TaskId)}</td><td>{Encode(Display(item.LatestEvidence))}<br><span class=\"meta\">{item.Role} &middot; {Encode(Display(item.TaskStatus))}</span></td><td>{Encode(item.Message)}</td>");
+            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.TaskId)}</td><td>{Encode(Display(item.LatestEvidence))}<br><span class=\"meta\">{item.Role} &middot; {Encode(Display(item.TaskStatus))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</td>");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");
@@ -511,7 +512,7 @@ public static partial class DashboardRenderer
         {
             var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(stage.Description)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(stage.SuggestedAction)}<br><span class=\"meta\">{Encode(stage.Message)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(taskNumber, stage))}</code></td>");
+            html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateSummary(stage.Description).Text)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(stage.SuggestedAction).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(stage.Message).Text)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(taskNumber, stage))}</code></td>");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");
@@ -526,7 +527,7 @@ public static partial class DashboardRenderer
         foreach (var gate in verificationGate.Tasks)
         {
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, gate.TaskId)}</td><td>{Encode(Display(gate.GateStatus))}</td><td>{Encode(gate.Message)}</td>");
+            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, gate.TaskId)}</td><td>{Encode(Display(gate.GateStatus))}</td><td>{Encode(OutputTextPreview.CreateTimeline(gate.Message).Text)}</td>");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");
@@ -543,7 +544,7 @@ public static partial class DashboardRenderer
             var task = goal.Tasks[index];
             var gate = verificationGate.Tasks.Single(item => item.TaskId == task.Id);
             html.AppendLine("<tr class=\"task-summary-row\">");
-            html.AppendLine($"<td>{index + 1}</td><td>{task.RequiredRole}</td><td>{Encode(Display(task.Status))}</td><td>{RenderTaskGate(gate)}</td><td>{Encode(task.Description)}</td><td>{RenderVerificationPlan(task)}</td>");
+            html.AppendLine($"<td>{index + 1}</td><td>{task.RequiredRole}</td><td>{Encode(Display(task.Status))}</td><td>{RenderTaskGate(gate)}</td><td>{Encode(OutputTextPreview.CreateSummary(task.Description).Text)}</td><td>{RenderVerificationPlan(task)}</td>");
             html.AppendLine($"<td>{RenderEvidence(task)}</td>");
             if (options.EnableOperatorControls)
             {

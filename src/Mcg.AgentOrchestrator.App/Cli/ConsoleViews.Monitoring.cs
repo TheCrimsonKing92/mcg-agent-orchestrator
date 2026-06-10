@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -8,7 +9,7 @@ internal static partial class ConsoleViews
 public static void PrintMonitor(GoalMonitor monitor)
 {
     Console.WriteLine();
-    Console.WriteLine($"Goal {monitor.GoalId.Value[..8]} {monitor.Status}: {monitor.Objective}");
+    Console.WriteLine($"Goal {monitor.GoalId.Value[..8]} {monitor.Status}: {OutputTextPreview.CreateSummary(monitor.Objective).Text}");
     Console.WriteLine($"Tasks: {monitor.TotalTasks}");
     Console.WriteLine("Status counts:");
 
@@ -35,7 +36,7 @@ public static void PrintMonitor(GoalMonitor monitor)
         foreach (var item in monitor.AttentionItems)
         {
             var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
-            Console.WriteLine($"  {item.Kind} {task}: {item.Message}");
+            Console.WriteLine($"  {item.Kind} {task}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
         }
     }
 
@@ -46,7 +47,7 @@ public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summa
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {summary.GoalId.Value[..8]} acceptance: {(summary.IsAccepted ? "accepted" : "not accepted")}");
-    Console.WriteLine($"Objective: {summary.Objective}");
+    Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(summary.Objective).Text}");
     Console.WriteLine($"Status: {summary.Status}");
     Console.WriteLine($"Tasks passed: {summary.PassedTasks}/{summary.TotalTasks}");
     Console.WriteLine($"Open verification: {summary.OpenVerificationCount}");
@@ -63,8 +64,8 @@ public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summa
         {
             int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
             var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
-            Console.WriteLine($"  {blocker.Kind} ({scope}): {blocker.Message}");
-            Console.WriteLine($"     action: {blocker.SuggestedAction}");
+            Console.WriteLine($"  {blocker.Kind} ({scope}): {OutputTextPreview.CreateTimeline(blocker.Message).Text}");
+            Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(blocker.SuggestedAction).Text}");
             Console.WriteLine($"     command: {BuildAcceptanceSuggestedCommand(blocker, taskNumber)}");
         }
     }

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
@@ -45,7 +46,7 @@ public static partial class DashboardRenderer
 
         if (task.LastExecution is not null)
         {
-            return $"{execution}<pre>{Encode(task.LastExecution.Output)}</pre>";
+            return $"{execution}<pre>{Encode(OutputTextPreview.Create(task.LastExecution.Output).Text)}</pre>";
         }
 
         return "<span class=\"meta\">none</span>";
@@ -67,7 +68,7 @@ public static partial class DashboardRenderer
     {
         return string.IsNullOrWhiteSpace(task.VerificationPlan)
             ? "<span class=\"meta\">none</span>"
-            : Encode(task.VerificationPlan);
+            : Encode(OutputTextPreview.CreateSummary(task.VerificationPlan).Text);
     }
 
     private static string FormatTokenUsage(int? inputTokens, int? outputTokens)
@@ -145,13 +146,13 @@ public static partial class DashboardRenderer
         if (task is not null)
         {
             var taskNumber = GetTaskDisplayNumber(goal, task.Id);
-            return $"<strong>Task {taskNumber}: {task.RequiredRole}</strong><br><span class=\"meta\">{Encode(Display(task.Status))}</span><br>{Encode(task.Description)}";
+            return $"<strong>Task {taskNumber}: {task.RequiredRole}</strong><br><span class=\"meta\">{Encode(Display(task.Status))}</span><br>{Encode(OutputTextPreview.CreateSummary(task.Description).Text)}";
         }
 
         var roleText = role?.ToString() ?? "Task";
         var statusText = status is null ? "unknown status" : Display(status.Value);
         var descriptionText = string.IsNullOrWhiteSpace(description) ? taskId.Value[..8] : description;
-        return $"<strong>{Encode(roleText)}</strong><br><span class=\"meta\">{Encode(statusText)}</span><br>{Encode(descriptionText)}";
+        return $"<strong>{Encode(roleText)}</strong><br><span class=\"meta\">{Encode(statusText)}</span><br>{Encode(OutputTextPreview.CreateSummary(descriptionText).Text)}";
     }
 
     private static string RenderNextActionControl(Goal goal, NextActionItem item, DashboardRenderOptions options)

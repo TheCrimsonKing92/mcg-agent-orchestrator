@@ -157,6 +157,9 @@ public sealed class DashboardRenderingTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var dto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+    var goalPrefix = goal.Id.Value[..8];
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.True(dto.LastExecution is not null);
     Assert.True(dto.LastExecution!.OutputTruncated);
@@ -165,6 +168,14 @@ public sealed class DashboardRenderingTests
     Assert.Contains(dto.LastExecution.Output, text => text.Contains("execution-tail", StringComparison.Ordinal));
     Assert.Contains(dto.LastExecution.Output, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(dto.LastExecution.Output.Length < output.Length);
+    Assert.Contains(html, text => text.Contains("execution-start", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("execution-tail", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!html.Contains(new string('o', 6000), StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("execution-start", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("execution-tail", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!transcript.Contains(new string('o', 6000), StringComparison.Ordinal));
     Assert.Equal(output, task.LastExecution!.Output);
 }
 
@@ -199,6 +210,14 @@ public sealed class DashboardRenderingTests
     Assert.Contains(verification.StandardError, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(verification.StandardOutput.Length < stdout.Length);
     Assert.True(verification.StandardError.Length < stderr.Length);
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+    Assert.Contains(transcript, text => text.Contains("stdout-start", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("stdout-tail", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("stderr-start", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("stderr-tail", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!transcript.Contains(new string('s', 6000), StringComparison.Ordinal));
+    Assert.True(!transcript.Contains(new string('e', 6000), StringComparison.Ordinal));
     Assert.Equal(stdout, task.VerificationHistory.Single().StandardOutput);
     Assert.Equal(stderr, task.VerificationHistory.Single().StandardError);
 }

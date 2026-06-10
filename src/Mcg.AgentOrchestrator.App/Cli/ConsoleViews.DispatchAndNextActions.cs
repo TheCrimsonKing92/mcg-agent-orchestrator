@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -49,7 +50,7 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
 public static void PrintNextActions(Goal goal, GoalNextActions actions)
 {
     Console.WriteLine();
-    Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {actions.Objective}");
+    Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
     Console.WriteLine("Next actions:");
 
     for (var index = 0; index < actions.Items.Count; index++)
@@ -61,7 +62,7 @@ public static void PrintNextActions(Goal goal, GoalNextActions actions)
             taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
         }
 
-        Console.WriteLine($"  {index + 1}. {item.Kind}: {item.Message}");
+        Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
         Console.WriteLine($"     command: {BuildSuggestedCommand(item, taskNumber)}");
     }
 

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -16,10 +17,10 @@ public static TaskQueryDto ToTaskQueryDto(Goal goal, TaskQueryResult result)
 
 public static TaskSummaryDto ToTaskSummaryDto(Goal goal, TaskSpec task)
 {
-    var description = ResponseTextPreview.CreateSummary(task.Description);
+    var description = OutputTextPreview.CreateSummary(task.Description);
     var verificationPlan = task.VerificationPlan is null
         ? null
-        : ResponseTextPreview.CreateSummary(task.VerificationPlan);
+        : OutputTextPreview.CreateSummary(task.VerificationPlan);
 
     return new TaskSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
@@ -41,7 +42,7 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
 {
     var executionOutput = task.LastExecution is null
         ? null
-        : ResponseTextPreview.Create(task.LastExecution.Output);
+        : OutputTextPreview.Create(task.LastExecution.Output);
 
     return new TaskDetailDto(
         ToTaskSummaryDto(goal, task),
@@ -133,8 +134,8 @@ public static TaskVerificationHistoryDto ToVerificationHistoryDto(Goal goal, Tas
         task.Id.Value,
         task.VerificationHistory.Select((verification, index) =>
         {
-            var stdout = ResponseTextPreview.Create(verification.StandardOutput);
-            var stderr = ResponseTextPreview.Create(verification.StandardError);
+            var stdout = OutputTextPreview.Create(verification.StandardOutput);
+            var stderr = OutputTextPreview.Create(verification.StandardError);
             return new VerificationHistoryEntryDto(
                 index + 1,
                 verification.Command,
@@ -175,54 +176,13 @@ public static TaskTimelineDto ToTaskTimelineDto(Goal goal, TaskSpec task)
 
 private static TimelineDto ToTimelineDto(ProgressEvent evt)
 {
-    var message = ResponseTextPreview.CreateTimeline(evt.Message);
+    var message = OutputTextPreview.CreateTimeline(evt.Message);
     return new TimelineDto(
         evt.Kind,
         message.Text,
         message.IsTruncated,
         message.OriginalLength,
         evt.OccurredAt);
-}
-
-private sealed record ResponseTextPreview(string Text, bool IsTruncated, int OriginalLength)
-{
-    private const int PayloadMaxChars = 4000;
-    private const int PayloadTailChars = 1200;
-    private const int TimelineMaxChars = 600;
-    private const int TimelineTailChars = 180;
-    private const int SummaryMaxChars = 600;
-    private const int SummaryTailChars = 180;
-
-    public static ResponseTextPreview Create(string text)
-    {
-        return Create(text, PayloadMaxChars, PayloadTailChars);
-    }
-
-    public static ResponseTextPreview CreateTimeline(string text)
-    {
-        return Create(text, TimelineMaxChars, TimelineTailChars);
-    }
-
-    public static ResponseTextPreview CreateSummary(string text)
-    {
-        return Create(text, SummaryMaxChars, SummaryTailChars);
-    }
-
-    private static ResponseTextPreview Create(string text, int maxChars, int tailChars)
-    {
-        if (text.Length <= maxChars)
-        {
-            return new ResponseTextPreview(text, false, text.Length);
-        }
-
-        var headChars = maxChars - tailChars;
-        var omittedChars = text.Length - headChars - tailChars;
-        var marker = $"{Environment.NewLine}{Environment.NewLine}[truncated {omittedChars} chars]{Environment.NewLine}{Environment.NewLine}";
-        return new ResponseTextPreview(
-            text[..headChars] + marker + text[^tailChars..],
-            true,
-            text.Length);
-    }
 }
 
 private static bool HasOutputTokenLimitHit(TaskExecutionRecord execution)

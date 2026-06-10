@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -22,12 +23,12 @@ public static void PrintVerificationHistory(TaskSpec task)
 
         if (!string.IsNullOrWhiteSpace(verification.StandardOutput))
         {
-            Console.WriteLine($"   stdout: {verification.StandardOutput.TrimEnd()}");
+            Console.WriteLine($"   stdout: {OutputTextPreview.Create(verification.StandardOutput).Text.TrimEnd()}");
         }
 
         if (!string.IsNullOrWhiteSpace(verification.StandardError))
         {
-            Console.WriteLine($"   stderr: {verification.StandardError.TrimEnd()}");
+            Console.WriteLine($"   stderr: {OutputTextPreview.Create(verification.StandardError).Text.TrimEnd()}");
         }
     }
 }
