@@ -192,6 +192,12 @@ internal static partial class DashboardEndpoints
                     return paidConfirmation;
                 }
 
+                var largePaidSubscriptionStartConfirmation = RequireLargePaidSubscriptionStartConfirmation(context, current, goal, task, operation);
+                if (largePaidSubscriptionStartConfirmation is not null)
+                {
+                    return largePaidSubscriptionStartConfirmation;
+                }
+
                 var actionResult = await GoalManagementCommandService.ApplyTaskActionAsync(
                     current,
                     agents,
@@ -319,6 +325,18 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
+                var largePaidSubscriptionStartConfirmation = RequireLargePaidSubscriptionStartConfirmation(
+                    context,
+                    current,
+                    goal,
+                    agents,
+                    operation,
+                    services.Workspace);
+                if (largePaidSubscriptionStartConfirmation is not null)
+                {
+                    return Task.FromResult(largePaidSubscriptionStartConfirmation);
+                }
+
                 var result = GoalManagementCommandService.ApplyGoalBatchAction(
                     current,
                     agents,
@@ -380,6 +398,62 @@ internal static partial class DashboardEndpoints
             ? null
             : Text(
                 "dashboard invalid request: prepared work start requires confirmDispatchStart=true because it can start a worker process.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
+    }
+
+    private static IResult? RequireLargePaidSubscriptionStartConfirmation(
+        HttpContext context,
+        AgentOrchestratorKernel current,
+        Goal goal,
+        TaskSpec task,
+        string operation)
+    {
+        if (!operation.Equals("start", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return RequireLargePaidSubscriptionStartConfirmation(
+            context,
+            SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(current, goal, task));
+    }
+
+    private static IResult? RequireLargePaidSubscriptionStartConfirmation(
+        HttpContext context,
+        AgentOrchestratorKernel current,
+        Goal goal,
+        IReadOnlyList<AgentDefinition> agents,
+        string operation,
+        OrchestratorWorkspace workspace)
+    {
+        var risk = operation.ToLowerInvariant() switch
+        {
+            "start-subscription-ready" => SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+                goal,
+                agents,
+                WorkerProfileStore.Load(workspace.WorkerProfilePath),
+                task => current.BuildTaskBrief(goal.Id, task.Id).Content.Length),
+            "start-dispatches" => SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(current, goal),
+            _ => null
+        };
+
+        return RequireLargePaidSubscriptionStartConfirmation(context, risk);
+    }
+
+    private static IResult? RequireLargePaidSubscriptionStartConfirmation(HttpContext context, PaidSubscriptionPromptRisk? risk)
+    {
+        if (risk is null)
+        {
+            return null;
+        }
+
+        var confirmed = context.Request.Query.TryGetValue(SubscriptionPromptCostGuard.DashboardConfirmationQueryName, out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+        return confirmed
+            ? null
+            : Text(
+                "dashboard invalid request: " + SubscriptionPromptCostGuard.BuildDashboardMessage(risk),
                 "text/plain; charset=utf-8",
                 StatusCodes.Status400BadRequest);
     }

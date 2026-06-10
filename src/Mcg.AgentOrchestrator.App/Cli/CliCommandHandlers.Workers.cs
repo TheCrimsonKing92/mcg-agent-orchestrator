@@ -118,6 +118,13 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 "--confirm-batch-start",
                 "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+                SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+                    context.CurrentGoal,
+                    context.Agents,
+                    context.WorkerProfiles,
+                    task => context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, task.Id).Content.Length),
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
@@ -145,6 +152,9 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 "start-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var startTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal, startTask),
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             new BackgroundDispatchRunner().StartLatestDispatch(context.Kernel, context.CurrentGoal.Id, startTask.Id, context.Workspace.LogDirectory);
             ConsoleViews.PrintTask(context.CurrentGoal, startTask);
             return true;
@@ -155,6 +165,9 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 "--confirm-batch-start",
                 "start-dispatches requires --confirm-batch-start because it can start multiple worker processes.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal),
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             var started = GoalManagementCommandService.StartDispatches(context.Kernel, context.Workspace, context.CurrentGoal);
             ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, started);
             return started.Tasks.Count > 0;

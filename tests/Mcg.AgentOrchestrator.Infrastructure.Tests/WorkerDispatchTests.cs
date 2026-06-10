@@ -632,6 +632,35 @@ public sealed class WorkerDispatchTests
     Assert.Contains(item.Detail, text => text.Contains("retry after", StringComparison.Ordinal));
     Assert.Equal(developer.SubscriptionRetryAfter, DashboardResponseMapper.ToTaskSummaryDto(goal, developer).SubscriptionRetryAfter);
 }
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_large_paid_ready_subscription_start_before_dispatch")]
+    public void SubscriptionPromptCostGuardBlocksLargePaidReadySubscriptionStartBeforeDispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan expensive subscription start",
+        [new TaskSpec(TaskId.New(), "Do paid subscription work.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        _ => 12001);
+    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
+
+    Assert.True(risk is not null);
+    Assert.Equal(12001, risk!.PromptCharacterCount);
+    Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
     public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()
 {

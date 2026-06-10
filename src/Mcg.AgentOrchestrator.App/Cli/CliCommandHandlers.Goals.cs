@@ -135,11 +135,16 @@ private static string? GetOptionalArgument(IReadOnlyList<string> parts, params s
 
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)
 {
-    if (parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase)))
+    if (HasCliConfirmation(parts, flag))
     {
         return;
     }
 
     throw new InvalidOperationException(message);
+}
+
+private static bool HasCliConfirmation(IReadOnlyList<string> parts, string flag)
+{
+    return parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase));
 }
 }
