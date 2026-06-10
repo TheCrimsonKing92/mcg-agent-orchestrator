@@ -122,7 +122,10 @@ public static class DashboardNextActionControls
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true";
+        var url = $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true";
+        return RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
+            ? $"{url}&confirmPaidApiRun=true"
+            : url;
     }
 
     public static string BuildExplicitApiRunUrl(
@@ -132,7 +135,10 @@ public static class DashboardNextActionControls
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true";
+        var url = $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true";
+        return RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
+            ? $"{url}&confirmPaidApiRun=true"
+            : url;
     }
 
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
