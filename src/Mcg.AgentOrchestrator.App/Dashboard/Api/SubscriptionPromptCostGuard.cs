@@ -174,7 +174,7 @@ public static string? BuildRecommendation(PaidSubscriptionPromptRisk risk)
 
     if (risk.HasPriorOverkillFit)
     {
-        return "Prior evidence says this subscription model was overkill; try a cheaper or local model before paid subscription start.";
+        return CostRecommendationText.PaidSubscriptionOverkill();
     }
 
     if (risk.PromptExceedsBatchThreshold || risk.HasOversizedPrompt)
@@ -278,7 +278,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
     }
 
     details.AddRange(priorOverkill.Take(3).Select(item =>
-        $"{item.ProviderName}/{item.ModelName} has {item.PreviousOverkillCount} prior overkill model-fit note(s); consider a cheaper or local model before paid subscription start."));
+        $"{item.ProviderName}/{item.ModelName} has {item.PreviousOverkillCount} prior overkill model-fit note(s); {CostRecommendationText.LocalModelSwitchAction} before paid subscription start."));
 
     if (priorOverkill.Count > 3)
     {

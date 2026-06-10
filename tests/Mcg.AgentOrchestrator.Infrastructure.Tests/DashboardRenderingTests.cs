@@ -178,7 +178,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("prior overkill model", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5-mini Simple reasoning low", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("prior fit 1: overkill 1", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("try a cheaper or local model before paid start", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
 }
@@ -1431,13 +1431,13 @@ public sealed class DashboardRenderingTests
     Assert.True(risk.HasPriorOverkillFit);
     Assert.False(risk.PromptExceedsThreshold);
     Assert.Equal("prior overkill API model", nextDto.Control!.CostRisk);
-    Assert.True(nextDto.Control.CostRecommendation?.Contains("try a cheaper or local model before paid API run", StringComparison.Ordinal) == true);
+    Assert.True(nextDto.Control.CostRecommendation?.Contains("try local Ollama/qwen3:8b via agent configuration before paid API run", StringComparison.Ordinal) == true);
     Assert.Equal("run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true\">Run paid API task</button>", StringComparison.Ordinal));
     Assert.False(controls.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
     Assert.False(controls.Contains("confirmLargePaidApiPrompt=true", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5-codex Simple reasoning medium prompt {preview.PromptCharacterCount} chars max 768 out [potentially paid] [prior overkill API model]", StringComparison.Ordinal));
-    Assert.Contains(controls, text => text.Contains("try a cheaper or local model before paid API run", StringComparison.Ordinal));
+    Assert.Contains(controls, text => text.Contains("try local Ollama/qwen3:8b via agent configuration before paid API run", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ApiPromptCostGuard_retains_earlier_model_fit_attempts")]
@@ -1477,7 +1477,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal("prior overkill API model", ApiPromptCostGuard.BuildInlineLabel(requiredRisk));
     Assert.Equal(1, requiredRisk.PriorOverkillCount);
-    Assert.True(ApiPromptCostGuard.BuildRecommendation(requiredRisk)?.Contains("try a cheaper or local model", StringComparison.Ordinal) == true);
+    Assert.True(ApiPromptCostGuard.BuildRecommendation(requiredRisk)?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_complex_paid_api_model_from_exact_preview")]

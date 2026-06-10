@@ -206,7 +206,7 @@ public sealed class CliCommandTests
 
         var output = writer.ToString();
         Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
-        Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try a cheaper or local model before paid API run.", output);
+        Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try local Ollama/qwen3:8b via agent configuration before paid API run.", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_next_action_command_prefers_subscription_dispatch_for_subscription_agent")]
@@ -947,7 +947,7 @@ public sealed class CliCommandTests
 
         var output = writer.ToString();
         Xunit.Assert.Contains("prior fit 1: overkill 1", output);
-        Xunit.Assert.Contains("try a cheaper or local model before paid start", output);
+        Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_execute_dispatch_requires_confirm_flag")]

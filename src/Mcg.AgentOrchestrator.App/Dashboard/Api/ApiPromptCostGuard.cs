@@ -109,7 +109,7 @@ public static string? BuildRecommendation(PaidApiPromptRisk risk)
 
     if (risk.HasPriorOverkillFit)
     {
-        return $"Prior evidence says {risk.ProviderName}/{risk.ModelName} was overkill; try a cheaper or local model before paid API run.";
+        return CostRecommendationText.PaidApiOverkill(risk.ProviderName, risk.ModelName);
     }
 
     if (risk.PromptExceedsThreshold)
@@ -140,7 +140,7 @@ private static string BuildMessage(PaidApiPromptRisk risk, string confirmationIn
 
     if (risk.HasPriorOverkillFit)
     {
-        reasons.Add($"{risk.PriorOverkillCount} prior overkill model-fit note(s); consider a cheaper or local model");
+        reasons.Add($"{risk.PriorOverkillCount} prior overkill model-fit note(s); {CostRecommendationText.LocalModelSwitchAction}");
     }
 
     if (risk.HasPriorUnderpoweredFit)

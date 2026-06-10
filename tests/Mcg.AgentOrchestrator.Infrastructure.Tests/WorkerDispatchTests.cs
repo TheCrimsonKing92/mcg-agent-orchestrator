@@ -849,7 +849,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, summary.PreviousOverkillCount);
     Assert.Equal(0, summary.PreviousUnderpoweredCount);
     Assert.Equal(0, summary.PreviousUnknownFitCount);
-    Assert.True(summary.ModelFitRecommendation?.Contains("try a cheaper or local model", StringComparison.Ordinal) == true);
+    Assert.True(summary.ModelFitRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
     Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior overkill model-fit note", StringComparison.Ordinal)));
 }
@@ -896,7 +896,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal("gpt-5-mini", summary.ModelName);
     Assert.Equal(1, summary.PreviousModelFitNoteCount);
     Assert.Equal(1, summary.PreviousOverkillCount);
-    Assert.True(summary.ModelFitRecommendation?.Contains("try a cheaper or local model", StringComparison.Ordinal) == true);
+    Assert.True(summary.ModelFitRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
     Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
 }
 

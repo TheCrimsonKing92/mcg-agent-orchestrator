@@ -344,7 +344,7 @@ private static string? BuildModelFitRecommendation(ModelFitSummary? fit, string 
 
     if (fit.OverkillCount > 0 && IsPotentiallyPaidProvider(providerName))
     {
-        return $"Prior evidence says {providerName}/{modelName} was overkill; try a cheaper or local model before paid start.";
+        return CostRecommendationText.PaidStartOverkill(providerName, modelName);
     }
 
     return null;
