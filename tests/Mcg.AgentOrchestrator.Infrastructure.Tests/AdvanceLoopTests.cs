@@ -601,6 +601,60 @@ public sealed class AdvanceLoopTests
     Assert.True(File.Exists(storePath));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardContinuationService_bounds_restored_status_text")]
+    public async Task DashboardContinuationServiceBoundsRestoredStatusText()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Restore bounded continuation text", [new TaskSpec(TaskId.New(), "Wait", AgentRole.Developer)]);
+    await repository.SaveAsync(kernel);
+
+    var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+    var stopReason = "stop-head-" + new string('s', 1200) + "-stop-tail";
+    var lastError = "error-head-" + new string('e', 1200) + "-error-tail";
+    File.WriteAllText(
+        Path.Combine(workspace.RootDirectory, DashboardContinuationService.StoreFileName),
+        $$"""
+        {
+          "watches": [
+            {
+              "goalId": "{{goal.Id.Value}}",
+              "startedAt": "{{startedAt:O}}",
+              "lastCheckedAt": null,
+              "iterationCount": 0,
+              "stopReason": "{{stopReason}}",
+              "lastError": "{{lastError}}",
+              "nextCheckAt": null
+            }
+          ]
+        }
+        """);
+
+    using var service = new DashboardContinuationService(TimeSpan.FromHours(1), 1);
+    using var lifetime = new FakeHostLifetime();
+    var services = new DashboardEndpointServices(
+        new DashboardStateService(repository),
+        workspace,
+        new InMemoryModelProviderRegistry([]),
+        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
+        lifetime,
+        service);
+
+    var status = service.RestoreSubscriptionWatches(services).Single();
+
+    Assert.True(status.StopReason.Contains("stop-head", StringComparison.Ordinal));
+    Assert.True(status.StopReason.Contains("stop-tail", StringComparison.Ordinal));
+    Assert.True(status.StopReason.Contains("[truncated", StringComparison.Ordinal));
+    Assert.False(status.StopReason.Contains(new string('s', 700), StringComparison.Ordinal));
+    Assert.True(status.LastError is not null);
+    Assert.True(status.LastError!.Contains("error-head", StringComparison.Ordinal));
+    Assert.True(status.LastError.Contains("error-tail", StringComparison.Ordinal));
+    Assert.True(status.LastError.Contains("[truncated", StringComparison.Ordinal));
+    Assert.False(status.LastError.Contains(new string('e', 700), StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardContinuationService_prunes_restored_watch_that_is_no_longer_watchable")]
     public async Task DashboardContinuationServicePrunesRestoredWatchThatIsNoLongerWatchable()
 {

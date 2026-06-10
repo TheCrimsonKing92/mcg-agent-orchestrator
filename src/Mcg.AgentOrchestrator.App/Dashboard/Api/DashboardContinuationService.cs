@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
@@ -192,6 +193,12 @@ internal sealed class DashboardContinuationService : IDisposable
     private static string ShortGoalPrefix(string goalId) =>
         goalId.Length <= 8 ? goalId : goalId[..8];
 
+    private static string TimelineMessage(string value) =>
+        OutputTextPreview.CreateTimeline(value).Text;
+
+    private static string? TimelineMessageOrNull(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : TimelineMessage(value);
+
     public void Dispose()
     {
         lock (_gate)
@@ -320,8 +327,8 @@ internal sealed class DashboardContinuationService : IDisposable
             IterationCount = entry.IterationCount;
             StopReason = string.IsNullOrWhiteSpace(entry.StopReason)
                 ? "Waiting for running background work or retry window to complete."
-                : entry.StopReason;
-            LastError = entry.LastError;
+                : TimelineMessage(entry.StopReason);
+            LastError = TimelineMessageOrNull(entry.LastError);
             NextCheckAt = entry.NextCheckAt;
             RestoredFromStore = true;
         }
@@ -359,7 +366,7 @@ internal sealed class DashboardContinuationService : IDisposable
             {
                 LastCheckedAt = DateTimeOffset.UtcNow;
                 IterationCount++;
-                StopReason = result.StopReason;
+                StopReason = TimelineMessage(result.StopReason);
                 NextCheckAt = result.ContinueAfter is { } continueAfter && continueAfter > DateTimeOffset.UtcNow
                     ? continueAfter
                     : null;
@@ -386,7 +393,7 @@ internal sealed class DashboardContinuationService : IDisposable
             {
                 IsRunning = false;
                 LastCheckedAt ??= DateTimeOffset.UtcNow;
-                StopReason = stopReason;
+                StopReason = TimelineMessage(stopReason);
                 NextCheckAt = null;
             }
         }
@@ -397,7 +404,7 @@ internal sealed class DashboardContinuationService : IDisposable
             {
                 IsRunning = false;
                 LastCheckedAt ??= DateTimeOffset.UtcNow;
-                StopReason = stopReason;
+                StopReason = TimelineMessage(stopReason);
             }
         }
 
@@ -407,7 +414,7 @@ internal sealed class DashboardContinuationService : IDisposable
             {
                 IsRunning = false;
                 LastCheckedAt = DateTimeOffset.UtcNow;
-                LastError = error;
+                LastError = TimelineMessage(error);
                 StopReason = "Continuation watch failed.";
                 NextCheckAt = null;
             }
