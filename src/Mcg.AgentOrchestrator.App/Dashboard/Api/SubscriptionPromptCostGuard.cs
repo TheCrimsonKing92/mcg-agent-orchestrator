@@ -67,6 +67,27 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(AgentOrc
     return BuildRisk(candidates);
 }
 
+public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(Goal goal, TaskSpec task)
+{
+    if (task.LastDispatch is null ||
+        task.LastDispatch.PromptCharacterCount is null ||
+        string.IsNullOrWhiteSpace(task.LastDispatch.ProviderName) ||
+        !ProviderSmokeRunner.IsPaidProviderName(task.LastDispatch.ProviderName))
+    {
+        return null;
+    }
+
+    return BuildRisk(
+        [
+            new PaidPromptCandidate(
+                ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
+                task.LastDispatch.ProviderName,
+                task.LastDispatch.ModelName ?? "default",
+                task.LastDispatch.TaskComplexity,
+                task.LastDispatch.PromptCharacterCount.Value)
+        ]);
+}
+
 public static void ThrowIfConfirmationRequired(PaidSubscriptionPromptRisk? risk, bool confirmed)
 {
     if (risk is null || confirmed)

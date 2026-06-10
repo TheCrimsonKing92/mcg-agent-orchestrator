@@ -28,7 +28,10 @@ public static class DashboardNextActionControls
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
-                new DashboardNextActionControl("Start prepared work", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true"),
+                new DashboardNextActionControl(
+                    "Start prepared work",
+                    "POST",
+                    $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true{BuildLargePaidSubscriptionStartSuffix(goal, item.TaskId!)}"),
             NextActionKind.DelegatePendingTask =>
                 new DashboardNextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
             NextActionKind.InspectFailedTask when taskNumber is not null =>
@@ -240,6 +243,19 @@ public static class DashboardNextActionControls
 
         return TryPreviewApiRun(goal, task, agentDefinitions) is { } preview &&
             ApiPromptCostGuard.Evaluate(preview) is not null;
+    }
+
+    private static string BuildLargePaidSubscriptionStartSuffix(Goal goal, TaskId taskId)
+    {
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        if (task is null)
+        {
+            return string.Empty;
+        }
+
+        return SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is null
+            ? string.Empty
+            : $"&{SubscriptionPromptCostGuard.DashboardConfirmationQueryName}=true";
     }
 
     private static string ResolveApiProviderName(Goal goal, TaskSpec task, AgentConfigurationValidation agent)

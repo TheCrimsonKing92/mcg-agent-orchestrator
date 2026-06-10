@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
@@ -20,7 +21,7 @@ private static string BuildSuggestedCommand(Goal goal, NextActionItem item)
         NextActionKind.InspectFailedTask => taskNumber is null ? "monitor" : $"task {taskNumber} | retry {taskNumber} <note>",
         NextActionKind.FixFailedVerification => taskNumber is null ? "monitor" : $"verifications {taskNumber} | retry {taskNumber} <note>",
         NextActionKind.RefreshRunningProcess => taskNumber is null ? "monitor" : $"refresh-dispatch {taskNumber}",
-        NextActionKind.ExecuteRecordedDispatch => taskNumber is null ? "monitor" : $"execute-dispatch {taskNumber} --confirm-dispatch-start",
+        NextActionKind.ExecuteRecordedDispatch => taskNumber is null ? "monitor" : $"execute-dispatch {taskNumber} --confirm-dispatch-start{BuildLargePaidSubscriptionStartCommandSuffix(goal, item.TaskId)}",
         NextActionKind.VerifyCompletedTask => taskNumber is null ? "monitor" : $"verify {taskNumber} <command> | verify-manual {taskNumber} passed <note>",
         NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"run {taskNumber}",
         NextActionKind.DelegatePendingTask => "delegate",
@@ -44,6 +45,19 @@ private static string BuildVerificationSuggestedCommand(int taskNumber, Verifica
 private static string BuildHumanInputSuggestedCommand(HumanInputRequestId requestId)
 {
     return $"answer {requestId.Value[..8]} <answer>";
+}
+
+private static string BuildLargePaidSubscriptionStartCommandSuffix(Goal goal, TaskId? taskId)
+{
+    if (taskId is null)
+    {
+        return string.Empty;
+    }
+
+    var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+    return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
+        ? $" {SubscriptionPromptCostGuard.CliConfirmationFlag}"
+        : string.Empty;
 }
 
 private static string BuildStageSuggestedCommand(int taskNumber, TaskStageReadiness stage)

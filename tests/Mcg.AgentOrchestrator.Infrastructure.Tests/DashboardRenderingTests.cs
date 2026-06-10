@@ -1055,6 +1055,43 @@ public sealed class DashboardRenderingTests
     Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify")));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardNextActionControls_confirm_large_paid_prepared_dispatch")]
+    public void DashboardNextActionControlsConfirmLargePaidPreparedDispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Start costly prepared dispatch",
+        [new TaskSpec(TaskId.New(), "Run prepared paid work", AgentRole.Developer)]);
+    var agent = Agent(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt.md",
+        "C:\\repo",
+        DateTimeOffset.UtcNow,
+        "OpenAI",
+        "gpt-5.3-codex",
+        "medium",
+        TaskComplexity.Complex,
+        12001));
+    var action = kernel.BuildNextActions(goal.Id).Items.Single();
+    var goalPrefix = goal.Id.Value[..8];
+
+    var control = DashboardNextActionControls.Build(goal, action);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix));
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+
+    Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
+    Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", control!.Url);
+    Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&amp;confirmLargePaidSubscriptionStart=true\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Suggested command: execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_labels_run_controls_by_execution_policy")]
     public void DashboardRendererLabelsRunControlsByExecutionPolicy()
 {
