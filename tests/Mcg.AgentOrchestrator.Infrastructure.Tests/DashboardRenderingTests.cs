@@ -179,6 +179,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("prior overkill model", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5-mini Simple reasoning low", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("prior fit 1: overkill 1", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("shapes copy-only change", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
@@ -1476,6 +1477,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true&amp;confirmPaidApiRun=true\">Run paid API task</button>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
     Assert.False(controls.Contains("confirmLargePaidApiPrompt=true", StringComparison.Ordinal));
+    Assert.True(risk!.PriorTaskShapes?.Contains("copy-only change") == true);
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5-codex Simple reasoning medium prompt {preview.PromptCharacterCount} chars max 768 out [potentially paid] [prior overkill API model]", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains("try local Ollama/qwen3:8b via agent configuration before paid API run", StringComparison.Ordinal));
 }
@@ -1517,6 +1519,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal("prior overkill API model", ApiPromptCostGuard.BuildInlineLabel(requiredRisk));
     Assert.Equal(1, requiredRisk.PriorOverkillCount);
+    Assert.True(requiredRisk.PriorTaskShapes?.Contains("label-only change") == true);
     Assert.True(ApiPromptCostGuard.BuildRecommendation(requiredRisk)?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
 }
 

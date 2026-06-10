@@ -13,7 +13,8 @@ internal sealed record PaidApiPromptRisk(
     bool HasPriorOverkillFit = false,
     bool HasPriorUnderpoweredFit = false,
     int PriorOverkillCount = 0,
-    int PriorUnderpoweredCount = 0);
+    int PriorUnderpoweredCount = 0,
+    IReadOnlyList<string>? PriorTaskShapes = null);
 
 internal static class ApiPromptCostGuard
 {
@@ -53,7 +54,8 @@ public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview, Goal? goa
             hasPriorOverkillFit,
             hasPriorUnderpoweredFit,
             fit?.OverkillCount ?? 0,
-            fit?.UnderpoweredCount ?? 0);
+            fit?.UnderpoweredCount ?? 0,
+            fit?.TaskShapes ?? []);
 }
 
 public static void ThrowIfConfirmationRequired(PaidApiPromptRisk? risk, bool confirmed)
@@ -140,12 +142,12 @@ private static string BuildMessage(PaidApiPromptRisk risk, string confirmationIn
 
     if (risk.HasPriorOverkillFit)
     {
-        reasons.Add($"{risk.PriorOverkillCount} prior overkill model-fit note(s); {CostRecommendationText.LocalModelSwitchAction}");
+        reasons.Add($"{risk.PriorOverkillCount} prior overkill model-fit note(s){FormatPriorTaskShapes(risk.PriorTaskShapes)}; {CostRecommendationText.LocalModelSwitchAction}");
     }
 
     if (risk.HasPriorUnderpoweredFit)
     {
-        reasons.Add($"{risk.PriorUnderpoweredCount} prior underpowered model-fit note(s); consider a stronger model");
+        reasons.Add($"{risk.PriorUnderpoweredCount} prior underpowered model-fit note(s){FormatPriorTaskShapes(risk.PriorTaskShapes)}; consider a stronger model");
     }
 
     var reason = string.Join("; ", reasons);
@@ -154,6 +156,13 @@ private static string BuildMessage(PaidApiPromptRisk risk, string confirmationIn
         ? string.Empty
         : $" {recommendation}";
     return $"Paid API run requires explicit confirmation: {risk.ProviderName}/{risk.ModelName} {risk.TaskComplexity} {reason}.{recommendationText} {confirmationInstruction}.";
+}
+
+private static string FormatPriorTaskShapes(IReadOnlyList<string>? taskShapes)
+{
+    return taskShapes is { Count: > 0 }
+        ? $" on shapes {string.Join(", ", taskShapes)}"
+        : string.Empty;
 }
 
 private static ModelFitSummary? FindModelFit(Goal goal, string providerName, string modelName)

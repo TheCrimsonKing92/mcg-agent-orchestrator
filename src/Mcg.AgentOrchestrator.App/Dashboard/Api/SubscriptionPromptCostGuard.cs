@@ -278,7 +278,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
     }
 
     details.AddRange(priorOverkill.Take(3).Select(item =>
-        $"{item.ProviderName}/{item.ModelName} has {item.PreviousOverkillCount} prior overkill model-fit note(s); {CostRecommendationText.LocalModelSwitchAction} before paid subscription start."));
+        $"{item.ProviderName}/{item.ModelName} has {item.PreviousOverkillCount} prior overkill model-fit note(s){FormatPriorTaskShapes(item.PreviousTaskShapes)}; {CostRecommendationText.LocalModelSwitchAction} before paid subscription start."));
 
     if (priorOverkill.Count > 3)
     {
@@ -286,7 +286,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
     }
 
     details.AddRange(priorUnderpowered.Take(3).Select(item =>
-        $"{item.ProviderName}/{item.ModelName} has {item.PreviousUnderpoweredCount} prior underpowered model-fit note(s); consider a stronger model before repeating this selection."));
+        $"{item.ProviderName}/{item.ModelName} has {item.PreviousUnderpoweredCount} prior underpowered model-fit note(s){FormatPriorTaskShapes(item.PreviousTaskShapes)}; consider a stronger model before repeating this selection."));
 
     if (priorUnderpowered.Count > 3)
     {
@@ -320,8 +320,16 @@ private static List<SubscriptionPlanModelSummaryDto> BuildReadyModelFitSummaries
             PreviousAdequateCount: fit.AdequateCount,
             PreviousOverkillCount: fit.OverkillCount,
             PreviousUnderpoweredCount: fit.UnderpoweredCount,
-            PreviousUnknownFitCount: fit.UnknownCount))
+            PreviousUnknownFitCount: fit.UnknownCount,
+            PreviousTaskShapes: fit.TaskShapes))
         .ToList();
+}
+
+private static string FormatPriorTaskShapes(IReadOnlyList<string>? taskShapes)
+{
+    return taskShapes is { Count: > 0 }
+        ? $" on shapes {string.Join(", ", taskShapes)}"
+        : string.Empty;
 }
 
 private static string BuildModelKey(string providerName, string modelName)

@@ -320,6 +320,7 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
                 fit?.OverkillCount ?? 0,
                 fit?.UnderpoweredCount ?? 0,
                 fit?.UnknownCount ?? 0,
+                fit?.TaskShapes ?? [],
                 BuildModelFitRecommendation(fit, group.Key.ProviderName, group.Key.ModelName!));
         })
         .ToList();

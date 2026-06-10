@@ -59,6 +59,7 @@ internal sealed record SubscriptionPlanModelSummaryDto(
     int PreviousOverkillCount = 0,
     int PreviousUnderpoweredCount = 0,
     int PreviousUnknownFitCount = 0,
+    IReadOnlyList<string>? PreviousTaskShapes = null,
     string? ModelFitRecommendation = null);
 
 internal sealed record SubscriptionPlanItemDto(

@@ -541,10 +541,13 @@ public static partial class DashboardRenderer
         AddSubscriptionPlanModelFitCount(counts, "overkill", item.PreviousOverkillCount);
         AddSubscriptionPlanModelFitCount(counts, "underpowered", item.PreviousUnderpoweredCount);
         AddSubscriptionPlanModelFitCount(counts, "unknown", item.PreviousUnknownFitCount);
+        var shapes = item.PreviousTaskShapes is { Count: > 0 }
+            ? $"; shapes {string.Join(", ", item.PreviousTaskShapes)}"
+            : string.Empty;
         var recommendation = string.IsNullOrWhiteSpace(item.ModelFitRecommendation)
             ? string.Empty
             : $"; {item.ModelFitRecommendation}";
-        return $" prior fit {item.PreviousModelFitNoteCount}: {string.Join(", ", counts)}{recommendation}";
+        return $" prior fit {item.PreviousModelFitNoteCount}: {string.Join(", ", counts)}{shapes}{recommendation}";
     }
 
     private static void AddSubscriptionPlanModelFitCount(List<string> counts, string label, int count)

@@ -849,9 +849,11 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, summary.PreviousOverkillCount);
     Assert.Equal(0, summary.PreviousUnderpoweredCount);
     Assert.Equal(0, summary.PreviousUnknownFitCount);
+    Assert.True(summary.PreviousTaskShapes?.Contains("copy-only change") == true);
     Assert.True(summary.ModelFitRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
     Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior overkill model-fit note", StringComparison.Ordinal)));
+    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("shapes copy-only change", StringComparison.Ordinal)));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionPlan_retains_earlier_model_fit_attempts_for_ready_models")]
@@ -896,6 +898,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal("gpt-5-mini", summary.ModelName);
     Assert.Equal(1, summary.PreviousModelFitNoteCount);
     Assert.Equal(1, summary.PreviousOverkillCount);
+    Assert.True(summary.PreviousTaskShapes?.Contains("label-only change") == true);
     Assert.True(summary.ModelFitRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
     Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
 }
@@ -932,9 +935,11 @@ public sealed class WorkerDispatchTests
 
     var summary = plan.ReadyModelUsage.Single();
     Assert.Equal(1, summary.PreviousUnderpoweredCount);
+    Assert.True(summary.PreviousTaskShapes?.Contains("missed regression path") == true);
     Assert.True(summary.ModelFitRecommendation?.Contains("choose a stronger model", StringComparison.Ordinal) == true);
     Assert.Equal("prior underpowered model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior underpowered model-fit note", StringComparison.Ordinal)));
+    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("shapes missed regression path", StringComparison.Ordinal)));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]

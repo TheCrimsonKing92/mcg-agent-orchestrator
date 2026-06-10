@@ -361,6 +361,7 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-large-paid-api-prompt", ex!.Message);
         Xunit.Assert.Contains("prior overkill model-fit note", ex.Message);
+        Xunit.Assert.Contains("shapes copy-only change", ex.Message);
         Xunit.Assert.Null(provider.LastRequest);
         Xunit.Assert.Null(nextTask.LastExecution);
     }
@@ -962,6 +963,7 @@ public sealed class CliCommandTests
 
         var output = writer.ToString();
         Xunit.Assert.Contains("prior fit 1: overkill 1", output);
+        Xunit.Assert.Contains("shapes copy-only change", output);
         Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", output);
     }
 

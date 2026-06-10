@@ -184,10 +184,13 @@ private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummar
     AddSubscriptionPlanModelFitCount(counts, "overkill", summary.PreviousOverkillCount);
     AddSubscriptionPlanModelFitCount(counts, "underpowered", summary.PreviousUnderpoweredCount);
     AddSubscriptionPlanModelFitCount(counts, "unknown", summary.PreviousUnknownFitCount);
+    var shapes = summary.PreviousTaskShapes is { Count: > 0 }
+        ? $"; shapes {string.Join(", ", summary.PreviousTaskShapes)}"
+        : string.Empty;
     var recommendation = string.IsNullOrWhiteSpace(summary.ModelFitRecommendation)
         ? string.Empty
         : $"; {summary.ModelFitRecommendation}";
-    return $", prior fit {summary.PreviousModelFitNoteCount}: {string.Join(", ", counts)}{recommendation}";
+    return $", prior fit {summary.PreviousModelFitNoteCount}: {string.Join(", ", counts)}{shapes}{recommendation}";
 }
 
 private static void AddSubscriptionPlanModelFitCount(List<string> counts, string label, int count)
