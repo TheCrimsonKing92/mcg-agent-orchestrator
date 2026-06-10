@@ -219,6 +219,83 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(TaskEvidenceKind.FailedVerification, summary.Tasks.Single(item => item.TaskId == verificationTask.Id).LatestEvidence);
     Assert.Contains(summary.Tasks.Single(item => item.TaskId == verificationTask.Id).Message, text => text.Contains("failed", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_api_prompts")]
+    public void BuildGoalEvidenceSummaryFlagsLargePaidApiPrompts()
+{
+    var clock = new FakeClock();
+    var goalId = GoalId.New();
+    var taskId = TaskId.New();
+    var agentId = AgentId.New();
+    var kernel = AgentOrchestratorKernel.FromSnapshot(
+        new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    goalId.Value,
+                    "Warn on costly API prompts",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(
+                            taskId.Value,
+                            "Implement the requested change.",
+                            AgentRole.Developer,
+                            WorkTaskStatus.Completed,
+                            agentId.Value,
+                            new TaskExecutionSnapshot(
+                                agentId.Value,
+                                "Developer",
+                                "OpenAI",
+                                "gpt-routine",
+                                "Implemented change.",
+                                "stop",
+                                100,
+                                25,
+                                clock.UtcNow,
+                                TaskComplexity.Complex,
+                                1200,
+                                6001),
+                            LastVerification: null,
+                            VerificationHistory: [],
+                            LastDispatch: null,
+                            LastProcess: null)
+                    ],
+                    [])
+            ],
+            []),
+        clock);
+
+    var summary = kernel.BuildGoalEvidenceSummary(goalId);
+    var item = summary.Tasks.Single();
+
+    Assert.Contains(item.Message, text => text.Contains("large paid prompt", StringComparison.Ordinal));
+    Assert.Contains(item.Message, text => text.Contains("(>6000)", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_dispatch_prompts")]
+    public void BuildGoalEvidenceSummaryFlagsLargePaidDispatchPrompts()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Warn on costly subscription handoff prompts");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt.md",
+        "C:\\repo",
+        clock.UtcNow,
+        "OpenAI",
+        "gpt-5.3-codex",
+        "low",
+        TaskComplexity.Simple,
+        4001));
+
+    var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
+    var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
+
+    Assert.Contains(item.Message, text => text.Contains("large paid prompt 4001 chars (>4000)", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildStageReadinessReport_maps_sdlc_stage_statuses")]
     public void BuildStageReadinessReportMapsSdlcStageStatuses()
 {

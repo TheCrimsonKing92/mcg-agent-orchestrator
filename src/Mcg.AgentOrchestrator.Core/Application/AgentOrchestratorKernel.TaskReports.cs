@@ -2,6 +2,9 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    private const int SimplePaidPromptWarningChars = 4000;
+    private const int ComplexPaidPromptWarningChars = 6000;
+
     public ProcessBatchPlan BuildProcessBatchPlan(GoalId goalId, ProcessBatchActionKind action)
     {
         var goal = GetGoal(goalId);
@@ -434,12 +437,42 @@ public sealed partial class AgentOrchestratorKernel
             TaskEvidenceKind.RunningProcess => $"Process running pid={task.LastProcess!.ProcessId}: {task.LastProcess.Command}",
             TaskEvidenceKind.CompletedProcess => $"Process completed exit={task.LastProcess!.ExitCode?.ToString() ?? "n/a"}: {task.LastProcess.Command}",
             TaskEvidenceKind.Process => $"Process recorded: {task.LastProcess!.Command}",
-            TaskEvidenceKind.Dispatch => $"Dispatch recorded for {task.LastDispatch!.WorkerName}{FormatDispatchModelSelection(task.LastDispatch)}: {task.LastDispatch.Command}",
+            TaskEvidenceKind.Dispatch => BuildDispatchEvidenceMessage(task.LastDispatch!),
             TaskEvidenceKind.Execution when HasOutputTokenLimitHit(task) =>
-                $"Model output recorded by {task.LastExecution!.AgentName}; possible output cap hit at {task.LastExecution.MaxOutputTokens} tokens.",
-            TaskEvidenceKind.Execution => $"Model output recorded by {task.LastExecution!.AgentName}.",
+                BuildExecutionEvidenceMessage(task.LastExecution!, possibleOutputCapHit: true),
+            TaskEvidenceKind.Execution => BuildExecutionEvidenceMessage(task.LastExecution!, possibleOutputCapHit: false),
             _ => "No execution, dispatch, process, or verification evidence recorded."
         };
+    }
+
+    private static string BuildDispatchEvidenceMessage(TaskDispatchRecord dispatch)
+    {
+        return $"Dispatch recorded for {dispatch.WorkerName}{FormatDispatchModelSelection(dispatch)}{FormatPaidPromptWarning(dispatch.ProviderName, dispatch.TaskComplexity, dispatch.PromptCharacterCount)}: {dispatch.Command}";
+    }
+
+    private static string BuildExecutionEvidenceMessage(TaskExecutionRecord execution, bool possibleOutputCapHit)
+    {
+        var cap = possibleOutputCapHit
+            ? $"; possible output cap hit at {execution.MaxOutputTokens} tokens"
+            : string.Empty;
+        return $"Model output recorded by {execution.AgentName}{cap}{FormatPaidPromptWarning(execution.ProviderName, execution.TaskComplexity, execution.PromptCharacterCount)}.";
+    }
+
+    private static string FormatPaidPromptWarning(string? providerName, TaskComplexity? complexity, int? promptCharacterCount)
+    {
+        if (string.IsNullOrWhiteSpace(providerName) ||
+            !IsPotentiallyPaidProvider(providerName) ||
+            promptCharacterCount is null)
+        {
+            return string.Empty;
+        }
+
+        var threshold = complexity == TaskComplexity.Complex
+            ? ComplexPaidPromptWarningChars
+            : SimplePaidPromptWarningChars;
+        return promptCharacterCount.Value > threshold
+            ? $"; large paid prompt {promptCharacterCount.Value} chars (>{threshold})"
+            : string.Empty;
     }
 
     private static string FormatDispatchModelSelection(TaskDispatchRecord dispatch)
