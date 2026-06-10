@@ -234,9 +234,10 @@ public static partial class DashboardRenderer
             var actionLabel = task.Status == WorkTaskStatus.Completed
                 ? "Record passing evidence"
                 : "Complete and record passing evidence";
+            var modelFitPlaceholder = BuildModelFitNotePlaceholder(task);
             html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/complete-verify\">");
             html.AppendLine("<input type=\"hidden\" name=\"passed\" value=\"true\">");
-            html.AppendLine("<div class=\"field\"><label>Completion evidence</label><input class=\"wide\" name=\"note\" required></div>");
+            html.AppendLine($"<div class=\"field\"><label>Completion evidence</label><input class=\"wide\" name=\"note\"{modelFitPlaceholder} required></div>");
             html.AppendLine($"<button class=\"primary\" type=\"submit\">{actionLabel}</button>");
             html.AppendLine("</form>");
         }
@@ -316,9 +317,10 @@ public static partial class DashboardRenderer
         html.AppendLine("<button type=\"submit\">Run verification</button>");
         html.AppendLine("</form>");
         html.AppendLine("<p class=\"section-note\">PowerShell: quote filters that contain | so they stay command arguments.</p>");
+        var manualModelFitPlaceholder = BuildModelFitNotePlaceholder(task);
         html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/verify-manual\">");
         html.AppendLine("<div class=\"field\"><label>Manual result</label><select name=\"passed\"><option value=\"true\">Passed</option><option value=\"false\">Failed</option></select></div>");
-        html.AppendLine("<div class=\"field\"><label>Verification note</label><input name=\"note\" required></div>");
+        html.AppendLine($"<div class=\"field\"><label>Verification note</label><input name=\"note\"{manualModelFitPlaceholder} required></div>");
         html.AppendLine("<button type=\"submit\">Record manual result</button>");
         html.AppendLine("</form>");
         html.AppendLine("</section>");
@@ -327,6 +329,29 @@ public static partial class DashboardRenderer
         html.AppendLine("</div>");
         html.AppendLine("</div>");
         return html.ToString();
+    }
+
+    private static string BuildModelFitNotePlaceholder(TaskSpec task)
+    {
+        var model = task.LastExecution is not null
+            ? FormatModelFitTarget(task.LastExecution.ProviderName, task.LastExecution.ModelName)
+            : task.LastDispatch is not null
+                ? FormatModelFitTarget(task.LastDispatch.ProviderName, task.LastDispatch.ModelName)
+                : null;
+
+        return string.IsNullOrWhiteSpace(model)
+            ? string.Empty
+            : $" placeholder=\"Evidence checked. Model fit: {Encode(model)} - adequate|overkill|underpowered - reason.\"";
+    }
+
+    private static string? FormatModelFitTarget(string? providerName, string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(providerName) || string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        return $"{providerName}/{modelName}";
     }
 
     private static void RenderAdvancedProcessAction(
