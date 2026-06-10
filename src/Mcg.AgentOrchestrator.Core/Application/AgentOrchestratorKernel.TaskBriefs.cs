@@ -20,7 +20,7 @@ public sealed partial class AgentOrchestratorKernel
             .ToList();
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
         var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
-            goal.Timeline.Where(evt => evt.TaskId == taskId || evt.TaskId is null),
+            goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt)),
             maxEvents: TimelineEventBudget(complexity));
 
         var lines = new List<string>
@@ -108,5 +108,21 @@ public sealed partial class AgentOrchestratorKernel
     private static int TimelineEventBudget(TaskComplexity complexity)
     {
         return complexity == TaskComplexity.Complex ? 20 : 8;
+    }
+
+    private static bool IsRedundantBriefTimelineEvent(TaskSpec task, ProgressEvent evt)
+    {
+        if (evt.TaskId != task.Id)
+        {
+            return false;
+        }
+
+        return evt.Kind switch
+        {
+            ProgressKind.TaskOutputRecorded => task.LastExecution?.CompletedAt == evt.OccurredAt,
+            ProgressKind.TaskDispatchRecorded => task.LastDispatch?.DispatchedAt == evt.OccurredAt,
+            ProgressKind.TaskVerificationRecorded => task.LastVerification?.CompletedAt == evt.OccurredAt,
+            _ => false
+        };
     }
 }

@@ -157,6 +157,52 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains(new string('b', 1600), StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('c', 1600), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_skips_current_evidence_events_already_shown_in_sections")]
+    public async Task BuildTaskBriefSkipsCurrentEvidenceEventsAlreadyShownInSections()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Avoid duplicate brief evidence");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var runner = new AgentTaskRunner(
+        kernel,
+        agents,
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", "model-output-unique")]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, "stdout-unique", "stderr-unique", clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("## Last Model Output", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("model-output-unique", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("## Last Verification", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("stdout-unique", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("stderr-unique", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("TaskOutputRecorded", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("TaskVerificationRecorded", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_skips_current_dispatch_event_already_shown_in_section")]
+    public void BuildTaskBriefSkipsCurrentDispatchEventAlreadyShownInSection()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Avoid duplicate dispatch evidence");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("## Last Dispatch", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("codex-cli", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("codex exec prompt.md", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("TaskDispatchRecorded", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_evidence_budget_for_simple_tasks")]
     public async Task BuildTaskBriefUsesSmallerEvidenceBudgetForSimpleTasks()
 {
