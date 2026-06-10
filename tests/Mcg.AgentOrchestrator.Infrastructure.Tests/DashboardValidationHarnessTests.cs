@@ -54,6 +54,9 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains(dogfoodAction, text => text.Contains("dashboard-smoke.js", StringComparison.Ordinal));
     Assert.Contains(readme, text => text.Contains("Run-DashboardBrowserScript.ps1 .\\scripts\\dashboard-smoke.js", StringComparison.Ordinal));
     Assert.Contains(readme, text => text.Contains("Invoke-DashboardDogfoodAction.ps1", StringComparison.Ordinal));
+    Assert.Contains(readme, text => text.Contains("--confirm-large-paid-api-prompt", StringComparison.Ordinal));
+    Assert.Contains(readme, text => text.Contains("confirmLargePaidApiPrompt=true", StringComparison.Ordinal));
+    Assert.Contains(readme, text => text.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(agents, text => text.Contains("/api/goals/{goalPrefix}/work-summary", StringComparison.Ordinal));
     Assert.Contains(agents, text => text.Contains("Invoke-DashboardApi.ps1 -Path api/goals/<prefix>/work-summary", StringComparison.Ordinal));
     Assert.Contains(agents, text => text.Contains("Invoke-DashboardApi.ps1", StringComparison.Ordinal));

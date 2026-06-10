@@ -261,7 +261,7 @@ Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. 
 
 ## Model Providers
 
-Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists. Add `--confirm-paid-api-run` in the CLI, or `confirmPaidApiRun=true` in dashboard API calls, when intentionally running an OpenAI or Anthropic task through the API; local Ollama execution does not require that flag.
+Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists. Add `--confirm-paid-api-run` in the CLI, or `confirmPaidApiRun=true` in dashboard API calls, when intentionally running an OpenAI or Anthropic task through the API. Large paid API prompts also require `--confirm-large-paid-api-prompt` in the CLI or `confirmLargePaidApiPrompt=true` in dashboard API calls. Local Ollama execution does not require those flags.
 
 Set these environment variables to use live API providers:
 
@@ -383,11 +383,11 @@ The dashboard host also exposes local JSON endpoints for scripted monitoring and
 - `POST /api/goals/<goal-id-prefix>/delegate`
 - `POST /api/goals/<goal-id-prefix>/profile-dispatch-ready` with either a raw profile name body or JSON like `{ "profileName": "local-echo" }`; the response includes `Dispatches` entries with `Task`, generated `PromptPath`, and `LastDispatch` values
 - `POST /api/goals/<goal-id-prefix>/subscription-dispatch-ready`; the response includes provider-selected `Dispatches` entries with `Task`, generated `PromptPath`, and `LastDispatch` values
-- `POST /api/goals/<goal-id-prefix>/start-subscription-ready?confirmBatchStart=true`; the response includes provider-selected `Dispatches`, `ProcessPlan` ready/skipped reasons, and `Processes` for started tasks
-- `POST /api/goals/<goal-id-prefix>/start-dispatches?confirmBatchStart=true`; the response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
+- `POST /api/goals/<goal-id-prefix>/start-subscription-ready?confirmBatchStart=true`; add `confirmLargePaidSubscriptionStart=true` when starting a large paid prepared subscription batch. The response includes provider-selected `Dispatches`, `ProcessPlan` ready/skipped reasons, and `Processes` for started tasks
+- `POST /api/goals/<goal-id-prefix>/start-dispatches?confirmBatchStart=true`; add `confirmLargePaidSubscriptionStart=true` when starting a large paid prepared dispatch. The response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
 - `POST /api/goals/<goal-id-prefix>/refresh-dispatches`; the response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/run?confirmTaskRun=true`; add `confirmPaidApiRun=true` when this will run OpenAI or Anthropic through the API
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/api-run?confirmTaskRun=true`; add `confirmPaidApiRun=true` when this will run OpenAI or Anthropic through the API
+- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/run?confirmTaskRun=true`; add `confirmPaidApiRun=true` when this will run OpenAI or Anthropic through the API, and add `confirmLargePaidApiPrompt=true` when the exact prompt preview reports a large paid prompt
+- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/api-run?confirmTaskRun=true`; add `confirmPaidApiRun=true` when this will run OpenAI or Anthropic through the API, and add `confirmLargePaidApiPrompt=true` when the exact prompt preview reports a large paid prompt
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/retry` with either a raw note body or JSON like `{ "message": "Retry after failed verification" }`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/dispatch` with JSON like `{ "workerName": "local", "command": "Write-Output ok" }`
 - `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/profile-dispatch` with either a raw profile name body or JSON like `{ "profileName": "codex-cli" }`
