@@ -19,7 +19,8 @@ public sealed class ModelExecutionTests
     Assert.Equal(1, provider.CallCount);
     Assert.Contains(provider.LastRequest!.SystemPrompt, text => text.Contains("Developer", StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
+    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("Report only changed files", StringComparison.Ordinal));
+    Assert.True(!provider.LastRequest.SystemPrompt.Contains("Avoid generic status summaries", StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains(goal.Objective, StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains(task.Description, StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains(task.VerificationPlan!, StringComparison.Ordinal));
@@ -156,6 +157,8 @@ public sealed class ModelExecutionTests
     var prompt = provider.LastRequest!.Messages.Single().Content;
     Assert.Contains(prompt, text => text.Contains("complex-api-goal-middle", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("complex-api-task-middle", StringComparison.Ordinal));
+    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("software-development orchestrator", StringComparison.Ordinal));
+    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
     Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_avoids_repeating_task_description_in_lifecycle_events")]

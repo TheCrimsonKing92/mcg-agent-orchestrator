@@ -125,11 +125,7 @@ public sealed class AgentTaskRunner
     {
         var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName);
 
-        var baseSystemPrompt =
-            $"You are the {agent.Role} agent in a software-development orchestrator. " +
-            "Complete the assigned SDLC task, state concrete results, verification evidence, blockers, and any human input needed. " +
-            "If you cannot proceed without operator input, include a line that starts with HUMAN_INPUT: followed by the exact question. " +
-            "Avoid generic status summaries; ground conclusions in files, command output, or cited source material.";
+        var baseSystemPrompt = BuildSystemPrompt(agent.Role, complexity);
 
         var systemPrompt = isLocal
             ? LocalModelPromptOptimizer.OptimizeSystemPrompt(baseSystemPrompt, agent.Role)
@@ -192,6 +188,21 @@ public sealed class AgentTaskRunner
         return complexity == TaskComplexity.Complex
             ? ComplexPaidProviderFallbackMaxOutputTokens
             : RoutinePaidProviderFallbackMaxOutputTokens;
+    }
+
+    private static string BuildSystemPrompt(AgentRole role, TaskComplexity complexity)
+    {
+        if (complexity == TaskComplexity.Simple)
+        {
+            return $"You are the {role} agent. Complete the assigned task. " +
+                "Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>; " +
+                "ground claims in files or command output.";
+        }
+
+        return $"You are the {role} agent in a software-development orchestrator. " +
+            "Complete the assigned SDLC task, state concrete results, verification evidence, blockers, and any human input needed. " +
+            "If you cannot proceed without operator input, include a line that starts with HUMAN_INPUT: followed by the exact question. " +
+            "Avoid generic status summaries; ground conclusions in files, command output, or cited source material.";
     }
 
     private static string FormatVerificationPlan(string? verificationPlan, TaskComplexity complexity)
