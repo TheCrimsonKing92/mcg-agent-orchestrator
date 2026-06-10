@@ -1508,7 +1508,7 @@ public sealed class DashboardRenderingTests
         goal,
         agents,
         profiles,
-        item => kernel.BuildTaskBrief(goal.Id, item.Id).Content.Length,
+        item => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, item, agents),
         task);
     var goalPrefix = goal.Id.Value[..8];
 

@@ -50,6 +50,8 @@ public sealed class WorkerDispatchTests
     [
         new WorkerProfile("custom-codex", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-reasoning {apiReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
     ]);
+    var expectedPromptCharacters = kernel.BuildTaskBrief(goal.Id, task.Id, "OpenAI/gpt-5.3-codex").Content.Length;
+    var estimatedPromptCharacters = WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]);
 
     var dispatchResult = WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -70,7 +72,9 @@ public sealed class WorkerDispatchTests
     Assert.Equal("gpt-5.3-codex", task.LastDispatch.ModelName);
     Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
+    Assert.Equal(expectedPromptCharacters, estimatedPromptCharacters);
     Assert.Equal(File.ReadAllText(dispatchResult.PromptPath).Length, task.LastDispatch.PromptCharacterCount);
+    Assert.Equal(estimatedPromptCharacters, task.LastDispatch.PromptCharacterCount);
     Assert.Contains(File.ReadAllText(dispatchResult.PromptPath), text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <short reason>", StringComparison.Ordinal));
 }
 

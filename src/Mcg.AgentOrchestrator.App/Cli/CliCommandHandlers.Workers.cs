@@ -123,7 +123,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     context.CurrentGoal,
                     context.Agents,
                     context.WorkerProfiles,
-                    task => context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, task.Id).Content.Length),
+                    task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents)),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);

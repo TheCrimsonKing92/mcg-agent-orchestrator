@@ -385,12 +385,12 @@ public static partial class DashboardRenderer
             goal,
             options.AgentDefinitions,
             options.WorkerProfiles,
-            task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, options.AgentDefinitions));
         var readyRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
             goal,
             options.AgentDefinitions,
             options.WorkerProfiles,
-            task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, options.AgentDefinitions));
         var preparedRisk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal);
 
         return new SubscriptionCostPreview(plan, readyRisk, preparedRisk);
@@ -430,7 +430,7 @@ public static partial class DashboardRenderer
                 goal,
                 options.AgentDefinitions,
                 options.WorkerProfiles,
-                candidate => kernel.BuildTaskBrief(goal.Id, candidate.Id).Content.Length,
+                candidate => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, candidate, options.AgentDefinitions),
                 task),
             NextActionAutomationKind.StartRecordedDispatch => SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
             _ => null

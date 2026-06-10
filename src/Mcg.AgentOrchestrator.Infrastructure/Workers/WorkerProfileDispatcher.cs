@@ -97,6 +97,23 @@ public static class WorkerProfileDispatcher
             selection.Complexity);
     }
 
+    public static int EstimateSubscriptionPromptCharacters(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        IReadOnlyList<AgentDefinition> agents)
+    {
+        var agent = ResolveAssignedAgent(task, agents);
+        var selection = ResolveSubscriptionModel(agent, goal, task);
+        return kernel
+            .BuildTaskBrief(
+                goal.Id,
+                task.Id,
+                BuildModelFitTarget(selection.Model.ProviderName, ResolveEffectiveSubscriptionModelName(agent, selection)))
+            .Content
+            .Length;
+    }
+
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareSubscriptionReadyTasks(
         AgentOrchestratorKernel kernel,
         Goal goal,

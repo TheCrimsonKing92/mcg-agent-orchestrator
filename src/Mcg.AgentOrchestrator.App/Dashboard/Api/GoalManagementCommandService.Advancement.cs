@@ -390,7 +390,7 @@ private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
             goal,
             agents,
             profiles,
-            item => kernel.BuildTaskBrief(goal.Id, item.Id).Content.Length,
+            item => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, item, agents),
             task),
         allowLargePaidSubscriptionStart);
 

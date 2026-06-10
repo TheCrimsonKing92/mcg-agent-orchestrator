@@ -117,7 +117,7 @@ internal static partial class DashboardEndpoints
             goal,
             agents,
             profiles,
-            task => current.BuildTaskBrief(goal.Id, task.Id).Content.Length));
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(current, goal, task, agents)));
     }
 
     private static async Task<IResult> AddTaskAsync(HttpContext context, string goalId, DashboardEndpointServices services)
@@ -452,7 +452,7 @@ internal static partial class DashboardEndpoints
                 goal,
                 agents,
                 WorkerProfileStore.Load(workspace.WorkerProfilePath),
-                task => current.BuildTaskBrief(goal.Id, task.Id).Content.Length),
+                task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(current, goal, task, agents)),
             "start-dispatches" => SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(current, goal),
             _ => null
         };
