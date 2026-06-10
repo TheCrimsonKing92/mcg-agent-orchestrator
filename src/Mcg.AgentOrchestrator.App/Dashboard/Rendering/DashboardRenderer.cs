@@ -729,7 +729,17 @@ public static partial class DashboardRenderer
 
     private static List<Goal> GetDisplayedGoals(IReadOnlyList<Goal> goals, DashboardRenderOptions options)
     {
-        var displayed = goals.Take(8).ToList();
+        var displayed = goals
+            .Where(IsActionableGoal)
+            .Take(8)
+            .ToList();
+        if (displayed.Count < 8)
+        {
+            displayed.AddRange(goals
+                .Where(goal => !IsActionableGoal(goal) && displayed.All(existing => existing.Id != goal.Id))
+                .Take(8 - displayed.Count));
+        }
+
         var focus = options.FocusGoalPrefix?.Trim();
         if (string.IsNullOrWhiteSpace(focus))
         {
@@ -744,6 +754,11 @@ public static partial class DashboardRenderer
 
         displayed.Insert(0, focused);
         return displayed;
+    }
+
+    private static bool IsActionableGoal(Goal goal)
+    {
+        return goal.Status is not GoalStatus.Completed and not GoalStatus.Cancelled;
     }
 
     private static bool IsManualOnlyCompletion(GoalEvidenceSummary evidence) =>

@@ -1663,6 +1663,39 @@ static string ExtractTaskControls(string html, int taskNumber)
     Assert.Contains(focusedOpsHtml, text => text.Contains($"value=\"{focusedPrefix}\"", StringComparison.Ordinal));
     Assert.Contains(goalDetailHtml, text => text.Contains($"data-action=\"/api/goals/{focusedPrefix}/tasks/1/complete-verify\"", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_prioritizes_active_goals_over_completed_recent_goals")]
+    public void DashboardRendererPrioritizesActiveGoalsOverCompletedRecentGoals()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var active = kernel.CreateGoal("Active older goal");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(active.Id, [agent]);
+
+    string? oldestCompletedPrefix = null;
+    for (var index = 0; index < 12; index++)
+    {
+        var completed = kernel.CreateGoal(
+            $"Completed recent goal {index}",
+            [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        kernel.ActivateGoal(completed.Id, [agent]);
+        var task = completed.Tasks.Single();
+        kernel.ReportTaskProgress(completed.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(completed.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "ok", string.Empty, DateTimeOffset.UtcNow));
+        oldestCompletedPrefix ??= completed.Id.Value[..8];
+    }
+
+    var activePrefix = active.Id.Value[..8];
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+
+    Assert.Contains(html, text => text.Contains($"<h2><a href=\"/goal/{activePrefix}\">Active older goal</a></h2>", StringComparison.Ordinal));
+    Assert.False(html.Contains($"<h2><a href=\"/goal/{oldestCompletedPrefix}\">Completed recent goal 0</a></h2>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"<option value=\"{oldestCompletedPrefix}\">Completed recent goal 0</option>", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_recoverable_subscription_limit_evidence")]
     public void DashboardRendererSurfacesRecoverableSubscriptionLimitEvidence()
 {
