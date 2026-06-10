@@ -466,10 +466,10 @@ public static partial class DashboardRenderer
             return "<form class=\"controls compact\" data-action=\"/api/provider-smoke\">" +
                 $"<input type=\"hidden\" name=\"target\" value=\"{Encode(smokeTarget)}\">" +
                 "<input type=\"hidden\" name=\"confirmPaidSmoke\" value=\"true\">" +
-                "<button type=\"submit\">Smoke</button></form>";
+                "<button type=\"submit\">Paid smoke</button></form>";
         }
 
-        return $"<a href=\"/api/provider-smoke?target={Encode(smokeTarget)}\" target=\"_blank\" rel=\"noopener\">Smoke</a>";
+        return $"<a href=\"/api/provider-smoke?target={Encode(smokeTarget)}\" target=\"_blank\" rel=\"noopener\">Local smoke</a>";
     }
 
     private static string RenderAgentConfigurationForm(
