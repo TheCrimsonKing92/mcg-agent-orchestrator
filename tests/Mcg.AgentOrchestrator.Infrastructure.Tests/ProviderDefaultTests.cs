@@ -124,8 +124,8 @@ public sealed class ProviderDefaultTests
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, provider.LastRequest!.Options.MaxOutputTokens);
     }
 
-    [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_larger_local_output_fallback")]
-    public async Task AgentTaskRunnerUsesLargerLocalOutputFallback()
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_routine_local_output_fallback_for_simple_tasks")]
+    public async Task AgentTaskRunnerUsesRoutineLocalOutputFallbackForSimpleTasks()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Run local model with quality headroom");
@@ -137,6 +137,31 @@ public sealed class ProviderDefaultTests
             ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var provider = new FakeSmokeProvider(providerName: "Ollama");
+
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))
+            .RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(2048, provider.LastRequest!.Options.MaxOutputTokens);
+    }
+
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_larger_local_output_fallback_for_complex_tasks")]
+    public async Task AgentTaskRunnerUsesLargerLocalOutputFallbackForComplexTasks()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(
+            TaskId.New(),
+            "Design and implement production dashboard integration across API, CLI, provider, worker, persistence, state, tests, and docs.",
+            AgentRole.Developer,
+            "Record explicit verification.");
+        var goal = kernel.CreateGoal("Run complex local model with quality headroom", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Ollama developer",
+            AgentRole.Developer,
+            new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
         var provider = new FakeSmokeProvider(providerName: "Ollama");
 
         await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))

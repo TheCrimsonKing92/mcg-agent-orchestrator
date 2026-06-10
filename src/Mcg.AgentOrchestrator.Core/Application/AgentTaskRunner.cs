@@ -4,7 +4,8 @@ public sealed class AgentTaskRunner
 {
     private const int RoutinePaidProviderFallbackMaxOutputTokens = 1024;
     private const int ComplexPaidProviderFallbackMaxOutputTokens = 1200;
-    private const int LocalProviderFallbackMaxOutputTokens = 8192;
+    private const int RoutineLocalProviderFallbackMaxOutputTokens = 2048;
+    private const int ComplexLocalProviderFallbackMaxOutputTokens = 8192;
 
     private readonly AgentOrchestratorKernel _kernel;
     private readonly IReadOnlyList<AgentDefinition> _agents;
@@ -159,7 +160,9 @@ public sealed class AgentTaskRunner
 
         if (LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName))
         {
-            return LocalProviderFallbackMaxOutputTokens;
+            return complexity == TaskComplexity.Complex
+                ? ComplexLocalProviderFallbackMaxOutputTokens
+                : RoutineLocalProviderFallbackMaxOutputTokens;
         }
 
         return complexity == TaskComplexity.Complex
