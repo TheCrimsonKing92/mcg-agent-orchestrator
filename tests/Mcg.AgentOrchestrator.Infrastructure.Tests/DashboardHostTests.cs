@@ -101,6 +101,7 @@ public sealed class DashboardHostTests
         var continuations = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations"));
         var continuationSummary = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations/summary"));
         var processDiagnostic = await client.GetStringAsync(new Uri(new Uri(url), "api/system/processes"));
+        var dashboardHostMetadata = await client.GetStringAsync(new Uri(new Uri(url), "api/system/dashboard-host"));
         var cleanupPlan = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-cleanup"));
         var buildTestRuns = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-runs"));
         using var paidSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=openai"));
@@ -193,6 +194,13 @@ public sealed class DashboardHostTests
             Assert.Equal("Mcg.AgentOrchestrator.App", processDocument.RootElement.GetProperty("ProcessName").GetString());
             Assert.Equal(JsonValueKind.Array, processDocument.RootElement.GetProperty("CurrentListeningPorts").ValueKind);
             Assert.Equal(JsonValueKind.Array, processDocument.RootElement.GetProperty("SiblingProcesses").ValueKind);
+        }
+        using (var hostDocument = JsonDocument.Parse(dashboardHostMetadata))
+        {
+            var host = hostDocument.RootElement;
+            Assert.Equal("prototype-ui", host.GetProperty("CommandName").GetString());
+            Assert.True(host.GetProperty("SourceSurveyUrl").GetString()?.EndsWith("/api/source-survey?max=8", StringComparison.Ordinal) is true);
+            Assert.Equal(JsonValueKind.Array, host.GetProperty("HostedSourceSurveyUrls").ValueKind);
         }
         using (var cleanupDocument = JsonDocument.Parse(cleanupPlan))
         {

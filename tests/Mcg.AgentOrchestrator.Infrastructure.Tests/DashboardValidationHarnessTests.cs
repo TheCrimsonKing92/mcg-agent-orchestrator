@@ -32,7 +32,8 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains(invoker, text => text.Contains("PSObject.Properties.Name -contains \"id\"", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("CloseOutputAsync", StringComparison.Ordinal));
     Assert.Contains(invoker, text => text.Contains("$socket.Abort()", StringComparison.Ordinal));
-    Assert.Contains(smoke, text => text.Contains("Open source survey", StringComparison.Ordinal));
+    Assert.Contains(smoke, text => text.Contains("Open bounded source survey", StringComparison.Ordinal));
+    Assert.Contains(smoke, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
     Assert.Contains(smoke, text => text.Contains("Goal JSON", StringComparison.Ordinal));
     Assert.Contains(smoke, text => text.Contains("Stop dashboard for build/test", StringComparison.Ordinal));
     Assert.Contains(api, text => text.Contains("Invoke-WebRequest @invokeArgs", StringComparison.Ordinal));

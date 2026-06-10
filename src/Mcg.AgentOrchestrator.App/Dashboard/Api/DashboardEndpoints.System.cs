@@ -16,9 +16,9 @@ internal static partial class DashboardEndpoints
             hostedUrlPrefixes
                 .Select(DashboardHost.GetDashboardPageUrl)
                 .ToList(),
-            new Uri(new Uri(browserUrl), "api/source-survey").ToString(),
+            DashboardHost.GetSourceSurveyUrl(browserUrl),
             hostedUrlPrefixes
-                .Select(prefix => new Uri(new Uri(prefix), "api/source-survey").ToString())
+                .Select(DashboardHost.GetSourceSurveyUrl)
                 .ToList(),
             DashboardHost.GetHostedAccessNote(services.HostArgs.UrlPrefix, hostedUrlPrefixes),
             services.HostArgs.AutoRefreshSeconds,

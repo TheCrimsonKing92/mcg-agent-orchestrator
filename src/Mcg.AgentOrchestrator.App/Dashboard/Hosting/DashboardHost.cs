@@ -13,6 +13,8 @@ internal sealed record DashboardUrlPrefixes(string BindUrlPrefix, string? Public
 
 internal static class DashboardHost
 {
+private const int DefaultOperatorSourceSurveyMaxFiles = 8;
+
 public static int RunPrototypeUi(IReadOnlyList<string> parts, IModelProviderRegistry providers, AgentCatalog? agentFallback = null)
 {
     var hostArgs = ParseDashboardHostArgs(parts, "prototype-ui", defaultOpenBrowser: true);
@@ -363,10 +365,10 @@ public static async Task RunDashboardHostAsync(
         Console.WriteLine($"Hosted dashboard page: {hostedUrl}");
     }
 
-    Console.WriteLine($"Source survey: {browserUrl}api/source-survey");
+    Console.WriteLine($"Source survey: {GetSourceSurveyUrl(browserUrl)}");
     foreach (var hostedUrl in hostedUrlPrefixes)
     {
-        Console.WriteLine($"Hosted source survey: {hostedUrl}api/source-survey");
+        Console.WriteLine($"Hosted source survey: {GetSourceSurveyUrl(hostedUrl)}");
     }
 
     var hostedAccessNote = GetHostedAccessNote(args.UrlPrefix, hostedUrlPrefixes);
@@ -456,6 +458,13 @@ public static string GetRestartUrl(DashboardHostArgs args)
 public static string GetDashboardPageUrl(string urlPrefix)
 {
     return new Uri(new Uri(EnsureTrailingSlash(urlPrefix)), "dashboard").ToString();
+}
+
+public static string GetSourceSurveyUrl(string urlPrefix)
+{
+    return new Uri(
+        new Uri(EnsureTrailingSlash(urlPrefix)),
+        $"api/source-survey?max={DefaultOperatorSourceSurveyMaxFiles}").ToString();
 }
 
 public static List<string> GetHostedDashboardPageUrls(string urlPrefix)

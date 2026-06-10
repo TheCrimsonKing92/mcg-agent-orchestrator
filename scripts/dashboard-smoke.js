@@ -40,7 +40,7 @@
   const systemHtml = await systemResponse.text();
   const systemRequired = [
     'Prototype workspace',
-    'Open source survey',
+    'Open bounded source survey',
     'Stop dashboard for build/test'
   ];
   for (const value of systemRequired) {
@@ -50,7 +50,7 @@
   }
 
   // Source survey link check via API
-  const sourceSurvey = await fetch('/api/source-survey?max=25', { cache: 'no-store' });
+  const sourceSurvey = await fetch('/api/source-survey?max=8', { cache: 'no-store' });
   if (!sourceSurvey.ok) {
     throw new Error(`Source survey failed with ${sourceSurvey.status}.`);
   }
