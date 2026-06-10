@@ -69,6 +69,64 @@ public sealed class ModelExecutionTests
     Assert.Equal(description, task.Description);
     Assert.Equal("gpt-5.4-mini", provider.LastRequest.Options.ModelName);
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_smaller_primary_context_budget_for_simple_tasks")]
+    public async Task ExecuteAssignedTaskUsesSmallerPrimaryContextBudgetForSimpleTasks()
+{
+    var clock = new FakeClock();
+    var objective = $"simple-api-goal-start {new string('g', 900)} simple-api-goal-middle {new string('h', 500)} simple-api-goal-tail";
+    var description = $"simple-api-task-start {new string('t', 900)} simple-api-task-middle {new string('u', 500)} simple-api-task-tail";
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("simple-api-goal-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("simple-api-goal-tail", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("simple-api-task-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("simple-api-task-tail", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("simple-api-goal-middle", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("simple-api-task-middle", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_primary_context_budget_for_complex_tasks")]
+    public async Task ExecuteAssignedTaskKeepsLargerPrimaryContextBudgetForComplexTasks()
+{
+    var clock = new FakeClock();
+    var objective = $"complex-api-goal-start {new string('g', 900)} complex-api-goal-middle {new string('h', 500)} complex-api-goal-tail";
+    var description = $"Design and implement production architecture. complex-api-task-start {new string('t', 900)} complex-api-task-middle {new string('u', 500)} complex-api-task-tail";
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("complex-api-goal-middle", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("complex-api-task-middle", StringComparison.Ordinal));
+    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_avoids_repeating_task_description_in_lifecycle_events")]
     public async Task ExecuteAssignedTaskAvoidsRepeatingTaskDescriptionInLifecycleEvents()
 {

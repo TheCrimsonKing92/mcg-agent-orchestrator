@@ -11,6 +11,9 @@ internal static class PromptContextFormatter
     private const int ComplexEvidenceBlockMaxChars = 1200;
     private const int ComplexEvidenceBlockHeadChars = 800;
     private const int ComplexEvidenceBlockTailChars = 400;
+    private const int SimplePrimaryContextMaxChars = 1200;
+    private const int SimplePrimaryContextHeadChars = 800;
+    private const int SimplePrimaryContextTailChars = 400;
     private const int PrimaryContextMaxChars = 2400;
     private const int PrimaryContextHeadChars = 1600;
     private const int PrimaryContextTailChars = 800;
@@ -37,6 +40,14 @@ internal static class PromptContextFormatter
     {
         var trimmed = value.Trim();
         return TrimBlock(trimmed, PrimaryContextMaxChars, PrimaryContextHeadChars, PrimaryContextTailChars);
+    }
+
+    public static string TrimPrimaryContextBlock(string value, TaskComplexity complexity)
+    {
+        var trimmed = value.Trim();
+        return complexity == TaskComplexity.Complex
+            ? TrimBlock(trimmed, PrimaryContextMaxChars, PrimaryContextHeadChars, PrimaryContextTailChars)
+            : TrimBlock(trimmed, SimplePrimaryContextMaxChars, SimplePrimaryContextHeadChars, SimplePrimaryContextTailChars);
     }
 
     private static string TrimBlock(string trimmed, int maxChars, int headChars, int tailChars)

@@ -27,9 +27,9 @@ public sealed partial class AgentOrchestratorKernel
         {
             "# Agent Task Brief",
             string.Empty,
-            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective)}",
+            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
             $"Goal status: {goal.Status}",
-            $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description)}",
+            $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}",
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",
             $"Task id: {task.Id}",

@@ -51,6 +51,42 @@ public sealed class TaskBriefTests
     Assert.Equal(objective, goal.Objective);
     Assert.Equal(description, task.Description);
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_primary_context_budget_for_simple_tasks")]
+    public void BuildTaskBriefUsesSmallerPrimaryContextBudgetForSimpleTasks()
+{
+    var objective = $"simple-goal-start {new string('g', 900)} simple-goal-middle {new string('h', 500)} simple-goal-tail";
+    var description = $"simple-task-start {new string('t', 900)} simple-task-middle {new string('u', 500)} simple-task-tail";
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("simple-goal-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-goal-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-task-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-task-tail", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("simple-goal-middle", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("simple-task-middle", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_primary_context_budget_for_complex_tasks")]
+    public void BuildTaskBriefKeepsLargerPrimaryContextBudgetForComplexTasks()
+{
+    var objective = $"complex-goal-start {new string('g', 900)} complex-goal-middle {new string('h', 500)} complex-goal-tail";
+    var description = $"Design and implement production architecture. complex-task-start {new string('t', 900)} complex-task-middle {new string('u', 500)} complex-task-tail";
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("complex-goal-middle", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-task-middle", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_full_role_requirements_for_complex_tasks")]
     public void BuildTaskBriefUsesFullRoleRequirementsForComplexTasks()
 {
