@@ -267,8 +267,9 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goalId);
     var item = summary.Tasks.Single();
 
-    Assert.Contains(item.Message, text => text.Contains("large paid prompt", StringComparison.Ordinal));
+    Assert.Contains(item.Message, text => text.Contains("large paid API prompt 6001 chars", StringComparison.Ordinal));
     Assert.Contains(item.Message, text => text.Contains("(>6000)", StringComparison.Ordinal));
+    Assert.Contains(item.Message, text => text.Contains("complex paid API model", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_dispatch_prompts")]
@@ -294,8 +295,36 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
-    Assert.Contains(item.Message, text => text.Contains("large paid prompt 4001 chars (>4000)", StringComparison.Ordinal));
+    Assert.Contains(item.Message, text => text.Contains("large paid subscription prompt 4001 chars (>4000)", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_complex_paid_dispatch_model")]
+    public void BuildGoalEvidenceSummaryFlagsComplexPaidDispatchModel()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Warn on complex subscription handoff models");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt.md",
+        "C:\\repo",
+        clock.UtcNow,
+        "OpenAI",
+        "gpt-5.5",
+        "high",
+        TaskComplexity.Complex,
+        500));
+
+    var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
+    var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
+
+    Assert.Contains(item.Message, text => text.Contains("complex paid subscription model", StringComparison.Ordinal));
+    Assert.False(item.Message.Contains("large paid subscription prompt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BuildStageReadinessReport_maps_sdlc_stage_statuses")]
     public void BuildStageReadinessReportMapsSdlcStageStatuses()
 {

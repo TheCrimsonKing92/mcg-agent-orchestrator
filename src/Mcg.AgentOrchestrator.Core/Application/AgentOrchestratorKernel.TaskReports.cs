@@ -447,7 +447,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private static string BuildDispatchEvidenceMessage(TaskDispatchRecord dispatch)
     {
-        return $"Dispatch recorded for {dispatch.WorkerName}{FormatDispatchModelSelection(dispatch)}{FormatPaidPromptWarning(dispatch.ProviderName, dispatch.TaskComplexity, dispatch.PromptCharacterCount)}: {dispatch.Command}";
+        return $"Dispatch recorded for {dispatch.WorkerName}{FormatDispatchModelSelection(dispatch)}{FormatPaidCostWarning(dispatch.ProviderName, dispatch.TaskComplexity, dispatch.PromptCharacterCount, PaidCostWarningSource.Subscription)}: {dispatch.Command}";
     }
 
     private static string BuildExecutionEvidenceMessage(TaskExecutionRecord execution, bool possibleOutputCapHit)
@@ -455,10 +455,14 @@ public sealed partial class AgentOrchestratorKernel
         var cap = possibleOutputCapHit
             ? $"; possible output cap hit at {execution.MaxOutputTokens} tokens"
             : string.Empty;
-        return $"Model output recorded by {execution.AgentName}{cap}{FormatPaidPromptWarning(execution.ProviderName, execution.TaskComplexity, execution.PromptCharacterCount)}.";
+        return $"Model output recorded by {execution.AgentName}{cap}{FormatPaidCostWarning(execution.ProviderName, execution.TaskComplexity, execution.PromptCharacterCount, PaidCostWarningSource.Api)}.";
     }
 
-    private static string FormatPaidPromptWarning(string? providerName, TaskComplexity? complexity, int? promptCharacterCount)
+    private static string FormatPaidCostWarning(
+        string? providerName,
+        TaskComplexity? complexity,
+        int? promptCharacterCount,
+        PaidCostWarningSource source)
     {
         if (string.IsNullOrWhiteSpace(providerName) ||
             !IsPotentiallyPaidProvider(providerName) ||
@@ -470,9 +474,19 @@ public sealed partial class AgentOrchestratorKernel
         var threshold = complexity == TaskComplexity.Complex
             ? ComplexPaidPromptWarningChars
             : SimplePaidPromptWarningChars;
-        return promptCharacterCount.Value > threshold
-            ? $"; large paid prompt {promptCharacterCount.Value} chars (>{threshold})"
-            : string.Empty;
+        var sourceLabel = source == PaidCostWarningSource.Subscription ? "subscription" : "API";
+        var warnings = new List<string>();
+        if (promptCharacterCount.Value > threshold)
+        {
+            warnings.Add($"large paid {sourceLabel} prompt {promptCharacterCount.Value} chars (>{threshold})");
+        }
+
+        if (complexity == TaskComplexity.Complex)
+        {
+            warnings.Add($"complex paid {sourceLabel} model");
+        }
+
+        return warnings.Count == 0 ? string.Empty : "; " + string.Join("; ", warnings);
     }
 
     private static string FormatDispatchModelSelection(TaskDispatchRecord dispatch)
@@ -487,5 +501,11 @@ public sealed partial class AgentOrchestratorKernel
             ? string.Empty
             : $" reasoning {dispatch.ReasoningEffort}";
         return $" using {dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}";
+    }
+
+    private enum PaidCostWarningSource
+    {
+        Api,
+        Subscription
     }
 }
