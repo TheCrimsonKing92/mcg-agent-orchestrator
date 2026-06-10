@@ -178,6 +178,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("prior overkill model", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5-mini Simple reasoning low", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("prior fit 1: overkill 1", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("try a cheaper or local model before paid start", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goal.Id.Value[..8]}/start-subscription-ready?confirmBatchStart=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
 }
 

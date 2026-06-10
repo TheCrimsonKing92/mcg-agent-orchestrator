@@ -318,7 +318,8 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
                 fit?.AdequateCount ?? 0,
                 fit?.OverkillCount ?? 0,
                 fit?.UnderpoweredCount ?? 0,
-                fit?.UnknownCount ?? 0);
+                fit?.UnknownCount ?? 0,
+                BuildModelFitRecommendation(fit, group.Key.ProviderName, group.Key.ModelName!));
         })
         .ToList();
 }
@@ -326,6 +327,26 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
 private static string BuildModelFitKey(string providerName, string modelName)
 {
     return $"{providerName}/{modelName}";
+}
+
+private static string? BuildModelFitRecommendation(ModelFitSummary? fit, string providerName, string modelName)
+{
+    if (fit is null)
+    {
+        return null;
+    }
+
+    if (fit.UnderpoweredCount > 0)
+    {
+        return $"Prior evidence says {providerName}/{modelName} was underpowered; choose a stronger model before repeating it.";
+    }
+
+    if (fit.OverkillCount > 0 && IsPotentiallyPaidProvider(providerName))
+    {
+        return $"Prior evidence says {providerName}/{modelName} was overkill; try a cheaper or local model before paid start.";
+    }
+
+    return null;
 }
 
 private static int? SumKnownUsage(IEnumerable<int?> values)

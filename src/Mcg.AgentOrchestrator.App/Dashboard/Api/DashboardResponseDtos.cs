@@ -57,7 +57,8 @@ internal sealed record SubscriptionPlanModelSummaryDto(
     int PreviousAdequateCount = 0,
     int PreviousOverkillCount = 0,
     int PreviousUnderpoweredCount = 0,
-    int PreviousUnknownFitCount = 0);
+    int PreviousUnknownFitCount = 0,
+    string? ModelFitRecommendation = null);
 
 internal sealed record SubscriptionPlanItemDto(
     int TaskNumber,

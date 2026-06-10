@@ -843,6 +843,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, summary.PreviousOverkillCount);
     Assert.Equal(0, summary.PreviousUnderpoweredCount);
     Assert.Equal(0, summary.PreviousUnknownFitCount);
+    Assert.True(summary.ModelFitRecommendation?.Contains("try a cheaper or local model", StringComparison.Ordinal) == true);
     Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior overkill model-fit note", StringComparison.Ordinal)));
 }
@@ -879,6 +880,7 @@ public sealed class WorkerDispatchTests
 
     var summary = plan.ReadyModelUsage.Single();
     Assert.Equal(1, summary.PreviousUnderpoweredCount);
+    Assert.True(summary.ModelFitRecommendation?.Contains("choose a stronger model", StringComparison.Ordinal) == true);
     Assert.Equal("prior underpowered model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior underpowered model-fit note", StringComparison.Ordinal)));
 }

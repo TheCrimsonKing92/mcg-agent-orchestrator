@@ -506,7 +506,10 @@ public static partial class DashboardRenderer
         AddSubscriptionPlanModelFitCount(counts, "overkill", item.PreviousOverkillCount);
         AddSubscriptionPlanModelFitCount(counts, "underpowered", item.PreviousUnderpoweredCount);
         AddSubscriptionPlanModelFitCount(counts, "unknown", item.PreviousUnknownFitCount);
-        return $" prior fit {item.PreviousModelFitNoteCount}: {string.Join(", ", counts)}";
+        var recommendation = string.IsNullOrWhiteSpace(item.ModelFitRecommendation)
+            ? string.Empty
+            : $"; {item.ModelFitRecommendation}";
+        return $" prior fit {item.PreviousModelFitNoteCount}: {string.Join(", ", counts)}{recommendation}";
     }
 
     private static void AddSubscriptionPlanModelFitCount(List<string> counts, string label, int count)
