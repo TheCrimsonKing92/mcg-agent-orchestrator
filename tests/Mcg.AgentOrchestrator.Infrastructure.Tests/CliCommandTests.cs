@@ -480,6 +480,62 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_execute_dispatch_blocks_large_paid_subscription_prompt_without_confirm_flag")]
+    public void CliExecuteDispatchBlocksLargePaidSubscriptionPromptWithoutConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Avoid accidentally executing a large paid prompt", [task]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "Write-Output ok",
+                root,
+                DateTimeOffset.UtcNow,
+                ProviderName: "OpenAI",
+                ModelName: "gpt-5-codex",
+                TaskComplexity: TaskComplexity.Simple,
+                PromptCharacterCount: 12001));
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["execute-dispatch", "1", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-large-paid-subscription-start", ex!.Message);
+        Xunit.Assert.Contains("12001 prompt chars", ex.Message);
+        Xunit.Assert.Empty(task.VerificationHistory);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_advance_subscription_blocks_large_paid_prepared_prompt_without_confirm_flag")]
     public void CliAdvanceSubscriptionBlocksLargePaidPreparedPromptWithoutConfirmFlag()
     {

@@ -130,13 +130,16 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 
         case "execute-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "execute-dispatch <task-number> --confirm-dispatch-start");
+            CliArgumentParser.RequirePartCount(parts, 2, "execute-dispatch <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-dispatch-start",
                 "execute-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var executeTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal, executeTask),
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             new LocalDispatchRunner()
                 .ExecuteLatestDispatchAsync(context.Kernel, context.CurrentGoal.Id, executeTask.Id)
                 .GetAwaiter()
@@ -145,7 +148,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return true;
 
         case "start-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "start-dispatch <task-number> --confirm-dispatch-start");
+            CliArgumentParser.RequirePartCount(parts, 2, "start-dispatch <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-dispatch-start",
