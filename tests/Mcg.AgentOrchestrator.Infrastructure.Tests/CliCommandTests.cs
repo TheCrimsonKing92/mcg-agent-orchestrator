@@ -86,6 +86,39 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(goal.Tasks.Single().LastExecution);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_next_action_command_confirms_large_paid_prepared_dispatch")]
+    public void CliNextActionCommandConfirmsLargePaidPreparedDispatch()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Start costly prepared dispatch",
+            [new TaskSpec(TaskId.New(), "Run prepared paid work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.3-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec prompt.md",
+            "C:\\repo",
+            DateTimeOffset.UtcNow,
+            "OpenAI",
+            "gpt-5.3-codex",
+            "medium",
+            TaskComplexity.Complex,
+            12001));
+        var action = kernel.BuildNextActions(goal.Id).Items.Single();
+
+        var command = ConsoleViews.BuildSuggestedCommand(goal, action);
+
+        Xunit.Assert.Equal("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", command);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_paid_provider_without_confirm_flag")]
     public void CliApiRunBlocksPaidProviderWithoutConfirmFlag()
     {

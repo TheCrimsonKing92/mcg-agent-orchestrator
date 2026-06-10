@@ -1079,6 +1079,8 @@ public sealed class DashboardRenderingTests
     var goalPrefix = goal.Id.Value[..8];
 
     var control = DashboardNextActionControls.Build(goal, action);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id)).Items.Single();
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
@@ -1087,6 +1089,8 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", control!.Url);
+    Assert.True(nextDto.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.True(workSummary.NextAction!.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&amp;confirmLargePaidSubscriptionStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Suggested command: execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));

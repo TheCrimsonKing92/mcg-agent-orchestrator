@@ -56,14 +56,8 @@ public static void PrintNextActions(Goal goal, GoalNextActions actions)
     for (var index = 0; index < actions.Items.Count; index++)
     {
         var item = actions.Items[index];
-        int? taskNumber = null;
-        if (item.TaskId is not null)
-        {
-            taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
-        }
-
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
-        Console.WriteLine($"     command: {BuildSuggestedCommand(item, taskNumber)}");
+        Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item)}");
     }
 
     Console.WriteLine();

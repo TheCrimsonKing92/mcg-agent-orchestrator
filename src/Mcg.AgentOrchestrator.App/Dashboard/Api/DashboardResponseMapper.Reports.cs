@@ -295,7 +295,7 @@ public static NextActionDto ToNextActionDto(Goal goal, NextActionItem item, int 
         taskNumber,
         item.HumanInputRequestId?.Value,
         TimelineText(item.Message),
-        ConsoleViews.BuildSuggestedCommand(item, taskNumber),
+        ConsoleViews.BuildSuggestedCommand(goal, item),
         ToNextActionControlDto(goal, item));
 }
 

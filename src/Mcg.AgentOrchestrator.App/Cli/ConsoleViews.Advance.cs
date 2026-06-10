@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -39,6 +40,26 @@ public static string BuildSuggestedCommand(NextActionItem item, int? taskNumber)
         NextActionKind.MonitorGoal => "monitor",
         _ => "monitor"
     };
+}
+
+public static string BuildSuggestedCommand(Goal goal, NextActionItem item)
+{
+    int? taskNumber = null;
+    if (item.TaskId is not null)
+    {
+        taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
+    }
+
+    var command = BuildSuggestedCommand(item, taskNumber);
+    if (item.Kind != NextActionKind.ExecuteRecordedDispatch || item.TaskId is null)
+    {
+        return command;
+    }
+
+    var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == item.TaskId);
+    return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
+        ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
+        : command;
 }
 }
 
