@@ -90,7 +90,8 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
-        return Text(GoalTranscriptRenderer.Render(current, goal), "text/markdown; charset=utf-8");
+        var agents = services.LoadAgentCatalog().Agents;
+        return Text(GoalTranscriptRenderer.Render(current, goal, agents), "text/markdown; charset=utf-8");
     }
 
     private static async Task<IResult> GetGoalWorkSummaryAsync(string goalId, DashboardEndpointServices services)

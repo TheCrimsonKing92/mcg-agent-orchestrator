@@ -1688,10 +1688,15 @@ static string ExtractTaskControls(string html, int taskNumber)
 
     var readyKernel = new AgentOrchestratorKernel();
     var readyGoal = readyKernel.CreateGoal("Ready transcript");
-    readyKernel.ActivateGoal(readyGoal.Id, AgentCatalog.Default().Agents);
+    var readyAgents = AgentCatalog.Default().Agents;
+    readyKernel.ActivateGoal(readyGoal.Id, readyAgents);
     var readyTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal);
     Assert.Contains(readyTranscript, text => text.Contains("Suggested command: run", StringComparison.Ordinal));
     Assert.False(readyTranscript.Contains("subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
+    var costAwareTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal, readyAgents);
+    var nextSteps = costAwareTranscript[..costAwareTranscript.IndexOf("## Needs Attention", StringComparison.Ordinal)];
+    Assert.Contains(nextSteps, text => text.Contains("Suggested command: subscription-dispatch 1", StringComparison.Ordinal));
+    Assert.False(nextSteps.Contains("Suggested command: run 1", StringComparison.Ordinal));
 }
 
 private static void AssertOpenAiModelOrderIsCostAware(string text)

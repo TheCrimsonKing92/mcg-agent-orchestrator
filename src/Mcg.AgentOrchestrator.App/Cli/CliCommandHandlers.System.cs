@@ -100,7 +100,7 @@ private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<strin
                 ? parts[1]
                 : context.Workspace.TranscriptPath;
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(transcriptPath))!);
-            File.WriteAllText(transcriptPath, GoalTranscriptRenderer.Render(context.Kernel, context.CurrentGoal));
+            File.WriteAllText(transcriptPath, GoalTranscriptRenderer.Render(context.Kernel, context.CurrentGoal, context.Agents));
             Console.WriteLine($"Transcript: {Path.GetFullPath(transcriptPath)}");
             return false;
 

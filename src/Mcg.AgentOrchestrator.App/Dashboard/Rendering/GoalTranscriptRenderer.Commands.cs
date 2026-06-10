@@ -1,34 +1,15 @@
 using Mcg.AgentOrchestrator.Core;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Cli;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 public static partial class GoalTranscriptRenderer
 {
-private static string BuildSuggestedCommand(Goal goal, NextActionItem item)
-{
-    string? taskNumber = null;
-    if (item.TaskId is not null)
-    {
-        taskNumber = GetTaskDisplayNumber(goal, item.TaskId).ToString();
-    }
-
-    return item.Kind switch
-    {
-        NextActionKind.AnswerHumanInput => item.HumanInputRequestId is null
-            ? "pending"
-            : $"answer {item.HumanInputRequestId.Value[..8]} <answer>",
-        NextActionKind.InspectFailedTask => taskNumber is null ? "monitor" : $"task {taskNumber} | retry {taskNumber} <note>",
-        NextActionKind.FixFailedVerification => taskNumber is null ? "monitor" : $"verifications {taskNumber} | retry {taskNumber} <note>",
-        NextActionKind.RefreshRunningProcess => taskNumber is null ? "monitor" : $"refresh-dispatch {taskNumber}",
-        NextActionKind.ExecuteRecordedDispatch => taskNumber is null ? "monitor" : $"execute-dispatch {taskNumber} --confirm-dispatch-start{BuildLargePaidSubscriptionStartCommandSuffix(goal, item.TaskId)}",
-        NextActionKind.VerifyCompletedTask => taskNumber is null ? "monitor" : $"verify {taskNumber} <command> | verify-manual {taskNumber} passed <note>",
-        NextActionKind.RunAssignedTask => taskNumber is null ? "monitor" : $"run {taskNumber}",
-        NextActionKind.DelegatePendingTask => "delegate",
-        NextActionKind.MonitorGoal => "monitor",
-        _ => "monitor"
-    };
-}
+private static string BuildSuggestedCommand(
+    Goal goal,
+    NextActionItem item,
+    IReadOnlyList<AgentDefinition>? agents = null) =>
+    ConsoleViews.BuildSuggestedCommand(goal, item, agents);
 
 private static string BuildVerificationSuggestedCommand(int taskNumber, VerificationGateStatus gateStatus)
 {
@@ -45,19 +26,6 @@ private static string BuildVerificationSuggestedCommand(int taskNumber, Verifica
 private static string BuildHumanInputSuggestedCommand(HumanInputRequestId requestId)
 {
     return $"answer {requestId.Value[..8]} <answer>";
-}
-
-private static string BuildLargePaidSubscriptionStartCommandSuffix(Goal goal, TaskId? taskId)
-{
-    if (taskId is null)
-    {
-        return string.Empty;
-    }
-
-    var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
-    return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
-        ? $" {SubscriptionPromptCostGuard.CliConfirmationFlag}"
-        : string.Empty;
 }
 
 private static string BuildStageSuggestedCommand(int taskNumber, TaskStageReadiness stage)

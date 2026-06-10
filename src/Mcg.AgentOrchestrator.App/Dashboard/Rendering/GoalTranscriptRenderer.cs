@@ -6,7 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 public static partial class GoalTranscriptRenderer
 {
-    public static string Render(AgentOrchestratorKernel kernel, Goal goal)
+    public static string Render(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        IReadOnlyList<AgentDefinition>? agents = null)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var nextActions = kernel.BuildNextActions(goal.Id);
@@ -42,7 +45,7 @@ public static partial class GoalTranscriptRenderer
         {
             var item = nextActions.Items[index];
             text.AppendLine($"{index + 1}. {Display(item.Kind)}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
-            text.AppendLine($"   Suggested command: {BuildSuggestedCommand(goal, item)}");
+            text.AppendLine($"   Suggested command: {BuildSuggestedCommand(goal, item, agents)}");
         }
 
         text.AppendLine();
