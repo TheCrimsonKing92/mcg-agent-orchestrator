@@ -127,7 +127,30 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList());
 }
 
-private static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
+public static TaskWorkContextDto ToTaskWorkContextDto(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    DashboardHostInfoDto host,
+    IReadOnlyList<AgentDefinition>? agents = null)
+{
+    var monitor = kernel.BuildMonitor(goal.Id);
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
+
+    return new TaskWorkContextDto(
+        goal.Id.Value,
+        SummaryText(goal.Objective),
+        goal.Status,
+        goal.Tasks.Count,
+        monitor.PendingHumanInputCount,
+        gate.IsSatisfied,
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
+        ToTaskWorkSummaryDto(goal, task),
+        host);
+}
+
+public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
 {
     return new TaskWorkSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),

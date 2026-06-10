@@ -135,6 +135,17 @@ internal sealed record GoalWorkSummaryDto(
     NextActionDto? NextAction,
     IReadOnlyList<TaskWorkSummaryDto> Tasks);
 
+internal sealed record TaskWorkContextDto(
+    string GoalId,
+    string Objective,
+    GoalStatus Status,
+    int TotalTasks,
+    int PendingHumanInputCount,
+    bool VerificationSatisfied,
+    NextActionDto? NextAction,
+    TaskWorkSummaryDto Task,
+    DashboardHostInfoDto Host);
+
 internal sealed record TaskWorkSummaryDto(
     int TaskNumber,
     string TaskId,

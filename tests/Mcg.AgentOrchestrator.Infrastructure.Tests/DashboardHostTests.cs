@@ -87,8 +87,10 @@ public sealed class DashboardHostTests
         var defaultManualGoal = await defaultManualGoalResponse.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.Created, simpleGoalResponse.StatusCode);
         var simpleGoalId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
+        var simpleTaskId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Tasks")[0].GetProperty("Id").GetString()!;
         var simpleGoalDetail = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}"));
         var simpleGoalWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/work-summary"));
+        var simpleTaskWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/tasks/{simpleTaskId}/work-summary"));
         using var cssResponse = await client.GetAsync(new Uri(new Uri(url), "assets/dashboard.css"));
         var css = await cssResponse.Content.ReadAsStringAsync();
         var js = await client.GetStringAsync(new Uri(new Uri(url), "assets/dashboard.js"));
@@ -152,6 +154,16 @@ public sealed class DashboardHostTests
             Assert.True(summary.GetProperty("Tasks").EnumerateArray().Any(task =>
                 task.TryGetProperty("LastDispatch", out var dispatch) &&
                 dispatch.ValueKind == JsonValueKind.Object));
+        }
+        using (var taskWorkSummaryDocument = JsonDocument.Parse(simpleTaskWorkSummary))
+        {
+            var summary = taskWorkSummaryDocument.RootElement;
+            Assert.Equal(simpleGoalId, summary.GetProperty("GoalId").GetString());
+            Assert.Equal(simpleTaskId, summary.GetProperty("Task").GetProperty("TaskId").GetString());
+            Assert.Equal("prototype-ui", summary.GetProperty("Host").GetProperty("CommandName").GetString());
+            Assert.True(summary.GetProperty("Host").GetProperty("OperatorControlsEnabled").GetBoolean());
+            Assert.True(summary.TryGetProperty("NextAction", out _));
+            Assert.False(summary.TryGetProperty("Tasks", out _));
         }
         Assert.Equal(HttpStatusCode.Created, manualGoalResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Created, defaultManualGoalResponse.StatusCode);

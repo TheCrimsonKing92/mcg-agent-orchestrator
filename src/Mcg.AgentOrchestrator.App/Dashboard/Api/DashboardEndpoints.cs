@@ -122,6 +122,7 @@ internal static partial class DashboardEndpoints
         }
 
         api.MapGet("/tasks", async Task<IResult> (HttpContext context) => await Safe(() => QueryTasksAsync(context, services)));
+        api.MapGet("/tasks/{taskId}/work-summary", async Task<IResult> (HttpContext context, string taskId) => await Safe(() => GetTaskWorkSummaryAsync(context, taskId, services)));
         api.MapGet("/task/{taskId}", async Task<IResult> (HttpContext context, string taskId) => await Safe(() => GetTaskAsync(context, taskId, services)));
 
         app.MapFallback(() => Text("not found", "text/plain; charset=utf-8", StatusCodes.Status404NotFound));

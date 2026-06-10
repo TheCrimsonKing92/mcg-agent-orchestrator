@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -84,6 +85,50 @@ internal static partial class DashboardEndpoints
         var goal = ResolveGoal(context.Request, current);
         var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
         return Json(DashboardResponseMapper.ToTaskDetailDto(goal, task));
+    }
+
+    private static async Task<IResult> GetTaskWorkSummaryAsync(HttpContext context, string taskId, DashboardEndpointServices services)
+    {
+        var current = await LoadAsync(services, context.RequestAborted);
+        var (goal, task) = ResolveTaskForWorkSummary(context.Request, current, taskId);
+        var agents = services.LoadAgentCatalog().Agents;
+        return Json(DashboardResponseMapper.ToTaskWorkContextDto(
+            current,
+            goal,
+            task,
+            BuildHostInfo(services),
+            agents));
+    }
+
+    private static (Goal Goal, TaskSpec Task) ResolveTaskForWorkSummary(
+        HttpRequest request,
+        AgentOrchestratorKernel kernel,
+        string taskId)
+    {
+        var goalQuery = DashboardRequestParser.GetQueryValue(request, "goal");
+        if (!string.IsNullOrWhiteSpace(goalQuery))
+        {
+            var scopedGoal = ResolveGoal(kernel, goalQuery);
+            return (scopedGoal, OrchestratorEntityResolver.GetTaskByDisplayNumber(scopedGoal, taskId));
+        }
+
+        if (int.TryParse(taskId, out _))
+        {
+            throw new ArgumentException("Task work summary by number requires a goal query, for example /api/tasks/1/work-summary?goal=<goalPrefix>.");
+        }
+
+        var matches = kernel.Goals
+            .SelectMany(goal => goal.Tasks
+                .Where(task => task.Id.Value.StartsWith(taskId, StringComparison.OrdinalIgnoreCase))
+                .Select(task => (Goal: goal, Task: task)))
+            .ToList();
+
+        return matches.Count switch
+        {
+            1 => matches[0],
+            0 => throw new KeyNotFoundException($"Task '{taskId}' was not found."),
+            _ => throw new InvalidOperationException($"Task id prefix '{taskId}' is ambiguous.")
+        };
     }
 
     private static int ParseSourceSurveyMaxFiles(HttpRequest request)
