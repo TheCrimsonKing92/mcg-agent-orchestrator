@@ -843,6 +843,44 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, summary.PreviousOverkillCount);
     Assert.Equal(0, summary.PreviousUnderpoweredCount);
     Assert.Equal(0, summary.PreviousUnknownFitCount);
+    Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
+    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior overkill model-fit note", StringComparison.Ordinal)));
+}
+
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_flags_prior_underpowered_model_fit_for_ready_models")]
+    public void SubscriptionPlanFlagsPriorUnderpoweredModelFitForReadyModels()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Fix failed parser behavior.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Fix another parser behavior.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Avoid repeating underpowered model choice", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification failed",
+        "C:\\repo",
+        1,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - underpowered - missed regression path.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+
+    var summary = plan.ReadyModelUsage.Single();
+    Assert.Equal(1, summary.PreviousUnderpoweredCount);
+    Assert.Equal("prior underpowered model", plan.ReadyStartCostRisk);
+    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior underpowered model-fit note", StringComparison.Ordinal)));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]

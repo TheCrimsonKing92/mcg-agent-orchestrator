@@ -12,6 +12,8 @@ internal sealed record PaidSubscriptionPromptRisk(
     bool TaskCountExceedsThreshold,
     bool HasOversizedPrompt,
     bool UsesComplexPaidModel,
+    bool HasPriorOverkillFit,
+    bool HasPriorUnderpoweredFit,
     IReadOnlyList<string> Details);
 
 internal static class SubscriptionPromptCostGuard
@@ -45,10 +47,13 @@ public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
             item.EstimatedPromptCharacterCount!.Value))
         .ToList();
 
-    return BuildRisk(candidates);
+    var fitSummaries = BuildReadyModelFitSummaries(goal);
+    return BuildRisk(candidates, fitSummaries);
 }
 
-public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(IReadOnlyList<SubscriptionPlanItemDto> items)
+public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
+    IReadOnlyList<SubscriptionPlanItemDto> items,
+    IReadOnlyList<SubscriptionPlanModelSummaryDto>? readyModelUsage = null)
 {
     var candidates = items
         .Where(item => item.CanPrepare &&
@@ -63,7 +68,7 @@ public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(IReadOn
             item.EstimatedPromptCharacterCount!.Value))
         .ToList();
 
-    return BuildRisk(candidates);
+    return BuildRisk(candidates, readyModelUsage);
 }
 
 public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(AgentOrchestratorKernel kernel, Goal goal, TaskSpec? onlyTask = null)
@@ -88,7 +93,7 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(AgentOrc
             task.LastDispatch.PromptCharacterCount!.Value))
         .ToList();
 
-    return BuildRisk(candidates);
+    return BuildRisk(candidates, BuildReadyModelFitSummaries(goal));
 }
 
 public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(Goal goal, TaskSpec task)
@@ -109,7 +114,8 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(Goal goa
                 task.LastDispatch.ModelName ?? "default",
                 task.LastDispatch.TaskComplexity,
                 task.LastDispatch.PromptCharacterCount.Value)
-        ]);
+        ],
+        BuildReadyModelFitSummaries(goal));
 }
 
 public static void ThrowIfConfirmationRequired(PaidSubscriptionPromptRisk? risk, bool confirmed)
@@ -146,6 +152,16 @@ public static string BuildInlineLabel(PaidSubscriptionPromptRisk risk)
         return "complex paid subscription model";
     }
 
+    if (risk.HasPriorUnderpoweredFit)
+    {
+        return "prior underpowered model";
+    }
+
+    if (risk.HasPriorOverkillFit)
+    {
+        return "prior overkill model";
+    }
+
     return "paid subscription start";
 }
 
@@ -164,13 +180,23 @@ private static string BuildMessage(PaidSubscriptionPromptRisk risk, string confi
     return $"Paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s). {confirmationInstruction}.{details}";
 }
 
-private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCandidate> candidates)
+private static PaidSubscriptionPromptRisk? BuildRisk(
+    IReadOnlyList<PaidPromptCandidate> candidates,
+    IReadOnlyList<SubscriptionPlanModelSummaryDto>? readyModelUsage = null)
 {
     if (candidates.Count == 0)
     {
         return null;
     }
 
+    var candidateModels = candidates
+        .Select(candidate => BuildModelKey(candidate.ProviderName, candidate.ModelName))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var modelFitRisks = (readyModelUsage ?? [])
+        .Where(item => item.IsPotentiallyPaidProvider && candidateModels.Contains(BuildModelKey(item.ProviderName, item.ModelName)))
+        .ToList();
+    var priorOverkill = modelFitRisks.Where(item => item.PreviousOverkillCount > 0).ToList();
+    var priorUnderpowered = modelFitRisks.Where(item => item.PreviousUnderpoweredCount > 0).ToList();
     var total = candidates.Sum(candidate => candidate.PromptCharacterCount);
     var oversized = candidates
         .Where(candidate => candidate.PromptCharacterCount > PromptThreshold(candidate.TaskComplexity))
@@ -183,7 +209,9 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
     if (total <= BatchPaidPromptThreshold &&
         !tooManyPaidTasks &&
         oversized.Count == 0 &&
-        complex.Count == 0)
+        complex.Count == 0 &&
+        priorOverkill.Count == 0 &&
+        priorUnderpowered.Count == 0)
     {
         return null;
     }
@@ -215,6 +243,22 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
         details.Add($"+{complex.Count - 3} more complex paid task(s).");
     }
 
+    details.AddRange(priorOverkill.Take(3).Select(item =>
+        $"{item.ProviderName}/{item.ModelName} has {item.PreviousOverkillCount} prior overkill model-fit note(s); consider a cheaper or local model before paid subscription start."));
+
+    if (priorOverkill.Count > 3)
+    {
+        details.Add($"+{priorOverkill.Count - 3} more model(s) with prior overkill fit.");
+    }
+
+    details.AddRange(priorUnderpowered.Take(3).Select(item =>
+        $"{item.ProviderName}/{item.ModelName} has {item.PreviousUnderpoweredCount} prior underpowered model-fit note(s); consider a stronger model before repeating this selection."));
+
+    if (priorUnderpowered.Count > 3)
+    {
+        details.Add($"+{priorUnderpowered.Count - 3} more model(s) with prior underpowered fit.");
+    }
+
     return new PaidSubscriptionPromptRisk(
         candidates.Count,
         total,
@@ -224,7 +268,31 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
         tooManyPaidTasks,
         oversized.Count > 0,
         complex.Count > 0,
+        priorOverkill.Count > 0,
+        priorUnderpowered.Count > 0,
         details);
+}
+
+private static List<SubscriptionPlanModelSummaryDto> BuildReadyModelFitSummaries(Goal goal)
+{
+    return ModelFitEvidence
+        .BuildSummary(goal.Tasks.Select(ModelFitEvidence.FindLatestNote))
+        .Select(fit => new SubscriptionPlanModelSummaryDto(
+            fit.ProviderName,
+            fit.ModelName,
+            0,
+            IsPotentiallyPaidProvider: ProviderSmokeRunner.IsPaidProviderName(fit.ProviderName),
+            PreviousModelFitNoteCount: fit.NoteCount,
+            PreviousAdequateCount: fit.AdequateCount,
+            PreviousOverkillCount: fit.OverkillCount,
+            PreviousUnderpoweredCount: fit.UnderpoweredCount,
+            PreviousUnknownFitCount: fit.UnknownCount))
+        .ToList();
+}
+
+private static string BuildModelKey(string providerName, string modelName)
+{
+    return $"{providerName}/{modelName}";
 }
 
 private static int PromptThreshold(TaskComplexity? complexity)
