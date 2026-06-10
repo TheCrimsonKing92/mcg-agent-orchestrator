@@ -155,7 +155,34 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Keep the response evidence-focused", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_includes_complex_response_budget_guidance")]
+    public async Task AgentTaskRunnerIncludesComplexResponseBudgetGuidance()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Maintain dashboard views",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "complex work complete");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]));
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    Assert.True(provider.LastRequest is not null);
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("Response guidance: Keep the response evidence-focused", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]
     public void BuildTaskBriefIncludesPendingHumanInputAndVerification()
