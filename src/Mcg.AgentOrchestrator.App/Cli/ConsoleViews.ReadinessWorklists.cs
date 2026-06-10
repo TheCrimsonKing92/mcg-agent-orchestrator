@@ -71,7 +71,10 @@ private static string FormatModelFitSummary(ModelFitSummary fit)
         counts.Add("none");
     }
 
-    return $"{fit.ProviderName}/{fit.ModelName}: {notes}; {string.Join(", ", counts)}";
+    var shapes = fit.TaskShapes is { Count: > 0 }
+        ? $"; shapes {string.Join(", ", fit.TaskShapes)}"
+        : string.Empty;
+    return $"{fit.ProviderName}/{fit.ModelName}: {notes}; {string.Join(", ", counts)}{shapes}";
 }
 
 private static void AddModelFitCount(List<string> counts, string label, int count)

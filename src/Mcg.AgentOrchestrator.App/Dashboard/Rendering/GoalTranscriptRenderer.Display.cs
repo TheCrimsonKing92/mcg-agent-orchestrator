@@ -143,7 +143,10 @@ public static partial class GoalTranscriptRenderer
     {
         var notes = fit.NoteCount == 1 ? "1 note" : $"{fit.NoteCount} notes";
         var counts = BuildModelFitCounts(fit);
-        return $"{fit.ProviderName}/{fit.ModelName}: {notes}; {string.Join(", ", counts)}";
+        var shapes = fit.TaskShapes is { Count: > 0 }
+            ? $"; shapes {string.Join(", ", fit.TaskShapes)}"
+            : string.Empty;
+        return $"{fit.ProviderName}/{fit.ModelName}: {notes}; {string.Join(", ", counts)}{shapes}";
     }
 
     private static List<string> BuildModelFitCounts(ModelFitSummary fit)

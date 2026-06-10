@@ -91,7 +91,8 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
             item.AdequateCount,
             item.OverkillCount,
             item.UnderpoweredCount,
-            item.UnknownCount)).ToList(),
+            item.UnknownCount,
+            item.TaskShapes ?? [])).ToList(),
         summary.Tasks.Select(item => ToTaskEvidenceSummaryDto(goal, item)).ToList());
 }
 

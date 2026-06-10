@@ -149,7 +149,7 @@ public sealed partial class AgentOrchestratorKernel
         var target = string.IsNullOrWhiteSpace(modelFitTarget)
             ? "<provider>/<model or launcher>"
             : modelFitTarget.Trim();
-        return $"Include a final model-selection note: Model fit: {target} - adequate|overkill|underpowered - <short reason>.";
+        return $"Include a final model-selection note: Model fit: {target} - adequate|overkill|underpowered - <task shape> - <short reason>.";
     }
 
     private static bool IsRedundantBriefTimelineEvent(TaskSpec task, ProgressEvent evt)

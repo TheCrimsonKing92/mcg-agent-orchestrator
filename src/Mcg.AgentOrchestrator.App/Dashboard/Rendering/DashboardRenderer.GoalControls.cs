@@ -383,7 +383,7 @@ public static partial class DashboardRenderer
 
         return string.IsNullOrWhiteSpace(model)
             ? string.Empty
-            : $" placeholder=\"Evidence checked. Model fit: {Encode(model)} - adequate|overkill|underpowered - reason.\"";
+            : $" placeholder=\"Evidence checked. Model fit: {Encode(model)} - adequate|overkill|underpowered - task shape - reason.\"";
     }
 
     private static string? FormatModelFitTarget(string? providerName, string? modelName)

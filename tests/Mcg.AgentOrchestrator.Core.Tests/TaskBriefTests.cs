@@ -25,7 +25,7 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Report only changed files", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <short reason>", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/obj/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
@@ -74,7 +74,7 @@ public sealed class TaskBriefTests
 
     Assert.True(provider.LastRequest is not null);
     Assert.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <short reason>", StringComparison.Ordinal));
+    Assert.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
     public void BuildTaskBriefTrimsNoisyGoalAndTaskPrimaryContext()
@@ -185,7 +185,7 @@ public sealed class TaskBriefTests
     var prompt = provider.LastRequest!.Messages.Single().Content;
     Assert.Contains(prompt, text => text.Contains("Response guidance: Keep the response evidence-focused", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <short reason>", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]
     public void BuildTaskBriefIncludesPendingHumanInputAndVerification()

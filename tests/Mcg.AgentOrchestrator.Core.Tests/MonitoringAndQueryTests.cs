@@ -270,12 +270,16 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, codexFit.OverkillCount);
     Assert.Equal(1, codexFit.UnderpoweredCount);
     Assert.Equal(0, codexFit.UnknownCount);
+    Assert.Contains(codexFit.TaskShapes!, shape => shape == "label-only change");
+    Assert.Contains(codexFit.TaskShapes!, shape => shape == "missed test coverage");
     var miniFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.4-mini");
     Assert.Equal(2, miniFit.NoteCount);
     Assert.Equal(1, miniFit.AdequateCount);
     Assert.Equal(1, miniFit.OverkillCount);
     Assert.Equal(0, miniFit.UnderpoweredCount);
     Assert.Equal(0, miniFit.UnknownCount);
+    Assert.Contains(miniFit.TaskShapes!, shape => shape == "focused parser fix");
+    Assert.Contains(miniFit.TaskShapes!, shape => shape == "text-only docs change");
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_api_prompts")]

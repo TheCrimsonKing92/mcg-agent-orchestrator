@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public sealed record ModelFitObservation(string ProviderName, string ModelName, string Fit);
+public sealed record ModelFitObservation(string ProviderName, string ModelName, string Fit, string? TaskShape = null);
 
 public static class ModelFitEvidence
 {
@@ -57,7 +57,8 @@ public static class ModelFitEvidence
                 group.Count(observation => observation.Fit == "adequate"),
                 group.Count(observation => observation.Fit == "overkill"),
                 group.Count(observation => observation.Fit == "underpowered"),
-                group.Count(observation => observation.Fit == "unknown")))
+                group.Count(observation => observation.Fit == "unknown"),
+                BuildTaskShapes(group)))
             .ToList();
     }
 
@@ -99,7 +100,27 @@ public static class ModelFitEvidence
             _ => "unknown"
         };
 
-        return new ModelFitObservation(providerName, modelName, fit);
+        var taskShape = parts.Length >= 3 ? NormalizeTaskShape(parts[2]) : null;
+
+        return new ModelFitObservation(providerName, modelName, fit, taskShape);
+    }
+
+    private static List<string> BuildTaskShapes(IEnumerable<ModelFitObservation> observations)
+    {
+        return observations
+            .Select(observation => observation.TaskShape)
+            .Where(shape => !string.IsNullOrWhiteSpace(shape))
+            .Select(shape => shape!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(shape => shape, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+    }
+
+    private static string? NormalizeTaskShape(string value)
+    {
+        var trimmed = value.Trim().TrimEnd('.');
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
     private static IEnumerable<string> EnumerateVerificationLines(TaskVerificationRecord verification)

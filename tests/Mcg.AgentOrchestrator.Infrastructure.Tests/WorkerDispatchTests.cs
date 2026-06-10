@@ -75,7 +75,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal(expectedPromptCharacters, estimatedPromptCharacters);
     Assert.Equal(File.ReadAllText(dispatchResult.PromptPath).Length, task.LastDispatch.PromptCharacterCount);
     Assert.Equal(estimatedPromptCharacters, task.LastDispatch.PromptCharacterCount);
-    Assert.Contains(File.ReadAllText(dispatchResult.PromptPath), text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <short reason>", StringComparison.Ordinal));
+    Assert.Contains(File.ReadAllText(dispatchResult.PromptPath), text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ProfileDispatchTask_enriches_matching_subscription_profile_metadata")]

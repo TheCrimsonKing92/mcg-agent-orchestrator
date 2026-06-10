@@ -116,7 +116,8 @@ internal sealed record ModelFitSummaryDto(
     int AdequateCount,
     int OverkillCount,
     int UnderpoweredCount,
-    int UnknownCount);
+    int UnknownCount,
+    IReadOnlyList<string>? TaskShapes = null);
 
 internal sealed record TaskEvidenceSummaryDto(
     int TaskNumber,

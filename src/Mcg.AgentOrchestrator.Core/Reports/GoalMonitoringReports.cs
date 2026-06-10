@@ -78,7 +78,8 @@ public sealed record ModelFitSummary(
     int AdequateCount,
     int OverkillCount,
     int UnderpoweredCount,
-    int UnknownCount);
+    int UnknownCount,
+    IReadOnlyList<string>? TaskShapes = null);
 
 public sealed record TaskEvidenceSummary(
     TaskId TaskId,

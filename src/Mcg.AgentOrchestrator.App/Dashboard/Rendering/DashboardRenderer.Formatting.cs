@@ -111,7 +111,8 @@ public static partial class DashboardRenderer
     private static string RenderModelFitSummary(ModelFitSummary fit)
     {
         var notes = fit.NoteCount == 1 ? "1 note" : $"{fit.NoteCount} notes";
-        return $"{Encode(fit.ProviderName)}/{Encode(fit.ModelName)}: {notes}; {string.Join(", ", BuildModelFitCounts(fit))}";
+        var shapes = FormatModelFitTaskShapes(fit.TaskShapes);
+        return $"{Encode(fit.ProviderName)}/{Encode(fit.ModelName)}: {notes}; {string.Join(", ", BuildModelFitCounts(fit))}{shapes}";
     }
 
     private static List<string> BuildModelFitCounts(ModelFitSummary fit)
@@ -130,6 +131,13 @@ public static partial class DashboardRenderer
         {
             counts.Add($"{label} {count}");
         }
+    }
+
+    private static string FormatModelFitTaskShapes(IReadOnlyList<string>? taskShapes)
+    {
+        return taskShapes is { Count: > 0 }
+            ? $"; shapes {string.Join(", ", taskShapes.Select(Encode))}"
+            : string.Empty;
     }
 
     private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
