@@ -1095,6 +1095,10 @@ public sealed class DashboardRenderingTests
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run", StringComparison.Ordinal));
+    Assert.False(ExtractTaskControls(html, 1).Contains("API plan:", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 1024 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 1024 out [potentially paid]", StringComparison.Ordinal));
+    Assert.False(ExtractTaskControls(html, 4).Contains("API plan:", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 3</code>", StringComparison.Ordinal));
@@ -1343,8 +1347,8 @@ static AgentConfigurationValidation Validation(AgentRole role, AgentExecutionPol
         role.ToString(),
         "OpenAI",
         "test",
-        null,
-        null,
+        "medium",
+        1024,
         policy,
         null,
         null,

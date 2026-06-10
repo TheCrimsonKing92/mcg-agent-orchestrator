@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -239,6 +240,7 @@ public static partial class DashboardRenderer
             html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents))}\">Explicit API run</button>");
         }
 
+        RenderApiRunPreview(html, goal, task, options.HealthReport?.Agents);
         RenderAdvancedProcessAction(html, prefix, "start?confirmDispatchStart=true", "Start prepared work", GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "cancel", "Cancel process", GetCancelProcessReadiness(task));
@@ -317,6 +319,55 @@ public static partial class DashboardRenderer
 
         html.AppendLine(
             $"<span class=\"disabled-action\"><button type=\"button\" disabled title=\"{Encode(readiness.Reason)}\">{label} unavailable</button><span class=\"meta\">{Encode(readiness.Reason)}</span></span>");
+    }
+
+    private static void RenderApiRunPreview(StringBuilder html, Goal goal, TaskSpec task, IReadOnlyList<AgentConfigurationValidation>? agents)
+    {
+        if (agents is null ||
+            task.Status != WorkTaskStatus.Assigned ||
+            task.LastDispatch is not null ||
+            task.LastProcess is not null ||
+            task.LastExecution is not null ||
+            task.LastVerification is not null ||
+            task.SubscriptionRetryAfter is not null)
+        {
+            return;
+        }
+
+        var agent = agents.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
+        if (agent is null ||
+            !AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
+            (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly &&
+                !DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, agents)))
+        {
+            return;
+        }
+
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+        var usesComplexModel = complexity == TaskComplexity.Complex && !string.IsNullOrWhiteSpace(agent.ComplexModelName);
+        var providerName = usesComplexModel && !string.IsNullOrWhiteSpace(agent.ComplexProviderName)
+            ? agent.ComplexProviderName!
+            : agent.ProviderName;
+        var modelName = usesComplexModel
+            ? agent.ComplexModelName!
+            : agent.ModelName;
+        var reasoning = usesComplexModel
+            ? agent.ComplexReasoningEffort ?? agent.ReasoningEffort
+            : agent.ReasoningEffort;
+        var maxOutputTokens = usesComplexModel
+            ? agent.ComplexMaxOutputTokens
+            : agent.MaxOutputTokens;
+        var reasoningLabel = string.IsNullOrWhiteSpace(reasoning)
+            ? string.Empty
+            : $" reasoning {reasoning}";
+        var maxLabel = maxOutputTokens is { } max
+            ? $" max {max} out"
+            : string.Empty;
+        var paidLabel = ProviderSmokeRunner.IsPaidProviderName(providerName)
+            ? " [potentially paid]"
+            : string.Empty;
+
+        html.AppendLine($"<p class=\"meta\">API plan: {Encode(providerName)}/{Encode(modelName)} {Encode(complexity.ToString())}{Encode(reasoningLabel)}{Encode(maxLabel)}{paidLabel}</p>");
     }
 
     private static TaskActionReadiness GetStartDispatchReadiness(TaskSpec task)
