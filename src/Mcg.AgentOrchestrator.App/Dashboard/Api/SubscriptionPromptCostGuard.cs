@@ -93,7 +93,7 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(AgentOrc
             task.LastDispatch.ModelName ?? "default",
             task.LastDispatch.TaskComplexity,
             task.LastDispatch.PromptCharacterCount!.Value,
-            task.LastDispatch.TaskComplexity == TaskComplexity.Complex))
+            task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex))
         .ToList();
 
     return BuildRisk(candidates, BuildReadyModelFitSummaries(goal));
@@ -117,7 +117,7 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(Goal goa
                 task.LastDispatch.ModelName ?? "default",
                 task.LastDispatch.TaskComplexity,
                 task.LastDispatch.PromptCharacterCount.Value,
-                task.LastDispatch.TaskComplexity == TaskComplexity.Complex)
+                task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex)
         ],
         BuildReadyModelFitSummaries(goal));
 }

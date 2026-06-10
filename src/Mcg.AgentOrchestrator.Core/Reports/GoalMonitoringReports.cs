@@ -69,7 +69,8 @@ public sealed record DispatchModelSummary(
     TaskComplexity? TaskComplexity = null,
     string? ReasoningEffort = null,
     bool IsPotentiallyPaidProvider = false,
-    int? PromptCharacterCount = null);
+    int? PromptCharacterCount = null,
+    bool UsesComplexModel = false);
 
 public sealed record ModelFitSummary(
     string ProviderName,

@@ -57,7 +57,8 @@ internal sealed record DispatchDto(
     string? ModelName = null,
     string? ReasoningEffort = null,
     TaskComplexity? TaskComplexity = null,
-    int? PromptCharacterCount = null);
+    int? PromptCharacterCount = null,
+    bool UsesComplexModel = false);
 
 internal sealed record ProcessDto(
     int ProcessId,

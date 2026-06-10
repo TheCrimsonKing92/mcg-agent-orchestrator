@@ -94,6 +94,7 @@ public static ProfileDispatchDto ToProfileDispatchDto(Goal goal, WorkerProfileDi
                 result.Task.LastDispatch.ModelName,
                 result.Task.LastDispatch.ReasoningEffort,
                 result.Task.LastDispatch.TaskComplexity,
-                result.Task.LastDispatch.PromptCharacterCount));
+                result.Task.LastDispatch.PromptCharacterCount,
+                result.Task.LastDispatch.UsesComplexModel));
 }
 }

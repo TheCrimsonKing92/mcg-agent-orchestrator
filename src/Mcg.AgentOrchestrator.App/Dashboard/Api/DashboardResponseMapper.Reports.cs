@@ -83,7 +83,8 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
             item.TaskComplexity,
             item.ReasoningEffort,
             item.IsPotentiallyPaidProvider,
-            item.PromptCharacterCount)).ToList(),
+            item.PromptCharacterCount,
+            item.UsesComplexModel)).ToList(),
         summary.ModelFit.Select(item => new ModelFitSummaryDto(
             item.ProviderName,
             item.ModelName,
@@ -178,7 +179,8 @@ public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
                 task.LastDispatch.ModelName,
                 task.LastDispatch.ReasoningEffort,
                 task.LastDispatch.TaskComplexity,
-                task.LastDispatch.PromptCharacterCount),
+                task.LastDispatch.PromptCharacterCount,
+                task.LastDispatch.UsesComplexModel),
         task.LastProcess is null
             ? null
             : new ProcessSummaryDto(

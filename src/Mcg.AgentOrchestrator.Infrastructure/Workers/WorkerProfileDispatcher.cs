@@ -21,7 +21,8 @@ public static class WorkerProfileDispatcher
         string? providerName = null,
         string? modelName = null,
         string? reasoningEffort = null,
-        TaskComplexity? taskComplexity = null)
+        TaskComplexity? taskComplexity = null,
+        bool usesComplexModel = false)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -41,7 +42,8 @@ public static class WorkerProfileDispatcher
             modelName,
             reasoningEffort,
             taskComplexity,
-            preparation.PromptCharacterCount));
+            preparation.PromptCharacterCount,
+            usesComplexModel));
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 
@@ -95,7 +97,8 @@ public static class WorkerProfileDispatcher
             selection.Model.ProviderName,
             ResolveEffectiveSubscriptionModelName(agent, selection),
             reasoningEffort,
-            selection.Complexity);
+            selection.Complexity,
+            selection.UsesComplexModel);
     }
 
     public static int EstimateSubscriptionPromptCharacters(
@@ -164,7 +167,8 @@ public static class WorkerProfileDispatcher
                 subscriptionModel.Model.ProviderName,
                 ResolveEffectiveSubscriptionModelName(selection.Agent, subscriptionModel),
                 reasoningEffort,
-                subscriptionModel.Complexity));
+                subscriptionModel.Complexity,
+                subscriptionModel.UsesComplexModel));
         }
 
         return results;

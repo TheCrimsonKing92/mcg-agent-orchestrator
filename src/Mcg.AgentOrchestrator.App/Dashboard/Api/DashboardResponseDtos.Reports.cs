@@ -107,7 +107,8 @@ internal sealed record DispatchModelSummaryDto(
     TaskComplexity? TaskComplexity = null,
     string? ReasoningEffort = null,
     bool IsPotentiallyPaidProvider = false,
-    int? PromptCharacterCount = null);
+    int? PromptCharacterCount = null,
+    bool UsesComplexModel = false);
 
 internal sealed record ModelFitSummaryDto(
     string ProviderName,
@@ -177,7 +178,8 @@ internal sealed record DispatchSummaryDto(
     string? ModelName = null,
     string? ReasoningEffort = null,
     TaskComplexity? TaskComplexity = null,
-    int? PromptCharacterCount = null);
+    int? PromptCharacterCount = null,
+    bool UsesComplexModel = false);
 
 internal sealed record ProcessSummaryDto(
     int ProcessId,

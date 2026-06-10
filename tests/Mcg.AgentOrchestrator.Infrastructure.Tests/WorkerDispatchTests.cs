@@ -972,6 +972,7 @@ public sealed class WorkerDispatchTests
         [agent],
         WorkerProfileCatalog.Default(),
         task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]));
+    var dispatchRoot = CreateTempDirectory();
 
     var item = plan.Items.Single(candidate => candidate.TaskId == nextTask.Id.Value);
     var summary = plan.ReadyModelUsage.Single();
@@ -985,6 +986,22 @@ public sealed class WorkerDispatchTests
     Assert.Equal("gpt-5.5", summary.ModelName);
     Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        nextTask,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        Path.Combine(dispatchRoot, "prompts"),
+        dispatchRoot,
+        DateTimeOffset.UtcNow);
+    var preparedRisk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, nextTask);
+
+    Assert.True(nextTask.LastDispatch!.UsesComplexModel);
+    Assert.Equal(TaskComplexity.Simple, nextTask.LastDispatch.TaskComplexity);
+    Assert.Equal("gpt-5.5", nextTask.LastDispatch.ModelName);
+    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(preparedRisk!));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]

@@ -96,7 +96,8 @@ public sealed class TaskSpec
                     LastDispatch.ModelName,
                     LastDispatch.ReasoningEffort,
                     LastDispatch.TaskComplexity,
-                    LastDispatch.PromptCharacterCount),
+                    LastDispatch.PromptCharacterCount,
+                    LastDispatch.UsesComplexModel),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -183,7 +184,8 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.ModelName,
                 snapshot.LastDispatch.ReasoningEffort,
                 snapshot.LastDispatch.TaskComplexity,
-                snapshot.LastDispatch.PromptCharacterCount));
+                snapshot.LastDispatch.PromptCharacterCount,
+                snapshot.LastDispatch.UsesComplexModel));
         }
 
         if (snapshot.LastProcess is not null)

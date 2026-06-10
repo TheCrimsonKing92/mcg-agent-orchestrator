@@ -124,7 +124,8 @@ public sealed partial class AgentOrchestratorKernel
                     task.LastDispatch!.ProviderName,
                     task.LastDispatch.ModelName,
                     task.LastDispatch.TaskComplexity,
-                    task.LastDispatch.ReasoningEffort
+                    task.LastDispatch.ReasoningEffort,
+                    task.LastDispatch.UsesComplexModel
                 })
             .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
@@ -137,7 +138,8 @@ public sealed partial class AgentOrchestratorKernel
                 group.Key.TaskComplexity,
                 group.Key.ReasoningEffort,
                 IsPotentiallyPaidProvider(group.Key.ProviderName!),
-                SumKnownUsage(group.Select(task => task.LastDispatch!.PromptCharacterCount))))
+                SumKnownUsage(group.Select(task => task.LastDispatch!.PromptCharacterCount)),
+                group.Key.UsesComplexModel))
             .ToList();
     }
 
@@ -449,7 +451,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private static string BuildDispatchEvidenceMessage(TaskDispatchRecord dispatch)
     {
-        return $"Dispatch recorded for {dispatch.WorkerName}{FormatDispatchModelSelection(dispatch)}{FormatPaidCostWarning(dispatch.ProviderName, dispatch.TaskComplexity, dispatch.PromptCharacterCount, PaidCostWarningSource.Subscription)}: {dispatch.Command}";
+        return $"Dispatch recorded for {dispatch.WorkerName}{FormatDispatchModelSelection(dispatch)}{FormatPaidCostWarning(dispatch.ProviderName, dispatch.TaskComplexity, dispatch.PromptCharacterCount, PaidCostWarningSource.Subscription, dispatch.UsesComplexModel)}: {dispatch.Command}";
     }
 
     private static string BuildExecutionEvidenceMessage(TaskExecutionRecord execution, bool possibleOutputCapHit)
@@ -464,7 +466,8 @@ public sealed partial class AgentOrchestratorKernel
         string? providerName,
         TaskComplexity? complexity,
         int? promptCharacterCount,
-        PaidCostWarningSource source)
+        PaidCostWarningSource source,
+        bool usesComplexModel = false)
     {
         if (string.IsNullOrWhiteSpace(providerName) ||
             !IsPotentiallyPaidProvider(providerName) ||
@@ -473,7 +476,7 @@ public sealed partial class AgentOrchestratorKernel
             return string.Empty;
         }
 
-        var threshold = complexity == TaskComplexity.Complex
+        var threshold = complexity == TaskComplexity.Complex || usesComplexModel
             ? ComplexPaidPromptWarningChars
             : SimplePaidPromptWarningChars;
         var sourceLabel = source == PaidCostWarningSource.Subscription ? "subscription" : "API";
@@ -483,7 +486,7 @@ public sealed partial class AgentOrchestratorKernel
             warnings.Add($"large paid {sourceLabel} prompt {promptCharacterCount.Value} chars (>{threshold})");
         }
 
-        if (complexity == TaskComplexity.Complex)
+        if (complexity == TaskComplexity.Complex || usesComplexModel)
         {
             warnings.Add($"complex paid {sourceLabel} model");
         }
