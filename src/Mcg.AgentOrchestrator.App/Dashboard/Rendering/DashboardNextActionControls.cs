@@ -5,7 +5,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
-public sealed record DashboardNextActionControl(string Label, string Method, string Url, string? CostRisk = null);
+public sealed record DashboardNextActionControl(
+    string Label,
+    string Method,
+    string Url,
+    string? CostRisk = null,
+    string? CostRecommendation = null);
 
 public static class DashboardNextActionControls
 {
@@ -25,7 +30,8 @@ public static class DashboardNextActionControls
                     GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
                     "POST",
                     BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions),
-                    BuildApiCostRiskLabel(goal, item.TaskId!, explicitApiRun: false, agents, agentDefinitions)),
+                    BuildApiCostRiskLabel(goal, item.TaskId!, explicitApiRun: false, agents, agentDefinitions),
+                    BuildApiCostRecommendation(goal, item.TaskId!, explicitApiRun: false, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
@@ -282,6 +288,30 @@ public static class DashboardNextActionControls
         }
 
         return "paid API";
+    }
+
+    private static string? BuildApiCostRecommendation(
+        Goal goal,
+        TaskId taskId,
+        bool explicitApiRun,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        if (!RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun, agents, agentDefinitions))
+        {
+            return null;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        if (task is null ||
+            agentDefinitions is null ||
+            TryPreviewApiRun(goal, task, agentDefinitions) is not { } preview ||
+            ApiPromptCostGuard.Evaluate(preview, goal) is not { } risk)
+        {
+            return null;
+        }
+
+        return ApiPromptCostGuard.BuildRecommendation(risk);
     }
 
     private static string BuildLargePaidSubscriptionStartSuffix(Goal goal, TaskId taskId)

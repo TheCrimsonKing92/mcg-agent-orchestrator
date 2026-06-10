@@ -1417,6 +1417,7 @@ public sealed class DashboardRenderingTests
     Assert.True(risk.HasPriorOverkillFit);
     Assert.False(risk.PromptExceedsThreshold);
     Assert.Equal("prior overkill API model", nextDto.Control!.CostRisk);
+    Assert.True(nextDto.Control.CostRecommendation?.Contains("try a cheaper or local model before paid API run", StringComparison.Ordinal) == true);
     Assert.Equal("run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run paid API task</button>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5-codex Simple reasoning medium prompt {preview.PromptCharacterCount} chars max 768 out [potentially paid] [prior overkill API model]", StringComparison.Ordinal));
