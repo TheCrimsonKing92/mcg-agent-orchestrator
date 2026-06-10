@@ -11,6 +11,20 @@ public static class TaskComplexityEstimator
         "architecture", "design and implement", "system design"
     ];
 
+    private static readonly string[] RiskTokenSignals =
+    [
+        "auth", "authentication", "authorization", "bypass",
+        "credential", "credentials", "secret", "secrets",
+        "encryption", "privacy", "permission", "permissions",
+        "migration", "rollback", "corruption", "deadlock"
+    ];
+
+    private static readonly string[] RiskPhraseSignals =
+    [
+        "data loss", "race condition", "schema migration",
+        "state migration", "breaking change"
+    ];
+
     private static readonly string[] SurfaceSignals =
     [
         "api", "cli", "dashboard", "provider", "subscription",
@@ -60,6 +74,14 @@ public static class TaskComplexityEstimator
             }
         }
 
+        foreach (var signal in RiskPhraseSignals)
+        {
+            if (lower.Contains(signal, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 2;
+            }
+        }
+
         // Multiple requirements (counted by conjunctions and list markers)
         // Thresholds are high because commas and "and" are common in normal prose
         var requirementCount = CountOccurrences(lower, " and ") +
@@ -69,6 +91,14 @@ public static class TaskComplexityEstimator
         else if (requirementCount >= 7) score += 1;
 
         var tokens = BuildTokenSet(lower);
+        foreach (var signal in RiskTokenSignals)
+        {
+            if (tokens.Contains(signal))
+            {
+                score += 2;
+            }
+        }
+
         var surfaceCount = SurfaceSignals.Count(tokens.Contains);
         if (surfaceCount >= 4) score += 4;
         else if (surfaceCount >= 3) score += 1;

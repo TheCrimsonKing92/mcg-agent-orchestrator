@@ -57,6 +57,50 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Simple, complexity);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_keeps_single_risk_word_copy_tasks_simple")]
+    public void TaskComplexityEstimatorKeepsSingleRiskWordCopyTasksSimple()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Update the authentication button label.",
+            ComplexGoalObjective,
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_short_security_regression_tasks")]
+    public void TaskComplexityEstimatorEscalatesShortSecurityRegressionTasks()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Fix authentication bypass in API authorization checks.",
+            "Harden login security.",
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_migration_and_data_integrity_tasks")]
+    public void TaskComplexityEstimatorEscalatesMigrationAndDataIntegrityTasks()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Add rollback-safe state migration for persisted task records.",
+            "Protect orchestrator state from data loss.",
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_security_review_tasks")]
+    public void TaskComplexityEstimatorEscalatesSecurityReviewTasks()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Review authentication bypass fix and authorization regression coverage.",
+            "Harden API security.",
+            AgentRole.Reviewer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_uses_complex_model_only_for_complex_task_text")]
     public void TaskComplexityEstimatorUsesComplexModelOnlyForComplexTaskText()
     {
@@ -73,11 +117,18 @@ public sealed class TaskComplexityEstimatorTests
             TaskComplexity.Auto,
             "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
             "Maintain dashboard views.");
+        var securityModel = TaskComplexityEstimator.ResolveModel(
+            agent,
+            TaskComplexity.Auto,
+            "Fix authentication bypass in API authorization checks.",
+            "Harden login security.");
 
         Assert.Equal("gpt-5.4-mini", simpleModel.ModelName);
         Assert.Equal("medium", simpleModel.ReasoningEffort);
         Assert.Equal("gpt-5.5", complexModel.ModelName);
         Assert.Equal("high", complexModel.ReasoningEffort);
+        Assert.Equal("gpt-5.5", securityModel.ModelName);
+        Assert.Equal("high", securityModel.ReasoningEffort);
     }
 
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_requires_stronger_signals_for_review_and_test_roles")]
