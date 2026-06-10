@@ -18,6 +18,13 @@ public static class DispatchFailureClassifier
             IsRecoverableSubscriptionLimitFailure(latest);
     }
 
+    public static int CountRecoverableSubscriptionLimitFailures(TaskSpec task)
+    {
+        return task.VerificationHistory.Count(verification =>
+            !verification.Succeeded &&
+            IsRecoverableSubscriptionLimitFailure(verification));
+    }
+
     public static bool IsSubscriptionRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)
     {
         retryAfter = default;

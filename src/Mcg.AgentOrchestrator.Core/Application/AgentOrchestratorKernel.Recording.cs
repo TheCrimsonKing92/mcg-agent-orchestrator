@@ -46,6 +46,20 @@ public sealed partial class AgentOrchestratorKernel
                 task.SetSubscriptionRetryAfter(retryAfter);
             }
 
+            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            if (recoverableLimitFailures >= 3)
+            {
+                task.ClearSubscriptionRetryAfter();
+                task.SetStatus(WorkTaskStatus.Failed);
+                Append(
+                    goal,
+                    taskId,
+                    ProgressKind.TaskFailed,
+                    $"Dispatch hit a recoverable subscription usage limit {recoverableLimitFailures} time(s); inspect the task before retrying with a different model, profile, or timing.");
+                RefreshGoalStatus(goal);
+                return;
+            }
+
             task.ClearLatestVerification();
             task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
             Append(goal, taskId, ProgressKind.TaskRetried, $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch.Command}");

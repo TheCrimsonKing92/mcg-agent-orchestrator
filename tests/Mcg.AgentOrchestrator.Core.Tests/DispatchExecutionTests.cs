@@ -211,6 +211,39 @@ public sealed class DispatchExecutionTests
     kernel.RetryTask(goal.Id, task.Id, "Retry after provider window.");
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
 }
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_after_repeated_subscription_usage_limits")]
+    public void RecordDispatchExecutionResultFailsAfterRepeatedSubscriptionUsageLimits()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Stop repeated subscription limit retries");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    for (var attempt = 1; attempt <= 3; attempt++)
+    {
+        var command = $"codex exec attempt {attempt}";
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification(command, clock.UtcNow));
+
+        if (attempt < 3)
+        {
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.True(task.LastVerification is null);
+            Assert.True(task.SubscriptionRetryAfter is not null);
+            kernel.RetryTask(goal.Id, task.Id, $"Manual retry after attempt {attempt}.");
+        }
+    }
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.True(task.LastVerification is not null);
+    Assert.Equal(3, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("recoverable subscription usage limit 3 time", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "Subscription_retry_after_snapshot_metadata_does_not_require_reparsing_provider_text")]
     public void SubscriptionRetryAfterSnapshotMetadataDoesNotRequireReparsingProviderText()
 {
@@ -258,6 +291,17 @@ public sealed class DispatchExecutionTests
 
     kernel.RecordTaskDispatch(new GoalId("goal-a"), new TaskId("task-a"), new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", retryAfter));
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+}
+
+private static TaskVerificationRecord SubscriptionLimitVerification(string command, DateTimeOffset completedAt)
+{
+    return new TaskVerificationRecord(
+        command,
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        completedAt);
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_rejects_task_without_dispatch")]
     public void RecordDispatchExecutionResultRejectsTaskWithoutDispatch()
