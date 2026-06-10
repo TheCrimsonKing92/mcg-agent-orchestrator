@@ -27,7 +27,7 @@ public static partial class DashboardRenderer
                 $"Last event: {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}"
             ],
             $"/api/monitor?goal={goalPrefix}",
-            "Open raw JSON");
+            "Open monitor JSON");
 
         RenderReportPreview(
             html,
@@ -47,7 +47,7 @@ public static partial class DashboardRenderer
             $"{nextActions.Items.Count} queued action(s)",
             nextActions.Items.Take(3).Select(item => $"{Encode(Display(item.Kind))}: {Encode(TrimPreview(item.Message))}").ToList(),
             $"/api/next?goal={goalPrefix}",
-            "Open raw JSON",
+            "Open next-action JSON",
             "report-preview-card-wide");
 
         RenderReportPreview(
@@ -60,7 +60,7 @@ public static partial class DashboardRenderer
                 $"Open verification: {acceptance.OpenVerificationCount}"
             ],
             $"/api/acceptance?goal={goalPrefix}",
-            "Open raw JSON");
+            "Open blockers JSON");
 
         RenderReportPreview(
             html,
@@ -68,7 +68,7 @@ public static partial class DashboardRenderer
             $"{evidence.TasksWithVerification}/{evidence.TotalTasks} task(s) verified",
             BuildRecordedProofPreviewDetails(evidence),
             $"/api/evidence?goal={goalPrefix}",
-            "Open raw JSON");
+            "Open evidence JSON");
 
         RenderReportPreview(
             html,
@@ -80,7 +80,7 @@ public static partial class DashboardRenderer
                 $"Blocked: {stages.BlockedStages}"
             ],
             $"/api/stages?goal={goalPrefix}",
-            "Open raw JSON");
+            "Open readiness JSON");
 
         RenderReportPreview(
             html,
@@ -91,7 +91,7 @@ public static partial class DashboardRenderer
                 $"Open: {verificationGate.Tasks.Count(task => task.GateStatus != VerificationGateStatus.Passed)}"
             ],
             $"/api/gates?goal={goalPrefix}",
-            "Open raw JSON");
+            "Open gate JSON");
 
         RenderReportPreview(
             html,
@@ -99,7 +99,7 @@ public static partial class DashboardRenderer
             $"{verificationWorklist.OpenCount} open item(s)",
             verificationWorklist.Items.Take(2).Select(item => $"Task {GetTaskDisplayNumber(goal, item.TaskId)}: {Encode(TrimPreview(item.SuggestedAction))}").ToList(),
             $"/api/verification-worklist?goal={goalPrefix}",
-            "Open raw JSON",
+            "Open verification JSON",
             "report-preview-card-wide");
 
         RenderReportPreview(
@@ -108,7 +108,7 @@ public static partial class DashboardRenderer
             $"{humanInputWorklist.OpenCount} pending request(s)",
             humanInputWorklist.Items.Take(2).Select(item => $"{Encode(item.RequestId.Value[..8])}: {Encode(TrimPreview(item.Question))}").ToList(),
             $"/api/human-input-worklist?goal={goalPrefix}",
-            "Open raw JSON",
+            "Open decisions JSON",
             "report-preview-card-wide");
 
         RenderReportPreview(
@@ -117,9 +117,9 @@ public static partial class DashboardRenderer
             "Low-noise repository map",
             [
                 "Excludes: bin, obj, .scratch, prototype state",
-                "<code>rg --files -g \"!**/bin/**\" -g \"!**/obj/**\" -g \"!**/.scratch/**\"</code>"
+                "<code>rg --files -g \"!**/bin/**\" -g \"!**/obj/**\" -g \"!**/.scratch/**\" -g \"!**/.orchestrator-prototype/**\"</code>"
             ],
-            "/api/source-survey",
+            "/api/source-survey?max=8",
             "Open survey",
             "report-preview-card-wide");
 

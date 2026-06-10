@@ -773,8 +773,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(systemHtml, text => text.Contains("Next check", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("2026-06-04 12:05:00Z", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("Background work is still running", StringComparison.Ordinal));
-    Assert.Contains(systemHtml, text => text.Contains("Open source survey", StringComparison.Ordinal));
-    Assert.Contains(systemHtml, text => text.Contains("href=\"/api/source-survey\"", StringComparison.Ordinal));
+    Assert.Contains(systemHtml, text => text.Contains("Open bounded source survey", StringComparison.Ordinal));
+    Assert.Contains(systemHtml, text => text.Contains("href=\"/api/source-survey?max=8\"", StringComparison.Ordinal));
 
     // Config view: setup doctor, agents, workers
     Assert.Contains(configHtml, text => text.Contains("Setup Doctor", StringComparison.Ordinal));
@@ -826,6 +826,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("Source survey", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Low-noise repository map", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("!**/.orchestrator-prototype/**", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"answer {request.Id.Value[..8]} &lt;answer&gt;", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"id=\"input-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"href=\"#input-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
@@ -841,7 +842,12 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("aria-expanded=\"false\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Work summary", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open compact JSON", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Open monitor JSON", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Open next-action JSON", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Open evidence JSON", StringComparison.Ordinal));
+    Assert.False(goalHtml.Contains("Open raw JSON", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/work-summary", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/acceptance?goal={goalPrefix}", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/evidence?goal={goalPrefix}", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/stages?goal={goalPrefix}", StringComparison.Ordinal));
