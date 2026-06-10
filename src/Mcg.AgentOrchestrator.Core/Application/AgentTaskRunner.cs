@@ -319,8 +319,6 @@ public sealed class AgentTaskRunner
 
     private static bool HasOutputTokenLimitHit(TaskExecutionRecord execution)
     {
-        return execution.MaxOutputTokens is > 0 &&
-            execution.Usage?.OutputTokens is { } outputTokens &&
-            outputTokens >= execution.MaxOutputTokens.Value;
+        return OutputTokenLimit.IsHit(execution);
     }
 }

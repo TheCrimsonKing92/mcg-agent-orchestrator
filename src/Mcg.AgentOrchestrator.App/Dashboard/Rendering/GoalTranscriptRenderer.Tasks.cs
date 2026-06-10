@@ -95,8 +95,6 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
 
 private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
 {
-    return execution.MaxOutputTokens is > 0 &&
-        execution.Usage?.OutputTokens is { } outputTokens &&
-        outputTokens >= execution.MaxOutputTokens.Value;
+    return OutputTokenLimit.IsHit(execution);
 }
 }

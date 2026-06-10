@@ -207,10 +207,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private static bool HasOutputTokenLimitHit(TaskSpec task)
     {
-        var execution = task.LastExecution;
-        return execution?.MaxOutputTokens is > 0 &&
-            execution.Usage?.OutputTokens is { } outputTokens &&
-            outputTokens >= execution.MaxOutputTokens.Value;
+        return OutputTokenLimit.IsHit(task.LastExecution);
     }
 
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)

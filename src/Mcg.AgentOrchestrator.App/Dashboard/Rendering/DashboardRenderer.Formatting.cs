@@ -142,9 +142,7 @@ public static partial class DashboardRenderer
 
     private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
     {
-        return execution.MaxOutputTokens is > 0 &&
-            execution.Usage?.OutputTokens is { } outputTokens &&
-            outputTokens >= execution.MaxOutputTokens.Value;
+        return OutputTokenLimit.IsHit(execution);
     }
 
     private static string FormatMaxOutputTokens(int? maxOutputTokens)

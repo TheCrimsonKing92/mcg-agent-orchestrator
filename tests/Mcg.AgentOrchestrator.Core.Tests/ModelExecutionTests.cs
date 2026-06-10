@@ -92,6 +92,31 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed && evt.Message.Contains("output may be truncated", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_completes_on_normal_stop_at_exact_output_cap")]
+    public async Task ExecuteAssignedTaskCompletesOnNormalStopAtExactOutputCap()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Accept complete output that lands on the cap");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-small", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: 2),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var runner = new AgentTaskRunner(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", "Complete output", usage: new ModelUsage(5, 2), stopReason: "end_turn")]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+}
     [Xunit.Fact(DisplayName = "Verification_gate_blocks_output_cap_hits_even_after_manual_pass")]
     public async Task VerificationGateBlocksOutputCapHitsEvenAfterManualPass()
 {
