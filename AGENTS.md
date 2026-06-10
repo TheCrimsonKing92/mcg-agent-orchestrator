@@ -71,6 +71,8 @@ Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalo
 
 ## Evidence
 
-Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durable product friction. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up. For subscription/API-authored work, also record the selected model or launcher and whether it was adequate, overkill, or underpowered for the task so future model-selection tuning has evidence.
+Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durable product friction. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up.
+
+For subscription/API-authored work, include a `Model fit:` note with the selected model or launcher and whether it was adequate, overkill, or underpowered for the task. Use this evidence to tune future model selection.
 
 Do not paste full dashboard responses, full prompts, full logs, or long API payloads.

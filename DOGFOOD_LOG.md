@@ -1,5 +1,7 @@
 # Dogfood Log
 
+Entry convention: keep entries short and record only durable product signal. For subscription/API-authored work, add `Model fit: <model or launcher> - adequate|overkill|underpowered - <short reason>`.
+
 ## 2026-06-09 - Dashboard split-view and prototype crash check
 
 Objective: Check the Ollama local-model branch state, verify the uncommitted dashboard split-view/testing changes, and diagnose the recent unhandled app exception popup.
