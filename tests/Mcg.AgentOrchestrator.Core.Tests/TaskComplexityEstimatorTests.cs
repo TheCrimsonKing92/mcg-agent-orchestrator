@@ -79,6 +79,17 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Simple, complexity);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_keeps_test_only_surface_tasks_simple")]
+    public void TaskComplexityEstimatorKeepsTestOnlySurfaceTasksSimple()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Add regression tests for provider smoke behavior across CLI, dashboard API, subscription worker state, and docs.",
+            ComplexGoalObjective,
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_complex_architecture_docs")]
     public void TaskComplexityEstimatorEscalatesComplexArchitectureDocs()
     {

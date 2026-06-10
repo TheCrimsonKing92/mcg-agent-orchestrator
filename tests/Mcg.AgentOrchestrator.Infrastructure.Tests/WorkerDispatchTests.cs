@@ -208,6 +208,53 @@ public sealed class WorkerDispatchTests
     Assert.Equal(TaskComplexity.Complex, complexTask.LastDispatch.TaskComplexity);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_test_only_surface_tasks_on_routine_subscription_model")]
+    public void WorkerProfileDispatcherKeepsTestOnlySurfaceTasksOnRoutineSubscriptionModel()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Make the orchestrator less costly to run without sacrificing accuracy.",
+        [new TaskSpec(
+            TaskId.New(),
+            "Add regression tests for provider smoke behavior across CLI, dashboard API, subscription worker state, and docs.",
+            AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Contains(task.LastDispatch!.Command, text => text.Contains("--model 'gpt-5-mini-codex'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--complexity 'Simple'", StringComparison.Ordinal));
+    Assert.Equal("gpt-5-mini-codex", task.LastDispatch.ModelName);
+    Assert.Equal("low", task.LastDispatch.ReasoningEffort);
+    Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_subscription_dispatch")]
     public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
 {
