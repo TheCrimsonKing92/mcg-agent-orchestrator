@@ -167,6 +167,29 @@ public sealed class ProviderDefaultTests
         Assert.Equal(8192, provider.LastRequest!.Options.MaxOutputTokens);
     }
 
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_treats_any_local_bridge_provider_as_local")]
+    public async Task AgentTaskRunnerTreatsAnyLocalBridgeProviderAsLocal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Run local bridge model with local prompt tuning");
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Local bridge developer",
+            AgentRole.Developer,
+            new ModelProfile("LocalAI", "local-coder", ModelCapability.Text, SubscriptionMode.LocalBridge),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var provider = new FakeSmokeProvider(providerName: "LocalAI");
+
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]))
+            .RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(2048, provider.LastRequest!.Options.MaxOutputTokens);
+        Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("## Implementation", StringComparison.Ordinal));
+        Assert.Contains(provider.LastRequest.Messages.Single().Content, text => text.Contains("/no_think", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "Scripted_provider_requests_configuration_instead_of_fake_completion")]
     public async Task ScriptedProviderRequestsConfigurationInsteadOfFakeCompletion()
     {

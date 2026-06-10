@@ -175,7 +175,7 @@ public sealed class AgentTaskRunner
         TaskComplexity complexity,
         IReadOnlyList<ProgressEvent>? pendingTimelineEvents = null)
     {
-        var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName);
+        var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel);
 
         var baseSystemPrompt = BuildSystemPrompt(agent.Role, complexity);
 
@@ -232,7 +232,7 @@ public sealed class AgentTaskRunner
             return maxOutputTokens;
         }
 
-        if (LocalModelPromptOptimizer.IsLocalProvider(resolvedModel.ProviderName))
+        if (LocalModelPromptOptimizer.IsLocalProvider(resolvedModel))
         {
             return complexity == TaskComplexity.Complex
                 ? ComplexLocalProviderFallbackMaxOutputTokens

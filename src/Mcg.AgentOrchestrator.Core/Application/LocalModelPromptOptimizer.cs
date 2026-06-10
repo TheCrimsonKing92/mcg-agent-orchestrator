@@ -5,8 +5,9 @@ internal static class LocalModelPromptOptimizer
     private static readonly HashSet<string> LocalProviders =
         new(StringComparer.OrdinalIgnoreCase) { "Ollama" };
 
-    public static bool IsLocalProvider(string providerName) =>
-        LocalProviders.Contains(providerName);
+    public static bool IsLocalProvider(ModelProfile model) =>
+        model.SubscriptionMode == SubscriptionMode.LocalBridge ||
+        LocalProviders.Contains(model.ProviderName);
 
     public static string OptimizeSystemPrompt(string basePrompt, AgentRole role)
     {
