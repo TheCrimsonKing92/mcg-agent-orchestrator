@@ -10,7 +10,7 @@ public static TaskQueryDto ToTaskQueryDto(Goal goal, TaskQueryResult result)
 {
     return new TaskQueryDto(
         result.GoalId.Value,
-        result.Objective,
+        OutputTextPreview.CreateSummary(result.Objective).Text,
         result.Status,
         result.Tasks.Select(task => ToTaskSummaryDto(goal, task)).ToList());
 }

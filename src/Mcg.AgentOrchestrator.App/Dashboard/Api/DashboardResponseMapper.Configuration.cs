@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -64,7 +65,7 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(Goal goal, IReadOnlyList
 
     return new SubscriptionPlanDto(
         goal.Id.Value,
-        goal.Objective,
+        OutputTextPreview.CreateSummary(goal.Objective).Text,
         goal.Status,
         items.Count(item => item.CanPrepare),
         items.Count(item => item.ProfileName is not null && item.ProfileIsResolvable && !item.ProfileIsEchoOnly && item.ProfileIsPatchCapable),
@@ -94,7 +95,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             task.Id.Value,
             task.RequiredRole,
             task.Status,
-            task.Description,
+            OutputTextPreview.CreateSummary(task.Description).Text,
             null,
             null,
             null,
@@ -118,7 +119,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             task.Id.Value,
             task.RequiredRole,
             task.Status,
-            task.Description,
+            OutputTextPreview.CreateSummary(task.Description).Text,
             task.AssignedAgentId.Value,
             null,
             null,
@@ -182,7 +183,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             task.Id.Value,
             task.RequiredRole,
             task.Status,
-            task.Description,
+            OutputTextPreview.CreateSummary(task.Description).Text,
             agent.Id.Value,
             agent.Name,
             effectiveProviderName,
@@ -209,7 +210,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             task.Id.Value,
             task.RequiredRole,
             task.Status,
-            task.Description,
+            OutputTextPreview.CreateSummary(task.Description).Text,
             agent.Id.Value,
             agent.Name,
             effectiveProviderName,

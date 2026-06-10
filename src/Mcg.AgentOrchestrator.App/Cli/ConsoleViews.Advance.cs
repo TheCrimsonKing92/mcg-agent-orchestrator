@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -9,12 +10,12 @@ public static void PrintAdvanceResult(AdvanceResultDto result)
 {
     Console.WriteLine();
     Console.WriteLine(result.Executed
-        ? $"Advanced goal {result.GoalId[..8]}: {result.Message}"
-        : $"Cannot advance goal {result.GoalId[..8]}: {result.Message}");
+        ? $"Advanced goal {result.GoalId[..8]}: {OutputTextPreview.CreateTimeline(result.Message).Text}"
+        : $"Cannot advance goal {result.GoalId[..8]}: {OutputTextPreview.CreateTimeline(result.Message).Text}");
 
     if (result.Action is not null)
     {
-        Console.WriteLine($"Next action: {result.Action.Kind} - {result.Action.Message}");
+        Console.WriteLine($"Next action: {result.Action.Kind} - {OutputTextPreview.CreateTimeline(result.Action.Message).Text}");
         Console.WriteLine($"Command: {result.Action.SuggestedCommand}");
     }
 

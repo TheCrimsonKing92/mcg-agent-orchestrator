@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -9,12 +10,12 @@ public static MonitorDto ToMonitorDto(GoalMonitor monitor)
 {
     return new MonitorDto(
         monitor.GoalId.Value,
-        monitor.Objective,
+        SummaryText(monitor.Objective),
         monitor.Status,
         monitor.TotalTasks,
         monitor.TaskStatusCounts.Select(count => new StatusCountDto(count.Status, count.Count)).ToList(),
         monitor.PendingHumanInputCount,
-        monitor.AttentionItems.Select(item => new AttentionDto(item.Kind, item.TaskId?.Value, item.Message)).ToList(),
+        monitor.AttentionItems.Select(item => new AttentionDto(item.Kind, item.TaskId?.Value, TimelineText(item.Message))).ToList(),
         monitor.LastTimelineEventAt);
 }
 
@@ -22,7 +23,7 @@ public static GoalAcceptanceSummaryDto ToGoalAcceptanceSummaryDto(Goal goal, Goa
 {
     return new GoalAcceptanceSummaryDto(
         summary.GoalId.Value,
-        summary.Objective,
+        SummaryText(summary.Objective),
         summary.Status,
         summary.IsAccepted,
         summary.TotalTasks,
@@ -40,8 +41,8 @@ public static GoalAcceptanceBlockerDto ToGoalAcceptanceBlockerDto(Goal goal, Goa
         blocker.TaskId?.Value,
         taskNumber,
         blocker.HumanInputRequestId?.Value,
-        blocker.Message,
-        blocker.SuggestedAction,
+        TimelineText(blocker.Message),
+        TimelineText(blocker.SuggestedAction),
         ConsoleViews.BuildAcceptanceSuggestedCommand(blocker, taskNumber));
 }
 
@@ -49,7 +50,7 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
 {
     return new GoalEvidenceSummaryDto(
         summary.GoalId.Value,
-        summary.Objective,
+        SummaryText(summary.Objective),
         summary.Status,
         summary.TotalTasks,
         summary.TasksWithExecution,
@@ -90,7 +91,7 @@ public static TaskEvidenceSummaryDto ToTaskEvidenceSummaryDto(Goal goal, TaskEvi
         ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId),
         item.TaskId.Value,
         item.Role,
-        item.Description,
+        SummaryText(item.Description),
         item.TaskStatus,
         item.LatestEvidence,
         item.HasExecution,
@@ -101,7 +102,7 @@ public static TaskEvidenceSummaryDto ToTaskEvidenceSummaryDto(Goal goal, TaskEvi
         item.LatestVerificationSucceeded,
         item.VerificationHistoryCount,
         item.PendingHumanInputCount,
-        item.Message);
+        TimelineText(item.Message));
 }
 
 public static GoalWorkSummaryDto ToGoalWorkSummaryDto(AgentOrchestratorKernel kernel, Goal goal)
@@ -112,7 +113,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(AgentOrchestratorKernel ke
 
     return new GoalWorkSummaryDto(
         goal.Id.Value,
-        goal.Objective,
+        SummaryText(goal.Objective),
         goal.Status,
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
@@ -163,7 +164,7 @@ public static GoalStageReadinessReportDto ToGoalStageReadinessReportDto(Goal goa
 {
     return new GoalStageReadinessReportDto(
         report.GoalId.Value,
-        report.Objective,
+        SummaryText(report.Objective),
         report.Status,
         report.TotalStages,
         report.VerifiedStages,
@@ -180,15 +181,15 @@ public static TaskStageReadinessDto ToTaskStageReadinessDto(Goal goal, TaskStage
         taskNumber,
         stage.TaskId.Value,
         stage.Stage,
-        stage.Description,
+        SummaryText(stage.Description),
         stage.TaskStatus,
         stage.IsAssigned,
         stage.StageStatus,
         stage.LatestEvidence,
         stage.VerificationStatus,
         stage.PendingHumanInputCount,
-        stage.Message,
-        stage.SuggestedAction,
+        TimelineText(stage.Message),
+        TimelineText(stage.SuggestedAction),
         ConsoleViews.BuildStageSuggestedCommand(taskNumber, stage));
 }
 
@@ -196,7 +197,7 @@ public static VerificationGateDto ToVerificationGateDto(Goal goal, GoalVerificat
 {
     return new VerificationGateDto(
         gate.GoalId.Value,
-        gate.Objective,
+        SummaryText(gate.Objective),
         gate.Status,
         gate.IsSatisfied,
         gate.Tasks.Select(task => ToTaskVerificationGateDto(goal, task)).ToList());
@@ -214,17 +215,17 @@ public static TaskVerificationGateDto ToTaskVerificationGateDto(Goal goal, TaskV
         ConsoleViews.GetTaskDisplayNumber(goal, taskGate.TaskId),
         taskGate.TaskId.Value,
         taskGate.Role,
-        taskGate.Description,
+        SummaryText(taskGate.Description),
         taskGate.TaskStatus,
         taskGate.GateStatus,
-        taskGate.Message);
+        TimelineText(taskGate.Message));
 }
 
 public static VerificationWorklistDto ToVerificationWorklistDto(Goal goal, GoalVerificationWorklist worklist)
 {
     return new VerificationWorklistDto(
         worklist.GoalId.Value,
-        worklist.Objective,
+        SummaryText(worklist.Objective),
         worklist.Status,
         worklist.IsSatisfied,
         worklist.OpenCount,
@@ -238,11 +239,11 @@ public static VerificationWorkItemDto ToVerificationWorkItemDto(Goal goal, TaskV
         taskNumber,
         item.TaskId.Value,
         item.Role,
-        item.Description,
+        SummaryText(item.Description),
         item.TaskStatus,
         item.GateStatus,
-        item.Message,
-        item.SuggestedAction,
+        TimelineText(item.Message),
+        TimelineText(item.SuggestedAction),
         ConsoleViews.BuildVerificationSuggestedCommand(taskNumber, item.GateStatus));
 }
 
@@ -250,7 +251,7 @@ public static HumanInputWorklistDto ToHumanInputWorklistDto(Goal goal, GoalHuman
 {
     return new HumanInputWorklistDto(
         worklist.GoalId.Value,
-        worklist.Objective,
+        SummaryText(worklist.Objective),
         worklist.Status,
         worklist.OpenCount,
         worklist.Items.Select(item => ToHumanInputWorkItemDto(goal, item)).ToList());
@@ -264,11 +265,11 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
         item.TaskId?.Value,
         taskNumber,
         item.Role,
-        item.Description,
+        SummaryText(item.Description),
         item.TaskStatus,
-        item.Question,
+        SummaryText(item.Question),
         item.RequestedAt,
-        item.SuggestedAction,
+        TimelineText(item.SuggestedAction),
         ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId));
 }
 
@@ -276,7 +277,7 @@ public static NextActionsDto ToNextActionsDto(Goal goal, GoalNextActions actions
 {
     return new NextActionsDto(
         actions.GoalId.Value,
-        actions.Objective,
+        SummaryText(actions.Objective),
         actions.Status,
         actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1)).ToList());
 }
@@ -290,7 +291,7 @@ public static NextActionDto ToNextActionDto(Goal goal, NextActionItem item, int 
         item.TaskId?.Value,
         taskNumber,
         item.HumanInputRequestId?.Value,
-        item.Message,
+        TimelineText(item.Message),
         ConsoleViews.BuildSuggestedCommand(item, taskNumber),
         ToNextActionControlDto(goal, item));
 }
@@ -315,11 +316,17 @@ public static HumanInputDto ToHumanInputDto(AgentOrchestratorKernel kernel, Huma
         request.GoalId.Value,
         request.TaskId?.Value,
         taskNumber,
-        request.Question,
+        SummaryText(request.Question),
         request.RequestedAt,
         request.IsCompleted,
-        request.Answer,
+        request.Answer is null ? null : SummaryText(request.Answer),
         request.AnsweredAt);
 }
+
+private static string SummaryText(string? text) =>
+    OutputTextPreview.CreateSummary(text ?? string.Empty).Text;
+
+private static string TimelineText(string text) =>
+    OutputTextPreview.CreateTimeline(text).Text;
 
 }

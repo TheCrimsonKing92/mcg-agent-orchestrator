@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -9,7 +10,7 @@ public static GoalSummaryDto ToGoalSummary(Goal goal)
 {
     return new GoalSummaryDto(
         goal.Id.Value,
-        goal.Objective,
+        OutputTextPreview.CreateSummary(goal.Objective).Text,
         goal.Status,
         goal.Tasks.Count,
         goal.Timeline.LastOrDefault()?.OccurredAt);

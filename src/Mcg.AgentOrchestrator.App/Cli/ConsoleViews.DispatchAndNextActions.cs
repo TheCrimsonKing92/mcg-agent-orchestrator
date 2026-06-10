@@ -28,7 +28,7 @@ public static void PrintProcessBatchResult(Goal goal, ProcessBatchExecutionResul
         Console.WriteLine("Skipped:");
         foreach (var item in skipped)
         {
-            Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, item.TaskId)}: {item.Reason}");
+            Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, item.TaskId)}: {OutputTextPreview.CreateTimeline(item.Reason).Text}");
         }
     }
 

@@ -222,6 +222,53 @@ public sealed class DashboardRenderingTests
     Assert.Equal(stderr, task.VerificationHistory.Single().StandardError);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_report_fields_without_mutating_records")]
+    public void DashboardResponseMapperTrimsVerboseReportFieldsWithoutMutatingRecords()
+{
+    var objective = "objective-start " + new string('o', 2000) + " objective-tail";
+    var description = "description-start " + new string('d', 2000) + " description-tail";
+    var question = "question-start " + new string('q', 2000) + " question-tail";
+    var message = "message-start " + new string('m', 2000) + " message-tail";
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    kernel.RequestHumanInput(goal.Id, task.Id, question);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, message);
+
+    var goalDetail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
+    var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
+    var evidence = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
+    var nextActions = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
+    var humanInput = DashboardResponseMapper.ToHumanInputWorklistDto(goal, kernel.BuildHumanInputWorklist(goal.Id));
+    var gate = DashboardResponseMapper.ToVerificationGateDto(goal, kernel.BuildVerificationGate(goal.Id));
+
+    Assert.Contains(goalDetail.Goal.Objective, text => text.Contains("objective-start", StringComparison.Ordinal));
+    Assert.Contains(goalDetail.Goal.Objective, text => text.Contains("objective-tail", StringComparison.Ordinal));
+    Assert.Contains(goalDetail.Goal.Objective, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains(goalDetail.Tasks.Single().Description, text => text.Contains("description-start", StringComparison.Ordinal));
+    Assert.Contains(goalDetail.Tasks.Single().Description, text => text.Contains("description-tail", StringComparison.Ordinal));
+    Assert.True(monitor.Attention.Count > 0);
+    Assert.Contains(evidence.Tasks.Single().Description, text => text.Contains("description-tail", StringComparison.Ordinal));
+    Assert.Contains(nextActions.Objective, text => text.Contains("objective-tail", StringComparison.Ordinal));
+    Assert.Contains(humanInput.Items.Single().Question, text => text.Contains("question-tail", StringComparison.Ordinal));
+    Assert.Contains(gate.Tasks.Single().Description, text => text.Contains("description-tail", StringComparison.Ordinal));
+    Assert.True(!goalDetail.Goal.Objective.Contains(new string('o', 2000), StringComparison.Ordinal));
+    Assert.True(!goalDetail.Tasks.Single().Description.Contains(new string('d', 2000), StringComparison.Ordinal));
+    Assert.True(!humanInput.Items.Single().Question.Contains(new string('q', 2000), StringComparison.Ordinal));
+    Assert.Equal(objective, goal.Objective);
+    Assert.Equal(description, task.Description);
+    Assert.Equal(question, kernel.HumanInputRequests.Single().Question);
+    Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_timeline_messages_without_mutating_events")]
     public void DashboardResponseMapperTrimsVerboseTimelineMessagesWithoutMutatingEvents()
 {

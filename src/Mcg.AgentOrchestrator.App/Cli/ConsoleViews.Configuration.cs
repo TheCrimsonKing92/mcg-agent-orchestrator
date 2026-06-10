@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -9,7 +10,7 @@ public static void PrintGoals(AgentOrchestratorKernel kernel)
 {
     foreach (var goal in kernel.Goals.OrderByDescending(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue))
     {
-        Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}: {goal.Objective}");
+        Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
     }
 }
 
@@ -45,7 +46,7 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {plan.GoalId[..8]} subscription plan: ready={plan.ReadyToPrepareCount} resolvable={plan.ResolvableProfileCount}/{plan.Items.Count}");
-    Console.WriteLine($"Objective: {plan.Objective}");
+    Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(plan.Objective).Text}");
     Console.WriteLine($"Status: {plan.Status}");
     if (plan.ReadyModelUsage.Count > 0)
     {
@@ -63,10 +64,10 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
         var profile = item.ProfileName is null
             ? "none"
             : $"{item.ProfileName} model={subscriptionModel}{subscriptionReasoning} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
-        Console.WriteLine($"  {item.TaskNumber}. [{item.TaskStatus}] {item.Role}: {item.Description}");
+        Console.WriteLine($"  {item.TaskNumber}. [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
         Console.WriteLine($"     agent: {agent}");
         Console.WriteLine($"     subscription: {profile}");
-        Console.WriteLine($"     ready: {item.CanPrepare}; {item.Detail}");
+        Console.WriteLine($"     ready: {item.CanPrepare}; {OutputTextPreview.CreateTimeline(item.Detail).Text}");
     }
 
     Console.WriteLine();
