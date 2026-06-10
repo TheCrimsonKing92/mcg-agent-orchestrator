@@ -32,7 +32,7 @@ public static string RunProviderSmoke(string target)
 
     if (tested == 0)
     {
-        throw new InvalidOperationException("Provider smoke did not run. Configure OPENAI_API_KEY or ANTHROPIC_API_KEY, then retry.");
+        throw new InvalidOperationException(NoProviderSmokeRanMessage(target));
     }
 
     return string.Join(Environment.NewLine + Environment.NewLine, evidence);
@@ -93,22 +93,22 @@ public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(str
         results.Any(result => !result.Status.Equals("skipped", StringComparison.OrdinalIgnoreCase)));
 }
 
-public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target, Func<bool>? isOllamaReachable = null)
+public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target)
 {
     return target.ToLowerInvariant() switch
     {
-        "default" => ResolveDefaultProviderSmokeTargets(isOllamaReachable ?? ProviderRegistryFactory.IsOllamaReachable),
+        "default" => ResolveDefaultProviderSmokeTargets(),
         "all" => ["OpenAI", "Anthropic", "Ollama"],
         "openai" => ["OpenAI"],
         "anthropic" => ["Anthropic"],
         "ollama" => ["Ollama"],
-        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]; omit the target to prefer local Ollama when reachable; use provider-smoke all --confirm-all only for deliberate broad checks.")
+        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]; omit the target for local Ollama only; use provider-smoke all --confirm-all only for deliberate broad checks.")
     };
 }
 
-public static bool RequiresPaidConfirmation(string target, Func<bool>? isOllamaReachable = null)
+public static bool RequiresPaidConfirmation(string target)
 {
-    return ResolveProviderSmokeTargets(target, isOllamaReachable)
+    return ResolveProviderSmokeTargets(target)
         .Any(IsPaidProviderName);
 }
 
@@ -118,9 +118,16 @@ public static bool IsPaidProviderName(string providerName)
         providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
 }
 
-private static IReadOnlyList<string> ResolveDefaultProviderSmokeTargets(Func<bool> isOllamaReachable)
+private static IReadOnlyList<string> ResolveDefaultProviderSmokeTargets()
 {
-    return isOllamaReachable() ? ["Ollama"] : ["OpenAI"];
+    return ["Ollama"];
+}
+
+private static string NoProviderSmokeRanMessage(string target)
+{
+    return target.Equals(DefaultTarget, StringComparison.OrdinalIgnoreCase)
+        ? "Provider smoke did not run. Local Ollama was not reachable; use provider-smoke openai --confirm-paid-smoke or provider-smoke anthropic --confirm-paid-smoke for an explicit paid smoke."
+        : "Provider smoke did not run. Configure the selected provider, then retry.";
 }
 
 public static bool TryCreateLiveProvider(string providerName, out IModelProvider provider, out string modelName, out string detail)

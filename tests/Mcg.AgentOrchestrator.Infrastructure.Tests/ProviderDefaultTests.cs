@@ -39,23 +39,20 @@ public sealed class ProviderDefaultTests
     [Xunit.Fact(DisplayName = "Provider_smoke_default_targets_one_provider")]
     public void ProviderSmokeDefaultTargetsOneProvider()
     {
-        var localTargets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget, () => true);
-        var paidFallbackTargets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget, () => false);
+        var defaultTargets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget);
 
         Assert.Equal("default", ProviderSmokeRunner.DefaultTarget);
-        Assert.Equal("Ollama", localTargets.Single());
-        Assert.Equal("OpenAI", paidFallbackTargets.Single());
+        Assert.Equal("Ollama", defaultTargets.Single());
     }
 
     [Xunit.Fact(DisplayName = "Provider_smoke_identifies_paid_targets_that_need_confirmation")]
     public void ProviderSmokeIdentifiesPaidTargetsThatNeedConfirmation()
     {
         Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation("ollama"));
-        Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget, () => true));
+        Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget));
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("openai"));
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("anthropic"));
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("all"));
-        Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget, () => false));
     }
 
     [Xunit.Fact(DisplayName = "Provider_smoke_evidence_trims_verbose_response_text")]
