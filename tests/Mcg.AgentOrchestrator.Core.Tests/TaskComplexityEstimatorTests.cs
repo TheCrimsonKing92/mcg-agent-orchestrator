@@ -68,6 +68,28 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Simple, complexity);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_keeps_docs_only_surface_tasks_simple")]
+    public void TaskComplexityEstimatorKeepsDocsOnlySurfaceTasksSimple()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Update docs for the subscription CLI and dashboard API examples.",
+            ComplexGoalObjective,
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_complex_architecture_docs")]
+    public void TaskComplexityEstimatorEscalatesComplexArchitectureDocs()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Document production multi-tenant architecture with distributed rollback and data integrity checks.",
+            "Maintain architecture docs.",
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_short_security_regression_tasks")]
     public void TaskComplexityEstimatorEscalatesShortSecurityRegressionTasks()
     {

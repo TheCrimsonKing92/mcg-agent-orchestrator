@@ -33,6 +33,11 @@ public static class TaskComplexityEstimator
 
     public static TaskComplexity Estimate(string taskDescription, string goalObjective, AgentRole role)
     {
+        if (IsLowImpactDocumentationOrCopyTask(taskDescription))
+        {
+            return TaskComplexity.Simple;
+        }
+
         var taskScore = ScoreText(taskDescription);
         var goalContextScore = Math.Min(ScoreText(goalObjective), 2);
         var score = taskScore + goalContextScore;
@@ -106,6 +111,49 @@ public static class TaskComplexityEstimator
         return score;
     }
 
+    private static bool IsLowImpactDocumentationOrCopyTask(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        var tokens = BuildTokenSet(lower);
+        if (HasRiskSignal(lower, tokens) || HasStrongComplexitySignal(lower))
+        {
+            return false;
+        }
+
+        var documentationTask =
+            ContainsAny(tokens, "doc", "docs", "documentation", "readme", "changelog") &&
+            StartsWithAny(
+                lower,
+                "add docs",
+                "add documentation",
+                "clarify docs",
+                "clarify documentation",
+                "document ",
+                "edit docs",
+                "fix docs",
+                "update docs",
+                "update documentation",
+                "update readme");
+        var copyTask =
+            ContainsAny(tokens, "copy", "label", "labels", "text", "tooltip", "tooltips", "wording") &&
+            StartsWithAny(lower, "change ", "clarify ", "edit ", "fix ", "rename ", "update ");
+
+        return documentationTask || copyTask;
+    }
+
+    private static bool HasRiskSignal(string lower, HashSet<string> tokens)
+    {
+        return RiskTokenSignals.Any(tokens.Contains) ||
+            RiskPhraseSignals.Any(signal => lower.Contains(signal, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasStrongComplexitySignal(string lower)
+    {
+        return ComplexitySignals.Any(signal =>
+            !signal.Equals("integration", StringComparison.OrdinalIgnoreCase) &&
+            lower.Contains(signal, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static HashSet<string> BuildTokenSet(string text)
     {
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -152,5 +200,15 @@ public static class TaskComplexityEstimator
             index += pattern.Length;
         }
         return count;
+    }
+
+    private static bool ContainsAny(HashSet<string> tokens, params string[] values)
+    {
+        return values.Any(tokens.Contains);
+    }
+
+    private static bool StartsWithAny(string text, params string[] values)
+    {
+        return values.Any(value => text.StartsWith(value, StringComparison.OrdinalIgnoreCase));
     }
 }
