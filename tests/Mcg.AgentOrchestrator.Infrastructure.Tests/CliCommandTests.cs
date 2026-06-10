@@ -859,6 +859,52 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Ready start risk: complex paid subscription model", output);
         Xunit.Assert.Contains("--confirm-large-paid-subscription-start", output);
         Xunit.Assert.Contains("uses complex paid model selection", output);
+}
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_model_fit_recommendation")]
+    public void CliSubscriptionPlanPrintsModelFitRecommendation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var priorTask = new TaskSpec(TaskId.New(), "Update the old button label.", AgentRole.Developer);
+        var nextTask = new TaskSpec(TaskId.New(), "Update the next button label.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Tune model choice from CLI evidence", [priorTask, nextTask]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "manual-verification passed",
+            "C:\\repo",
+            0,
+            "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - overkill - copy-only change.",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+        try
+        {
+            Console.SetOut(writer);
+
+            ConsoleViews.PrintSubscriptionPlan(plan);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+        Xunit.Assert.Contains("prior fit 1: overkill 1", output);
+        Xunit.Assert.Contains("try a cheaper or local model before paid start", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_execute_dispatch_requires_confirm_flag")]
