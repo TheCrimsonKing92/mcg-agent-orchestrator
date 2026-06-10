@@ -90,7 +90,7 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             DefaultSubscriptionMode(submission.ComplexProviderName),
             string.IsNullOrWhiteSpace(submission.ComplexReasoningEffort) ? null : submission.ComplexReasoningEffort,
             MaxOutputTokens: submission.ComplexMaxOutputTokens ?? DefaultComplexMaxOutputTokens(submission.ComplexProviderName))
-        : null;
+        : DefaultComplexModel(providerName);
 
     return new AgentDefinition(
         new AgentId($"{providerName.ToLowerInvariant()}-{role.ToString().ToLowerInvariant()}"),
@@ -190,6 +190,19 @@ private static int? DefaultMaxOutputTokens(string providerName)
 private static int? DefaultComplexMaxOutputTokens(string providerName)
 {
     return IsPaidProvider(providerName) ? AgentCatalog.ComplexApiMaxOutputTokens : null;
+}
+
+private static ModelProfile? DefaultComplexModel(string providerName)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
+        ? new ModelProfile(
+            "OpenAI",
+            "gpt-5.5",
+            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
+            SubscriptionMode.ApiKey,
+            AgentCatalog.ComplexReasoningEffort,
+            AgentCatalog.ComplexApiMaxOutputTokens)
+        : null;
 }
 
 private static bool IsPaidProvider(string providerName)

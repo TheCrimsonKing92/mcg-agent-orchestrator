@@ -461,15 +461,21 @@ public sealed class DashboardRenderingTests
     Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Model.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
     Assert.Equal(SubscriptionMode.ApiKey, openAi.Model.SubscriptionMode);
+    Assert.Equal("OpenAI", openAi.ComplexModel!.ProviderName);
+    Assert.Equal("gpt-5.5", openAi.ComplexModel.ModelName);
+    Assert.Equal(AgentCatalog.ComplexReasoningEffort, openAi.ComplexModel.ReasoningEffort);
+    Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, openAi.ComplexModel.MaxOutputTokens);
 
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, anthropic.ExecutionPolicy);
     Assert.Equal("claude-cli", anthropic.Subscription!.WorkerProfileName);
     Assert.Equal("claude-sonnet", anthropic.Subscription.ModelAlias);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, anthropic.Model.MaxOutputTokens);
     Assert.Equal(SubscriptionMode.ApiKey, anthropic.Model.SubscriptionMode);
+    Assert.True(anthropic.ComplexModel is null);
 
     Assert.Equal(AgentExecutionPolicy.ApiOnly, ollama.ExecutionPolicy);
     Assert.True(ollama.Subscription is null);
+    Assert.True(ollama.ComplexModel is null);
     Assert.True(ollama.Model.MaxOutputTokens is null);
     Assert.Equal(SubscriptionMode.LocalBridge, ollama.Model.SubscriptionMode);
 }
