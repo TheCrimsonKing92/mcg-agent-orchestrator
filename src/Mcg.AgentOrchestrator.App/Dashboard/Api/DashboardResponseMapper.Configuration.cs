@@ -52,7 +52,11 @@ public static WorkerProfileDto ToWorkerProfileDto(WorkerProfile profile, WorkerP
         validation?.Detail ?? "Worker profile was not inspected.");
 }
 
-public static SubscriptionPlanDto BuildSubscriptionPlan(Goal goal, IReadOnlyList<AgentDefinition> agents, WorkerProfileCatalog profiles)
+public static SubscriptionPlanDto BuildSubscriptionPlan(
+    Goal goal,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    Func<TaskSpec, int?>? estimatePromptCharacterCount = null)
 {
     var validations = OrchestratorHealthInspector
         .InspectCurrentEnvironment(new AgentCatalog(agents), profiles)
@@ -60,7 +64,7 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(Goal goal, IReadOnlyList
         .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
     var items = goal.Tasks
-        .Select(task => BuildSubscriptionPlanItem(goal, task, agents, profiles, validations))
+        .Select(task => BuildSubscriptionPlanItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount))
         .ToList();
 
     return new SubscriptionPlanDto(
@@ -85,7 +89,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
     TaskSpec task,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
-    IReadOnlyDictionary<string, WorkerProfileValidation> validations)
+    IReadOnlyDictionary<string, WorkerProfileValidation> validations,
+    Func<TaskSpec, int?>? estimatePromptCharacterCount = null)
 {
     var taskNumber = ConsoleViews.GetTaskDisplayNumber(goal, task.Id);
     if (task.AssignedAgentId is null)
@@ -164,6 +169,9 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             (!requiresPatchCapability || patchCapability.IsPatchCapable) &&
             AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
             !retryDeferred;
+        var estimatedPromptCharacterCount = canPrepare
+            ? estimatePromptCharacterCount?.Invoke(task)
+            : null;
         var detail = canPrepare
             ? "Ready to prepare subscription dispatch."
             : !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy)
@@ -201,7 +209,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             retryDelaySeconds,
             taskComplexity,
             subscriptionModelName,
-            subscriptionReasoningEffort);
+            subscriptionReasoningEffort,
+            estimatedPromptCharacterCount);
     }
     catch (InvalidOperationException ex)
     {
@@ -253,7 +262,8 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
             ProviderName = item.ProviderName!,
             ModelName = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName,
             item.TaskComplexity,
-            item.SubscriptionReasoningEffort
+            item.SubscriptionReasoningEffort,
+            item.EstimatedPromptCharacterCount
         })
         .Where(item => !string.IsNullOrWhiteSpace(item.ModelName))
         .GroupBy(item => new
@@ -273,8 +283,15 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
             group.Count(),
             group.Key.TaskComplexity,
             group.Key.SubscriptionReasoningEffort,
-            IsPotentiallyPaidProvider(group.Key.ProviderName)))
+            IsPotentiallyPaidProvider(group.Key.ProviderName),
+            SumKnownUsage(group.Select(item => item.EstimatedPromptCharacterCount))))
         .ToList();
+}
+
+private static int? SumKnownUsage(IEnumerable<int?> values)
+{
+    var known = values.Where(value => value is not null).Select(value => value!.Value).ToList();
+    return known.Count == 0 ? null : known.Sum();
 }
 
 private static bool IsPotentiallyPaidProvider(string providerName)

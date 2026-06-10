@@ -92,7 +92,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "subscription-plan":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintSubscriptionPlan(DashboardResponseMapper.BuildSubscriptionPlan(context.CurrentGoal, context.Agents, context.WorkerProfiles));
+            ConsoleViews.PrintSubscriptionPlan(DashboardResponseMapper.BuildSubscriptionPlan(
+                context.CurrentGoal,
+                context.Agents,
+                context.WorkerProfiles,
+                task => context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, task.Id).Content.Length));
             return false;
 
         case "advance":

@@ -61,9 +61,10 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
             : $"{item.AgentName} ({item.ProviderName}/{item.ModelName}{complexity}, {item.ExecutionPolicy})";
         var subscriptionModel = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? "default";
         var subscriptionReasoning = item.SubscriptionReasoningEffort is null ? string.Empty : $" reasoning={item.SubscriptionReasoningEffort}";
+        var estimatedPrompt = item.EstimatedPromptCharacterCount is null ? string.Empty : $" estPrompt={item.EstimatedPromptCharacterCount.Value}chars";
         var profile = item.ProfileName is null
             ? "none"
-            : $"{item.ProfileName} model={subscriptionModel}{subscriptionReasoning} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
+            : $"{item.ProfileName} model={subscriptionModel}{subscriptionReasoning}{estimatedPrompt} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
         Console.WriteLine($"  {item.TaskNumber}. [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
         Console.WriteLine($"     agent: {agent}");
         Console.WriteLine($"     subscription: {profile}");
@@ -78,8 +79,9 @@ private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSu
     var complexity = summary.TaskComplexity is null ? string.Empty : $" ({summary.TaskComplexity})";
     var reasoning = string.IsNullOrWhiteSpace(summary.ReasoningEffort) ? string.Empty : $" reasoning {summary.ReasoningEffort}";
     var paid = summary.IsPotentiallyPaidProvider ? " potentially paid" : string.Empty;
+    var estimatedPrompt = summary.EstimatedPromptCharacterCount is null ? string.Empty : $", est prompt {summary.EstimatedPromptCharacterCount.Value} chars";
     var noun = summary.ReadyCount == 1 ? "task" : "tasks";
-    return $"{summary.ProviderName}/{summary.ModelName}{complexity}{reasoning}{paid}: {summary.ReadyCount} ready {noun}";
+    return $"{summary.ProviderName}/{summary.ModelName}{complexity}{reasoning}{paid}: {summary.ReadyCount} ready {noun}{estimatedPrompt}";
 }
 
 public static void PrintAgents(IReadOnlyList<AgentDefinition> agents)

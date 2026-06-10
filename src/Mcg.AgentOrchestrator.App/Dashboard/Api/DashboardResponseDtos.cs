@@ -48,7 +48,8 @@ internal sealed record SubscriptionPlanModelSummaryDto(
     int ReadyCount,
     TaskComplexity? TaskComplexity = null,
     string? ReasoningEffort = null,
-    bool IsPotentiallyPaidProvider = false);
+    bool IsPotentiallyPaidProvider = false,
+    int? EstimatedPromptCharacterCount = null);
 
 internal sealed record SubscriptionPlanItemDto(
     int TaskNumber,
@@ -73,7 +74,8 @@ internal sealed record SubscriptionPlanItemDto(
     int? RetryDelaySeconds = null,
     TaskComplexity? TaskComplexity = null,
     string? SubscriptionModelName = null,
-    string? SubscriptionReasoningEffort = null);
+    string? SubscriptionReasoningEffort = null,
+    int? EstimatedPromptCharacterCount = null);
 
 internal sealed record ProviderSmokeReportDto(
     string Target,

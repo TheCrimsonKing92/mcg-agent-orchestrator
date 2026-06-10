@@ -559,34 +559,46 @@ public sealed class WorkerDispatchTests
         ComplexModel: new ModelProfile("Anthropic", "claude-opus-4.1", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, [agent], WorkerProfileCatalog.Default());
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
 
     var simple = plan.Items.First(item => item.Description.Contains("tooltip", StringComparison.Ordinal));
     var complex = plan.Items.First(item => item.Description.Contains("multi-tenant", StringComparison.Ordinal));
+    var simpleTask = goal.Tasks.First(task => task.Description.Contains("tooltip", StringComparison.Ordinal));
+    var complexTask = goal.Tasks.First(task => task.Description.Contains("multi-tenant", StringComparison.Ordinal));
+    var simplePromptCharacters = kernel.BuildTaskBrief(goal.Id, simpleTask.Id).Content.Length;
+    var complexPromptCharacters = kernel.BuildTaskBrief(goal.Id, complexTask.Id).Content.Length;
     Assert.Equal(TaskComplexity.Simple, simple.TaskComplexity);
     Assert.Equal("OpenAI", simple.ProviderName);
     Assert.Equal("gpt-5-mini", simple.ModelName);
     Assert.Equal("codex-cli", simple.ProfileName);
     Assert.Equal("gpt-5-mini", simple.SubscriptionModelName);
     Assert.Equal("low", simple.SubscriptionReasoningEffort);
+    Assert.Equal(simplePromptCharacters, simple.EstimatedPromptCharacterCount);
     Assert.Equal(TaskComplexity.Complex, complex.TaskComplexity);
     Assert.Equal("Anthropic", complex.ProviderName);
     Assert.Equal("claude-opus-4.1", complex.ModelName);
     Assert.Equal("claude-cli", complex.ProfileName);
     Assert.Equal("claude-opus-4.1", complex.SubscriptionModelName);
     Assert.Equal("high", complex.SubscriptionReasoningEffort);
+    Assert.Equal(complexPromptCharacters, complex.EstimatedPromptCharacterCount);
     Assert.Equal(2, plan.ReadyModelUsage.Count);
     var simpleSummary = plan.ReadyModelUsage.Single(item => item.TaskComplexity == TaskComplexity.Simple);
     Assert.Equal("OpenAI", simpleSummary.ProviderName);
     Assert.Equal("gpt-5-mini", simpleSummary.ModelName);
     Assert.Equal("low", simpleSummary.ReasoningEffort);
     Assert.Equal(1, simpleSummary.ReadyCount);
+    Assert.Equal(simplePromptCharacters, simpleSummary.EstimatedPromptCharacterCount);
     Assert.True(simpleSummary.IsPotentiallyPaidProvider);
     var complexSummary = plan.ReadyModelUsage.Single(item => item.TaskComplexity == TaskComplexity.Complex);
     Assert.Equal("Anthropic", complexSummary.ProviderName);
     Assert.Equal("claude-opus-4.1", complexSummary.ModelName);
     Assert.Equal("high", complexSummary.ReasoningEffort);
     Assert.Equal(1, complexSummary.ReadyCount);
+    Assert.Equal(complexPromptCharacters, complexSummary.EstimatedPromptCharacterCount);
     Assert.True(complexSummary.IsPotentiallyPaidProvider);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
