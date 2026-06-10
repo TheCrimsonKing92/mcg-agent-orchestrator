@@ -460,15 +460,18 @@ public sealed class DashboardRenderingTests
     Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, openAi.Subscription.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Model.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
+    Assert.Equal(SubscriptionMode.ApiKey, openAi.Model.SubscriptionMode);
 
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, anthropic.ExecutionPolicy);
     Assert.Equal("claude-cli", anthropic.Subscription!.WorkerProfileName);
     Assert.Equal("claude-sonnet", anthropic.Subscription.ModelAlias);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, anthropic.Model.MaxOutputTokens);
+    Assert.Equal(SubscriptionMode.ApiKey, anthropic.Model.SubscriptionMode);
 
     Assert.Equal(AgentExecutionPolicy.ApiOnly, ollama.ExecutionPolicy);
     Assert.True(ollama.Subscription is null);
     Assert.True(ollama.Model.MaxOutputTokens is null);
+    Assert.Equal(SubscriptionMode.LocalBridge, ollama.Model.SubscriptionMode);
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_ignores_subscription_fields_for_api_only_agents")]
     public void DashboardRequestParserIgnoresSubscriptionFieldsForApiOnlyAgents()
@@ -481,11 +484,16 @@ public sealed class DashboardRenderingTests
         ExecutionPolicy: "ApiOnly",
         SubscriptionProfileName: "codex-cli",
         SubscriptionModelAlias: "gpt-5.3-codex",
-        SubscriptionReasoningEffort: "high"));
+        SubscriptionReasoningEffort: "high",
+        ComplexProviderName: "Ollama",
+        ComplexModelName: "qwen3:8b"));
 
     Assert.Equal(AgentExecutionPolicy.ApiOnly, agent.ExecutionPolicy);
     Assert.True(agent.Subscription is null);
     Assert.Equal("Ollama", agent.Model.ProviderName);
+    Assert.Equal(SubscriptionMode.LocalBridge, agent.Model.SubscriptionMode);
+    Assert.Equal("Ollama", agent.ComplexModel!.ProviderName);
+    Assert.Equal(SubscriptionMode.LocalBridge, agent.ComplexModel.SubscriptionMode);
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_respects_explicit_api_only_agent_policy")]
     public void DashboardRequestParserRespectsExplicitApiOnlyAgentPolicy()

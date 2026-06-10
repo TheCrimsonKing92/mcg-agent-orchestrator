@@ -87,7 +87,7 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             submission.ComplexProviderName,
             submission.ComplexModelName,
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
-            SubscriptionMode.ApiKey,
+            DefaultSubscriptionMode(submission.ComplexProviderName),
             string.IsNullOrWhiteSpace(submission.ComplexReasoningEffort) ? null : submission.ComplexReasoningEffort,
             MaxOutputTokens: submission.ComplexMaxOutputTokens ?? DefaultComplexMaxOutputTokens(submission.ComplexProviderName))
         : null;
@@ -100,12 +100,19 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             providerName,
             modelName,
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
-            SubscriptionMode.ApiKey,
+            DefaultSubscriptionMode(providerName),
             string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? DefaultReasoningEffort(providerName) : submission.ReasoningEffort,
             submission.MaxOutputTokens ?? DefaultMaxOutputTokens(providerName)),
         ExecutionPolicy: executionPolicy,
         Subscription: subscription,
         ComplexModel: complexModel);
+}
+
+private static SubscriptionMode DefaultSubscriptionMode(string providerName)
+{
+    return providerName.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
+        ? SubscriptionMode.LocalBridge
+        : SubscriptionMode.ApiKey;
 }
 
 private static AgentExecutionPolicy ParseExecutionPolicy(string? value, string providerName)
