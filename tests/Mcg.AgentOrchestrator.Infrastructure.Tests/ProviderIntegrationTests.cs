@@ -54,6 +54,21 @@ public sealed class ProviderIntegrationTests
     Assert.Contains(handler.LastBody!, text => text.Contains("\"instructions\":\"system prompt\"", StringComparison.Ordinal));
     Assert.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":123", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_uses_routine_cap_when_request_omits_max_output_tokens")]
+    public async Task OpenAiResponsesModelProviderUsesRoutineCapWhenRequestOmitsMaxOutputTokens()
+{
+    var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent("""{ "status": "completed", "output_text": "implemented" }""")
+    });
+    var provider = new OpenAiResponsesModelProvider(new HttpClient(handler), "openai-key", "gpt-test");
+
+    await provider.CompleteAsync(TestRequest(new ModelOptions()), CancellationToken.None);
+
+    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":768", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_sends_reasoning_effort_when_configured")]
     public async Task OpenAiResponsesModelProviderSendsReasoningEffortWhenConfigured()
 {
@@ -99,6 +114,21 @@ public sealed class ProviderIntegrationTests
     Assert.Contains(body, text => text.Contains("\"system\":\"system prompt\"", StringComparison.Ordinal));
     Assert.Contains(body, text => text.Contains("\"max_tokens\":123", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "AnthropicMessagesModelProvider_uses_routine_cap_when_request_omits_max_output_tokens")]
+    public async Task AnthropicMessagesModelProviderUsesRoutineCapWhenRequestOmitsMaxOutputTokens()
+{
+    var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent("""{ "content": [{ "type": "text", "text": "reviewed" }], "stop_reason": "end_turn" }""")
+    });
+    var provider = new AnthropicMessagesModelProvider(new HttpClient(handler), "anthropic-key", "claude-test");
+
+    await provider.CompleteAsync(TestRequest(new ModelOptions()), CancellationToken.None);
+
+    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_tokens\":768", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "ModelProviders_throw_on_http_error")]
     public async Task ModelProvidersThrowOnHttpError()
 {

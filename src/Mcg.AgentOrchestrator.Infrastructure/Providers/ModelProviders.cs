@@ -28,7 +28,7 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
             model = string.IsNullOrWhiteSpace(request.Options.ModelName) ? _modelName : request.Options.ModelName,
             instructions = request.SystemPrompt,
             input = request.Messages.Select(message => new { role = message.Role, content = message.Content }).ToArray(),
-            max_output_tokens = request.Options.MaxOutputTokens,
+            max_output_tokens = request.Options.MaxOutputTokens ?? AgentCatalog.RoutineApiMaxOutputTokens,
             reasoning = string.IsNullOrWhiteSpace(request.Options.ReasoningEffort)
                 ? null
                 : new { effort = request.Options.ReasoningEffort }
@@ -104,7 +104,7 @@ public sealed class AnthropicMessagesModelProvider : IModelProvider
         var body = new
         {
             model = string.IsNullOrWhiteSpace(request.Options.ModelName) ? _modelName : request.Options.ModelName,
-            max_tokens = request.Options.MaxOutputTokens ?? 1200,
+            max_tokens = request.Options.MaxOutputTokens ?? AgentCatalog.RoutineApiMaxOutputTokens,
             system = request.SystemPrompt,
             messages = request.Messages.Select(message => new { role = NormalizeRole(message.Role), content = message.Content }).ToArray()
         };
