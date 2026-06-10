@@ -156,7 +156,11 @@ internal sealed record DashboardHostInfoDto(
 
 internal sealed record GoalSummaryDto(string Id, string Objective, GoalStatus Status, int TotalTasks, DateTimeOffset? LastEventAt);
 
-internal sealed record GoalDetailDto(GoalSummaryDto Goal, IReadOnlyList<TaskSummaryDto> Tasks, bool VerificationSatisfied);
+internal sealed record GoalDetailDto(
+    GoalSummaryDto Goal,
+    IReadOnlyList<TaskSummaryDto> Tasks,
+    bool VerificationSatisfied,
+    AdvanceLoopResultDto? AutoHandoff = null);
 
 internal sealed record DelegationPlanDto(string GoalId, IReadOnlyList<TaskAssignmentDto> Assignments);
 

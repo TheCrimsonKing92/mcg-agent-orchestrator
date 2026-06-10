@@ -39,6 +39,7 @@ function summarizeResponse(text){
     const goal = value.goal || value.Goal;
     const tasks = value.tasks || value.Tasks;
     const task = value.task || value.Task;
+    const autoHandoff = value.autoHandoff || value.AutoHandoff;
     const continuation = value.continuation || value.Continuation;
     const name = value.name || value.Name;
     const role = value.role || value.Role;
@@ -54,7 +55,14 @@ function summarizeResponse(text){
     if(action) return `Ran ${action}. Changed: ${count}. Goal: ${goalId.slice(0, 8) || 'n/a'}.`;
     if(processId && command && outputLogPath) return `Started build/test cycle PID ${processId}: ${command}. Logs: ${outputLogPath}${errorLogPath ? `, ${errorLogPath}` : ''}`;
     if(processId && restartCommand) return `Dashboard stop requested for PID ${processId}${listeningPorts.length ? ` on port(s) ${listeningPorts.join(', ')}` : ''}. Siblings: ${siblings.length}. Restart: ${restartCommand}`;
-    if(goal?.Id || goal?.id) return `Goal ${(goal.Id || goal.id).slice(0, 8)} created with ${tasks?.length ?? goal.TotalTasks ?? goal.totalTasks ?? 0} task(s).`;
+    if(goal?.Id || goal?.id) {
+      const autoStopReason = autoHandoff?.StopReason || autoHandoff?.stopReason;
+      const autoStepCount = autoHandoff?.StepCount ?? autoHandoff?.stepCount ?? 0;
+      const continuationWatching = autoHandoff?.Continuation?.IsRunning || autoHandoff?.continuation?.isRunning;
+      const created = `Goal ${(goal.Id || goal.id).slice(0, 8)} created with ${tasks?.length ?? goal.TotalTasks ?? goal.totalTasks ?? 0} task(s).`;
+      if(autoStopReason) return `${created} Auto-handoff stopped: ${autoStopReason}. Steps: ${autoStepCount}.${continuationWatching ? ' Server continuation is watching.' : ''}`;
+      return created;
+    }
     if(task?.TaskNumber || task?.taskNumber) return `Task ${task.TaskNumber || task.taskNumber} updated: ${task.Status || task.status}.`;
     if(name && commandTemplate) return `Worker profile ${name} saved.`;
     if(role && name) return `${role} agent ${name} saved.`;

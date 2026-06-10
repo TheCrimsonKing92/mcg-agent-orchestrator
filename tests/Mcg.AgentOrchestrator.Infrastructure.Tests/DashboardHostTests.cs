@@ -64,6 +64,20 @@ public sealed class DashboardHostTests
                 System.Text.Encoding.UTF8,
                 "application/json"));
         var simpleGoal = await simpleGoalResponse.Content.ReadAsStringAsync();
+        const string largeAutoHandoffObjective = "Design and implement a production multi-tenant distributed architecture with API CLI dashboard provider subscription worker persistence state tests and rollback safety";
+        using var largeAutoHandoffResponse = await client.PostAsync(
+            new Uri(new Uri(url), "api/goals"),
+            new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    objective = largeAutoHandoffObjective,
+                    workflow = "simple",
+                    autoHandoff = true,
+                    confirmAutoHandoff = true
+                }),
+                System.Text.Encoding.UTF8,
+                "application/json"));
+        var largeAutoHandoffGoal = await largeAutoHandoffResponse.Content.ReadAsStringAsync();
         using var defaultManualGoalResponse = await client.PostAsync(
             new Uri(new Uri(url), "api/goals"),
             new StringContent(
@@ -114,6 +128,13 @@ public sealed class DashboardHostTests
         Assert.Equal(HttpStatusCode.OK, workerProfileResponse.StatusCode);
         Assert.Contains(simpleGoal, text => text.Contains("\"TotalTasks\": 1", StringComparison.Ordinal));
         Assert.Contains(simpleGoal, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.Created, largeAutoHandoffResponse.StatusCode);
+        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"AutoHandoff\"", StringComparison.Ordinal));
+        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"StopReason\"", StringComparison.Ordinal));
+        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
+        Assert.False(GoalResponseContainsDispatch(largeAutoHandoffGoal));
+        Assert.False(GoalResponseContainsProcess(largeAutoHandoffGoal));
         Assert.Contains(simpleGoalDetail, text => text.Contains("\"VerificationSatisfied\"", StringComparison.Ordinal));
         Assert.Contains(simpleGoalDetail, text => text.Contains(simpleGoalId, StringComparison.Ordinal));
         using (var workSummaryDocument = JsonDocument.Parse(simpleGoalWorkSummary))

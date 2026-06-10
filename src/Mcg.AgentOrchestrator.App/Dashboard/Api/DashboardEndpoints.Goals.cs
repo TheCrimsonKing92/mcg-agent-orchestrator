@@ -22,21 +22,22 @@ internal static partial class DashboardEndpoints
                     var goal = isSimple
                         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(current, agents, submission.Objective)
                         : GoalLifecycleCommands.CreateAndActivateGoal(current, agents, submission.Objective);
+                    AdvanceLoopResultDto? autoHandoff = null;
 
                     if (submission.AutoHandoff)
                     {
                         try
                         {
                             await saveCheckpoint();
-                            var handoff = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+                            autoHandoff = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
                                 current,
                                 agents,
                                 profiles,
                                 services.Workspace,
                                 goal);
-                            if (DashboardContinuationService.ShouldContinueWatching(handoff))
+                            if (DashboardContinuationService.ShouldContinueWatching(autoHandoff))
                             {
-                                services.Continuations.StartSubscriptionWatch(services, handoff.GoalId);
+                                services.Continuations.StartSubscriptionWatch(services, autoHandoff.GoalId);
                             }
 
                             await saveCheckpoint();
@@ -48,7 +49,7 @@ internal static partial class DashboardEndpoints
                     }
 
                     var responseGoal = current.Goals.Single(currentGoal => currentGoal.Id == goal.Id);
-                    return Json(BuildCreatedGoalResponse(current, responseGoal), StatusCodes.Status201Created);
+                    return Json(BuildCreatedGoalResponse(current, responseGoal, autoHandoff), StatusCodes.Status201Created);
                 },
                 context.RequestAborted);
         }
@@ -57,11 +58,14 @@ internal static partial class DashboardEndpoints
         return Json(current.Goals.Select(DashboardResponseMapper.ToGoalSummary).ToList());
     }
 
-    private static GoalDetailDto BuildCreatedGoalResponse(AgentOrchestratorKernel current, Goal goal)
+    private static GoalDetailDto BuildCreatedGoalResponse(
+        AgentOrchestratorKernel current,
+        Goal goal,
+        AdvanceLoopResultDto? autoHandoff = null)
     {
         try
         {
-            return DashboardResponseMapper.ToGoalDetailDto(current, goal);
+            return DashboardResponseMapper.ToGoalDetailDto(current, goal) with { AutoHandoff = autoHandoff };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -69,7 +73,8 @@ internal static partial class DashboardEndpoints
             return new GoalDetailDto(
                 DashboardResponseMapper.ToGoalSummary(goal),
                 goal.Tasks.Select(task => DashboardResponseMapper.ToTaskSummaryDto(goal, task)).ToList(),
-                VerificationSatisfied: false);
+                VerificationSatisfied: false,
+                AutoHandoff: autoHandoff);
         }
     }
 
