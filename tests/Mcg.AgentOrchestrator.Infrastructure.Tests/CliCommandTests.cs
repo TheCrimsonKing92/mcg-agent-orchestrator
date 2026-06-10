@@ -838,6 +838,47 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("--confirm-paid-smoke", ex!.Message);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_worker_profile_check_validates_active_subscription_routes")]
+    public void CliWorkerProfileCheckValidatesActiveSubscriptionRoutes()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-test", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("custom-agent"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
+        var profiles = new WorkerProfileCatalog([]);
+        Goal? currentGoal = null;
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["worker-profile-check"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("active subscription routes", ex!.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_retry_requires_message_without_clearing_evidence")]
     public void CliRetryRequiresMessageWithoutClearingEvidence()
     {

@@ -23,12 +23,12 @@ public static void PrintWorkerProfiles(WorkerProfileCatalog catalog)
     }
 }
 
-public static void PrintWorkerProfileChecks(WorkerProfileCatalog catalog, string? name)
+public static void PrintWorkerProfileChecks(AgentCatalog agents, WorkerProfileCatalog catalog, string? name)
 {
     var selected = string.IsNullOrWhiteSpace(name)
         ? catalog
         : new WorkerProfileCatalog([catalog.GetRequired(name)]);
-    var report = OrchestratorHealthInspector.InspectCurrentEnvironment(AgentCatalog.Default(), selected);
+    var report = OrchestratorHealthInspector.InspectCurrentEnvironment(agents, selected);
 
     Console.WriteLine("Worker profile checks:");
     foreach (var profile in report.WorkerProfiles)
@@ -36,9 +36,63 @@ public static void PrintWorkerProfileChecks(WorkerProfileCatalog catalog, string
         Console.WriteLine($"  {profile.Name}: executable={profile.Executable} resolvable={profile.IsResolvable} patchCapable={profile.IsPatchCapable} ({profile.Detail})");
     }
 
+    var routeIssues = BuildSubscriptionRouteIssues(report, name).ToList();
+    foreach (var issue in routeIssues)
+    {
+        Console.WriteLine($"  route {issue.Role}: profile={issue.ProfileName} ({issue.Detail})");
+    }
+
     if (report.WorkerProfiles.Any(profile => !profile.IsResolvable))
     {
         throw new InvalidOperationException("One or more worker profiles are not resolvable.");
+    }
+
+    if (routeIssues.Count > 0)
+    {
+        throw new InvalidOperationException("One or more active subscription routes are not usable.");
+    }
+}
+
+private static IEnumerable<(AgentRole Role, string ProfileName, string Detail)> BuildSubscriptionRouteIssues(
+    OrchestratorHealthReport report,
+    string? name)
+{
+    var profiles = report.WorkerProfiles.ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
+    foreach (var agent in report.Agents.Where(agent => AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy)))
+    {
+        if (string.IsNullOrWhiteSpace(agent.SubscriptionProfileName))
+        {
+            continue;
+        }
+
+        if (!string.IsNullOrWhiteSpace(name) &&
+            !agent.SubscriptionProfileName.Equals(name, StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (!profiles.TryGetValue(agent.SubscriptionProfileName, out var profile))
+        {
+            yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile is not configured");
+            continue;
+        }
+
+        if (!profile.IsResolvable)
+        {
+            yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile is not executable");
+            continue;
+        }
+
+        if (profile.IsEchoOnly)
+        {
+            yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile only echoes the prompt path");
+            continue;
+        }
+
+        if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)
+        {
+            yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile cannot patch Developer tasks");
+        }
     }
 }
 

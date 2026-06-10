@@ -21,7 +21,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return false;
 
         case "worker-profile-check":
-            ConsoleViews.PrintWorkerProfileChecks(context.WorkerProfiles, parts.Count > 1 ? parts[1] : null);
+            ConsoleViews.PrintWorkerProfileChecks(new AgentCatalog(context.Agents), context.WorkerProfiles, parts.Count > 1 ? parts[1] : null);
             return false;
 
         case "worker-profile-export":
