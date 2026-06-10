@@ -46,6 +46,14 @@ public static partial class GoalTranscriptRenderer
             var item = nextActions.Items[index];
             text.AppendLine($"{index + 1}. {Display(item.Kind)}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
             text.AppendLine($"   Suggested command: {BuildSuggestedCommand(goal, item, agents)}");
+            var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+            if (!string.IsNullOrWhiteSpace(control?.CostRisk))
+            {
+                var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)
+                    ? string.Empty
+                    : $" {control.CostRecommendation}";
+                text.AppendLine($"   Cost: {control.CostRisk}.{recommendation}");
+            }
         }
 
         text.AppendLine();

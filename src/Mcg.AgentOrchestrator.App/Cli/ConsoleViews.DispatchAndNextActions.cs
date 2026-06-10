@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -61,6 +62,14 @@ public static void PrintNextActions(
         var item = actions.Items[index];
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
+        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+        if (!string.IsNullOrWhiteSpace(control?.CostRisk))
+        {
+            var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)
+                ? string.Empty
+                : $" {control.CostRecommendation}";
+            Console.WriteLine($"     cost: {control.CostRisk}.{recommendation}");
+        }
     }
 
     Console.WriteLine();

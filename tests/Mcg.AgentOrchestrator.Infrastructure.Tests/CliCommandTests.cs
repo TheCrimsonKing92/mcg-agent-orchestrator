@@ -167,6 +167,46 @@ public sealed class CliCommandTests
         var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
 
         Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
+}
+
+    [Xunit.Fact(DisplayName = "Cli_next_actions_prints_cost_recommendation")]
+    public void CliNextActionsPrintsCostRecommendation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var priorTask = new TaskSpec(TaskId.New(), "Update the old label.", AgentRole.Developer);
+        var nextTask = new TaskSpec(TaskId.New(), "Update the next label.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Avoid repeating overkill API model", [priorTask, nextTask]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "manual-verification passed",
+            "C:\\repo",
+            0,
+            "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+        try
+        {
+            Console.SetOut(writer);
+
+            ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+        Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
+        Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try a cheaper or local model before paid API run.", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_next_action_command_prefers_subscription_dispatch_for_subscription_agent")]
