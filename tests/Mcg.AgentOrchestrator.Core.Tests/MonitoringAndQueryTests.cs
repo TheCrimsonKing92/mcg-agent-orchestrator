@@ -265,9 +265,9 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal("Model fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.", item.ModelFitNote);
     var codexFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.3-codex");
     Assert.Equal("OpenAI", codexFit.ProviderName);
-    Assert.Equal(1, codexFit.NoteCount);
+    Assert.Equal(2, codexFit.NoteCount);
     Assert.Equal(0, codexFit.AdequateCount);
-    Assert.Equal(0, codexFit.OverkillCount);
+    Assert.Equal(1, codexFit.OverkillCount);
     Assert.Equal(1, codexFit.UnderpoweredCount);
     Assert.Equal(0, codexFit.UnknownCount);
     var miniFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.4-mini");

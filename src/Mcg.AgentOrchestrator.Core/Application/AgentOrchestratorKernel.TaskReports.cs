@@ -82,7 +82,7 @@ public sealed partial class AgentOrchestratorKernel
             SumKnownUsage(goal.Tasks.Where(HasPotentiallyPaidExecution).Select(task => task.LastExecution?.Usage?.OutputTokens)),
             BuildModelUsageSummary(goal.Tasks),
             BuildDispatchModelSummary(goal.Tasks),
-            ModelFitEvidence.BuildSummary(items.Select(item => item.ModelFitNote)),
+            ModelFitEvidence.BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes)),
             items);
     }
 

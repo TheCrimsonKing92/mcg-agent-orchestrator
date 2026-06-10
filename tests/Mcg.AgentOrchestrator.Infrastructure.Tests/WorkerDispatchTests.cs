@@ -854,6 +854,52 @@ public sealed class WorkerDispatchTests
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("prior overkill model-fit note", StringComparison.Ordinal)));
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_retains_earlier_model_fit_attempts_for_ready_models")]
+    public void SubscriptionPlanRetainsEarlierModelFitAttemptsForReadyModels()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Update the old button label.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Update the next button label.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Tune model choice from all fit evidence", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - overkill - label-only change.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.",
+        string.Empty,
+        DateTimeOffset.UtcNow.AddMinutes(1)));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]));
+
+    var summary = plan.ReadyModelUsage.Single();
+    Assert.Equal("OpenAI", summary.ProviderName);
+    Assert.Equal("gpt-5-mini", summary.ModelName);
+    Assert.Equal(1, summary.PreviousModelFitNoteCount);
+    Assert.Equal(1, summary.PreviousOverkillCount);
+    Assert.True(summary.ModelFitRecommendation?.Contains("try a cheaper or local model", StringComparison.Ordinal) == true);
+    Assert.Equal("prior overkill model", plan.ReadyStartCostRisk);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionPlan_flags_prior_underpowered_model_fit_for_ready_models")]
     public void SubscriptionPlanFlagsPriorUnderpoweredModelFitForReadyModels()
 {

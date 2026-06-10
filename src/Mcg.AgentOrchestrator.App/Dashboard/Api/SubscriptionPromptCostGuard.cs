@@ -310,7 +310,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
 private static List<SubscriptionPlanModelSummaryDto> BuildReadyModelFitSummaries(Goal goal)
 {
     return ModelFitEvidence
-        .BuildSummary(goal.Tasks.Select(ModelFitEvidence.FindLatestNote))
+        .BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes))
         .Select(fit => new SubscriptionPlanModelSummaryDto(
             fit.ProviderName,
             fit.ModelName,

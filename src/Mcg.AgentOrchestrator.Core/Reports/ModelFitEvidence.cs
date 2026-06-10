@@ -21,6 +21,21 @@ public static class ModelFitEvidence
         return null;
     }
 
+    public static IEnumerable<string> FindNotes(TaskSpec task)
+    {
+        foreach (var verification in task.VerificationHistory)
+        {
+            foreach (var line in EnumerateVerificationLines(verification))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("Model fit:", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return trimmed;
+                }
+            }
+        }
+    }
+
     public static List<ModelFitSummary> BuildSummary(IEnumerable<string?> notes)
     {
         return notes

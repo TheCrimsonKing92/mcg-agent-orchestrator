@@ -279,7 +279,7 @@ private static TaskComplexity? TryParseTaskComplexity(string? value)
 private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelSummary(Goal goal, IReadOnlyList<SubscriptionPlanItemDto> items)
 {
     var fitByModel = ModelFitEvidence
-        .BuildSummary(goal.Tasks.Select(ModelFitEvidence.FindLatestNote))
+        .BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes))
         .ToDictionary(fit => BuildModelFitKey(fit.ProviderName, fit.ModelName), StringComparer.OrdinalIgnoreCase);
 
     return items

@@ -159,7 +159,7 @@ private static string BuildMessage(PaidApiPromptRisk risk, string confirmationIn
 private static ModelFitSummary? FindModelFit(Goal goal, string providerName, string modelName)
 {
     return ModelFitEvidence
-        .BuildSummary(goal.Tasks.Select(ModelFitEvidence.FindLatestNote))
+        .BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes))
         .FirstOrDefault(fit =>
             fit.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
             fit.ModelName.Equals(modelName, StringComparison.OrdinalIgnoreCase));
