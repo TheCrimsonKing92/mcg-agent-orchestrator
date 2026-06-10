@@ -81,6 +81,22 @@ public sealed partial class AgentOrchestratorKernel
             outputTokens >= execution.MaxOutputTokens.Value;
     }
 
+    private static string BuildVerificationSuggestedAction(TaskVerificationGate gate)
+    {
+        if (IsOutputTokenLimitGate(gate))
+        {
+            return "Retry with narrower scope or a stronger model, rerun verification, and record model fit if this was subscription/API work.";
+        }
+
+        return BuildVerificationSuggestedAction(gate.GateStatus);
+    }
+
+    private static bool IsOutputTokenLimitGate(TaskVerificationGate gate)
+    {
+        return gate.GateStatus == VerificationGateStatus.FailedVerification &&
+            gate.Message.StartsWith("Model output may be truncated", StringComparison.Ordinal);
+    }
+
     private static string BuildVerificationSuggestedAction(VerificationGateStatus status)
     {
         return status switch

@@ -27,7 +27,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.TaskStatus,
                 task.GateStatus,
                 task.Message,
-                BuildVerificationSuggestedAction(task.GateStatus)))
+                BuildVerificationSuggestedAction(task)))
             .ToList();
 
         return new GoalVerificationWorklist(
@@ -62,7 +62,7 @@ public sealed partial class AgentOrchestratorKernel
                 taskGate.TaskId,
                 null,
                 taskGate.Message,
-                BuildVerificationSuggestedAction(taskGate.GateStatus)));
+                BuildVerificationSuggestedAction(taskGate)));
         }
 
         return new GoalAcceptanceSummary(

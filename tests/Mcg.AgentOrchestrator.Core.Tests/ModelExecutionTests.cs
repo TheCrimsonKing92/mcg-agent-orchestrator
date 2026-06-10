@@ -129,6 +129,13 @@ public sealed class ModelExecutionTests
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(VerificationGateStatus.FailedVerification, taskGate.GateStatus);
     Assert.Contains(taskGate.Message, text => text.Contains("output may be truncated", StringComparison.Ordinal));
+
+    var worklistItem = kernel.BuildVerificationWorklist(goal.Id).Items.Single(item => item.TaskId == task.Id);
+    Assert.Contains(worklistItem.SuggestedAction, text => text.Contains("stronger model", StringComparison.Ordinal));
+    Assert.Contains(worklistItem.SuggestedAction, text => text.Contains("record model fit", StringComparison.Ordinal));
+
+    var blocker = kernel.BuildGoalAcceptanceSummary(goal.Id).Blockers.Single(item => item.TaskId == task.Id);
+    Assert.Contains(blocker.SuggestedAction, text => text.Contains("narrower scope", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_goal_and_task_primary_context_in_prompt")]
     public async Task ExecuteAssignedTaskTrimsNoisyGoalAndTaskPrimaryContextInPrompt()
