@@ -52,6 +52,8 @@ For live prototype dashboard work, prefer `.\mcg-orchestrator.cmd prototype-ui h
 
 Keep prototype state isolated from repository state. Prototype dashboard state lives under `src/Mcg.AgentOrchestrator.App\.orchestrator-prototype\workspace`; launcher-backed task execution should run from the repository root through `MCG_ORCHESTRATOR_REPOSITORY_ROOT`.
 
+API model runs (`run`/`api-run`) are pure text completion with no file access; embed any data the model needs in the task description, and route file-touching work through subscription dispatches. Task descriptions also drive complexity classification: start inspection work with `Summarize `/`Report `/`Inspect ` and avoid risk keywords (auth, migration, rollback) unless the task genuinely carries that risk.
+
 When the task involves subscription/dogfood execution:
 
 - Verify worker profiles before starting subscription tasks.
@@ -67,6 +69,10 @@ Use dashboard cancel/refresh controls or exact known process ids for stuck worke
 
 On Windows, a running dashboard can lock app binaries. Prefer `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/`.
 
+`mcg-orchestrator.cmd` with no arguments starts an interactive REPL that stays alive and holds build outputs. Always pass a command. If builds fail with "file in use", check for lingering `Mcg.AgentOrchestrator.App`/`dotnet run` processes before blaming antivirus.
+
+Tests that spawn the real app inherit the machine environment; pin provider env vars (see `StartPrototypeDashboardProcess`) so assertions do not depend on which providers are live on the dev machine.
+
 Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalog|PrototypeWorkspaceSeeder|WorkerProfile|WorkerDispatch'`.
 
 ## Evidence
@@ -78,3 +84,5 @@ For subscription/API-authored work, include a `Model fit:` note with the selecte
 Do not paste full dashboard responses, full prompts, full logs, or long API payloads.
 
 Rotate `DOGFOOD_LOG.md` when it grows past roughly 500 lines: move all but the most recent entries to a dated archive under `docs/` (for example `docs/DOGFOOD_LOG-2026-06.md`) and keep the pointer line at the top of the log current. Do not load archives into context for routine work.
+
+Check `BACKLOG.md` before proposing follow-up work; it holds open items with context, file pointers, and done-conditions. Update it at goal boundaries: remove finished entries, add newly discovered follow-ups as self-contained entries that need no conversation history.
