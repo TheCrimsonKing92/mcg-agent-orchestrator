@@ -102,9 +102,16 @@ internal static class PromptContextFormatter
 
     public static IReadOnlyList<ProgressEvent> SelectPromptTimelineEvents(IEnumerable<ProgressEvent> events, int maxEvents)
     {
+        return SelectPromptTimelineEvents(events, maxEvents, TaskComplexity.Complex);
+    }
+
+    public static IReadOnlyList<ProgressEvent> SelectPromptTimelineEvents(IEnumerable<ProgressEvent> events, int maxEvents, TaskComplexity complexity)
+    {
         var ordered = events.OrderBy(evt => evt.OccurredAt).ToList();
         var decisionEvents = ordered.Where(IsDecisionRelevantTimelineEvent).ToList();
-        var selected = decisionEvents.Count > 0 ? decisionEvents : ordered;
+        var selected = decisionEvents.Count > 0 || complexity == TaskComplexity.Simple
+            ? decisionEvents
+            : ordered;
         return selected.TakeLast(maxEvents).ToList();
     }
 

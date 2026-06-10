@@ -129,7 +129,8 @@ public sealed class AgentTaskRunner
             Environment.NewLine,
             PromptContextFormatter.SelectPromptTimelineEvents(
                     goal.Timeline.Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
-                    maxEvents: TimelineEventBudget(complexity))
+                    maxEvents: TimelineEventBudget(complexity),
+                    complexity)
                 .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false, complexity)));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         var responseGuidance = string.IsNullOrWhiteSpace(responseBudgetGuidance)

@@ -453,6 +453,66 @@ public sealed class ModelExecutionTests
     Assert.True(!prompt.Contains("unrelated-tester-noise", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_omits_lifecycle_only_timeline_for_simple_tasks")]
+    public async Task ExecuteAssignedTaskOmitsLifecycleOnlyTimelineForSimpleTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep routine API prompt lifecycle noise out",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.True(!prompt.Contains("GoalCreated", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("TaskDelegated", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("TaskStarted", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("started task", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_lifecycle_fallback_timeline_for_complex_tasks")]
+    public async Task ExecuteAssignedTaskKeepsLifecycleFallbackTimelineForComplexTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep lifecycle context for complex API work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("GoalCreated", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("TaskDelegated", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("TaskStarted", StringComparison.Ordinal));
+    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+}
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_smaller_timeline_budget_for_simple_tasks")]
     public async Task ExecuteAssignedTaskUsesSmallerTimelineBudgetForSimpleTasks()
 {

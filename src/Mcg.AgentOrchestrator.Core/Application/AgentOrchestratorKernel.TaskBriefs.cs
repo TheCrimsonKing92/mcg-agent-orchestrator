@@ -21,7 +21,8 @@ public sealed partial class AgentOrchestratorKernel
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
         var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
             goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt)),
-            maxEvents: TimelineEventBudget(complexity));
+            maxEvents: TimelineEventBudget(complexity),
+            complexity);
 
         var lines = new List<string>
         {

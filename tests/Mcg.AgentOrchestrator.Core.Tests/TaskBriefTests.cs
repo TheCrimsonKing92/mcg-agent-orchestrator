@@ -9,7 +9,7 @@ public sealed class TaskBriefTests
     var goal = kernel.CreateGoal("Build worker adapter");
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Developer started.");
+    kernel.RetryTask(goal.Id, task.Id, "Developer retry note.");
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
 
@@ -18,7 +18,7 @@ public sealed class TaskBriefTests
     Assert.Equal(AgentRole.Developer, brief.Role);
     Assert.Contains(brief.Content, text => text.Contains("Build worker adapter", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.Description, StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("Developer started.", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("Developer retry note.", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
@@ -348,6 +348,45 @@ public sealed class TaskBriefTests
 
     Assert.Contains(brief, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
     Assert.True(!brief.Contains("routine completed lifecycle noise", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_lifecycle_only_timeline_for_simple_tasks")]
+    public void BuildTaskBriefOmitsLifecycleOnlyTimelineForSimpleTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep routine brief lifecycle noise out",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.True(!brief.Contains("GoalCreated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("TaskDelegated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("Goal created.", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("Delegated Developer task", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_lifecycle_fallback_timeline_for_complex_tasks")]
+    public void BuildTaskBriefKeepsLifecycleFallbackTimelineForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep lifecycle context for complex brief work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("GoalCreated", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("TaskDelegated", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_timeline_budget_for_simple_tasks")]
     public void BuildTaskBriefUsesSmallerTimelineBudgetForSimpleTasks()
