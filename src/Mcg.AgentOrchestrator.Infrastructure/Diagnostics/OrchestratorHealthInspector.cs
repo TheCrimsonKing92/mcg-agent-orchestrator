@@ -132,6 +132,10 @@ public static class OrchestratorHealthInspector
     {
         var providersByName = providers.ToDictionary(provider => provider.ProviderName, StringComparer.OrdinalIgnoreCase);
         var profilesByName = workerProfiles.ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
+        var localOllamaAvailable = providers.Any(provider =>
+            provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) &&
+            provider.IsConfigured &&
+            provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase));
         var roles = Enum.GetValues<AgentRole>();
 
         foreach (var role in roles)
@@ -183,7 +187,7 @@ public static class OrchestratorHealthInspector
                 agent.Subscription?.ModelAlias,
                 agent.Subscription?.ReasoningEffort,
                 isValid,
-                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName),
+                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName, localOllamaAvailable),
                 agent.ComplexModel?.ProviderName,
                 agent.ComplexModel?.ModelName,
                 agent.ComplexModel?.MaxOutputTokens,
@@ -234,7 +238,8 @@ public static class OrchestratorHealthInspector
         WorkerProfileValidation? profile,
         bool apiAllowed,
         bool subscriptionAllowed,
-        string? profileName)
+        string? profileName,
+        bool localOllamaAvailable)
     {
         var api = apiAllowed
             ? BuildApiValidationDetail(agent, provider)
@@ -242,7 +247,14 @@ public static class OrchestratorHealthInspector
         var subscription = subscriptionAllowed
             ? BuildSubscriptionValidationDetail(agent, profile, profileName)
             : "subscription execution disabled";
-        return $"{api}; {subscription}.";
+        return $"{api}; {subscription}{BuildLocalModelRecommendation(agent, localOllamaAvailable)}.";
+    }
+
+    private static string BuildLocalModelRecommendation(AgentDefinition agent, bool localOllamaAvailable)
+    {
+        return localOllamaAvailable && IsPotentiallyPaidProvider(agent.Model.ProviderName)
+            ? "; local Ollama is available, consider switching this role to Ollama before paid work"
+            : string.Empty;
     }
 
     private static string BuildApiValidationDetail(AgentDefinition agent, ProviderConfigurationStatus? provider)
@@ -310,6 +322,12 @@ public static class OrchestratorHealthInspector
     {
         return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
+    }
+
+    private static bool IsPotentiallyPaidProvider(string providerName)
+    {
+        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveSubscriptionProfileName(AgentDefinition agent)
