@@ -21,11 +21,13 @@ public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
-    Func<TaskSpec, int?> estimatePromptCharacterCount)
+    Func<TaskSpec, int?> estimatePromptCharacterCount,
+    TaskSpec? onlyTask = null)
 {
     var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles, estimatePromptCharacterCount);
     var candidates = plan.Items
         .Where(item => item.CanPrepare &&
+            (onlyTask is null || item.TaskId.Equals(onlyTask.Id.Value, StringComparison.Ordinal)) &&
             item.EstimatedPromptCharacterCount is not null &&
             !string.IsNullOrWhiteSpace(item.ProviderName) &&
             ProviderSmokeRunner.IsPaidProviderName(item.ProviderName))

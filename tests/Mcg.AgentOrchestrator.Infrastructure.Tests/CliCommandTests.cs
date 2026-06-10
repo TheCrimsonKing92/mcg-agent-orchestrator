@@ -392,6 +392,54 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_advance_subscription_blocks_large_paid_prepared_prompt_without_confirm_flag")]
+    public void CliAdvanceSubscriptionBlocksLargePaidPreparedPromptWithoutConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Run prepared paid work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Avoid advance starting a large paid prompt", [task]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "Write-Output ok",
+                root,
+                DateTimeOffset.UtcNow,
+                ProviderName: "OpenAI",
+                ModelName: "gpt-5-codex",
+                TaskComplexity: TaskComplexity.Simple,
+                PromptCharacterCount: 12001));
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["advance-subscription", "--confirm-subscription-advance"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_execute_dispatch_requires_confirm_flag")]
     public void CliExecuteDispatchRequiresConfirmFlag()
     {

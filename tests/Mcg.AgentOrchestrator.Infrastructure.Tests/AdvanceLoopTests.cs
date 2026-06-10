@@ -519,6 +519,43 @@ public sealed class AdvanceLoopTests
     Assert.Equal(task.SubscriptionRetryAfter, result.ContinueAfter);
     Assert.True(DashboardContinuationService.ShouldContinueWatching(result));
 }
+    [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_blocks_large_paid_prompt_before_dispatch")]
+    public void AdvanceGoalWithSubscriptionsUntilBlockedBlocksLargePaidPromptBeforeDispatch()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var objective = "Design and implement a production multi-tenant distributed architecture " + new string('o', 5000);
+    var task = new TaskSpec(
+        TaskId.New(),
+        "Build an end-to-end distributed integration with horizontal scaling across API CLI dashboard provider subscription worker persistence state tests docs " + new string('t', 5000),
+        AgentRole.Developer,
+        "Verify the full integration with build, tests, dashboard smoke, and focused regression evidence. " + new string('v', 5000));
+    var goal = kernel.CreateGoal(objective, [task]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var promptCharacters = kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length;
+
+    var blocked = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+        kernel,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workspace,
+        goal);
+
+    Assert.True(promptCharacters > 6000);
+    Assert.False(blocked.Executed);
+    Assert.Equal(0, blocked.StepCount);
+    Assert.Equal(NextActionKind.RunAssignedTask, blocked.BlockingAction!.Kind);
+    Assert.Contains(blocked.StopReason, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
     [Xunit.Fact(DisplayName = "DashboardContinuationService_refreshes_running_process_until_handoff_is_blocked")]
     public async Task DashboardContinuationServiceRefreshesRunningProcessUntilHandoffIsBlocked()
 {

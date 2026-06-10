@@ -253,7 +253,13 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
-                var result = GoalManagementCommandService.AdvanceGoalWithSubscriptions(current, agents, profiles, services.Workspace, goal);
+                var result = GoalManagementCommandService.AdvanceGoalWithSubscriptions(
+                    current,
+                    agents,
+                    profiles,
+                    services.Workspace,
+                    goal,
+                    HasLargePaidSubscriptionStartConfirmation(context));
                 return Task.FromResult((result.Executed, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict)));
             });
     }
@@ -285,7 +291,13 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
-                var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(current, agents, profiles, services.Workspace, goal);
+                var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+                    current,
+                    agents,
+                    profiles,
+                    services.Workspace,
+                    goal,
+                    HasLargePaidSubscriptionStartConfirmation(context));
                 return Task.FromResult((advance.Executed, advance));
             });
         if (DashboardContinuationService.ShouldContinueWatching(result))
@@ -448,14 +460,19 @@ internal static partial class DashboardEndpoints
             return null;
         }
 
-        var confirmed = context.Request.Query.TryGetValue(SubscriptionPromptCostGuard.DashboardConfirmationQueryName, out var value) &&
-            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+        var confirmed = HasLargePaidSubscriptionStartConfirmation(context);
         return confirmed
             ? null
             : Text(
                 "dashboard invalid request: " + SubscriptionPromptCostGuard.BuildDashboardMessage(risk),
                 "text/plain; charset=utf-8",
                 StatusCodes.Status400BadRequest);
+    }
+
+    private static bool HasLargePaidSubscriptionStartConfirmation(HttpContext context)
+    {
+        return context.Request.Query.TryGetValue(SubscriptionPromptCostGuard.DashboardConfirmationQueryName, out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
     }
 
     private static IResult? RequirePaidApiRunConfirmation(

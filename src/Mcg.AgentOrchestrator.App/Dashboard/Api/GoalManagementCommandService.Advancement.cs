@@ -161,7 +161,8 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
-    Goal goal)
+    Goal goal,
+    bool allowLargePaidSubscriptionStart = false)
 {
     var actions = kernel.BuildNextActions(goal.Id);
     var item = actions.Items.FirstOrDefault();
@@ -178,7 +179,19 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     }
 
     var message = GetSubscriptionAutomationMessage(automation);
-    object? result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation);
+    object? result;
+    try
+    {
+        result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(ex.Message), null);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(ex.Message), null);
+    }
 
     return new AdvanceResultDto(goal.Id.Value, true, action, automation.Kind, TimelineMessage(message), result);
 }
@@ -188,12 +201,13 @@ public static AdvanceLoopResultDto AdvanceGoalWithSubscriptionsUntilBlocked(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
-    Goal goal)
+    Goal goal,
+    bool allowLargePaidSubscriptionStart = false)
 {
     return AdvanceUntilBlockedAsync(
         kernel,
         goal,
-        automation => Task.FromResult(ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation)),
+        automation => Task.FromResult(ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart)),
         GetSubscriptionAutomationMessage).GetAwaiter().GetResult();
 }
 
@@ -341,28 +355,66 @@ private static object? ExecuteSubscriptionAutomation(
     WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
     Goal goal,
-    NextActionAutomationPlan automation)
+    NextActionAutomationPlan automation,
+    bool allowLargePaidSubscriptionStart)
 {
     return automation.Kind switch
     {
         NextActionAutomationKind.RunAssignedTask =>
-            DashboardResponseMapper.ToProfileDispatchDto(
-                goal,
-                SubscriptionDispatchTask(
-                    kernel,
-                    workspace,
-                    goal,
-                    goal.Tasks.Single(task => task.Id == automation.TaskId),
-                    agents,
-                    profiles)),
+            ExecuteSubscriptionRunAssignedTask(kernel, agents, profiles, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart),
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>
-            AdvanceStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!),
+            ExecuteSubscriptionStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart),
         NextActionAutomationKind.DelegatePendingTask =>
             DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
         _ => null
     };
+}
+
+private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskId taskId,
+    bool allowLargePaidSubscriptionStart)
+{
+    var task = goal.Tasks.Single(task => task.Id == taskId);
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+        SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+            goal,
+            agents,
+            profiles,
+            item => kernel.BuildTaskBrief(goal.Id, item.Id).Content.Length,
+            task),
+        allowLargePaidSubscriptionStart);
+
+    return DashboardResponseMapper.ToProfileDispatchDto(
+        goal,
+        SubscriptionDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            task,
+            agents,
+            profiles));
+}
+
+private static TaskDetailDto ExecuteSubscriptionStartRecordedDispatch(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskId taskId,
+    bool allowLargePaidSubscriptionStart)
+{
+    var task = goal.Tasks.Single(task => task.Id == taskId);
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+        SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
+        allowLargePaidSubscriptionStart);
+
+    return AdvanceStartRecordedDispatch(kernel, workspace, goal, taskId);
 }
 
 private static bool CanFallBackToApiAfterSubscriptionFailure(TaskSpec task)

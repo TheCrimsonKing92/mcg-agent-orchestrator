@@ -112,8 +112,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 parts,
                 "--confirm-subscription-advance",
                 "advance-subscription requires --confirm-subscription-advance because it can prepare or start subscription worker processes.");
-            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, GetOptionalArgument(parts, "--confirm-subscription-advance"));
-            var subscriptionAdvance = GoalManagementCommandService.AdvanceGoalWithSubscriptions(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, context.CurrentGoal);
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(
+                context.Kernel,
+                context.CurrentGoal,
+                GetOptionalArgument(parts, "--confirm-subscription-advance", SubscriptionPromptCostGuard.CliConfirmationFlag));
+            var subscriptionAdvance = GoalManagementCommandService.AdvanceGoalWithSubscriptions(
+                context.Kernel,
+                context.Agents,
+                context.WorkerProfiles,
+                context.Workspace,
+                context.CurrentGoal,
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             ConsoleViews.PrintAdvanceResult(subscriptionAdvance);
             return subscriptionAdvance.Executed;
 
