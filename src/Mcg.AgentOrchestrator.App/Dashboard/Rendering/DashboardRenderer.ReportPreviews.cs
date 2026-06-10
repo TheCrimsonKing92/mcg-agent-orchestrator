@@ -170,6 +170,11 @@ public static partial class DashboardRenderer
         {
             details.Add($"Dispatch models: +{evidence.DispatchModelUsage.Count - 2} more");
         }
+        details.AddRange(evidence.ModelFit.Take(2).Select(fit => $"Model fit: {RenderModelFitSummary(fit)}"));
+        if (evidence.ModelFit.Count > 2)
+        {
+            details.Add($"Model fit: +{evidence.ModelFit.Count - 2} more");
+        }
 
         return details;
     }

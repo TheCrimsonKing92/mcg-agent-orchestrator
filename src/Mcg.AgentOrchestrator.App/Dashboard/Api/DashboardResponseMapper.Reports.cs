@@ -84,6 +84,14 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
             item.ReasoningEffort,
             item.IsPotentiallyPaidProvider,
             item.PromptCharacterCount)).ToList(),
+        summary.ModelFit.Select(item => new ModelFitSummaryDto(
+            item.ProviderName,
+            item.ModelName,
+            item.NoteCount,
+            item.AdequateCount,
+            item.OverkillCount,
+            item.UnderpoweredCount,
+            item.UnknownCount)).ToList(),
         summary.Tasks.Select(item => ToTaskEvidenceSummaryDto(goal, item)).ToList());
 }
 

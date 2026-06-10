@@ -107,6 +107,30 @@ public static partial class DashboardRenderer
         return $"{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}{paid}: {dispatches}{prompt}";
     }
 
+    private static string RenderModelFitSummary(ModelFitSummary fit)
+    {
+        var notes = fit.NoteCount == 1 ? "1 note" : $"{fit.NoteCount} notes";
+        return $"{Encode(fit.ProviderName)}/{Encode(fit.ModelName)}: {notes}; {string.Join(", ", BuildModelFitCounts(fit))}";
+    }
+
+    private static List<string> BuildModelFitCounts(ModelFitSummary fit)
+    {
+        var counts = new List<string>();
+        AddModelFitCount(counts, "adequate", fit.AdequateCount);
+        AddModelFitCount(counts, "overkill", fit.OverkillCount);
+        AddModelFitCount(counts, "underpowered", fit.UnderpoweredCount);
+        AddModelFitCount(counts, "unknown", fit.UnknownCount);
+        return counts.Count == 0 ? ["none"] : counts;
+    }
+
+    private static void AddModelFitCount(List<string> counts, string label, int count)
+    {
+        if (count > 0)
+        {
+            counts.Add($"{label} {count}");
+        }
+    }
+
     private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
     {
         return execution.MaxOutputTokens is > 0 &&

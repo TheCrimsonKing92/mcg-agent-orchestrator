@@ -125,6 +125,14 @@ public static partial class GoalTranscriptRenderer
                 text.AppendLine($"- {FormatDispatchModelUsage(dispatch)}");
             }
         }
+        if (evidence.ModelFit.Count > 0)
+        {
+            text.AppendLine("Model fit:");
+            foreach (var fit in evidence.ModelFit)
+            {
+                text.AppendLine($"- {FormatModelFitSummary(fit)}");
+            }
+        }
         text.AppendLine($"Verification: {evidence.TasksWithVerification}; passed={evidence.PassedVerifications}; failed={evidence.FailedVerifications}");
         text.AppendLine($"Pending human input: {evidence.PendingHumanInputCount}");
         foreach (var item in evidence.Tasks)

@@ -227,6 +227,8 @@ public sealed class MonitoringAndQueryTests
     var goal = kernel.CreateGoal("Track model fit");
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var testerTask = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+    var reviewerTask = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
 
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
         "manual-verification passed",
@@ -242,11 +244,38 @@ public sealed class MonitoringAndQueryTests
         "Evidence checked.\nModel fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.",
         string.Empty,
         clock.UtcNow.AddMinutes(1)));
+    kernel.RecordTaskVerification(goal.Id, testerTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.4-mini - overkill - text-only docs change.",
+        string.Empty,
+        clock.UtcNow.AddMinutes(2)));
+    kernel.RecordTaskVerification(goal.Id, reviewerTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - underpowered - missed test coverage.",
+        string.Empty,
+        clock.UtcNow.AddMinutes(3)));
 
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
     Assert.Equal("Model fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.", item.ModelFitNote);
+    var codexFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.3-codex");
+    Assert.Equal("OpenAI", codexFit.ProviderName);
+    Assert.Equal(1, codexFit.NoteCount);
+    Assert.Equal(0, codexFit.AdequateCount);
+    Assert.Equal(0, codexFit.OverkillCount);
+    Assert.Equal(1, codexFit.UnderpoweredCount);
+    Assert.Equal(0, codexFit.UnknownCount);
+    var miniFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.4-mini");
+    Assert.Equal(2, miniFit.NoteCount);
+    Assert.Equal(1, miniFit.AdequateCount);
+    Assert.Equal(1, miniFit.OverkillCount);
+    Assert.Equal(0, miniFit.UnderpoweredCount);
+    Assert.Equal(0, miniFit.UnknownCount);
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_api_prompts")]

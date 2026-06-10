@@ -139,6 +139,31 @@ public static partial class GoalTranscriptRenderer
         return $"{dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{paid}: {dispatches}{prompt}";
     }
 
+    private static string FormatModelFitSummary(ModelFitSummary fit)
+    {
+        var notes = fit.NoteCount == 1 ? "1 note" : $"{fit.NoteCount} notes";
+        var counts = BuildModelFitCounts(fit);
+        return $"{fit.ProviderName}/{fit.ModelName}: {notes}; {string.Join(", ", counts)}";
+    }
+
+    private static List<string> BuildModelFitCounts(ModelFitSummary fit)
+    {
+        var counts = new List<string>();
+        AddModelFitCount(counts, "adequate", fit.AdequateCount);
+        AddModelFitCount(counts, "overkill", fit.OverkillCount);
+        AddModelFitCount(counts, "underpowered", fit.UnderpoweredCount);
+        AddModelFitCount(counts, "unknown", fit.UnknownCount);
+        return counts.Count == 0 ? ["none"] : counts;
+    }
+
+    private static void AddModelFitCount(List<string> counts, string label, int count)
+    {
+        if (count > 0)
+        {
+            counts.Add($"{label} {count}");
+        }
+    }
+
     private static string FormatMaxOutputTokens(int? maxOutputTokens)
     {
         return maxOutputTokens is null ? string.Empty : $" of {maxOutputTokens}";

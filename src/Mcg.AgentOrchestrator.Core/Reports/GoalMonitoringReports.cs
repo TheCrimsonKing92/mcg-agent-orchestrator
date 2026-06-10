@@ -47,6 +47,7 @@ public sealed record GoalEvidenceSummary(
     int? PotentiallyPaidOutputTokens,
     IReadOnlyList<ModelUsageSummary> ModelUsage,
     IReadOnlyList<DispatchModelSummary> DispatchModelUsage,
+    IReadOnlyList<ModelFitSummary> ModelFit,
     IReadOnlyList<TaskEvidenceSummary> Tasks);
 
 public sealed record ModelUsageSummary(
@@ -69,6 +70,15 @@ public sealed record DispatchModelSummary(
     string? ReasoningEffort = null,
     bool IsPotentiallyPaidProvider = false,
     int? PromptCharacterCount = null);
+
+public sealed record ModelFitSummary(
+    string ProviderName,
+    string ModelName,
+    int NoteCount,
+    int AdequateCount,
+    int OverkillCount,
+    int UnderpoweredCount,
+    int UnknownCount);
 
 public sealed record TaskEvidenceSummary(
     TaskId TaskId,

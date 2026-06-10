@@ -125,9 +125,20 @@ public sealed class DashboardRenderingTests
 
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
     var taskEvidence = evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value);
+    var modelFit = evidenceDto.ModelFit.Single();
 
     Assert.Equal("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", taskEvidence.ModelFitNote);
+    Assert.Equal("OpenAI", modelFit.ProviderName);
+    Assert.Equal("gpt-5.3-codex", modelFit.ModelName);
+    Assert.Equal(1, modelFit.NoteCount);
+    Assert.Equal(0, modelFit.AdequateCount);
+    Assert.Equal(0, modelFit.OverkillCount);
+    Assert.Equal(1, modelFit.UnderpoweredCount);
+    Assert.Equal(0, modelFit.UnknownCount);
+    Assert.Contains(html, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex: 1 note; underpowered 1", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-5.3-codex: 1 note; underpowered 1", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", StringComparison.Ordinal));
 }
 

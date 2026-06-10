@@ -32,6 +32,10 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
             : $" reasoning {dispatch.ReasoningEffort}";
         Console.WriteLine($"  dispatch model: {dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{paid}: {dispatch.DispatchCount} dispatch(es)");
     }
+    foreach (var fit in summary.ModelFit)
+    {
+        Console.WriteLine($"  model fit: {FormatModelFitSummary(fit)}");
+    }
     Console.WriteLine($"Verification: {summary.TasksWithVerification}; passed={summary.PassedVerifications}; failed={summary.FailedVerifications}");
     Console.WriteLine($"Pending human input: {summary.PendingHumanInputCount}");
 
@@ -52,6 +56,30 @@ private static string FormatTokenUsage(int? inputTokens, int? outputTokens)
 private static string FormatMaxOutputTokens(int? maxOutputTokens)
 {
     return maxOutputTokens is null ? string.Empty : $" of {maxOutputTokens}";
+}
+
+private static string FormatModelFitSummary(ModelFitSummary fit)
+{
+    var notes = fit.NoteCount == 1 ? "1 note" : $"{fit.NoteCount} notes";
+    var counts = new List<string>();
+    AddModelFitCount(counts, "adequate", fit.AdequateCount);
+    AddModelFitCount(counts, "overkill", fit.OverkillCount);
+    AddModelFitCount(counts, "underpowered", fit.UnderpoweredCount);
+    AddModelFitCount(counts, "unknown", fit.UnknownCount);
+    if (counts.Count == 0)
+    {
+        counts.Add("none");
+    }
+
+    return $"{fit.ProviderName}/{fit.ModelName}: {notes}; {string.Join(", ", counts)}";
+}
+
+private static void AddModelFitCount(List<string> counts, string label, int count)
+{
+    if (count > 0)
+    {
+        counts.Add($"{label} {count}");
+    }
 }
 
 public static void PrintStageReadinessReport(

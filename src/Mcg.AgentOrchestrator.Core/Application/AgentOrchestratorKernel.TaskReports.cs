@@ -82,6 +82,7 @@ public sealed partial class AgentOrchestratorKernel
             SumKnownUsage(goal.Tasks.Where(HasPotentiallyPaidExecution).Select(task => task.LastExecution?.Usage?.OutputTokens)),
             BuildModelUsageSummary(goal.Tasks),
             BuildDispatchModelSummary(goal.Tasks),
+            BuildModelFitSummary(items),
             items);
     }
 
@@ -144,6 +145,72 @@ public sealed partial class AgentOrchestratorKernel
     {
         return !string.IsNullOrWhiteSpace(task.LastDispatch?.ProviderName) &&
             !string.IsNullOrWhiteSpace(task.LastDispatch.ModelName);
+    }
+
+    private static List<ModelFitSummary> BuildModelFitSummary(IReadOnlyList<TaskEvidenceSummary> items)
+    {
+        return items
+            .Select(item => TryParseModelFitNote(item.ModelFitNote))
+            .Where(observation => observation is not null)
+            .Cast<ModelFitObservation>()
+            .GroupBy(
+                observation => new
+                {
+                    observation.ProviderName,
+                    observation.ModelName
+                })
+            .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ModelFitSummary(
+                group.Key.ProviderName,
+                group.Key.ModelName,
+                group.Count(),
+                group.Count(observation => observation.Fit == "adequate"),
+                group.Count(observation => observation.Fit == "overkill"),
+                group.Count(observation => observation.Fit == "underpowered"),
+                group.Count(observation => observation.Fit == "unknown")))
+            .ToList();
+    }
+
+    private static ModelFitObservation? TryParseModelFitNote(string? note)
+    {
+        const string Prefix = "Model fit:";
+        if (string.IsNullOrWhiteSpace(note) ||
+            !note.TrimStart().StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var body = note.TrimStart()[Prefix.Length..].Trim();
+        var parts = body.Split([" - "], StringSplitOptions.None);
+        if (parts.Length < 2)
+        {
+            return null;
+        }
+
+        var target = parts[0].Trim();
+        var separator = target.IndexOf('/');
+        if (separator <= 0 || separator >= target.Length - 1)
+        {
+            return null;
+        }
+
+        var providerName = target[..separator].Trim();
+        var modelName = target[(separator + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(providerName) || string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        var fit = parts[1].Trim().ToLowerInvariant() switch
+        {
+            "adequate" => "adequate",
+            "overkill" => "overkill",
+            "underpowered" => "underpowered",
+            _ => "unknown"
+        };
+
+        return new ModelFitObservation(providerName, modelName, fit);
     }
 
     private static bool HasPotentiallyPaidExecution(TaskSpec task)
@@ -473,6 +540,8 @@ public sealed partial class AgentOrchestratorKernel
     {
         return value.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
     }
+
+    private sealed record ModelFitObservation(string ProviderName, string ModelName, string Fit);
 
     private static string BuildDispatchEvidenceMessage(TaskDispatchRecord dispatch)
     {

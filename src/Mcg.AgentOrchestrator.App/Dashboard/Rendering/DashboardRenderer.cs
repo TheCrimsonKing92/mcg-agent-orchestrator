@@ -493,6 +493,10 @@ public static partial class DashboardRenderer
         {
             html.AppendLine("<p>Dispatch models: " + string.Join(" &middot; ", evidence.DispatchModelUsage.Select(RenderDispatchModelSummary)) + "</p>");
         }
+        if (evidence.ModelFit.Count > 0)
+        {
+            html.AppendLine("<p>Model fit: " + string.Join(" &middot; ", evidence.ModelFit.Select(RenderModelFitSummary)) + "</p>");
+        }
         html.AppendLine("<table><thead><tr><th>#</th><th>Evidence</th><th>Message</th></tr></thead><tbody>");
         foreach (var item in evidence.Tasks)
         {

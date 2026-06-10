@@ -85,6 +85,7 @@ internal sealed record GoalEvidenceSummaryDto(
     int? PotentiallyPaidOutputTokens,
     IReadOnlyList<ModelUsageSummaryDto> ModelUsage,
     IReadOnlyList<DispatchModelSummaryDto> DispatchModelUsage,
+    IReadOnlyList<ModelFitSummaryDto> ModelFit,
     IReadOnlyList<TaskEvidenceSummaryDto> Tasks);
 
 internal sealed record ModelUsageSummaryDto(
@@ -107,6 +108,15 @@ internal sealed record DispatchModelSummaryDto(
     string? ReasoningEffort = null,
     bool IsPotentiallyPaidProvider = false,
     int? PromptCharacterCount = null);
+
+internal sealed record ModelFitSummaryDto(
+    string ProviderName,
+    string ModelName,
+    int NoteCount,
+    int AdequateCount,
+    int OverkillCount,
+    int UnderpoweredCount,
+    int UnknownCount);
 
 internal sealed record TaskEvidenceSummaryDto(
     int TaskNumber,
