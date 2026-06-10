@@ -68,3 +68,14 @@ Goal ID: `aa6e8301137a4378ba63e5fe45ac9f11` (CLI workspace), task 2 `093e044c`, 
 - Friction: the model echoed the fit template literally (`adequate|overkill|underpowered`); the hardened parser drops the echo instead of recording unknown fit. The operator's first manual note embedded `Model fit:` mid-line and was unparseable; a line-leading note was recorded. Both argue for a structured fit field.
 - Verification: `verify-manual 2 passed` with line-leading note. Placeholder task 1 cancelled.
 - Model fit: Ollama/qwen3:8b - adequate - bounded report from provided data - usable conclusion on first live attempt, minor structure drift.
+
+## 2026-06-10 - Local agentic bridge validation (codex --oss, qwen-code)
+
+Goal ID: `ea57a8e7b4114e8ca6e6431d50e1c6d3` (CLI workspace), task 2 `d2f0286e`, profile-dispatch through goal worktree.
+
+- Machinery outcome: full pass. `workspace create` made the worktree, `profile-dispatch` expanded the qwen-code template with per-invocation env vars, `start-dispatch` ran qwen in `.orchestrator-worktrees/ea57a8e7`, logs/exit/refresh all recorded. Phase-1 worktrees and phase-2 launcher compose correctly.
+- Model outcome: fail. qwen3:8b returned an empty response to the 1,326-char task brief. Across nine smokes: codex `--oss` + qwen emits tool calls as fenced JSON prose (harmony format mismatch; qwen2.5-coder and qwen3:8b) or thinks endlessly (qwen3:14b, 20+ min at 100% GPU); codex 0.137 removed `wire_api = "chat"`; Ollama serves `/v1/responses` but tool definitions do not reach qwen templates through codex. qwen-code + qwen3:8b makes real structured tool calls (validated twice) but botched a parameter every attempt (wrong name, then `C:\` root path) and gives up in `-p` mode.
+- Model fit: Ollama/qwen3:8b - underpowered - agentic file write via qwen-code - structured calls work but parameters wrong every attempt; empty response under dispatch.
+- Friction: dispatch process exit 0 with empty stdout auto-recorded as passing verification and completed the task; "completed" was indistinguishable from "did nothing". Verification-from-exit-code should require non-empty output or task-relevant evidence for Developer tasks.
+- Friction: nvm shims (`codex.ps1`, `qwen.ps1`) hang on open redirected stdin (`Reading additional input from stdin...`); launching with `< NUL` via cmd avoids it. The orchestrator dispatcher inherits console stdin and did not hang.
+- Next lever: `ollama pull gpt-oss:20b` for the codex `--oss` designed pairing (offload penalty on 10GB VRAM), or revisit when stronger small tool-calling models land. The `qwen-code-cli` profile is wired as the Ollama default either way.
