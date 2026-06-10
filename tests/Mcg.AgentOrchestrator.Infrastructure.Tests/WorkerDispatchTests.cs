@@ -1117,6 +1117,69 @@ public sealed class WorkerDispatchTests
         failureAt.AddMinutes(30)));
     Assert.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_requires_review_after_repeated_usage_limits")]
+    public void WorkerProfileDispatcherRequiresReviewAfterRepeatedUsageLimits()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var firstFailureAt = DateTimeOffset.Parse("2026-06-01T12:00:00Z");
+    var secondFailureAt = DateTimeOffset.Parse("2026-06-01T13:00:00Z");
+    var retryWindowPassed = DateTimeOffset.Parse("2026-06-01T18:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Review repeated subscription usage limits");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", workingDirectory, firstFailureAt));
+    kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
+        "codex exec attempt 1",
+        workingDirectory,
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        firstFailureAt));
+    kernel.RetryTask(goal.Id, developer.Id, "Retry after first usage limit.");
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", workingDirectory, secondFailureAt));
+    kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
+        "codex exec attempt 2",
+        workingDirectory,
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        secondFailureAt));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
+    var item = plan.Items.First(item => item.Role == AgentRole.Developer);
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        retryWindowPassed);
+
+    Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
+    Assert.False(item.CanPrepare);
+    Assert.Contains(item.Detail, text => text.Contains("Repeated recoverable subscription usage limit", StringComparison.Ordinal));
+    Assert.Contains(item.Detail, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
+    Assert.False(results.Any(result => result.Task.Id == developer.Id));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        developer,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        retryWindowPassed));
+    Assert.Contains(ex.Message, text => text.Contains("recoverable subscription usage limit 2 time", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_rejects_duplicate_process_start")]
     public void BackgroundDispatchRunnerRejectsDuplicateProcessStart()
 {

@@ -246,6 +246,29 @@ public sealed class DispatchExecutionTests
         evt.Kind == ProgressKind.TaskFailed &&
         evt.Message.Contains("recoverable subscription usage limit 3 time", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "DispatchFailureClassifier_requires_review_after_repeated_subscription_usage_limits")]
+    public void DispatchFailureClassifierRequiresReviewAfterRepeatedSubscriptionUsageLimits()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Review repeated subscription limits");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 1", clock.UtcNow));
+
+    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+
+    kernel.RetryTask(goal.Id, task.Id, "Manual retry after attempt 1.");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 2", clock.UtcNow));
+
+    Assert.Equal(DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+}
     [Xunit.Fact(DisplayName = "Subscription_retry_after_snapshot_metadata_does_not_require_reparsing_provider_text")]
     public void SubscriptionRetryAfterSnapshotMetadataDoesNotRequireReparsingProviderText()
 {

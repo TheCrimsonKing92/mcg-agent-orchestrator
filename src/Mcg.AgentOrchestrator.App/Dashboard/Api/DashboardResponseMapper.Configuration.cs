@@ -171,6 +171,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         var now = DateTimeOffset.UtcNow;
         var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
         var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
         var retryDelaySeconds = retryDeferred
             ? Math.Max(0, (int)Math.Ceiling((retryAfter - now).TotalSeconds))
             : (int?)null;
@@ -181,7 +182,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             pinsSelectedReasoning &&
             (!requiresPatchCapability || patchCapability.IsPatchCapable) &&
             AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
-            !retryDeferred;
+            !retryDeferred &&
+            !requiresLimitReview;
         var estimatedPromptCharacterCount = canPrepare
             ? estimatePromptCharacterCount?.Invoke(task)
             : null;
@@ -196,6 +198,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
                 ? $"Agent execution policy is {agent.ExecutionPolicy}; subscription dispatch is disabled."
             : retryDeferred
                 ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."
+            : requiresLimitReview
+                ? $"Repeated recoverable subscription usage limit ({previousLimitFailures}); inspect model, profile, or timing before redispatch."
             : !hasProfile
                 ? $"Worker profile '{profileName}' was not found."
             : isEchoOnly

@@ -82,6 +82,7 @@ public static class WorkerProfileDispatcher
         var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
         EnsureSubscriptionProfilePinsSelectedReasoning(profile, selection.Model.ProviderName, reasoningEffort);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        EnsureRepeatedSubscriptionLimitReviewed(task);
         return PrepareTask(
             kernel,
             goal,
@@ -136,6 +137,11 @@ public static class WorkerProfileDispatcher
         foreach (var selection in selections)
         {
             if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(selection.Task, dispatchedAt, out _))
+            {
+                continue;
+            }
+
+            if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(selection.Task))
             {
                 continue;
             }
@@ -236,6 +242,18 @@ public static class WorkerProfileDispatcher
         }
 
         throw new InvalidOperationException($"Task '{task.Id}' hit a recoverable subscription usage limit; retry after {retryAfter:u}.");
+    }
+
+    private static void EnsureRepeatedSubscriptionLimitReviewed(TaskSpec task)
+    {
+        if (!DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+        {
+            return;
+        }
+
+        var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        throw new InvalidOperationException(
+            $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing before redispatch.");
     }
 
     public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(AgentDefinition agent)

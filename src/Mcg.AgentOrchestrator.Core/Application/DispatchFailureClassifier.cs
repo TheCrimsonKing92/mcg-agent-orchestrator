@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static class DispatchFailureClassifier
 {
+    public const int RecoverableSubscriptionLimitReviewThreshold = 2;
+
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
         var output = $"{verification.StandardOutput}\n{verification.StandardError}";
@@ -23,6 +25,12 @@ public static class DispatchFailureClassifier
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
             IsRecoverableSubscriptionLimitFailure(verification));
+    }
+
+    public static bool RequiresSubscriptionLimitReview(TaskSpec task)
+    {
+        return HasRecoverableSubscriptionLimitHistory(task) &&
+            CountRecoverableSubscriptionLimitFailures(task) >= RecoverableSubscriptionLimitReviewThreshold;
     }
 
     public static bool IsSubscriptionRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)
