@@ -21,9 +21,10 @@ public sealed class ProviderIntegrationTests
     Assert.Equal(2, result.Usage.OutputTokens);
     Assert.Equal("stop", result.StopReason);
     Assert.Equal(0, request.Options.Temperature);
-    Assert.Equal(32, request.Options.MaxOutputTokens);
-    Assert.Contains(request.SystemPrompt, text => text.Contains("connectivity smoke test", StringComparison.Ordinal));
-    Assert.Contains(request.Messages.Single().Content, text => text.Contains("reachable", StringComparison.Ordinal));
+    Assert.Equal(8, request.Options.MaxOutputTokens);
+    Assert.Contains(request.SystemPrompt, text => text.Contains("Connectivity smoke test", StringComparison.Ordinal));
+    Assert.Contains(request.SystemPrompt, text => text.Contains("Reply exactly OK", StringComparison.Ordinal));
+    Assert.Equal("Reply OK.", request.Messages.Single().Content);
 }
     [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_sends_request_and_parses_response")]
     public async Task OpenAiResponsesModelProviderSendsRequestAndParsesResponse()
