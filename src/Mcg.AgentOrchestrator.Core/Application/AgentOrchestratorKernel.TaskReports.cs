@@ -488,7 +488,13 @@ public sealed partial class AgentOrchestratorKernel
             warnings.Add($"complex paid {sourceLabel} model");
         }
 
-        return warnings.Count == 0 ? string.Empty : "; " + string.Join("; ", warnings);
+        if (warnings.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        warnings.Add($"try a local or routine model before repeating paid {sourceLabel} work");
+        return "; " + string.Join("; ", warnings);
     }
 
     private static string FormatDispatchModelSelection(TaskDispatchRecord dispatch)
