@@ -142,6 +142,44 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_subscription_cost_preview_surfaces_prior_model_fit")]
+    public void DashboardSubscriptionCostPreviewSurfacesPriorModelFit()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Update the old button label.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Update the next button label.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Tune model choice from dashboard evidence", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - overkill - copy-only change.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var html = DashboardRenderer.Render(
+        kernel,
+        new DashboardRenderOptions(
+            EnableOperatorControls: true,
+            View: DashboardView.Goal,
+            FocusGoalPrefix: goal.Id.Value[..8],
+            AgentDefinitions: [agent],
+            WorkerProfiles: WorkerProfileCatalog.Default()));
+
+    Assert.Contains(html, text => text.Contains("Subscription plan: ready 1", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("OpenAI/gpt-5-mini Simple reasoning low", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("prior fit 1: overkill 1", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_possible_output_token_cap_hits")]
     public async Task DashboardRendererSurfacesPossibleOutputTokenCapHits()
 {

@@ -84,7 +84,7 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(
         readyStartRisk is null ? null : SubscriptionPromptCostGuard.BuildInlineLabel(readyStartRisk),
         readyStartRisk?.PromptCharacterCount,
         readyStartRisk?.Details ?? [],
-        BuildSubscriptionPlanModelSummary(items),
+        BuildSubscriptionPlanModelSummary(goal, items),
         items);
 }
 
@@ -274,8 +274,12 @@ private static TaskComplexity? TryParseTaskComplexity(string? value)
         : null;
 }
 
-private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelSummary(IReadOnlyList<SubscriptionPlanItemDto> items)
+private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelSummary(Goal goal, IReadOnlyList<SubscriptionPlanItemDto> items)
 {
+    var fitByModel = ModelFitEvidence
+        .BuildSummary(goal.Tasks.Select(ModelFitEvidence.FindLatestNote))
+        .ToDictionary(fit => BuildModelFitKey(fit.ProviderName, fit.ModelName), StringComparer.OrdinalIgnoreCase);
+
     return items
         .Where(item => item.CanPrepare && !string.IsNullOrWhiteSpace(item.ProviderName))
         .Select(item => new
@@ -298,15 +302,29 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
         .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
         .ThenBy(group => group.Key.TaskComplexity?.ToString() ?? string.Empty, StringComparer.OrdinalIgnoreCase)
         .ThenBy(group => group.Key.SubscriptionReasoningEffort ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-        .Select(group => new SubscriptionPlanModelSummaryDto(
-            group.Key.ProviderName,
-            group.Key.ModelName!,
-            group.Count(),
-            group.Key.TaskComplexity,
-            group.Key.SubscriptionReasoningEffort,
-            IsPotentiallyPaidProvider(group.Key.ProviderName),
-            SumKnownUsage(group.Select(item => item.EstimatedPromptCharacterCount))))
+        .Select(group =>
+        {
+            fitByModel.TryGetValue(BuildModelFitKey(group.Key.ProviderName, group.Key.ModelName!), out var fit);
+            return new SubscriptionPlanModelSummaryDto(
+                group.Key.ProviderName,
+                group.Key.ModelName!,
+                group.Count(),
+                group.Key.TaskComplexity,
+                group.Key.SubscriptionReasoningEffort,
+                IsPotentiallyPaidProvider(group.Key.ProviderName),
+                SumKnownUsage(group.Select(item => item.EstimatedPromptCharacterCount)),
+                fit?.NoteCount ?? 0,
+                fit?.AdequateCount ?? 0,
+                fit?.OverkillCount ?? 0,
+                fit?.UnderpoweredCount ?? 0,
+                fit?.UnknownCount ?? 0);
+        })
         .ToList();
+}
+
+private static string BuildModelFitKey(string providerName, string modelName)
+{
+    return $"{providerName}/{modelName}";
 }
 
 private static int? SumKnownUsage(IEnumerable<int?> values)

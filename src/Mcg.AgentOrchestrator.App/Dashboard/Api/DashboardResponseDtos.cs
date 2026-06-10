@@ -52,7 +52,12 @@ internal sealed record SubscriptionPlanModelSummaryDto(
     TaskComplexity? TaskComplexity = null,
     string? ReasoningEffort = null,
     bool IsPotentiallyPaidProvider = false,
-    int? EstimatedPromptCharacterCount = null);
+    int? EstimatedPromptCharacterCount = null,
+    int PreviousModelFitNoteCount = 0,
+    int PreviousAdequateCount = 0,
+    int PreviousOverkillCount = 0,
+    int PreviousUnderpoweredCount = 0,
+    int PreviousUnknownFitCount = 0);
 
 internal sealed record SubscriptionPlanItemDto(
     int TaskNumber,

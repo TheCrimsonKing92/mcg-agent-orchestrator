@@ -804,6 +804,47 @@ public sealed class WorkerDispatchTests
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_surfaces_prior_model_fit_for_ready_models")]
+    public void SubscriptionPlanSurfacesPriorModelFitForReadyModels()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Update the old button label.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Update the next button label.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Tune model choice from fit evidence", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - overkill - copy-only change.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+
+    var summary = plan.ReadyModelUsage.Single();
+    Assert.Equal("OpenAI", summary.ProviderName);
+    Assert.Equal("gpt-5-mini", summary.ModelName);
+    Assert.Equal(1, summary.ReadyCount);
+    Assert.Equal(1, summary.PreviousModelFitNoteCount);
+    Assert.Equal(0, summary.PreviousAdequateCount);
+    Assert.Equal(1, summary.PreviousOverkillCount);
+    Assert.Equal(0, summary.PreviousUnderpoweredCount);
+    Assert.Equal(0, summary.PreviousUnknownFitCount);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
     public void SubscriptionPlanMarksUsageLimitedTasksNotPreparableUntilRetryTime()
 {

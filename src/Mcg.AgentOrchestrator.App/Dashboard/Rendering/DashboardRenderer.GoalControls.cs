@@ -490,7 +490,31 @@ public static partial class DashboardRenderer
         var complexity = item.TaskComplexity is null ? string.Empty : $" {item.TaskComplexity.Value}";
         var reasoning = string.IsNullOrWhiteSpace(item.ReasoningEffort) ? string.Empty : $" reasoning {item.ReasoningEffort}";
         var paid = item.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
-        return $"{item.ProviderName}/{item.ModelName}{complexity}{reasoning} prompt {item.EstimatedPromptCharacterCount!.Value} chars{paid}";
+        var priorFit = FormatSubscriptionPlanModelFit(item);
+        return $"{item.ProviderName}/{item.ModelName}{complexity}{reasoning} prompt {item.EstimatedPromptCharacterCount!.Value} chars{paid}{priorFit}";
+    }
+
+    private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummaryDto item)
+    {
+        if (item.PreviousModelFitNoteCount == 0)
+        {
+            return string.Empty;
+        }
+
+        var counts = new List<string>();
+        AddSubscriptionPlanModelFitCount(counts, "adequate", item.PreviousAdequateCount);
+        AddSubscriptionPlanModelFitCount(counts, "overkill", item.PreviousOverkillCount);
+        AddSubscriptionPlanModelFitCount(counts, "underpowered", item.PreviousUnderpoweredCount);
+        AddSubscriptionPlanModelFitCount(counts, "unknown", item.PreviousUnknownFitCount);
+        return $" prior fit {item.PreviousModelFitNoteCount}: {string.Join(", ", counts)}";
+    }
+
+    private static void AddSubscriptionPlanModelFitCount(List<string> counts, string label, int count)
+    {
+        if (count > 0)
+        {
+            counts.Add($"{label} {count}");
+        }
     }
 
     private static void RenderApiRunPreview(

@@ -164,8 +164,32 @@ private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSu
     var reasoning = string.IsNullOrWhiteSpace(summary.ReasoningEffort) ? string.Empty : $" reasoning {summary.ReasoningEffort}";
     var paid = summary.IsPotentiallyPaidProvider ? " potentially paid" : string.Empty;
     var estimatedPrompt = summary.EstimatedPromptCharacterCount is null ? string.Empty : $", est prompt {summary.EstimatedPromptCharacterCount.Value} chars";
+    var priorFit = FormatSubscriptionPlanModelFit(summary);
     var noun = summary.ReadyCount == 1 ? "task" : "tasks";
-    return $"{summary.ProviderName}/{summary.ModelName}{complexity}{reasoning}{paid}: {summary.ReadyCount} ready {noun}{estimatedPrompt}";
+    return $"{summary.ProviderName}/{summary.ModelName}{complexity}{reasoning}{paid}: {summary.ReadyCount} ready {noun}{estimatedPrompt}{priorFit}";
+}
+
+private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummaryDto summary)
+{
+    if (summary.PreviousModelFitNoteCount == 0)
+    {
+        return string.Empty;
+    }
+
+    var counts = new List<string>();
+    AddSubscriptionPlanModelFitCount(counts, "adequate", summary.PreviousAdequateCount);
+    AddSubscriptionPlanModelFitCount(counts, "overkill", summary.PreviousOverkillCount);
+    AddSubscriptionPlanModelFitCount(counts, "underpowered", summary.PreviousUnderpoweredCount);
+    AddSubscriptionPlanModelFitCount(counts, "unknown", summary.PreviousUnknownFitCount);
+    return $", prior fit {summary.PreviousModelFitNoteCount}: {string.Join(", ", counts)}";
+}
+
+private static void AddSubscriptionPlanModelFitCount(List<string> counts, string label, int count)
+{
+    if (count > 0)
+    {
+        counts.Add($"{label} {count}");
+    }
 }
 
 public static void PrintAgents(IReadOnlyList<AgentDefinition> agents)
