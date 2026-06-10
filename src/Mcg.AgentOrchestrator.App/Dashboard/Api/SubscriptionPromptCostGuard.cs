@@ -237,7 +237,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
     var priorUnderpowered = modelFitRisks.Where(item => item.PreviousUnderpoweredCount > 0).ToList();
     var total = candidates.Sum(candidate => candidate.PromptCharacterCount);
     var oversized = candidates
-        .Where(candidate => candidate.PromptCharacterCount > PromptThreshold(candidate.TaskComplexity))
+        .Where(candidate => candidate.PromptCharacterCount > PromptThreshold(candidate))
         .ToList();
     var complex = candidates
         .Where(candidate => candidate.TaskComplexity == TaskComplexity.Complex || candidate.UsesComplexModel)
@@ -266,7 +266,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
     }
 
     details.AddRange(oversized.Take(3).Select(candidate =>
-        $"Task {candidate.TaskNumber} {candidate.ProviderName}/{candidate.ModelName} prompt {candidate.PromptCharacterCount} chars exceeds {PromptThreshold(candidate.TaskComplexity)}."));
+        $"Task {candidate.TaskNumber} {candidate.ProviderName}/{candidate.ModelName} prompt {candidate.PromptCharacterCount} chars exceeds {PromptThreshold(candidate)}."));
 
     if (oversized.Count > 3)
     {
@@ -341,9 +341,9 @@ private static string BuildModelKey(string providerName, string modelName)
     return $"{providerName}/{modelName}";
 }
 
-private static int PromptThreshold(TaskComplexity? complexity)
+private static int PromptThreshold(PaidPromptCandidate candidate)
 {
-    return complexity == TaskComplexity.Complex
+    return candidate.TaskComplexity == TaskComplexity.Complex || candidate.UsesComplexModel
         ? ComplexPaidPromptThreshold
         : SimplePaidPromptThreshold;
 }

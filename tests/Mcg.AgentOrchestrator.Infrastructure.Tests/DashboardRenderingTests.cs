@@ -1572,6 +1572,29 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5.5 Complex reasoning high prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [complex paid API model]", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "ApiPromptCostGuard_uses_complex_threshold_for_evidence_escalated_model")]
+    public void ApiPromptCostGuardUsesComplexThresholdForEvidenceEscalatedModel()
+{
+    var preview = new AgentTaskRunPreview(
+        AgentId.New(),
+        "Developer",
+        "OpenAI",
+        "gpt-5.5",
+        TaskComplexity.Simple,
+        MaxOutputTokens: 1200,
+        ReasoningEffort: "high",
+        PromptCharacterCount: 5000,
+        UsesComplexModel: true);
+
+    var risk = ApiPromptCostGuard.Evaluate(preview);
+
+    Assert.True(risk is not null);
+    Assert.Equal(6000, risk!.PromptThreshold);
+    Assert.False(risk.PromptExceedsThreshold);
+    Assert.True(risk.UsesComplexPaidModel);
+    Assert.Equal("complex paid API model", ApiPromptCostGuard.BuildInlineLabel(risk));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_evidence_escalated_paid_api_model")]
     public void DashboardRendererConfirmsEvidenceEscalatedPaidApiModel()
 {

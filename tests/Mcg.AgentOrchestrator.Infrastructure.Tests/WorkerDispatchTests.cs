@@ -972,6 +972,11 @@ public sealed class WorkerDispatchTests
         [agent],
         WorkerProfileCatalog.Default(),
         task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]));
+    var thresholdRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        _ => 5000);
     var dispatchRoot = CreateTempDirectory();
 
     var item = plan.Items.Single(candidate => candidate.TaskId == nextTask.Id.Value);
@@ -986,6 +991,11 @@ public sealed class WorkerDispatchTests
     Assert.Equal("gpt-5.5", summary.ModelName);
     Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
+    Assert.True(thresholdRisk is not null);
+    Assert.False(thresholdRisk!.HasOversizedPrompt);
+    Assert.True(thresholdRisk.UsesComplexPaidModel);
+    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(thresholdRisk));
+    Assert.False(thresholdRisk.Details.Any(detail => detail.Contains("exceeds 4000", StringComparison.Ordinal)));
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
