@@ -37,8 +37,8 @@ public sealed class WorkerProfileTests
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(codexOss.CommandTemplate).IsPatchCapable);
 }
 
-    [Xunit.Fact(DisplayName = "Ollama_agents_default_to_codex_oss_subscription_profile")]
-    public void OllamaAgentsDefaultToCodexOssSubscriptionProfile()
+    [Xunit.Fact(DisplayName = "Ollama_agents_default_to_qwen_code_subscription_profile")]
+    public void OllamaAgentsDefaultToQwenCodeSubscriptionProfile()
 {
     var agent = new AgentDefinition(
         AgentId.New(),
@@ -47,7 +47,19 @@ public sealed class WorkerProfileTests
         new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.LocalBridge),
         ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
 
-    Assert.Equal("codex-oss-cli", WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent));
+    Assert.Equal("qwen-code-cli", WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_qwen_code_profile_pins_model_and_prompt")]
+    public void WorkerProfileCatalogDefaultQwenCodeProfilePinsModelAndPrompt()
+{
+    var qwenCode = WorkerProfileCatalog.Default().GetRequired("qwen-code-cli");
+
+    Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("OPENAI_MODEL='{subscriptionModelName}'", StringComparison.Ordinal));
+    Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("Set-Location {workingDirectory}", StringComparison.Ordinal));
+    Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
+    Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("127.0.0.1:11434", StringComparison.Ordinal));
+    Assert.False(WorkerProfileDiagnostics.IsEchoOnlyCommand(qwenCode.CommandTemplate));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_upsert_replaces_existing_profile")]
     public void WorkerProfileCatalogUpsertReplacesExistingProfile()
@@ -55,7 +67,7 @@ public sealed class WorkerProfileTests
     var catalog = WorkerProfileCatalog.Default()
         .Upsert(new WorkerProfile("local-echo", "Get-Content {promptPath}"));
 
-    Assert.Equal(4, catalog.Profiles.Count);
+    Assert.Equal(5, catalog.Profiles.Count);
     Assert.Equal("Get-Content {promptPath}", catalog.GetRequired("local-echo").CommandTemplate);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_merge_upserts_imported_profiles")]
@@ -71,7 +83,7 @@ public sealed class WorkerProfileTests
 
     var merged = current.Merge(imported);
 
-    Assert.Equal(6, merged.Profiles.Count);
+    Assert.Equal(7, merged.Profiles.Count);
     Assert.Equal("codex exec --full-auto {promptPath}", merged.GetRequired("codex").CommandTemplate);
     Assert.Equal("claude --file {promptPath}", merged.GetRequired("CLAUDE").CommandTemplate);
 }

@@ -375,6 +375,7 @@ public static class OrchestratorHealthInspector
     {
         return name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase);
     }
 

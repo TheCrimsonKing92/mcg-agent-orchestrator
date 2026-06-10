@@ -8,7 +8,7 @@ public static class WorkerProfileDispatcher
 {
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
-    public const string OllamaSubscriptionProfileName = "codex-oss-cli";
+    public const string OllamaSubscriptionProfileName = "qwen-code-cli";
 
     public static WorkerProfileDispatchResult PrepareTask(
         AgentOrchestratorKernel kernel,
