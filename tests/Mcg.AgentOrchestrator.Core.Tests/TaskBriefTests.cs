@@ -20,12 +20,14 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains(task.Description, StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Developer retry note.", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("Report only changed files", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/obj/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("/api/source-survey", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
+    Assert.True(!brief.Content.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
     public void BuildTaskBriefTrimsNoisyGoalAndTaskPrimaryContext()
@@ -106,6 +108,8 @@ public sealed class TaskBriefTests
 
     Assert.Contains(brief, text => text.Contains("Developer Requirements", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]

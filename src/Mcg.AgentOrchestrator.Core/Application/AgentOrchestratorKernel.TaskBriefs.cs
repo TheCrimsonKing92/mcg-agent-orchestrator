@@ -35,14 +35,9 @@ public sealed partial class AgentOrchestratorKernel
             $"Task status: {task.Status}",
             $"Task id: {task.Id}",
             string.Empty,
-            "## Instructions",
-            "Complete this task as the assigned SDLC role. Report concrete changes, verification evidence, blockers, and any human input required.",
-            "If you cannot proceed without operator input, write a line that starts with HUMAN_INPUT: followed by the exact question.",
-            "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
-            "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
-            "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
-            "Prefer the dashboard source survey or /api/source-survey as the starting repository map before broad recursive file reads."
+            "## Instructions"
         };
+        lines.AddRange(BuildTaskBriefInstructions(complexity));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
@@ -118,6 +113,29 @@ public sealed partial class AgentOrchestratorKernel
     private static int TimelineEventBudget(TaskComplexity complexity)
     {
         return complexity == TaskComplexity.Complex ? 20 : 8;
+    }
+
+    private static IReadOnlyList<string> BuildTaskBriefInstructions(TaskComplexity complexity)
+    {
+        if (complexity == TaskComplexity.Simple)
+        {
+            return
+            [
+                "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
+                "Use repository-local verification when practical; do not claim completion without evidence.",
+                "When surveying files, start with the dashboard source survey or /api/source-survey, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state."
+            ];
+        }
+
+        return
+        [
+            "Complete this task as the assigned SDLC role. Report concrete changes, verification evidence, blockers, and any human input required.",
+            "If you cannot proceed without operator input, write a line that starts with HUMAN_INPUT: followed by the exact question.",
+            "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
+            "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
+            "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
+            "Prefer the dashboard source survey or /api/source-survey as the starting repository map before broad recursive file reads."
+        ];
     }
 
     private static bool IsRedundantBriefTimelineEvent(TaskSpec task, ProgressEvent evt)
