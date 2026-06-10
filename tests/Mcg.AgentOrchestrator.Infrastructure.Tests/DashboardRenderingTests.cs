@@ -1773,6 +1773,7 @@ static string ExtractTaskControls(string html, int taskNumber)
     Assert.Contains(goalHtml, text => text.Contains("Subscription retry queue", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Subscription handoff is paused", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Retry after", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("1 limit failure", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Developer", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "DashboardRenderer_html_encodes_dynamic_content")]

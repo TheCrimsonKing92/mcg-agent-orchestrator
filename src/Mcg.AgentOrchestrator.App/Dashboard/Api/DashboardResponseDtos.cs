@@ -78,7 +78,8 @@ internal sealed record SubscriptionPlanItemDto(
     TaskComplexity? TaskComplexity = null,
     string? SubscriptionModelName = null,
     string? SubscriptionReasoningEffort = null,
-    int? EstimatedPromptCharacterCount = null);
+    int? EstimatedPromptCharacterCount = null,
+    int RecoverableSubscriptionLimitFailureCount = 0);
 
 internal sealed record ProviderSmokeReportDto(
     string Target,

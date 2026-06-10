@@ -168,6 +168,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
         var now = DateTimeOffset.UtcNow;
         var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
+        var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
         var retryDelaySeconds = retryDeferred
             ? Math.Max(0, (int)Math.Ceiling((retryAfter - now).TotalSeconds))
             : (int?)null;
@@ -182,12 +183,17 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         var estimatedPromptCharacterCount = canPrepare
             ? estimatePromptCharacterCount?.Invoke(task)
             : null;
+        var previousLimitFailures = recoverableLimitFailures == 1
+            ? "1 previous recoverable subscription usage limit failure"
+            : $"{recoverableLimitFailures} previous recoverable subscription usage limit failures";
         var detail = canPrepare
-            ? "Ready to prepare subscription dispatch."
+            ? recoverableLimitFailures > 0
+                ? $"Ready to prepare subscription dispatch after {previousLimitFailures}; inspect model, profile, or timing before redispatch."
+                : "Ready to prepare subscription dispatch."
             : !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy)
                 ? $"Agent execution policy is {agent.ExecutionPolicy}; subscription dispatch is disabled."
             : retryDeferred
-                ? $"Recoverable subscription usage limit; retry after {retryAfter:u}."
+                ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."
             : !hasProfile
                 ? $"Worker profile '{profileName}' was not found."
             : isEchoOnly
@@ -224,7 +230,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             taskComplexity,
             subscriptionModelName,
             subscriptionReasoningEffort,
-            estimatedPromptCharacterCount);
+            estimatedPromptCharacterCount,
+            recoverableLimitFailures);
     }
     catch (InvalidOperationException ex)
     {

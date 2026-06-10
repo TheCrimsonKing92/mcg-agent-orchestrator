@@ -822,6 +822,15 @@ public sealed class WorkerDispatchTests
         string.Empty,
         $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
         now));
+    kernel.RetryTask(goal.Id, developer.Id, "Retry after provider window.");
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec retry", "C:\\repo", now.AddMinutes(5)));
+    kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
+        "codex exec retry",
+        "C:\\repo",
+        1,
+        string.Empty,
+        $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
+        now.AddMinutes(5)));
 
     var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
 
@@ -831,7 +840,9 @@ public sealed class WorkerDispatchTests
     Assert.False(item.CanPrepare);
     Assert.Equal(developer.SubscriptionRetryAfter, item.RetryAfter);
     Assert.True(item.RetryDelaySeconds is > 0);
+    Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
     Assert.Contains(item.Detail, text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
+    Assert.Contains(item.Detail, text => text.Contains("2 previous recoverable subscription usage limit failures", StringComparison.Ordinal));
     Assert.Contains(item.Detail, text => text.Contains("retry after", StringComparison.Ordinal));
     Assert.Equal(developer.SubscriptionRetryAfter, DashboardResponseMapper.ToTaskSummaryDto(goal, developer).SubscriptionRetryAfter);
 }

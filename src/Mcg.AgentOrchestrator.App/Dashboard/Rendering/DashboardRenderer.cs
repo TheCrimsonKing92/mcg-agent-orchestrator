@@ -655,7 +655,8 @@ public static partial class DashboardRenderer
             {
                 Task = task,
                 IsDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter),
-                RetryAfter = retryAfter
+                RetryAfter = retryAfter,
+                RecoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task)
             })
             .Where(item => item.IsDeferred)
             .OrderBy(item => item.RetryAfter)
@@ -669,12 +670,15 @@ public static partial class DashboardRenderer
         html.AppendLine("<div class=\"goal-panel goal-panel-wide subscription-retry-queue\">");
         html.AppendLine("<h3>Subscription retry queue</h3>");
         html.AppendLine("<p class=\"section-note\">Subscription handoff is paused until these provider retry windows pass.</p>");
-        html.AppendLine("<table><thead><tr><th>#</th><th>Role</th><th>Retry after</th><th>Wait</th><th>Task</th></tr></thead><tbody>");
+        html.AppendLine("<table><thead><tr><th>#</th><th>Role</th><th>Retry after</th><th>Wait</th><th>Failures</th><th>Task</th></tr></thead><tbody>");
         foreach (var item in deferredTasks)
         {
             var delay = item.RetryAfter - now;
+            var failures = item.RecoverableLimitFailures == 1
+                ? "1 limit failure"
+                : $"{item.RecoverableLimitFailures} limit failures";
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.Task.Id)}</td><td>{item.Task.RequiredRole}</td><td><code>{Encode(item.RetryAfter.ToString("u"))}</code></td><td>{Encode(FormatRetryDelay(delay))}</td><td>{Encode(item.Task.Description)}</td>");
+            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.Task.Id)}</td><td>{item.Task.RequiredRole}</td><td><code>{Encode(item.RetryAfter.ToString("u"))}</code></td><td>{Encode(FormatRetryDelay(delay))}</td><td>{Encode(failures)}</td><td>{Encode(item.Task.Description)}</td>");
             html.AppendLine("</tr>");
         }
 
