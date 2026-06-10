@@ -67,8 +67,8 @@ public sealed class AgentCatalogTests
     Assert.Equal("OpenAI reviewer", restored.GetRequired(AgentRole.Reviewer).Name);
     Assert.Equal("gpt-review", restored.GetRequired(AgentRole.Reviewer).Model.ModelName);
 }
-    [Xunit.Fact(DisplayName = "AgentCatalogStore_load_adds_missing_paid_provider_caps_without_overriding_explicit_values")]
-    public void AgentCatalogStoreLoadAddsMissingPaidProviderCapsWithoutOverridingExplicitValues()
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_load_adds_missing_paid_provider_cost_defaults_without_overriding_explicit_values")]
+    public void AgentCatalogStoreLoadAddsMissingPaidProviderCostDefaultsWithoutOverridingExplicitValues()
 {
     var root = CreateTempDirectory();
     var path = Path.Combine(root, "agents.json");
@@ -79,12 +79,16 @@ public sealed class AgentCatalogTests
             "OpenAI developer",
             AgentRole.Developer,
             new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"),
             ComplexModel: new ModelProfile("OpenAI", "gpt-complex", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey)),
         new AgentDefinition(
             new AgentId("anthropic-reviewer"),
             "Anthropic reviewer",
             AgentRole.Reviewer,
-            new ModelProfile("Anthropic", "claude-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey, MaxOutputTokens: 4096)),
+            new ModelProfile("Anthropic", "claude-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey, "custom", 4096),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("claude-cli", ReasoningEffort: "custom-subscription")),
         new AgentDefinition(
             new AgentId("ollama-tester"),
             "Ollama tester",
@@ -100,8 +104,14 @@ public sealed class AgentCatalogTests
     var ollama = restored.GetRequired(AgentRole.Tester);
 
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
+    Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Model.ReasoningEffort);
+    Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, openAi.Subscription!.ReasoningEffort);
     Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, openAi.ComplexModel!.MaxOutputTokens);
+    Assert.Equal(AgentCatalog.ComplexReasoningEffort, openAi.ComplexModel.ReasoningEffort);
     Assert.Equal(4096, anthropic.Model.MaxOutputTokens);
+    Assert.Equal("custom", anthropic.Model.ReasoningEffort);
+    Assert.Equal("custom-subscription", anthropic.Subscription!.ReasoningEffort);
     Assert.True(ollama.Model.MaxOutputTokens is null);
+    Assert.True(ollama.Model.ReasoningEffort is null);
 }
 }

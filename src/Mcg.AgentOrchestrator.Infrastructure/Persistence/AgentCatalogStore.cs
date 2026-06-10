@@ -106,18 +106,40 @@ public static class AgentCatalogStore
     {
         return agent with
         {
-            Model = NormalizeModel(agent.Model, AgentCatalog.RoutineApiMaxOutputTokens),
+            Model = NormalizeModel(agent.Model, AgentCatalog.RoutineApiMaxOutputTokens, AgentCatalog.RoutineReasoningEffort),
             ComplexModel = agent.ComplexModel is null
                 ? null
-                : NormalizeModel(agent.ComplexModel, AgentCatalog.ComplexApiMaxOutputTokens)
+                : NormalizeModel(agent.ComplexModel, AgentCatalog.ComplexApiMaxOutputTokens, AgentCatalog.ComplexReasoningEffort),
+            Subscription = NormalizeSubscription(agent)
         };
     }
 
-    private static ModelProfile NormalizeModel(ModelProfile model, int defaultMaxOutputTokens)
+    private static ModelProfile NormalizeModel(ModelProfile model, int defaultMaxOutputTokens, string defaultReasoningEffort)
     {
-        return model.MaxOutputTokens is null && IsPaidProvider(model.ProviderName)
-            ? model with { MaxOutputTokens = defaultMaxOutputTokens }
-            : model;
+        if (!IsPaidProvider(model.ProviderName))
+        {
+            return model;
+        }
+
+        return model with
+        {
+            MaxOutputTokens = model.MaxOutputTokens ?? defaultMaxOutputTokens,
+            ReasoningEffort = string.IsNullOrWhiteSpace(model.ReasoningEffort)
+                ? defaultReasoningEffort
+                : model.ReasoningEffort
+        };
+    }
+
+    private static SubscriptionLaunchProfile? NormalizeSubscription(AgentDefinition agent)
+    {
+        if (agent.Subscription is null || !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+        {
+            return agent.Subscription;
+        }
+
+        return string.IsNullOrWhiteSpace(agent.Subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)
+            ? agent.Subscription with { ReasoningEffort = AgentCatalog.RoutineSubscriptionReasoningEffort }
+            : agent.Subscription;
     }
 
     private static bool IsPaidProvider(string providerName)
