@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Providers;
@@ -69,7 +70,7 @@ public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(str
                 result.StopReason,
                 result.Usage?.InputTokens,
                 result.Usage?.OutputTokens,
-                result.ResponseText.Trim()));
+                FormatProviderSmokeResponseText(result.ResponseText)));
         }
         catch (Exception ex)
         {
@@ -205,14 +206,16 @@ public static void PrintProviderSmokeResult(ProviderSmokeResult result, string m
 
 public static string FormatProviderSmokeEvidence(ProviderSmokeResult result, string modelName)
 {
-    var text = result.ResponseText.Trim();
     return string.Join(
         Environment.NewLine,
         $"{result.ProviderName}: ok model={modelName}",
         $"Stop reason: {result.StopReason}",
         $"Usage: input={result.Usage?.InputTokens?.ToString() ?? "n/a"} output={result.Usage?.OutputTokens?.ToString() ?? "n/a"}",
-        $"Response: {text}");
+        $"Response: {FormatProviderSmokeResponseText(result.ResponseText)}");
 }
+
+public static string FormatProviderSmokeResponseText(string text) =>
+    OutputTextPreview.CreateTimeline(text.Trim()).Text;
 }
 
 

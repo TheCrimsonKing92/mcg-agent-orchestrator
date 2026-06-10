@@ -58,6 +58,25 @@ public sealed class ProviderDefaultTests
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget, () => false));
     }
 
+    [Xunit.Fact(DisplayName = "Provider_smoke_evidence_trims_verbose_response_text")]
+    public void ProviderSmokeEvidenceTrimsVerboseResponseText()
+    {
+        var response = "smoke-start " + new string('s', 2000) + " smoke-tail";
+        var result = new ProviderSmokeResult("Fake", response, new ModelUsage(1, 2), "stop");
+
+        var preview = ProviderSmokeRunner.FormatProviderSmokeResponseText(response);
+        var evidence = ProviderSmokeRunner.FormatProviderSmokeEvidence(result, "fake-model");
+
+        Assert.Contains(preview, text => text.Contains("smoke-start", StringComparison.Ordinal));
+        Assert.Contains(preview, text => text.Contains("smoke-tail", StringComparison.Ordinal));
+        Assert.Contains(preview, text => text.Contains("[truncated", StringComparison.Ordinal));
+        Assert.True(!preview.Contains(new string('s', 2000), StringComparison.Ordinal));
+        Assert.Contains(evidence, text => text.Contains("Fake: ok model=fake-model", StringComparison.Ordinal));
+        Assert.Contains(evidence, text => text.Contains("Usage: input=1 output=2", StringComparison.Ordinal));
+        Assert.Contains(evidence, text => text.Contains("smoke-tail", StringComparison.Ordinal));
+        Assert.True(!evidence.Contains(new string('s', 2000), StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "AgentTaskRunner_uses_conservative_paid_output_fallback")]
     public async Task AgentTaskRunnerUsesConservativePaidOutputFallback()
     {
