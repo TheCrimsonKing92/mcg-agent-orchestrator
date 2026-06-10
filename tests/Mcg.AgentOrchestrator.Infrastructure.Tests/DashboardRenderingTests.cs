@@ -1156,6 +1156,88 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_subscription_prompt_from_plan")]
+    public void DashboardRendererConfirmsLargePaidSubscriptionPromptFromPlan()
+{
+    var objective = "production architecture api cli dashboard provider subscription worker persistence state tests docs " + new string('o', 5000);
+    var description = "Design and implement complete integration with authentication migration rollback state persistence and dashboard api tests. " + new string('d', 5000);
+    var verificationPlan = "Run end-to-end integration tests, dashboard smoke tests, api tests, cli tests, and rollback checks. " + new string('v', 5000);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        objective,
+        [new TaskSpec(TaskId.New(), description, AgentRole.Developer, verificationPlan)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey, ReasoningEffort: "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.3-codex", "medium"));
+    var agents = new[] { agent };
+    var profiles = WorkerProfileCatalog.Default();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        agents,
+        profiles,
+        item => kernel.BuildTaskBrief(goal.Id, item.Id).Content.Length,
+        task);
+    var goalPrefix = goal.Id.Value[..8];
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: agents,
+        WorkerProfiles: profiles));
+
+    Assert.True(risk is not null);
+    Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Large paid subscription prompt", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"{risk!.PromptCharacterCount} prompt chars across 1 task(s), threshold {risk.BatchPromptThreshold}.", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_prepared_dispatch_start")]
+    public void DashboardRendererConfirmsLargePaidPreparedDispatchStart()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Start large prepared subscription work",
+        [new TaskSpec(TaskId.New(), "Run a prepared paid subscription prompt.", AgentRole.Developer)]);
+    var agent = Agent(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt.md",
+        "C:\\repo",
+        DateTimeOffset.UtcNow,
+        "OpenAI",
+        "gpt-5.3-codex",
+        "medium",
+        TaskComplexity.Complex,
+        12001));
+    var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task);
+    var goalPrefix = goal.Id.Value[..8];
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: [agent],
+        WorkerProfiles: WorkerProfileCatalog.Default()));
+    var controls = ExtractTaskControls(html, 1);
+
+    Assert.True(risk is not null);
+    Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(controls, text => text.Contains($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Prepared starts: 12001 paid prompt chars.", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_prepared_dispatch_as_primary_task_action")]
     public void DashboardRendererSurfacesPreparedDispatchAsPrimaryTaskAction()
 {

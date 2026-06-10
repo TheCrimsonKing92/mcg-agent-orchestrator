@@ -10,9 +10,18 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 public static partial class DashboardRenderer
 {
-    private static void RenderGoalOperatorControls(StringBuilder html, AgentOrchestratorKernel kernel, Goal goal)
+    private static void RenderGoalOperatorControls(
+        StringBuilder html,
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        DashboardRenderOptions options)
     {
         var goalPrefix = Encode(goal.Id.Value[..8]);
+        var subscriptionCost = BuildSubscriptionCostPreview(kernel, goal, options);
+        var nextSubscriptionRisk = BuildNextSubscriptionStartRisk(kernel, goal, options);
+        var continueSubscriptionRisk = subscriptionCost is null
+            ? null
+            : subscriptionCost.ReadyRisk ?? subscriptionCost.PreparedRisk;
         html.AppendLine("<div class=\"goal-actions goal-control-card\">");
         html.AppendLine("<div class=\"goal-control-card-head\">");
         html.AppendLine("<strong>Operate this goal</strong>");
@@ -29,8 +38,8 @@ public static partial class DashboardRenderer
         html.AppendLine("<p class=\"section-note\">Use these when you want the orchestrator to choose or assign the next goal-level step.</p>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance\">Run next safe action</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true\">Run next subscription action</button>");
-        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true\">Continue subscription handoff</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true{BuildLargeSubscriptionConfirmationSuffix(nextSubscriptionRisk)}\">Run next subscription action</button>");
+        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true{BuildLargeSubscriptionConfirmationSuffix(continueSubscriptionRisk)}\">Continue subscription handoff</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-until-blocked\">Continue non-API actions</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/delegate\">Assign tasks to agents</button>");
         html.AppendLine("</div>");
@@ -44,11 +53,12 @@ public static partial class DashboardRenderer
         html.AppendLine("</form>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/subscription-dispatch-ready\">Prepare subscription handoffs</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true\">Start subscription work</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true\">Start prepared work</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true{BuildLargeSubscriptionConfirmationSuffix(subscriptionCost?.ReadyRisk)}\">Start subscription work</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true{BuildLargeSubscriptionConfirmationSuffix(subscriptionCost?.PreparedRisk)}\">Start prepared work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/refresh-dispatches\">Refresh running work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/cancel-dispatches\">Cancel running work</button>");
         html.AppendLine("</div>");
+        RenderSubscriptionCostPreview(html, subscriptionCost);
         html.AppendLine("</section>");
         html.AppendLine("<section class=\"goal-control-group goal-control-group-planning\">");
         html.AppendLine("<h4>Add work or ask</h4>");
@@ -175,7 +185,11 @@ public static partial class DashboardRenderer
         html.AppendLine("</form>");
     }
 
-    private static string RenderTaskActions(Goal goal, TaskSpec task, DashboardRenderOptions options)
+    private static string RenderTaskActions(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DashboardRenderOptions options)
     {
         var goalPrefix = Encode(goal.Id.Value[..8]);
         var taskNumber = GetTaskDisplayNumber(goal, task.Id);
@@ -246,7 +260,13 @@ public static partial class DashboardRenderer
         }
 
         RenderApiRunPreview(html, goal, task, options.HealthReport?.Agents, options.AgentDefinitions);
-        RenderAdvancedProcessAction(html, prefix, "start?confirmDispatchStart=true", "Start prepared work", GetStartDispatchReadiness(task));
+        var startDispatchRisk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task);
+        RenderAdvancedProcessAction(
+            html,
+            prefix,
+            $"start?confirmDispatchStart=true{BuildLargeSubscriptionConfirmationSuffix(startDispatchRisk)}",
+            "Start prepared work",
+            GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "cancel", "Cancel process", GetCancelProcessReadiness(task));
         if (task.LastProcess is not null)
@@ -324,6 +344,128 @@ public static partial class DashboardRenderer
 
         html.AppendLine(
             $"<span class=\"disabled-action\"><button type=\"button\" disabled title=\"{Encode(readiness.Reason)}\">{label} unavailable</button><span class=\"meta\">{Encode(readiness.Reason)}</span></span>");
+    }
+
+    private static SubscriptionCostPreview? BuildSubscriptionCostPreview(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        DashboardRenderOptions options)
+    {
+        if (options.AgentDefinitions is null || options.WorkerProfiles is null)
+        {
+            return null;
+        }
+
+        var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+            goal,
+            options.AgentDefinitions,
+            options.WorkerProfiles,
+            task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        var readyRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+            goal,
+            options.AgentDefinitions,
+            options.WorkerProfiles,
+            task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        var preparedRisk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal);
+
+        return new SubscriptionCostPreview(plan, readyRisk, preparedRisk);
+    }
+
+    private static PaidSubscriptionPromptRisk? BuildNextSubscriptionStartRisk(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        DashboardRenderOptions options)
+    {
+        if (options.AgentDefinitions is null || options.WorkerProfiles is null)
+        {
+            return null;
+        }
+
+        var item = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
+        if (item is null)
+        {
+            return null;
+        }
+
+        var automation = NextActionAutomationPolicy.Build(item);
+        if (!automation.CanExecute || automation.TaskId is null)
+        {
+            return null;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == automation.TaskId);
+        if (task is null)
+        {
+            return null;
+        }
+
+        return automation.Kind switch
+        {
+            NextActionAutomationKind.RunAssignedTask => SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+                goal,
+                options.AgentDefinitions,
+                options.WorkerProfiles,
+                candidate => kernel.BuildTaskBrief(goal.Id, candidate.Id).Content.Length,
+                task),
+            NextActionAutomationKind.StartRecordedDispatch => SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
+            _ => null
+        };
+    }
+
+    private static string BuildLargeSubscriptionConfirmationSuffix(PaidSubscriptionPromptRisk? risk)
+    {
+        return risk is null
+            ? string.Empty
+            : $"&{SubscriptionPromptCostGuard.DashboardConfirmationQueryName}=true";
+    }
+
+    private static void RenderSubscriptionCostPreview(StringBuilder html, SubscriptionCostPreview? preview)
+    {
+        if (preview is null)
+        {
+            return;
+        }
+
+        var preparedPrompt = preview.PreparedRisk is null
+            ? string.Empty
+            : $" Prepared starts: {preview.PreparedRisk.PromptCharacterCount} paid prompt chars.";
+        var modelSummary = string.Join(
+            "; ",
+            preview.Plan.ReadyModelUsage
+                .Where(item => item.EstimatedPromptCharacterCount is not null)
+                .Take(3)
+                .Select(FormatSubscriptionPlanModel));
+
+        if (preview.ReadyRisk is not null || preview.PreparedRisk is not null)
+        {
+            var risk = preview.ReadyRisk ?? preview.PreparedRisk!;
+            var details = risk.Details.Count == 0
+                ? string.Empty
+                : " " + string.Join(" ", risk.Details.Take(2));
+            var readyModels = string.IsNullOrWhiteSpace(modelSummary)
+                ? string.Empty
+                : $" Ready: {modelSummary}.";
+            html.AppendLine($"<p class=\"attention\"><strong>Large paid subscription prompt</strong><br>{risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), threshold {risk.BatchPromptThreshold}.{Encode(details)}{Encode(readyModels)}{Encode(preparedPrompt)}</p>");
+            return;
+        }
+
+        if (preview.Plan.ReadyToPrepareCount == 0 && string.IsNullOrWhiteSpace(modelSummary) && string.IsNullOrWhiteSpace(preparedPrompt))
+        {
+            return;
+        }
+
+        var summary = string.IsNullOrWhiteSpace(modelSummary)
+            ? $"ready {preview.Plan.ReadyToPrepareCount}"
+            : $"ready {preview.Plan.ReadyToPrepareCount}: {modelSummary}";
+        html.AppendLine($"<p class=\"meta\">Subscription plan: {Encode(summary)}{Encode(preparedPrompt)}</p>");
+    }
+
+    private static string FormatSubscriptionPlanModel(SubscriptionPlanModelSummaryDto item)
+    {
+        var complexity = item.TaskComplexity is null ? string.Empty : $" {item.TaskComplexity.Value}";
+        var reasoning = string.IsNullOrWhiteSpace(item.ReasoningEffort) ? string.Empty : $" reasoning {item.ReasoningEffort}";
+        var paid = item.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
+        return $"{item.ProviderName}/{item.ModelName}{complexity}{reasoning} prompt {item.EstimatedPromptCharacterCount!.Value} chars{paid}";
     }
 
     private static void RenderApiRunPreview(
@@ -433,6 +575,11 @@ public static partial class DashboardRenderer
 
         html.AppendLine($"<p class=\"meta\">API plan: {Encode(preview.ProviderName)}/{Encode(preview.ModelName)} {Encode(preview.TaskComplexity.ToString())}{Encode(reasoningLabel)} prompt {preview.PromptCharacterCount} chars{Encode(maxLabel)}{paidLabel}{riskLabel}</p>");
     }
+
+    private sealed record SubscriptionCostPreview(
+        SubscriptionPlanDto Plan,
+        PaidSubscriptionPromptRisk? ReadyRisk,
+        PaidSubscriptionPromptRisk? PreparedRisk);
 
     private static TaskActionReadiness GetStartDispatchReadiness(TaskSpec task)
     {

@@ -17,7 +17,8 @@ public sealed record DashboardRenderOptions(
     IReadOnlyList<DashboardContinuationStatusDto>? ContinuationWatches = null,
     string? FocusGoalPrefix = null,
     DashboardView View = DashboardView.Ops,
-    IReadOnlyList<AgentDefinition>? AgentDefinitions = null);
+    IReadOnlyList<AgentDefinition>? AgentDefinitions = null,
+    WorkerProfileCatalog? WorkerProfiles = null);
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,
@@ -424,7 +425,7 @@ public static partial class DashboardRenderer
         // Operator controls
         if (options.EnableOperatorControls)
         {
-            RenderGoalOperatorControls(html, kernel, goal);
+            RenderGoalOperatorControls(html, kernel, goal, options);
         }
 
         RenderSubscriptionRetryQueue(html, goal);
@@ -551,7 +552,7 @@ public static partial class DashboardRenderer
             {
                 html.AppendLine("</tr>");
                 html.AppendLine("<tr class=\"task-action-row\">");
-                html.AppendLine($"<td colspan=\"7\">{RenderTaskActions(goal, task, options)}</td>");
+                html.AppendLine($"<td colspan=\"7\">{RenderTaskActions(kernel, goal, task, options)}</td>");
             }
             html.AppendLine("</tr>");
         }

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
 using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -14,6 +15,7 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var agentCatalog = services.LoadAgentCatalog();
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var health = BuildHealthReport(services);
         var browserUrl = DashboardHost.GetBrowserUrl(services.HostArgs);
         var hostedUrlPrefixes = DashboardHost.GetHostedUrlPrefixes(services.HostArgs);
@@ -52,7 +54,8 @@ internal static partial class DashboardEndpoints
                 services.Continuations.GetStatuses(),
                 focusGoalPrefix,
                 view,
-                agentCatalog.Agents));
+                agentCatalog.Agents,
+                workerProfiles));
         return Text(html, "text/html; charset=utf-8");
     }
 }
