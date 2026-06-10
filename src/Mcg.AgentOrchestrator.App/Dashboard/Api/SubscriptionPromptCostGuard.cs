@@ -207,7 +207,11 @@ private static string BuildMessage(PaidSubscriptionPromptRisk risk, string confi
     var details = risk.Details.Count == 0
         ? string.Empty
         : " " + string.Join(" ", risk.Details);
-    return $"Paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s). {confirmationInstruction}.{details}";
+    var recommendation = BuildRecommendation(risk);
+    var recommendationText = string.IsNullOrWhiteSpace(recommendation)
+        ? string.Empty
+        : $" {recommendation}";
+    return $"Paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).{recommendationText} {confirmationInstruction}.{details}";
 }
 
 private static PaidSubscriptionPromptRisk? BuildRisk(

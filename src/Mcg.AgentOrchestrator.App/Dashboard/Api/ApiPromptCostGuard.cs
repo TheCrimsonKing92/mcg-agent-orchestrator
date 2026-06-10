@@ -149,7 +149,11 @@ private static string BuildMessage(PaidApiPromptRisk risk, string confirmationIn
     }
 
     var reason = string.Join("; ", reasons);
-    return $"Paid API run requires explicit confirmation: {risk.ProviderName}/{risk.ModelName} {risk.TaskComplexity} {reason}. {confirmationInstruction}.";
+    var recommendation = BuildRecommendation(risk);
+    var recommendationText = string.IsNullOrWhiteSpace(recommendation)
+        ? string.Empty
+        : $" {recommendation}";
+    return $"Paid API run requires explicit confirmation: {risk.ProviderName}/{risk.ModelName} {risk.TaskComplexity} {reason}.{recommendationText} {confirmationInstruction}.";
 }
 
 private static ModelFitSummary? FindModelFit(Goal goal, string providerName, string modelName)

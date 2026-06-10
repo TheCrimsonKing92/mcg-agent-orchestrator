@@ -468,6 +468,7 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-large-paid-api-prompt", ex!.Message);
         Xunit.Assert.Contains("complex paid model", ex.Message);
+        Xunit.Assert.Contains("Confirm this task needs the complex paid model before API run", ex.Message);
         Xunit.Assert.Null(provider.LastRequest);
         Xunit.Assert.Null(task.LastExecution);
     }
@@ -754,6 +755,7 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-large-paid-subscription-start", ex!.Message);
         Xunit.Assert.Contains("complex paid model", ex.Message);
+        Xunit.Assert.Contains("Confirm this task needs the complex paid subscription model before start", ex.Message);
         Xunit.Assert.Null(task.LastProcess);
     }
 

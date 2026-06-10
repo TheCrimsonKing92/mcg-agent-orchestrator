@@ -961,6 +961,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(ex.Message, text => text.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Inspect the generated prompt before paid subscription start", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_fanout_with_small_prompts")]
