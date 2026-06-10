@@ -4,6 +4,15 @@ public sealed record ModelFitObservation(string ProviderName, string ModelName, 
 
 public static class ModelFitEvidence
 {
+    public const string NotePrefix = "Model fit:";
+
+    // Single source for the note format; emitters must not restate it so the
+    // parser and prompts cannot drift apart.
+    public static string BuildNoteTemplate(string target)
+    {
+        return $"{NotePrefix} {target} - adequate|overkill|underpowered - <task shape> - <short reason>";
+    }
+
     public static string? FindLatestNote(TaskSpec task)
     {
         foreach (var verification in task.VerificationHistory.Reverse())
@@ -64,14 +73,13 @@ public static class ModelFitEvidence
 
     public static ModelFitObservation? TryParseNote(string? note)
     {
-        const string Prefix = "Model fit:";
         if (string.IsNullOrWhiteSpace(note) ||
-            !note.TrimStart().StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            !note.TrimStart().StartsWith(NotePrefix, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var body = note.TrimStart()[Prefix.Length..].Trim();
+        var body = note.TrimStart()[NotePrefix.Length..].Trim();
         var parts = body.Split([" - "], StringSplitOptions.None);
         if (parts.Length < 2)
         {
@@ -88,6 +96,13 @@ public static class ModelFitEvidence
         var providerName = target[..separator].Trim();
         var modelName = target[(separator + 1)..].Trim();
         if (string.IsNullOrWhiteSpace(providerName) || string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        // A literal echo of the prompt template ("adequate|overkill|underpowered")
+        // is not evidence; drop it instead of counting it as an unknown fit.
+        if (parts[1].Contains('|'))
         {
             return null;
         }
@@ -120,7 +135,13 @@ public static class ModelFitEvidence
     private static string? NormalizeTaskShape(string value)
     {
         var trimmed = value.Trim().TrimEnd('.');
-        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+        if (string.IsNullOrWhiteSpace(trimmed) ||
+            (trimmed.StartsWith('<') && trimmed.EndsWith('>')))
+        {
+            return null;
+        }
+
+        return trimmed;
     }
 
     private static IEnumerable<string> EnumerateVerificationLines(TaskVerificationRecord verification)

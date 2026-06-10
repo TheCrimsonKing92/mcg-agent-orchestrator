@@ -383,7 +383,16 @@ public static partial class DashboardRenderer
 
         return string.IsNullOrWhiteSpace(model)
             ? string.Empty
-            : $" placeholder=\"Evidence checked. Model fit: {Encode(model)} - adequate|overkill|underpowered - task shape - reason.\"";
+            : $" placeholder=\"Evidence checked. {Encode(BuildPlaceholderNoteTemplate(model))}.\"";
+    }
+
+    private static string BuildPlaceholderNoteTemplate(string model)
+    {
+        // Placeholder text must not keep the canonical template's angle
+        // brackets; the parser treats bracketed segments as unfilled.
+        return ModelFitEvidence.BuildNoteTemplate(model)
+            .Replace("<", string.Empty, StringComparison.Ordinal)
+            .Replace(">", string.Empty, StringComparison.Ordinal);
     }
 
     private static string? FormatModelFitTarget(string? providerName, string? modelName)

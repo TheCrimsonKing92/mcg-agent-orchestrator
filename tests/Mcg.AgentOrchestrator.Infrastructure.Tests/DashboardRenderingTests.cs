@@ -79,7 +79,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"Model usage: OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out, prompt {promptChars} chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Model fit: OpenAI/gpt-test - adequate|overkill|underpowered - task shape - reason.", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Model fit: OpenAI/gpt-test - adequate|overkill|underpowered - task shape - short reason.", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Potentially paid tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model selection: complexity=Simple", StringComparison.Ordinal));
@@ -1780,7 +1780,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("try local Ollama/qwen3:8b via agent configuration when the task is routine", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Prompt: 321 chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Dispatch models: OpenAI/gpt-5.3-codex (Simple) reasoning medium [potentially paid]: 1 dispatch, prompt 321 chars", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - task shape - reason.", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - task shape - short reason.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>codex exec prompt.md</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Start prepared work", StringComparison.Ordinal));

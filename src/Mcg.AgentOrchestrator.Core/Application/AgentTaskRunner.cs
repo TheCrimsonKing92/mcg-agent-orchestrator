@@ -276,7 +276,7 @@ public sealed class AgentTaskRunner
 
     private static string BuildModelFitGuidance(ModelProfile resolvedModel)
     {
-        return $"Model fit reporting: Include a final line exactly like `Model fit: {resolvedModel.ProviderName}/{resolvedModel.ModelName} - adequate|overkill|underpowered - <task shape> - <short reason>`.{Environment.NewLine}";
+        return $"Model fit reporting: Include a final line exactly like `{ModelFitEvidence.BuildNoteTemplate($"{resolvedModel.ProviderName}/{resolvedModel.ModelName}")}`.{Environment.NewLine}";
     }
 
     private static string BuildSystemPrompt(AgentRole role, TaskComplexity complexity)
