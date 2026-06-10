@@ -104,7 +104,8 @@ public static TaskEvidenceSummaryDto ToTaskEvidenceSummaryDto(Goal goal, TaskEvi
         item.LatestVerificationSucceeded,
         item.VerificationHistoryCount,
         item.PendingHumanInputCount,
-        TimelineText(item.Message));
+        TimelineText(item.Message),
+        item.ModelFitNote is null ? null : TimelineText(item.ModelFitNote));
 }
 
 public static GoalWorkSummaryDto ToGoalWorkSummaryDto(

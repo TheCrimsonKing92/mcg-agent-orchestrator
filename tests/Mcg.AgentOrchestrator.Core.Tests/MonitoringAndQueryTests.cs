@@ -219,6 +219,35 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(TaskEvidenceKind.FailedVerification, summary.Tasks.Single(item => item.TaskId == verificationTask.Id).LatestEvidence);
     Assert.Contains(summary.Tasks.Single(item => item.TaskId == verificationTask.Id).Message, text => text.Contains("failed", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_surfaces_latest_model_fit_note")]
+    public void BuildGoalEvidenceSummarySurfacesLatestModelFitNote()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Track model fit");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - overkill - label-only change.",
+        string.Empty,
+        clock.UtcNow));
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.",
+        string.Empty,
+        clock.UtcNow.AddMinutes(1)));
+
+    var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
+    var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
+
+    Assert.Equal("Model fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.", item.ModelFitNote);
+}
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_api_prompts")]
     public void BuildGoalEvidenceSummaryFlagsLargePaidApiPrompts()

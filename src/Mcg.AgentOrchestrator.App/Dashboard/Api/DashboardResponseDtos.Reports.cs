@@ -123,7 +123,8 @@ internal sealed record TaskEvidenceSummaryDto(
     bool? LatestVerificationSucceeded,
     int VerificationHistoryCount,
     int PendingHumanInputCount,
-    string Message);
+    string Message,
+    string? ModelFitNote = null);
 
 internal sealed record GoalWorkSummaryDto(
     string GoalId,

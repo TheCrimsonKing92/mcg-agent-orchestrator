@@ -130,6 +130,10 @@ public static partial class GoalTranscriptRenderer
         foreach (var item in evidence.Tasks)
         {
             text.AppendLine($"- Task {GetTaskDisplayNumber(goal, item.TaskId)} [{Display(item.LatestEvidence)}] {item.Role}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
+            if (!string.IsNullOrWhiteSpace(item.ModelFitNote))
+            {
+                text.AppendLine($"  {OutputTextPreview.CreateTimeline(item.ModelFitNote).Text}");
+            }
         }
 
         text.AppendLine();

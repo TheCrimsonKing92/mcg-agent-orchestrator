@@ -103,6 +103,33 @@ public sealed class DashboardRenderingTests
     Assert.Equal(promptChars, modelUsage.PromptCharacterCount);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
 }
+    [Xunit.Fact(DisplayName = "Dashboard_evidence_surfaces_model_fit_notes")]
+    public void DashboardEvidenceSurfacesModelFitNotes()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Surface model fit");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+    var taskEvidence = evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value);
+
+    Assert.Equal("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", taskEvidence.ModelFitNote);
+    Assert.Contains(transcript, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", StringComparison.Ordinal));
+}
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_possible_output_token_cap_hits")]
     public async Task DashboardRendererSurfacesPossibleOutputTokenCapHits()

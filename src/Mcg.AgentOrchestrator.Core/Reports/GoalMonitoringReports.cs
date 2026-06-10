@@ -84,4 +84,5 @@ public sealed record TaskEvidenceSummary(
     bool? LatestVerificationSucceeded,
     int VerificationHistoryCount,
     int PendingHumanInputCount,
-    string Message);
+    string Message,
+    string? ModelFitNote = null);

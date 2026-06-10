@@ -275,7 +275,8 @@ public sealed partial class AgentOrchestratorKernel
             task.LastVerification?.Succeeded,
             task.VerificationHistory.Count,
             pendingHumanInputCount,
-            BuildEvidenceSummaryMessage(task, latestEvidence, pendingHumanInputCount));
+            BuildEvidenceSummaryMessage(task, latestEvidence, pendingHumanInputCount),
+            FindLatestModelFitNote(task));
     }
 
     private static TaskStageReadiness BuildTaskStageReadiness(TaskSpec task, TaskVerificationGate gate, int pendingHumanInputCount)
@@ -443,6 +444,34 @@ public sealed partial class AgentOrchestratorKernel
             TaskEvidenceKind.Execution => BuildExecutionEvidenceMessage(task.LastExecution!, possibleOutputCapHit: false),
             _ => "No execution, dispatch, process, or verification evidence recorded."
         };
+    }
+
+    private static string? FindLatestModelFitNote(TaskSpec task)
+    {
+        foreach (var verification in task.VerificationHistory.Reverse())
+        {
+            foreach (var line in EnumerateVerificationLines(verification))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("Model fit:", StringComparison.OrdinalIgnoreCase))
+                {
+                    return trimmed;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateVerificationLines(TaskVerificationRecord verification)
+    {
+        return SplitLines(verification.StandardOutput)
+            .Concat(SplitLines(verification.StandardError));
+    }
+
+    private static string[] SplitLines(string value)
+    {
+        return value.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
     }
 
     private static string BuildDispatchEvidenceMessage(TaskDispatchRecord dispatch)
