@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -181,6 +182,12 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
+                var paidConfirmation = RequirePaidApiRunConfirmation(context, goal, task, agents, operation);
+                if (paidConfirmation is not null)
+                {
+                    return paidConfirmation;
+                }
+
                 var actionResult = await GoalManagementCommandService.ApplyTaskActionAsync(
                     current,
                     agents,
@@ -371,5 +378,62 @@ internal static partial class DashboardEndpoints
                 "dashboard invalid request: prepared work start requires confirmDispatchStart=true because it can start a worker process.",
                 "text/plain; charset=utf-8",
                 StatusCodes.Status400BadRequest);
+    }
+
+    private static IResult? RequirePaidApiRunConfirmation(
+        HttpContext context,
+        Goal goal,
+        TaskSpec task,
+        IReadOnlyList<AgentDefinition> agents,
+        string operation)
+    {
+        var agent = agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
+        if (agent is null || !TaskOperationCanInvokeApi(operation, task, agent))
+        {
+            return null;
+        }
+
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
+        if (!ProviderSmokeRunner.IsPaidProviderName(resolvedModel.ProviderName))
+        {
+            return null;
+        }
+
+        var confirmed = context.Request.Query.TryGetValue("confirmPaidApiRun", out var value) &&
+            value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+        return confirmed
+            ? null
+            : Text(
+                $"dashboard invalid request: paid API execution for provider '{resolvedModel.ProviderName}' requires confirmPaidApiRun=true because it can make a live billable request.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status400BadRequest);
+    }
+
+    private static bool TaskOperationCanInvokeApi(string operation, TaskSpec task, AgentDefinition agent)
+    {
+        if (operation.Equals("run", StringComparison.OrdinalIgnoreCase))
+        {
+            return agent.ExecutionPolicy == AgentExecutionPolicy.ApiOnly;
+        }
+
+        if (!operation.Equals("api-run", StringComparison.OrdinalIgnoreCase) ||
+            !AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
+        {
+            return false;
+        }
+
+        return agent.ExecutionPolicy == AgentExecutionPolicy.ApiOnly ||
+            IsCleanExplicitApiRun(task);
+    }
+
+    private static bool IsCleanExplicitApiRun(TaskSpec task)
+    {
+        return task.Status == WorkTaskStatus.Assigned &&
+            task.LastDispatch is null &&
+            task.LastProcess is null &&
+            task.LastExecution is null &&
+            task.LastVerification is null &&
+            task.SubscriptionRetryAfter is null;
     }
 }

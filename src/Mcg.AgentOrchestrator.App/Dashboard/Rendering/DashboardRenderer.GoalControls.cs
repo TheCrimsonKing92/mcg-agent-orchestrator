@@ -232,10 +232,10 @@ public static partial class DashboardRenderer
         html.AppendLine($"<a href=\"{prefix}/gate\" target=\"_blank\" rel=\"noreferrer\">Verification status</a>");
         html.AppendLine($"<a href=\"{prefix}/verification-plan\" target=\"_blank\" rel=\"noreferrer\">Verification plan</a>");
         html.AppendLine($"<a href=\"{prefix}/verifications\" target=\"_blank\" rel=\"noreferrer\">Verification records</a>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/run?confirmTaskRun=true\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents))}</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildTaskRunUrl(goal, task.Id, options.HealthReport?.Agents))}\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents))}</button>");
         if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents))
         {
-            html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/api-run?confirmTaskRun=true\">Explicit API run</button>");
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents))}\">Explicit API run</button>");
         }
 
         RenderAdvancedProcessAction(html, prefix, "start?confirmDispatchStart=true", "Start prepared work", GetStartDispatchReadiness(task));

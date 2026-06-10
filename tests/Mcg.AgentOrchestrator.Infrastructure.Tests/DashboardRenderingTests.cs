@@ -907,6 +907,13 @@ public sealed class DashboardRenderingTests
         [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)]);
     AssertControl(
         goal,
+        new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
+        "Run task",
+        "POST",
+        $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true&confirmPaidApiRun=true",
+        [Validation(task.RequiredRole, AgentExecutionPolicy.ApiOnly)]);
+    AssertControl(
+        goal,
         new NextActionItem(NextActionKind.RefreshRunningProcess, task.Id, null, "Refresh it"),
         "Refresh process",
         "POST",
@@ -987,8 +994,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/api-run", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run?confirmTaskRun=true\">Explicit API run</button>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true\">Run task</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/api-run?confirmTaskRun=true&amp;confirmPaidApiRun=true\">Explicit API run</button>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true&amp;confirmPaidApiRun=true\">Run task</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/3/api-run", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run", StringComparison.Ordinal));

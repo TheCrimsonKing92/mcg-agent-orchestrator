@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -18,7 +19,7 @@ public static class DashboardNextActionControls
         return item.Kind switch
         {
             NextActionKind.RunAssignedTask when taskNumber is not null =>
-                new DashboardNextActionControl(GetRunActionLabel(goal, item.TaskId, agents), "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/run?confirmTaskRun=true"),
+                new DashboardNextActionControl(GetRunActionLabel(goal, item.TaskId, agents), "POST", BuildTaskRunUrl(goal, item.TaskId!, agents)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
@@ -82,6 +83,30 @@ public static class DashboardNextActionControls
             task.SubscriptionRetryAfter is null;
     }
 
+    public static string BuildTaskRunUrl(
+        Goal goal,
+        TaskId taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+    {
+        var taskNumber = GetTaskDisplayNumber(goal, taskId);
+        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents)
+            ? "&confirmPaidApiRun=true"
+            : string.Empty;
+        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true{suffix}";
+    }
+
+    public static string BuildExplicitApiRunUrl(
+        Goal goal,
+        TaskId taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents = null)
+    {
+        var taskNumber = GetTaskDisplayNumber(goal, taskId);
+        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents)
+            ? "&confirmPaidApiRun=true"
+            : string.Empty;
+        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true{suffix}";
+    }
+
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
         Goal goal,
         TaskId? taskId,
@@ -96,6 +121,57 @@ public static class DashboardNextActionControls
         return task is null
             ? null
             : agents.FirstOrDefault(agent => agent.Role == task.RequiredRole)?.ExecutionPolicy;
+    }
+
+    private static bool RequiresPaidApiRunConfirmation(
+        Goal goal,
+        TaskId? taskId,
+        bool explicitApiRun,
+        IReadOnlyList<AgentConfigurationValidation>? agents)
+    {
+        if (taskId is null || agents is null)
+        {
+            return false;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        if (task is null)
+        {
+            return false;
+        }
+
+        var agent = agents.FirstOrDefault(candidate => candidate.Role == task.RequiredRole);
+        if (agent is null)
+        {
+            return false;
+        }
+
+        if (!explicitApiRun && agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly)
+        {
+            return false;
+        }
+
+        if (explicitApiRun &&
+            (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
+                (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly && !CanRunApiExplicitly(goal, taskId, agents))))
+        {
+            return false;
+        }
+
+        var providerName = ResolveApiProviderName(goal, task, agent);
+        return !string.IsNullOrWhiteSpace(providerName) &&
+            ProviderSmokeRunner.IsPaidProviderName(providerName);
+    }
+
+    private static string ResolveApiProviderName(Goal goal, TaskSpec task, AgentConfigurationValidation agent)
+    {
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
+        if (complexity == TaskComplexity.Complex && !string.IsNullOrWhiteSpace(agent.ComplexProviderName))
+        {
+            return agent.ComplexProviderName;
+        }
+
+        return agent.ProviderName;
     }
 }
 
