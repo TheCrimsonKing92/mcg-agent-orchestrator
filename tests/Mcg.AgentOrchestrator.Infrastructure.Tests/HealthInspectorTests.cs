@@ -32,7 +32,7 @@ public sealed class HealthInspectorTests
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("local-subscription"));
     var catalog = new AgentCatalog([agent]);
-    var profiles = new WorkerProfileCatalog([new WorkerProfile("local-subscription", "agent-cli {promptPath}")]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("local-subscription", "agent-cli --model {subscriptionModelName} {promptPath}")]);
 
     var report = OrchestratorHealthInspector.Inspect(
         new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
@@ -44,6 +44,29 @@ public sealed class HealthInspectorTests
     Assert.True(developer.IsValid);
     Assert.Equal(AgentExecutionPolicy.SubscriptionOnly, developer.ExecutionPolicy);
     Assert.Equal("local-subscription", developer.SubscriptionProfileName);
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_subscription_profiles_without_model_pinning")]
+    public void OrchestratorHealthInspectorRejectsSubscriptionProfilesWithoutModelPinning()
+{
+    var agent = new AgentDefinition(
+        new AgentId("subscription-reviewer"),
+        "Subscription Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("local-subscription"));
+    var catalog = new AgentCatalog([agent]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("local-subscription", "agent-cli {promptPath}")]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        catalog,
+        profiles,
+        command => command == "agent-cli");
+
+    var reviewer = report.Agents.Single(agent => agent.Role == AgentRole.Reviewer);
+    Assert.False(reviewer.IsValid);
+    Assert.Contains(reviewer.Detail, text => text.Contains("does not pin the selected model", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_local_bridge_provider_status")]
     public void OrchestratorHealthInspectorReportsLocalBridgeProviderStatus()

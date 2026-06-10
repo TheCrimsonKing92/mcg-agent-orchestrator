@@ -78,6 +78,7 @@ public static class WorkerProfileDispatcher
         var selection = ResolveSubscriptionModel(agent, goal, task);
         var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
         EnsureSubscriptionProfileCanExecuteTask(profile, task);
+        EnsureSubscriptionProfilePinsSelectedModel(profile);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
         return PrepareTask(
             kernel,
@@ -123,6 +124,7 @@ public static class WorkerProfileDispatcher
             var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
             var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
             EnsureSubscriptionProfileCanExecuteTask(profile, selection.Task);
+            EnsureSubscriptionProfilePinsSelectedModel(profile);
             results.Add(PrepareTask(
                 kernel,
                 goal,
@@ -306,6 +308,17 @@ public static class WorkerProfileDispatcher
 
         throw new InvalidOperationException(
             $"Subscription worker profile '{profile.Name}' is not patch-capable for Developer tasks: {capability.Detail}");
+    }
+
+    private static void EnsureSubscriptionProfilePinsSelectedModel(WorkerProfile profile)
+    {
+        if (WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Subscription worker profile '{profile.Name}' does not include {{subscriptionModelName}}; pin the selected model before subscription dispatch.");
     }
 
     private static Dictionary<string, string?> AddWorkingDirectoryVariable(

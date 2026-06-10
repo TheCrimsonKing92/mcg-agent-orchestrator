@@ -473,6 +473,36 @@ public sealed class WorkerDispatchTests
     Assert.Contains(ex.Message, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_model_pinning")]
+    public void WorkerProfileDispatcherRejectsSubscriptionProfilesWithoutModelPinning()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Reject unpinned subscription model");
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli {promptPath}")]);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        Path.Combine(root, "prompts"),
+        root,
+        DateTimeOffset.UtcNow));
+
+    Assert.Contains(ex.Message, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is null);
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_developer_subscription_profiles_that_cannot_patch")]
     public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCannotPatch()
 {
@@ -521,6 +551,31 @@ public sealed class WorkerDispatchTests
     Assert.False(developer.CanPrepare);
     Assert.Contains(developer.Detail, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_unpinned_model_profiles_not_preparable")]
+    public void SubscriptionPlanMarksUnpinnedModelProfilesNotPreparable()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Plan unpinned subscription model");
+    var agents =
+        AgentCatalog.Default()
+            .UpsertRole(new AgentDefinition(
+                new AgentId("openai-reviewer"),
+                "OpenAI reviewer",
+                AgentRole.Reviewer,
+                new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex")))
+            .Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("custom-agent", "agent-cli {promptPath}"));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+
+    var reviewer = plan.Items.First(item => item.Role == AgentRole.Reviewer);
+    Assert.True(reviewer.ProfileExists);
+    Assert.False(reviewer.CanPrepare);
+    Assert.Contains(reviewer.Detail, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_non_patching_developer_profiles_not_preparable")]
     public void SubscriptionPlanMarksNonPatchingDeveloperProfilesNotPreparable()
 {
@@ -528,7 +583,7 @@ public sealed class WorkerDispatchTests
     var goal = kernel.CreateGoal("Plan non-patching subscription profile");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
-    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec {promptPath}"));
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} {promptPath}"));
 
     var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
 

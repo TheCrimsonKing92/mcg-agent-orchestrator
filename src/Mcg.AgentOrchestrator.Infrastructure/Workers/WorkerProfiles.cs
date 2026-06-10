@@ -19,6 +19,11 @@ public static class WorkerProfileDiagnostics
         return EvaluatePatchCapability(commandTemplate).IsPatchCapable;
     }
 
+    public static bool UsesSubscriptionModelPlaceholder(string commandTemplate)
+    {
+        return commandTemplate.Contains("{subscriptionModelName}", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static WorkerProfilePatchCapability EvaluatePatchCapability(string commandTemplate)
     {
         var normalized = commandTemplate.Trim();

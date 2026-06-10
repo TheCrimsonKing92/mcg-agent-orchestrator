@@ -89,6 +89,12 @@ private static IEnumerable<(AgentRole Role, string ProfileName, string Detail)> 
             continue;
         }
 
+        if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
+        {
+            yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile does not pin the selected model");
+            continue;
+        }
+
         if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)
         {
             yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile cannot patch Developer tasks");

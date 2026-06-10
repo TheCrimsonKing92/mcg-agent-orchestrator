@@ -214,6 +214,11 @@ public static class OrchestratorHealthInspector
             return false;
         }
 
+        if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
+        {
+            return false;
+        }
+
         return agent.Role != AgentRole.Developer || profile.IsPatchCapable;
     }
 
@@ -274,6 +279,11 @@ public static class OrchestratorHealthInspector
         if (profile.IsEchoOnly)
         {
             return $"subscription profile '{profile.Name}' only echoes the prompt path";
+        }
+
+        if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
+        {
+            return $"subscription profile '{profile.Name}' does not pin the selected model";
         }
 
         if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)

@@ -154,6 +154,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         validations.TryGetValue(profileName, out var validation);
         var hasProfile = profile is not null;
         var isEchoOnly = profile is not null && WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate);
+        var pinsSelectedModel = profile is not null &&
+            WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate);
         var patchCapability = profile is null
             ? new WorkerProfilePatchCapability(false, "Worker profile was not found.")
             : WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
@@ -166,6 +168,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         var canPrepare = task.Status == WorkTaskStatus.Assigned &&
             hasProfile &&
             !isEchoOnly &&
+            pinsSelectedModel &&
             (!requiresPatchCapability || patchCapability.IsPatchCapable) &&
             AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
             !retryDeferred;
@@ -182,6 +185,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
                 ? $"Worker profile '{profileName}' was not found."
             : isEchoOnly
                 ? $"Worker profile '{profileName}' only echoes the prompt path; configure a real launcher before subscription dispatch."
+            : !pinsSelectedModel
+                ? $"Worker profile '{profileName}' does not include {{subscriptionModelName}}; pin the selected model before subscription dispatch."
             : requiresPatchCapability && !patchCapability.IsPatchCapable
                 ? $"Worker profile '{profileName}' is not patch-capable for Developer tasks: {patchCapability.Detail}"
                 : $"Task status is {task.Status}; only assigned tasks are ready for subscription dispatch.";
