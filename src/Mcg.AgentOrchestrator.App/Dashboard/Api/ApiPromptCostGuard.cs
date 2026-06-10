@@ -7,7 +7,9 @@ internal sealed record PaidApiPromptRisk(
     string ModelName,
     TaskComplexity TaskComplexity,
     int PromptCharacterCount,
-    int PromptThreshold);
+    int PromptThreshold,
+    bool PromptExceedsThreshold,
+    bool UsesComplexPaidModel);
 
 internal static class ApiPromptCostGuard
 {
@@ -24,14 +26,18 @@ public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview)
     }
 
     var threshold = PromptThreshold(preview.TaskComplexity);
-    return preview.PromptCharacterCount <= threshold
+    var promptExceedsThreshold = preview.PromptCharacterCount > threshold;
+    var usesComplexPaidModel = preview.TaskComplexity == TaskComplexity.Complex;
+    return !promptExceedsThreshold && !usesComplexPaidModel
         ? null
         : new PaidApiPromptRisk(
             preview.ProviderName,
             preview.ModelName,
             preview.TaskComplexity,
             preview.PromptCharacterCount,
-            threshold);
+            threshold,
+            promptExceedsThreshold,
+            usesComplexPaidModel);
 }
 
 public static void ThrowIfConfirmationRequired(PaidApiPromptRisk? risk, bool confirmed)
@@ -58,9 +64,22 @@ private static string BuildCliMessage(PaidApiPromptRisk risk)
         $"rerun with {CliConfirmationFlag} after inspecting the API plan");
 }
 
+public static string BuildInlineLabel(PaidApiPromptRisk risk)
+{
+    if (risk.PromptExceedsThreshold)
+    {
+        return $"large paid prompt: exceeds {risk.PromptThreshold}";
+    }
+
+    return "complex paid API model";
+}
+
 private static string BuildMessage(PaidApiPromptRisk risk, string confirmationInstruction)
 {
-    return $"Large paid API prompt requires explicit confirmation: {risk.ProviderName}/{risk.ModelName} {risk.TaskComplexity} prompt {risk.PromptCharacterCount} chars exceeds {risk.PromptThreshold}. {confirmationInstruction}.";
+    var reason = risk.PromptExceedsThreshold
+        ? $"prompt {risk.PromptCharacterCount} chars exceeds {risk.PromptThreshold}"
+        : "uses complex paid model selection";
+    return $"Paid API run requires explicit confirmation: {risk.ProviderName}/{risk.ModelName} {risk.TaskComplexity} {reason}. {confirmationInstruction}.";
 }
 
 private static int PromptThreshold(TaskComplexity complexity)

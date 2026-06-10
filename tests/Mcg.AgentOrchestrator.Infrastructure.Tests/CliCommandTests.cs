@@ -146,6 +146,28 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_next_action_command_confirms_complex_paid_api_run")]
+    public void CliNextActionCommandConfirmsComplexPaidApiRun()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan architecture work",
+            [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
+            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var action = kernel.BuildNextActions(goal.Id).Items.Single();
+
+        var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
+
+        Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_next_action_command_prefers_subscription_dispatch_for_subscription_agent")]
     public void CliNextActionCommandPrefersSubscriptionDispatchForSubscriptionAgent()
     {
@@ -299,6 +321,58 @@ public sealed class CliCommandTests
         Xunit.Assert.True(preview.PromptCharacterCount > 6000);
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-large-paid-api-prompt", ex!.Message);
+        Xunit.Assert.Null(provider.LastRequest);
+        Xunit.Assert.Null(task.LastExecution);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_api_run_blocks_complex_paid_model_without_confirm_flag")]
+    public void CliApiRunBlocksComplexPaidModelWithoutConfirmFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan architecture work",
+            [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"),
+            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var provider = new FakeSmokeProvider(providerName: "OpenAI");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        var preview = AgentTaskRunner.PreviewRun(goal, task, agents);
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["api-run", "1", "--confirm-paid-api-run"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
+        Xunit.Assert.True(preview.PromptCharacterCount <= 6000);
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-large-paid-api-prompt", ex!.Message);
+        Xunit.Assert.Contains("complex paid model", ex.Message);
         Xunit.Assert.Null(provider.LastRequest);
         Xunit.Assert.Null(task.LastExecution);
     }

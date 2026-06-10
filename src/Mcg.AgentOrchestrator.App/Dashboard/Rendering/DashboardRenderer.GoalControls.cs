@@ -570,7 +570,7 @@ public static partial class DashboardRenderer
             ? " [potentially paid]"
             : string.Empty;
         var riskLabel = ApiPromptCostGuard.Evaluate(preview) is { } risk
-            ? $" [large paid prompt: exceeds {risk.PromptThreshold}]"
+            ? $" [{ApiPromptCostGuard.BuildInlineLabel(risk)}]"
             : string.Empty;
 
         html.AppendLine($"<p class=\"meta\">API plan: {Encode(preview.ProviderName)}/{Encode(preview.ModelName)} {Encode(preview.TaskComplexity.ToString())}{Encode(reasoningLabel)} prompt {preview.PromptCharacterCount} chars{Encode(maxLabel)}{paidLabel}{riskLabel}</p>");

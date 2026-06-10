@@ -1216,6 +1216,47 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_complex_paid_api_model_from_exact_preview")]
+    public void DashboardRendererConfirmsComplexPaidApiModelFromExactPreview()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan architecture work",
+        [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    var agents = new[] { agent };
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var preview = AgentTaskRunner.PreviewRun(goal, task, agents);
+    var risk = ApiPromptCostGuard.Evaluate(preview);
+    var goalPrefix = goal.Id.Value[..8];
+    var health = new OrchestratorHealthReport(
+        [],
+        [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
+        []);
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: agents));
+    var controls = ExtractTaskControls(html, 1);
+
+    Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
+    Assert.True(preview.PromptCharacterCount <= risk!.PromptThreshold);
+    Assert.True(risk.UsesComplexPaidModel);
+    Assert.False(risk.PromptExceedsThreshold);
+    Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run task</button>", StringComparison.Ordinal));
+    Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5.5 Complex reasoning high prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [complex paid API model]", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_subscription_prompt_from_plan")]
     public void DashboardRendererConfirmsLargePaidSubscriptionPromptFromPlan()
 {
