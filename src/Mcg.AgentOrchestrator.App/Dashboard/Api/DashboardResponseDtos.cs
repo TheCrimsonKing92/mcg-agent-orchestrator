@@ -39,7 +39,16 @@ internal sealed record SubscriptionPlanDto(
     int ResolvableProfileCount,
     int RetryDeferredCount,
     DateTimeOffset? NextSubscriptionRetryAfter,
+    IReadOnlyList<SubscriptionPlanModelSummaryDto> ReadyModelUsage,
     IReadOnlyList<SubscriptionPlanItemDto> Items);
+
+internal sealed record SubscriptionPlanModelSummaryDto(
+    string ProviderName,
+    string ModelName,
+    int ReadyCount,
+    TaskComplexity? TaskComplexity = null,
+    string? ReasoningEffort = null,
+    bool IsPotentiallyPaidProvider = false);
 
 internal sealed record SubscriptionPlanItemDto(
     int TaskNumber,

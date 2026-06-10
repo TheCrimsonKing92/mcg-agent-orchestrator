@@ -75,6 +75,7 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(Goal goal, IReadOnlyList
             .Where(item => item is not null)
             .OrderBy(item => item)
             .FirstOrDefault(),
+        BuildSubscriptionPlanModelSummary(items),
         items);
 }
 
@@ -240,5 +241,44 @@ private static TaskComplexity? TryParseTaskComplexity(string? value)
     return Enum.TryParse<TaskComplexity>(value, ignoreCase: true, out var parsed)
         ? parsed
         : null;
+}
+
+private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelSummary(IReadOnlyList<SubscriptionPlanItemDto> items)
+{
+    return items
+        .Where(item => item.CanPrepare && !string.IsNullOrWhiteSpace(item.ProviderName))
+        .Select(item => new
+        {
+            ProviderName = item.ProviderName!,
+            ModelName = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName,
+            item.TaskComplexity,
+            item.SubscriptionReasoningEffort
+        })
+        .Where(item => !string.IsNullOrWhiteSpace(item.ModelName))
+        .GroupBy(item => new
+        {
+            item.ProviderName,
+            item.ModelName,
+            item.TaskComplexity,
+            item.SubscriptionReasoningEffort
+        })
+        .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(group => group.Key.TaskComplexity?.ToString() ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(group => group.Key.SubscriptionReasoningEffort ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+        .Select(group => new SubscriptionPlanModelSummaryDto(
+            group.Key.ProviderName,
+            group.Key.ModelName!,
+            group.Count(),
+            group.Key.TaskComplexity,
+            group.Key.SubscriptionReasoningEffort,
+            IsPotentiallyPaidProvider(group.Key.ProviderName)))
+        .ToList();
+}
+
+private static bool IsPotentiallyPaidProvider(string providerName)
+{
+    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
 }
 }

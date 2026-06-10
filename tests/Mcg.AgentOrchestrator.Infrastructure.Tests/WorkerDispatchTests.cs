@@ -573,6 +573,19 @@ public sealed class WorkerDispatchTests
     Assert.Equal("claude-cli", complex.ProfileName);
     Assert.Equal("claude-opus-4.1", complex.SubscriptionModelName);
     Assert.Equal("high", complex.SubscriptionReasoningEffort);
+    Assert.Equal(2, plan.ReadyModelUsage.Count);
+    var simpleSummary = plan.ReadyModelUsage.Single(item => item.TaskComplexity == TaskComplexity.Simple);
+    Assert.Equal("OpenAI", simpleSummary.ProviderName);
+    Assert.Equal("gpt-5-mini", simpleSummary.ModelName);
+    Assert.Equal("low", simpleSummary.ReasoningEffort);
+    Assert.Equal(1, simpleSummary.ReadyCount);
+    Assert.True(simpleSummary.IsPotentiallyPaidProvider);
+    var complexSummary = plan.ReadyModelUsage.Single(item => item.TaskComplexity == TaskComplexity.Complex);
+    Assert.Equal("Anthropic", complexSummary.ProviderName);
+    Assert.Equal("claude-opus-4.1", complexSummary.ModelName);
+    Assert.Equal("high", complexSummary.ReasoningEffort);
+    Assert.Equal(1, complexSummary.ReadyCount);
+    Assert.True(complexSummary.IsPotentiallyPaidProvider);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
     public void SubscriptionPlanMarksUsageLimitedTasksNotPreparableUntilRetryTime()

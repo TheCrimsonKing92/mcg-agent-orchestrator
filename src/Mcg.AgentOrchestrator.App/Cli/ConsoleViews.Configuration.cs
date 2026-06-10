@@ -47,6 +47,11 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
     Console.WriteLine($"Goal {plan.GoalId[..8]} subscription plan: ready={plan.ReadyToPrepareCount} resolvable={plan.ResolvableProfileCount}/{plan.Items.Count}");
     Console.WriteLine($"Objective: {plan.Objective}");
     Console.WriteLine($"Status: {plan.Status}");
+    if (plan.ReadyModelUsage.Count > 0)
+    {
+        Console.WriteLine("Ready model usage: " + string.Join("; ", plan.ReadyModelUsage.Select(FormatSubscriptionPlanModelSummary)));
+    }
+
     foreach (var item in plan.Items)
     {
         var complexity = item.TaskComplexity is null ? string.Empty : $", {item.TaskComplexity}";
@@ -65,6 +70,15 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
     }
 
     Console.WriteLine();
+}
+
+private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSummaryDto summary)
+{
+    var complexity = summary.TaskComplexity is null ? string.Empty : $" ({summary.TaskComplexity})";
+    var reasoning = string.IsNullOrWhiteSpace(summary.ReasoningEffort) ? string.Empty : $" reasoning {summary.ReasoningEffort}";
+    var paid = summary.IsPotentiallyPaidProvider ? " potentially paid" : string.Empty;
+    var noun = summary.ReadyCount == 1 ? "task" : "tasks";
+    return $"{summary.ProviderName}/{summary.ModelName}{complexity}{reasoning}{paid}: {summary.ReadyCount} ready {noun}";
 }
 
 public static void PrintAgents(IReadOnlyList<AgentDefinition> agents)
