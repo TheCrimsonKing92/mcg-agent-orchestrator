@@ -62,7 +62,8 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 task.LastExecution.CompletedAt,
                 task.LastExecution.TaskComplexity,
                 task.LastExecution.MaxOutputTokens,
-                HasOutputTokenLimitHit(task.LastExecution)),
+                HasOutputTokenLimitHit(task.LastExecution),
+                task.LastExecution.PromptCharacterCount),
         task.LastDispatch is null
             ? null
             : new DispatchDto(

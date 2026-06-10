@@ -20,7 +20,8 @@ public sealed record TaskExecutionRecord(
     ModelUsage? Usage,
     DateTimeOffset CompletedAt,
     TaskComplexity? TaskComplexity = null,
-    int? MaxOutputTokens = null);
+    int? MaxOutputTokens = null,
+    int? PromptCharacterCount = null);
 
 public sealed record AgentTaskRunResult(Goal Goal, TaskSpec Task, TaskExecutionRecord Execution);
 

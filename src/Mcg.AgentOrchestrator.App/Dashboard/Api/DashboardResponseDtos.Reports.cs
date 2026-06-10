@@ -96,7 +96,8 @@ internal sealed record ModelUsageSummaryDto(
     int OutputTokenLimitHitCount = 0,
     int? MaxOutputTokens = null,
     TaskComplexity? TaskComplexity = null,
-    bool IsPotentiallyPaidProvider = false);
+    bool IsPotentiallyPaidProvider = false,
+    int? PromptCharacterCount = null);
 
 internal sealed record DispatchModelSummaryDto(
     string ProviderName,

@@ -65,7 +65,8 @@ public sealed class TaskSpec
                     LastExecution.Usage?.OutputTokens,
                     LastExecution.CompletedAt,
                     LastExecution.TaskComplexity,
-                    LastExecution.MaxOutputTokens),
+                    LastExecution.MaxOutputTokens,
+                    LastExecution.PromptCharacterCount),
             LastVerification is null
                 ? null
                 : new TaskVerificationSnapshot(
@@ -136,7 +137,8 @@ public sealed class TaskSpec
                 new ModelUsage(snapshot.LastExecution.InputTokens, snapshot.LastExecution.OutputTokens),
                 snapshot.LastExecution.CompletedAt,
                 snapshot.LastExecution.TaskComplexity,
-                snapshot.LastExecution.MaxOutputTokens));
+                snapshot.LastExecution.MaxOutputTokens,
+                snapshot.LastExecution.PromptCharacterCount));
         }
 
         if (snapshot.VerificationHistory is { Count: > 0 })

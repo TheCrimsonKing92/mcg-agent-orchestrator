@@ -68,22 +68,26 @@ public sealed class DashboardRenderingTests
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+    var promptChars = task.LastExecution!.PromptCharacterCount!.Value;
 
     Assert.Contains(html, text => text.Contains("Model: OpenAI/gpt-test by API developer", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("tokens 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"prompt {promptChars} chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Potentially paid: 1 in / 2 out", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Model usage: OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"Model usage: OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out, prompt {promptChars} chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("stop reason stop", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<pre>OK</pre>", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Potentially paid tokens: 1 in / 2 out", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model selection: complexity=Simple", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains($"Prompt size: {promptChars} chars", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Model usage:", StringComparison.Ordinal));
-    Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains($"- OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out, prompt {promptChars} chars", StringComparison.Ordinal));
     Assert.Equal(TaskComplexity.Simple, taskDto.LastExecution!.TaskComplexity);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, taskDto.LastExecution.MaxOutputTokens);
     Assert.False(taskDto.LastExecution.OutputTokenLimitHit);
+    Assert.Equal(promptChars, taskDto.LastExecution.PromptCharacterCount);
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
     Assert.Equal(1, evidenceDto.PotentiallyPaidInputTokens);
@@ -95,6 +99,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(1, modelUsage.InputTokens);
     Assert.Equal(2, modelUsage.OutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
+    Assert.Equal(promptChars, modelUsage.PromptCharacterCount);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
 }
 

@@ -32,6 +32,10 @@ public static void PrintTask(Goal goal, TaskSpec task)
         Console.WriteLine($"Last execution: {task.LastExecution.ProviderName}/{task.LastExecution.ModelName} by {task.LastExecution.AgentName}");
         Console.WriteLine($"Stop reason: {task.LastExecution.StopReason}");
         Console.WriteLine($"Usage: input={task.LastExecution.Usage?.InputTokens?.ToString() ?? "n/a"} output={task.LastExecution.Usage?.OutputTokens?.ToString() ?? "n/a"} maxOutput={task.LastExecution.MaxOutputTokens?.ToString() ?? "n/a"}");
+        if (task.LastExecution.PromptCharacterCount is { } promptCharacterCount)
+        {
+            Console.WriteLine($"Prompt size: {promptCharacterCount} chars");
+        }
         if (IsOutputTokenLimitHit(task.LastExecution))
         {
             Console.WriteLine("Model note: possible output token cap hit.");

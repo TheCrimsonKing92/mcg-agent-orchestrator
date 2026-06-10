@@ -31,6 +31,9 @@ public sealed class ModelExecutionTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal("Implemented requested change.", task.LastExecution!.Output);
     Assert.Equal(TaskComplexity.Simple, task.LastExecution.TaskComplexity);
+    Assert.Equal(
+        provider.LastRequest.SystemPrompt.Length + provider.LastRequest.Messages.Sum(message => message.Content.Length),
+        task.LastExecution.PromptCharacterCount);
     Assert.Equal(provider.ProviderName, result.Execution.ProviderName);
     Assert.Equal(TaskComplexity.Simple, result.Execution.TaskComplexity);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskStarted);

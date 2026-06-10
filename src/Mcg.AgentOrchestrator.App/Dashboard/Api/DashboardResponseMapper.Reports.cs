@@ -74,7 +74,8 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
             item.OutputTokenLimitHitCount,
             item.MaxOutputTokens,
             item.TaskComplexity,
-            item.IsPotentiallyPaidProvider)).ToList(),
+            item.IsPotentiallyPaidProvider,
+            item.PromptCharacterCount)).ToList(),
         summary.DispatchModelUsage.Select(item => new DispatchModelSummaryDto(
             item.ProviderName,
             item.ModelName,

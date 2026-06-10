@@ -202,6 +202,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(0, modelUsage.OutputTokenLimitHitCount);
     Assert.Equal(768, modelUsage.MaxOutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
+    Assert.True(modelUsage.PromptCharacterCount > 0);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
     var dispatchModel = summary.DispatchModelUsage.Single();
     Assert.Equal("OpenAI", dispatchModel.ProviderName);

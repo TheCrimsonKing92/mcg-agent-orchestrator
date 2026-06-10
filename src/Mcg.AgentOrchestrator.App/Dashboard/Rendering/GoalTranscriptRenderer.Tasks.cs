@@ -21,6 +21,10 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
         text.AppendLine($"Model selection: complexity={task.LastExecution.TaskComplexity?.ToString() ?? "unknown"}");
         text.AppendLine($"Stop reason: {task.LastExecution.StopReason}");
         text.AppendLine($"Usage: input={task.LastExecution.Usage?.InputTokens?.ToString() ?? "n/a"} output={task.LastExecution.Usage?.OutputTokens?.ToString() ?? "n/a"} maxOutput={task.LastExecution.MaxOutputTokens?.ToString() ?? "n/a"}");
+        if (task.LastExecution.PromptCharacterCount is { } promptCharacterCount)
+        {
+            text.AppendLine($"Prompt size: {promptCharacterCount} chars");
+        }
         if (IsOutputTokenLimitHit(task.LastExecution))
         {
             text.AppendLine("Model note: possible output token cap hit.");

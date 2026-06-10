@@ -57,11 +57,12 @@ public static partial class DashboardRenderer
         var inputTokens = execution.Usage?.InputTokens?.ToString() ?? "n/a";
         var outputTokens = execution.Usage?.OutputTokens?.ToString() ?? "n/a";
         var maxOutputTokens = execution.MaxOutputTokens?.ToString() ?? "n/a";
+        var prompt = execution.PromptCharacterCount?.ToString() ?? "n/a";
         var capWarning = IsOutputTokenLimitHit(execution)
             ? " &middot; possible output cap hit"
             : string.Empty;
 
-        return $"<div>Model: {Encode(execution.ProviderName)}/{Encode(execution.ModelName)} by {Encode(execution.AgentName)} <span class=\"meta\">tokens {inputTokens} in / {outputTokens} out &middot; max {maxOutputTokens} out &middot; stop reason {Encode(execution.StopReason)}{capWarning}</span></div>";
+        return $"<div>Model: {Encode(execution.ProviderName)}/{Encode(execution.ModelName)} by {Encode(execution.AgentName)} <span class=\"meta\">tokens {inputTokens} in / {outputTokens} out &middot; prompt {prompt} chars &middot; max {maxOutputTokens} out &middot; stop reason {Encode(execution.StopReason)}{capWarning}</span></div>";
     }
 
     private static string RenderVerificationPlan(TaskSpec task)
@@ -84,7 +85,10 @@ public static partial class DashboardRenderer
         var limitHits = usage.OutputTokenLimitHitCount > 0
             ? $", cap hits {usage.OutputTokenLimitHitCount}{FormatMaxOutputTokens(usage.MaxOutputTokens)}"
             : string.Empty;
-        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}";
+        var prompt = usage.PromptCharacterCount is null
+            ? string.Empty
+            : $", prompt {usage.PromptCharacterCount.Value} chars";
+        return $"{Encode(usage.ProviderName)}/{Encode(usage.ModelName)}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}{prompt}";
     }
 
     private static string RenderDispatchModelSummary(DispatchModelSummary dispatch)

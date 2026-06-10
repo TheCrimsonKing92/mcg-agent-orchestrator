@@ -119,7 +119,10 @@ public static partial class GoalTranscriptRenderer
         var limitHits = usage.OutputTokenLimitHitCount > 0
             ? $", cap hits {usage.OutputTokenLimitHitCount}{FormatMaxOutputTokens(usage.MaxOutputTokens)}"
             : string.Empty;
-        return $"{usage.ProviderName}/{usage.ModelName}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}";
+        var prompt = usage.PromptCharacterCount is null
+            ? string.Empty
+            : $", prompt {usage.PromptCharacterCount.Value} chars";
+        return $"{usage.ProviderName}/{usage.ModelName}{complexity}{paid}: {runs}, {FormatTokenUsage(usage.InputTokens, usage.OutputTokens)}{limitHits}{prompt}";
     }
 
     private static string FormatDispatchModelUsage(DispatchModelSummary dispatch)

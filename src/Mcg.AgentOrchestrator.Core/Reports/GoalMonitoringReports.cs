@@ -58,7 +58,8 @@ public sealed record ModelUsageSummary(
     int OutputTokenLimitHitCount = 0,
     int? MaxOutputTokens = null,
     TaskComplexity? TaskComplexity = null,
-    bool IsPotentiallyPaidProvider = false);
+    bool IsPotentiallyPaidProvider = false,
+    int? PromptCharacterCount = null);
 
 public sealed record DispatchModelSummary(
     string ProviderName,

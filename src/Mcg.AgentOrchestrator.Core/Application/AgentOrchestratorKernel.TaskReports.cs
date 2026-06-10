@@ -105,7 +105,8 @@ public sealed partial class AgentOrchestratorKernel
                 group.Count(HasOutputTokenLimitHit),
                 ResolveSharedMaxOutputTokens(group.Select(task => task.LastExecution!.MaxOutputTokens)),
                 group.Key.TaskComplexity,
-                IsPotentiallyPaidProvider(group.Key.ProviderName)))
+                IsPotentiallyPaidProvider(group.Key.ProviderName),
+                SumKnownUsage(group.Select(task => task.LastExecution!.PromptCharacterCount))))
             .ToList();
     }
 

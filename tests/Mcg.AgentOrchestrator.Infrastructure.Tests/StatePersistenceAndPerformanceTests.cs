@@ -230,6 +230,7 @@ public sealed class StatePersistenceAndPerformanceTests
     kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run dotnet test before accepting.");
     await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]))
         .RunAsync(goal.Id, task.Id);
+    var promptCharacterCount = task.LastExecution!.PromptCharacterCount;
 
     OrchestratorStateStore.Save(path, kernel);
     var restored = OrchestratorStateStore.Load(path);
@@ -238,6 +239,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.Equal("Persist state", restored.Goals.Single().Objective);
     Assert.Equal("Run dotnet test before accepting.", restored.GetTask(goal.Id, task.Id).VerificationPlan);
     Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
+    Assert.Equal(promptCharacterCount, restored.GetTask(goal.Id, task.Id).LastExecution!.PromptCharacterCount);
 }
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_handles_concurrent_atomic_saves")]
     public async Task OrchestratorStateStoreHandlesConcurrentAtomicSaves()

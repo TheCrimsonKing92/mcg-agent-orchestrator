@@ -36,7 +36,8 @@ public sealed record TaskExecutionSnapshot(
     int? OutputTokens,
     DateTimeOffset CompletedAt,
     TaskComplexity? TaskComplexity = null,
-    int? MaxOutputTokens = null);
+    int? MaxOutputTokens = null,
+    int? PromptCharacterCount = null);
 
 public sealed record TaskVerificationSnapshot(
     string Command,

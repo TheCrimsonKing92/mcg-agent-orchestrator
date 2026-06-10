@@ -94,7 +94,8 @@ public sealed class AgentTaskRunner
             response.Usage,
             _clock.UtcNow,
             complexity,
-            request.Options.MaxOutputTokens);
+            request.Options.MaxOutputTokens,
+            CountPromptCharacters(request));
 
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
@@ -215,6 +216,11 @@ public sealed class AgentTaskRunner
     private static int TimelineEventBudget(TaskComplexity complexity)
     {
         return complexity == TaskComplexity.Complex ? 12 : 6;
+    }
+
+    private static int CountPromptCharacters(ModelRequest request)
+    {
+        return request.SystemPrompt.Length + request.Messages.Sum(message => message.Content.Length);
     }
 
     private static string TrimForTimeline(string value)
