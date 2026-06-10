@@ -38,7 +38,7 @@ public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview, Goal? goa
     var fit = goal is null ? null : FindModelFit(goal, preview.ProviderName, preview.ModelName);
     var threshold = PromptThreshold(preview.TaskComplexity);
     var promptExceedsThreshold = preview.PromptCharacterCount > threshold;
-    var usesComplexPaidModel = preview.TaskComplexity == TaskComplexity.Complex;
+    var usesComplexPaidModel = preview.TaskComplexity == TaskComplexity.Complex || preview.UsesComplexModel;
     var hasPriorOverkillFit = fit?.OverkillCount > 0;
     var hasPriorUnderpoweredFit = fit?.UnderpoweredCount > 0;
     return !promptExceedsThreshold && !usesComplexPaidModel && !hasPriorOverkillFit && !hasPriorUnderpoweredFit

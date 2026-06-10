@@ -44,7 +44,8 @@ public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
             item.ProviderName!,
             item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName ?? "default",
             item.TaskComplexity,
-            item.EstimatedPromptCharacterCount!.Value))
+            item.EstimatedPromptCharacterCount!.Value,
+            item.UsesComplexModel))
         .ToList();
 
     var fitSummaries = BuildReadyModelFitSummaries(goal);
@@ -65,7 +66,8 @@ public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
             item.ProviderName!,
             item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName ?? "default",
             item.TaskComplexity,
-            item.EstimatedPromptCharacterCount!.Value))
+            item.EstimatedPromptCharacterCount!.Value,
+            item.UsesComplexModel))
         .ToList();
 
     return BuildRisk(candidates, readyModelUsage);
@@ -90,7 +92,8 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(AgentOrc
             task.LastDispatch!.ProviderName!,
             task.LastDispatch.ModelName ?? "default",
             task.LastDispatch.TaskComplexity,
-            task.LastDispatch.PromptCharacterCount!.Value))
+            task.LastDispatch.PromptCharacterCount!.Value,
+            task.LastDispatch.TaskComplexity == TaskComplexity.Complex))
         .ToList();
 
     return BuildRisk(candidates, BuildReadyModelFitSummaries(goal));
@@ -113,7 +116,8 @@ public static PaidSubscriptionPromptRisk? EvaluatePreparedDispatchStart(Goal goa
                 task.LastDispatch.ProviderName,
                 task.LastDispatch.ModelName ?? "default",
                 task.LastDispatch.TaskComplexity,
-                task.LastDispatch.PromptCharacterCount.Value)
+                task.LastDispatch.PromptCharacterCount.Value,
+                task.LastDispatch.TaskComplexity == TaskComplexity.Complex)
         ],
         BuildReadyModelFitSummaries(goal));
 }
@@ -236,7 +240,7 @@ private static PaidSubscriptionPromptRisk? BuildRisk(
         .Where(candidate => candidate.PromptCharacterCount > PromptThreshold(candidate.TaskComplexity))
         .ToList();
     var complex = candidates
-        .Where(candidate => candidate.TaskComplexity == TaskComplexity.Complex)
+        .Where(candidate => candidate.TaskComplexity == TaskComplexity.Complex || candidate.UsesComplexModel)
         .ToList();
     var tooManyPaidTasks = candidates.Count > BatchPaidTaskThreshold;
 
@@ -349,5 +353,6 @@ private sealed record PaidPromptCandidate(
     string ProviderName,
     string ModelName,
     TaskComplexity? TaskComplexity,
-    int PromptCharacterCount);
+    int PromptCharacterCount,
+    bool UsesComplexModel = false);
 }

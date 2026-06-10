@@ -309,8 +309,20 @@ public static class WorkerProfileDispatcher
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
     {
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
-        var model = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
-        return new SubscriptionModelSelection(complexity, model, complexity == TaskComplexity.Complex && agent.ComplexModel is not null);
+        var model = TaskComplexityEstimator.ResolveModel(
+            agent,
+            complexity,
+            task.Description,
+            goal.Objective,
+            ModelFitEvidence.BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes)));
+        return new SubscriptionModelSelection(complexity, model, UsesComplexModel(agent, model));
+    }
+
+    private static bool UsesComplexModel(AgentDefinition agent, ModelProfile model)
+    {
+        return agent.ComplexModel is not null &&
+            agent.ComplexModel.ProviderName.Equals(model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
+            agent.ComplexModel.ModelName.Equals(model.ModelName, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record SubscriptionModelSelection(TaskComplexity Complexity, ModelProfile Model, bool UsesComplexModel);

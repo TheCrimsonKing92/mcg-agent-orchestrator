@@ -149,6 +149,7 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
     var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
     var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
     var effectiveModelName = GetTemplateValue(templateVariables, "apiModelName") ?? agent.Model.ModelName;
+    var usesComplexModel = UsesComplexModel(agent, effectiveProviderName, effectiveModelName);
     var subscriptionModelName = GetTemplateValue(templateVariables, "subscriptionModelName");
     var subscriptionReasoningEffort = GetTemplateValue(templateVariables, "subscriptionReasoningEffort");
     var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
@@ -237,7 +238,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             subscriptionModelName,
             subscriptionReasoningEffort,
             estimatedPromptCharacterCount,
-            recoverableLimitFailures);
+            recoverableLimitFailures,
+            usesComplexModel);
     }
     catch (InvalidOperationException ex)
     {
@@ -262,8 +264,16 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             OutputTextPreview.CreateTimeline(ex.Message).Text,
             TaskComplexity: taskComplexity,
             SubscriptionModelName: subscriptionModelName,
-            SubscriptionReasoningEffort: subscriptionReasoningEffort);
+            SubscriptionReasoningEffort: subscriptionReasoningEffort,
+            UsesComplexModel: usesComplexModel);
     }
+}
+
+private static bool UsesComplexModel(AgentDefinition agent, string providerName, string modelName)
+{
+    return agent.ComplexModel is not null &&
+        agent.ComplexModel.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+        agent.ComplexModel.ModelName.Equals(modelName, StringComparison.OrdinalIgnoreCase);
 }
 
 private static string? GetTemplateValue(IReadOnlyDictionary<string, string?> variables, string name)
@@ -293,6 +303,7 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
             ProviderName = item.ProviderName!,
             ModelName = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName,
             item.TaskComplexity,
+            item.UsesComplexModel,
             item.SubscriptionReasoningEffort,
             item.EstimatedPromptCharacterCount
         })
@@ -302,6 +313,7 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
             item.ProviderName,
             item.ModelName,
             item.TaskComplexity,
+            item.UsesComplexModel,
             item.SubscriptionReasoningEffort
         })
         .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
@@ -325,7 +337,8 @@ private static List<SubscriptionPlanModelSummaryDto> BuildSubscriptionPlanModelS
                 fit?.UnderpoweredCount ?? 0,
                 fit?.UnknownCount ?? 0,
                 fit?.TaskShapes ?? [],
-                BuildModelFitRecommendation(fit, group.Key.ProviderName, group.Key.ModelName!));
+                BuildModelFitRecommendation(fit, group.Key.ProviderName, group.Key.ModelName!),
+                group.Key.UsesComplexModel);
         })
         .ToList();
 }

@@ -942,6 +942,51 @@ public sealed class WorkerDispatchTests
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("shapes missed regression path", StringComparison.Ordinal)));
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_escalates_underpowered_routine_model_to_complex_model")]
+    public void SubscriptionPlanEscalatesUnderpoweredRoutineModelToComplexModel()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Fix failed parser behavior.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Fix another parser behavior.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Avoid repeating underpowered model choice", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("cost-aware-developer"),
+        "Cost-aware Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification failed",
+        "C:\\repo",
+        1,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - underpowered - missed regression path.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]));
+
+    var item = plan.Items.Single(candidate => candidate.TaskId == nextTask.Id.Value);
+    var summary = plan.ReadyModelUsage.Single();
+    Assert.Equal(TaskComplexity.Simple, item.TaskComplexity);
+    Assert.True(item.UsesComplexModel);
+    Assert.Equal("OpenAI", item.ProviderName);
+    Assert.Equal("gpt-5.5", item.ModelName);
+    Assert.Equal("gpt-5.5", item.SubscriptionModelName);
+    Assert.Equal("high", item.SubscriptionReasoningEffort);
+    Assert.True(summary.UsesComplexModel);
+    Assert.Equal("gpt-5.5", summary.ModelName);
+    Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
+    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
     public void SubscriptionPlanMarksUsageLimitedTasksNotPreparableUntilRetryTime()
 {

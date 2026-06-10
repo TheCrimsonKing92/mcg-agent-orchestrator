@@ -60,7 +60,8 @@ internal sealed record SubscriptionPlanModelSummaryDto(
     int PreviousUnderpoweredCount = 0,
     int PreviousUnknownFitCount = 0,
     IReadOnlyList<string>? PreviousTaskShapes = null,
-    string? ModelFitRecommendation = null);
+    string? ModelFitRecommendation = null,
+    bool UsesComplexModel = false);
 
 internal sealed record SubscriptionPlanItemDto(
     int TaskNumber,
@@ -87,7 +88,8 @@ internal sealed record SubscriptionPlanItemDto(
     string? SubscriptionModelName = null,
     string? SubscriptionReasoningEffort = null,
     int? EstimatedPromptCharacterCount = null,
-    int RecoverableSubscriptionLimitFailureCount = 0);
+    int RecoverableSubscriptionLimitFailureCount = 0,
+    bool UsesComplexModel = false);
 
 internal sealed record ProviderSmokeReportDto(
     string Target,

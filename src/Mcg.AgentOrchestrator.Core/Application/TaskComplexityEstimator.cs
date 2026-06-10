@@ -51,6 +51,16 @@ public static class TaskComplexityEstimator
 
     public static ModelProfile ResolveModel(AgentDefinition agent, TaskComplexity complexity, string taskDescription, string goalObjective)
     {
+        return ResolveModel(agent, complexity, taskDescription, goalObjective, []);
+    }
+
+    public static ModelProfile ResolveModel(
+        AgentDefinition agent,
+        TaskComplexity complexity,
+        string taskDescription,
+        string goalObjective,
+        IReadOnlyList<ModelFitSummary> modelFit)
+    {
         if (agent.ComplexModel is null)
         {
             return agent.Model;
@@ -60,7 +70,22 @@ public static class TaskComplexityEstimator
             ? Estimate(taskDescription, goalObjective, agent.Role)
             : complexity;
 
-        return effective == TaskComplexity.Complex ? agent.ComplexModel : agent.Model;
+        if (effective == TaskComplexity.Complex)
+        {
+            return agent.ComplexModel;
+        }
+
+        return HasUnresolvedUnderpoweredFit(agent.Model, modelFit)
+            ? agent.ComplexModel
+            : agent.Model;
+    }
+
+    private static bool HasUnresolvedUnderpoweredFit(ModelProfile model, IReadOnlyList<ModelFitSummary> modelFit)
+    {
+        var fit = modelFit.FirstOrDefault(item =>
+            item.ProviderName.Equals(model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
+            item.ModelName.Equals(model.ModelName, StringComparison.OrdinalIgnoreCase));
+        return fit is { UnderpoweredCount: > 0, AdequateCount: 0 };
     }
 
     private static int ScoreText(string text)

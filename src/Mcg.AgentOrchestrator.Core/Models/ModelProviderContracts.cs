@@ -18,7 +18,8 @@ public sealed record AgentTaskRunPreview(
     TaskComplexity TaskComplexity,
     int? MaxOutputTokens,
     string? ReasoningEffort,
-    int PromptCharacterCount);
+    int PromptCharacterCount,
+    bool UsesComplexModel = false);
 
 public sealed record TaskExecutionRecord(
     AgentId AgentId,

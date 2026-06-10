@@ -186,6 +186,35 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal("high", securityModel.ReasoningEffort);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_simple_model_after_unresolved_underpowered_fit")]
+    public void TaskComplexityEstimatorEscalatesSimpleModelAfterUnresolvedUnderpoweredFit()
+    {
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+
+        var underpoweredModel = TaskComplexityEstimator.ResolveModel(
+            agent,
+            TaskComplexity.Simple,
+            "Update a tooltip label.",
+            ComplexGoalObjective,
+            [new ModelFitSummary("OpenAI", "gpt-5.4-mini", 1, 0, 0, 1, 0, ["label regression"])]);
+        var adequateModel = TaskComplexityEstimator.ResolveModel(
+            agent,
+            TaskComplexity.Simple,
+            "Update a tooltip label.",
+            ComplexGoalObjective,
+            [new ModelFitSummary("OpenAI", "gpt-5.4-mini", 2, 1, 0, 1, 0, ["label regression"])]);
+
+        Assert.Equal("gpt-5.5", underpoweredModel.ModelName);
+        Assert.Equal("high", underpoweredModel.ReasoningEffort);
+        Assert.Equal("gpt-5.4-mini", adequateModel.ModelName);
+        Assert.Equal("medium", adequateModel.ReasoningEffort);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_requires_stronger_signals_for_review_and_test_roles")]
     public void TaskComplexityEstimatorRequiresStrongerSignalsForReviewAndTestRoles()
     {

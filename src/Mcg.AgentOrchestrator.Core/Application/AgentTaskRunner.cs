@@ -66,7 +66,12 @@ public sealed class AgentTaskRunner
         }
 
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
-        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
+        var resolvedModel = TaskComplexityEstimator.ResolveModel(
+            agent,
+            complexity,
+            task.Description,
+            goal.Objective,
+            BuildModelFitSummary(goal));
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
         var startMessage = BuildStartMessage(agent, resolvedModel);
         var request = BuildRequest(
@@ -136,7 +141,12 @@ public sealed class AgentTaskRunner
         }
 
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
-        var resolvedModel = TaskComplexityEstimator.ResolveModel(agent, complexity, task.Description, goal.Objective);
+        var resolvedModel = TaskComplexityEstimator.ResolveModel(
+            agent,
+            complexity,
+            task.Description,
+            goal.Objective,
+            BuildModelFitSummary(goal));
         var request = BuildRequest(
             goal,
             task,
@@ -152,7 +162,8 @@ public sealed class AgentTaskRunner
             complexity,
             request.Options.MaxOutputTokens,
             resolvedModel.ReasoningEffort,
-            CountPromptCharacters(request));
+            CountPromptCharacters(request),
+            UsesComplexModel(agent, resolvedModel));
     }
 
     private static AgentDefinition ResolveAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
@@ -244,6 +255,23 @@ public sealed class AgentTaskRunner
         return complexity == TaskComplexity.Complex
             ? ComplexPaidProviderFallbackMaxOutputTokens
             : RoutinePaidProviderFallbackMaxOutputTokens;
+    }
+
+    private static List<ModelFitSummary> BuildModelFitSummary(Goal goal)
+    {
+        return ModelFitEvidence.BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes));
+    }
+
+    private static bool UsesComplexModel(AgentDefinition agent, ModelProfile resolvedModel)
+    {
+        return agent.ComplexModel is not null &&
+            SameModel(agent.ComplexModel, resolvedModel);
+    }
+
+    private static bool SameModel(ModelProfile left, ModelProfile right)
+    {
+        return left.ProviderName.Equals(right.ProviderName, StringComparison.OrdinalIgnoreCase) &&
+            left.ModelName.Equals(right.ModelName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildModelFitGuidance(ModelProfile resolvedModel)

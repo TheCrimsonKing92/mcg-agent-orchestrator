@@ -1409,7 +1409,10 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goalPrefix,
         AgentDefinitions: agents));
     var controls = ExtractTaskControls(html, 1);
-    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents).Items.Single();
+    var nextDto = DashboardResponseMapper
+        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents)
+        .Items
+        .Single(item => item.TaskId == task.Id.Value);
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, agents);
     var stageDto = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents).Stages.Single();
 
@@ -1465,7 +1468,10 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goalPrefix,
         AgentDefinitions: agents));
     var controls = ExtractTaskControls(html, 2);
-    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents).Items.Single();
+    var nextDto = DashboardResponseMapper
+        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents)
+        .Items
+        .Single(item => item.TaskId == nextTask.Id.Value);
 
     Assert.Equal(TaskComplexity.Simple, preview.TaskComplexity);
     Assert.True(preview.PromptCharacterCount <= risk!.PromptThreshold);
@@ -1564,6 +1570,59 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
     Assert.False(controls.Contains("confirmLargePaidApiPrompt=true", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5.5 Complex reasoning high prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [complex paid API model]", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_evidence_escalated_paid_api_model")]
+    public void DashboardRendererConfirmsEvidenceEscalatedPaidApiModel()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Fix old parser behavior.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Fix another parser behavior.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Avoid repeating underpowered API model", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low", 768),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    var agents = new[] { agent };
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification failed",
+        "C:\\repo",
+        1,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - underpowered - missed regression path.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+    var preview = AgentTaskRunner.PreviewRun(goal, nextTask, agents);
+    var risk = ApiPromptCostGuard.Evaluate(preview, goal);
+    var goalPrefix = goal.Id.Value[..8];
+    var health = new OrchestratorHealthReport(
+        [],
+        [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
+        []);
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: agents));
+    var controls = ExtractTaskControls(html, 2);
+    var nextDto = DashboardResponseMapper
+        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents)
+        .Items
+        .Single(item => item.TaskId == nextTask.Id.Value);
+
+    Assert.Equal(TaskComplexity.Simple, preview.TaskComplexity);
+    Assert.True(preview.UsesComplexModel);
+    Assert.Equal("gpt-5.5", preview.ModelName);
+    Assert.True(risk!.UsesComplexPaidModel);
+    Assert.Equal("complex paid API model", nextDto.Control!.CostRisk);
+    Assert.Equal("run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
+    Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5.5 Simple reasoning high prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [complex paid API model]", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_subscription_prompt_from_plan")]
