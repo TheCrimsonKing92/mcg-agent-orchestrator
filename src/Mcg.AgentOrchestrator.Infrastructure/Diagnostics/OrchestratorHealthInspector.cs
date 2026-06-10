@@ -103,13 +103,12 @@ public static class OrchestratorHealthInspector
 
     private static ProviderConfigurationStatus InspectOllamaProvider(IReadOnlyDictionary<string, string?> environment)
     {
-        var baseUrl = environment.TryGetValue("OLLAMA_BASE_URL", out var url) && !string.IsNullOrWhiteSpace(url)
-            ? url
-            : "http://localhost:11434";
+        var baseUrl = OllamaDefaults.ResolveBaseUrl(
+            environment.TryGetValue("OLLAMA_BASE_URL", out var url) ? url : null);
 
         try
         {
-            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             var response = probe.GetAsync($"{baseUrl.TrimEnd('/')}/api/version").GetAwaiter().GetResult();
             if (response.IsSuccessStatusCode)
             {

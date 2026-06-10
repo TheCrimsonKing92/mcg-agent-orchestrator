@@ -176,7 +176,7 @@ public static bool TryCreateLiveProvider(string providerName, out IModelProvider
 
     if (providerName.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
     {
-        var baseUrl = Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434";
+        var baseUrl = OllamaDefaults.ResolveBaseUrl();
         modelName = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? ProviderModelDefaults.Ollama;
 
         try

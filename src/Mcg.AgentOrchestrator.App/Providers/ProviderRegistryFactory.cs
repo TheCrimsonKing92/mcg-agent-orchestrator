@@ -19,7 +19,7 @@ internal static class ProviderRegistryFactory
             ? new ScriptedModelProvider("Anthropic")
             : new AnthropicMessagesModelProvider(ProviderHttpClientFactory.CreateAnthropicClient(), anthropicKey, Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? ProviderModelDefaults.Anthropic));
 
-        var ollamaBaseUrl = Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434";
+        var ollamaBaseUrl = OllamaDefaults.ResolveBaseUrl();
         var ollamaModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? ProviderModelDefaults.Ollama;
 
         providers.Add(IsOllamaReachable(ollamaBaseUrl)
@@ -30,13 +30,13 @@ internal static class ProviderRegistryFactory
     }
 
     public static bool IsOllamaReachable() =>
-        IsOllamaReachable(Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434");
+        IsOllamaReachable(OllamaDefaults.ResolveBaseUrl());
 
     private static bool IsOllamaReachable(string baseUrl)
     {
         try
         {
-            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             var response = probe.GetAsync($"{baseUrl.TrimEnd('/')}/api/version").GetAwaiter().GetResult();
             return response.IsSuccessStatusCode;
         }

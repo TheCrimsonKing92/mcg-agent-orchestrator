@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Providers;
 
 internal static class ProviderHttpClientFactory
@@ -20,7 +22,7 @@ internal static class ProviderHttpClientFactory
 
     public static HttpClient CreateOllamaClient(string? baseUrl = null)
     {
-        return CreateClient(new Uri(baseUrl ?? "http://localhost:11434/"));
+        return CreateClient(new Uri(OllamaDefaults.ResolveBaseUrl(baseUrl)));
     }
 
     private static HttpClient CreateClient(Uri baseAddress)

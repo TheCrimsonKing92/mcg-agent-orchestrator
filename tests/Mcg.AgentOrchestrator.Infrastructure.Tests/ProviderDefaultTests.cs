@@ -4,6 +4,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ProviderDefaultTests
 {
+    [Xunit.Fact(DisplayName = "Ollama_default_base_url_avoids_localhost_ipv6_fallback")]
+    public void OllamaDefaultBaseUrlAvoidsLocalhostIpv6Fallback()
+    {
+        Assert.Equal("http://127.0.0.1:11434", OllamaDefaults.BaseUrl);
+        Assert.Equal(OllamaDefaults.BaseUrl, OllamaDefaults.ResolveBaseUrl(null));
+        Assert.Equal(OllamaDefaults.BaseUrl, OllamaDefaults.ResolveBaseUrl("  "));
+        Assert.Equal("http://ollama-host:11434", OllamaDefaults.ResolveBaseUrl(" http://ollama-host:11434 "));
+    }
+
     [Xunit.Fact(DisplayName = "Provider_defaults_keep_openai_fallback_aligned_with_base_agent_model")]
     public void ProviderDefaultsKeepOpenAiFallbackAlignedWithBaseAgentModel()
     {

@@ -42,6 +42,10 @@ public static Process StartPrototypeDashboardProcess(string appProject, string w
         CreateNoWindow = true
     };
 
+    // Pin Ollama to an unreachable endpoint so assertions are deterministic
+    // regardless of whether a live Ollama server runs on this machine.
+    startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
+
     startInfo.ArgumentList.Add("run");
     startInfo.ArgumentList.Add("--no-build");
     startInfo.ArgumentList.Add("--project");
