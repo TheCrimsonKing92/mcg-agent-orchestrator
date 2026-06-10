@@ -50,3 +50,6 @@ appsettings.Local.json
 # OS cruft
 Thumbs.db
 Desktop.ini
+
+# Goal worktrees for isolated goal execution
+.orchestrator-worktrees/

@@ -54,6 +54,8 @@ Keep prototype state isolated from repository state. Prototype dashboard state l
 
 API model runs (`run`/`api-run`) are pure text completion with no file access; embed any data the model needs in the task description, and route file-touching work through subscription dispatches. Task descriptions also drive complexity classification: start inspection work with `Summarize `/`Report `/`Inspect ` and avoid risk keywords (auth, migration, rollback) unless the task genuinely carries that risk.
 
+Goals that touch files should get an isolated workspace: `workspace create` adds a git worktree under `.orchestrator-worktrees/<goal-prefix>` on branch `goal/<goal-prefix>`, and dispatches/verifications for that goal then run there instead of the shared repository root. `acceptance` fast-forwards the goal branch automatically when possible and prints the manual merge command otherwise; `workspace remove` cleans up after merge.
+
 When the task involves subscription/dogfood execution:
 
 - Verify worker profiles before starting subscription tasks.
@@ -69,7 +71,7 @@ Use dashboard cancel/refresh controls or exact known process ids for stuck worke
 
 On Windows, a running dashboard can lock app binaries. Prefer `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/`.
 
-`mcg-orchestrator.cmd` with no arguments starts an interactive REPL that stays alive and holds build outputs. Always pass a command. If builds fail with "file in use", check for lingering `Mcg.AgentOrchestrator.App`/`dotnet run` processes before blaming antivirus.
+`mcg-orchestrator.cmd` with no arguments starts an interactive REPL that stays alive and holds build outputs. Always pass a command. If builds fail with "file in use", check for lingering `Mcg.AgentOrchestrator.App`/`dotnet run` processes, then run `dotnet build-server shutdown` to clear stale MSBuild/compiler nodes, before blaming antivirus.
 
 Tests that spawn the real app inherit the machine environment; pin provider env vars (see `StartPrototypeDashboardProcess`) so assertions do not depend on which providers are live on the dev machine.
 

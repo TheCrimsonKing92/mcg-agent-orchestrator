@@ -53,6 +53,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("verifications", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("tasks", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("task", StringComparison.OrdinalIgnoreCase);
+        command.Equals("task", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("workspace", StringComparison.OrdinalIgnoreCase);
 }
 }

@@ -58,6 +58,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "acceptance":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
+            PrintAcceptanceWorkspaceMerge(context);
+            return false;
+
+        case "workspace":
+            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            HandleWorkspaceCommand(context, parts.Count > 1 ? parts[1] : null);
             return false;
 
         case "evidence":
@@ -155,5 +161,61 @@ private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string fl
 private static bool HasCliConfirmation(IReadOnlyList<string> parts, string flag)
 {
     return parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase));
+}
+
+private static void HandleWorkspaceCommand(CliExecutionContext context, string? action)
+{
+    var goal = context.CurrentGoal!;
+    var executionDirectory = context.Workspace.ExecutionDirectory;
+    var branch = GoalWorktrees.BranchName(goal.Id);
+    switch ((action ?? "status").ToLowerInvariant())
+    {
+        case "status":
+            var existing = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+            Console.WriteLine(existing is null
+                ? $"Goal has no workspace. Create one with: workspace create (branch {branch})"
+                : $"Workspace: {existing} (branch {branch})");
+            return;
+
+        case "create":
+            Console.WriteLine($"Workspace: {GoalWorktrees.Ensure(executionDirectory, goal.Id)} (branch {branch})");
+            return;
+
+        case "merge":
+            var merge = GoalWorktrees.TryFastForwardMerge(executionDirectory, goal.Id);
+            Console.WriteLine(merge is null
+                ? "Goal has no workspace branch to merge."
+                : FormatWorkspaceMerge(merge));
+            return;
+
+        case "remove":
+            Console.WriteLine(GoalWorktrees.Remove(executionDirectory, goal.Id));
+            return;
+
+        default:
+            throw new ArgumentException("Usage: workspace [create|merge|remove]");
+    }
+}
+
+private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context)
+{
+    var goal = context.CurrentGoal!;
+    if (goal.Status != GoalStatus.Completed)
+    {
+        return;
+    }
+
+    var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+    if (merge is not null)
+    {
+        Console.WriteLine($"Workspace merge: {FormatWorkspaceMerge(merge)}");
+    }
+}
+
+private static string FormatWorkspaceMerge(GoalWorktreeMergeResult merge)
+{
+    return merge.FastForwarded
+        ? merge.Message
+        : $"{merge.Message} command: {merge.SuggestedCommand}";
 }
 }

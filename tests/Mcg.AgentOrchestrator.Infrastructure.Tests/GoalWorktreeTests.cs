@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -90,6 +92,37 @@ public sealed class GoalWorktreeTests
         try
         {
             Assert.True(GoalWorktrees.TryFastForwardMerge(repo, GoalId.New()) is null);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_command_creates_and_removes_goal_worktree")]
+    public void CliWorkspaceCommandCreatesAndRemovesGoalWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Workspace goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            CliCommandDispatcher.ExecuteCommand(["workspace", "create"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+            var path = GoalWorktrees.TryResolve(repo, goal.Id);
+            Assert.True(path is not null);
+            Assert.Equal(path, workspace.ResolveExecutionDirectory(goal.Id));
+
+            CliCommandDispatcher.ExecuteCommand(["workspace", "remove"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.Equal(workspace.ExecutionDirectory, workspace.ResolveExecutionDirectory(goal.Id));
         }
         finally
         {

@@ -2,6 +2,20 @@
 
 Follow-up work items. Each entry is self-contained: act on it without prior conversation context. When an item is finished, remove the entry and note the closing commit in DOGFOOD_LOG.md or the commit message. Check this file before proposing new follow-up work.
 
+## Local agentic worker profile for file-capable local-model execution
+
+Status: open | Size: medium | Suggested route: operator-driven setup plus dogfood validation
+
+Why: API model runs are single-shot text completion with no file access, so local models cannot do file work even with goal worktrees available (phase 1, landed 2026-06-10: `GoalWorktrees`, `workspace` CLI command, worktree-aware dispatch). The agreed path is bridging to an agent CLI that targets the local Ollama endpoint, reusing the existing subscription-dispatch machinery (prompt file, background process, logs, verification gates) unchanged.
+
+Where: worker profile catalog (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfiles.cs` defaults), `.orchestrator/workers.json`. Candidate CLIs: Qwen Code (built for qwen models, OpenAI-compatible endpoint) first, Codex CLI `--oss`/custom provider as fallback. Endpoint: `http://127.0.0.1:11434/v1`.
+
+Done when: a worker profile dispatches a file-touching task to a local-model agent CLI inside the goal worktree, evidence and verification record normally, and the run is classified local/free by the cost guards. Record a model-fit note and a dogfood entry comparing CLI candidates.
+
+Decision record: goal-branch merge policy is auto-merge on `acceptance` when fast-forward succeeds, suggest the merge command otherwise (decided 2026-06-10).
+
+Optional later phase: native tool loop in `AgentTaskRunner` (read/glob/edit/run tools over Ollama function calling) if bridge CLIs prove too heavy or unreliable at 8B scale.
+
 ## Structured model-fit field
 
 Status: open | Size: medium, decomposable | Suggested route: three Simple local-model subtasks with tight briefs
