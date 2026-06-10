@@ -57,3 +57,14 @@ Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows
 - Hosted smoke: launched `dotnet bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll simple-hosted-dashboard 5200 --no-open --refresh 5` as a bounded background process. `curl.exe` confirmed `/health` returned HTTP `200`, `/api/system/dashboard-host` returned `CommandName=simple-hosted-dashboard`, `BindUrl=http://0.0.0.0:5200/`, `OperatorControlsEnabled=false`, `DashboardUrl=http://127.0.0.1:5200/dashboard`, and hosted dashboard URLs for `192.168.1.214` and `seventhson`. Mutating `POST /api/goals` returned HTTP `403` with `dashboard read-only: simple hosted dashboard does not allow operator actions`.
 - Blockers and direct interventions: no product blocker remains. Two early PowerShell `Invoke-WebRequest` readiness probes timed out because the script compared response objects/body too strictly even while server logs showed `/health` 200 responses; the final `curl.exe` smoke supplied the verification evidence. The exact smoke PID was stopped, and `Get-NetTCPConnection -LocalPort 5200` returned no listener afterward.
 
+
+## 2026-06-10 - Local qwen cap-validation report
+
+Goal ID: `aa6e8301137a4378ba63e5fe45ac9f11` (CLI workspace), task 2 `093e044c`, Reviewer, live Ollama API run via `run 2`.
+
+- Operator evidence inventory: prototype workspace has 541 goals, 0 recorded API executions, 0 stop-reason or token-usage records; all 20 `Model fit:` matches are template text inside dispatch prompts; 4 `truncated` matches are prompt-budget trims. The 768 routine paid output cap has never been exercised.
+- Outcome: qwen3:8b produced a usable report (keep the 768 cap, collect execution data first). First real execution record in the system: 595 in / 851 out, stop reason `stop`, max 2048. Note: 851 output tokens exceeds 768, so this Simple report task would have been truncated on a routine paid model.
+- Friction: provider registry probes `localhost` with a 2s timeout; localhost resolved through IPv6 fallback at ~2120ms vs 61ms via `127.0.0.1`, so the CLI silently used the offline scripted adapter. Workaround: `OLLAMA_BASE_URL=http://127.0.0.1:11434`. Product fix: probe 127.0.0.1 by default or lengthen/retry the probe, and surface scripted-adapter fallback loudly.
+- Friction: the model echoed the fit template literally (`adequate|overkill|underpowered`); the hardened parser drops the echo instead of recording unknown fit. The operator's first manual note embedded `Model fit:` mid-line and was unparseable; a line-leading note was recorded. Both argue for a structured fit field.
+- Verification: `verify-manual 2 passed` with line-leading note. Placeholder task 1 cancelled.
+- Model fit: Ollama/qwen3:8b - adequate - bounded report from provided data - usable conclusion on first live attempt, minor structure drift.
