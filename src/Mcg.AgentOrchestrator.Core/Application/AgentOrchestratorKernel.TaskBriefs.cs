@@ -67,7 +67,7 @@ public sealed partial class AgentOrchestratorKernel
         if (task.LastExecution is not null)
         {
             lines.Add("## Last Model Output");
-            lines.Add(PromptContextFormatter.TrimPromptBlock(task.LastExecution.Output));
+            lines.Add(PromptContextFormatter.TrimEvidenceBlock(task.LastExecution.Output, complexity));
             lines.Add(string.Empty);
         }
 
@@ -86,8 +86,8 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"Command: {task.LastVerification.Command}");
             lines.Add($"Exit code: {task.LastVerification.ExitCode}");
             lines.Add($"Verification history count: {task.VerificationHistory.Count}");
-            lines.Add($"Stdout: {PromptContextFormatter.TrimPromptBlock(task.LastVerification.StandardOutput)}");
-            lines.Add($"Stderr: {PromptContextFormatter.TrimPromptBlock(task.LastVerification.StandardError)}");
+            lines.Add($"Stdout: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardOutput, complexity)}");
+            lines.Add($"Stderr: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardError, complexity)}");
             lines.Add(string.Empty);
         }
 

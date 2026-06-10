@@ -121,6 +121,76 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains(new string('b', 1600), StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('c', 1600), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_evidence_budget_for_simple_tasks")]
+    public async Task BuildTaskBriefUsesSmallerEvidenceBudgetForSimpleTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep simple evidence prompt budget small",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var modelOutput = $"simple-model-start {new string('a', 460)} simple-model-middle {new string('b', 260)} simple-model-tail";
+    var stdout = $"simple-stdout-start {new string('c', 460)} simple-stdout-middle {new string('d', 260)} simple-stdout-tail";
+    var stderr = $"simple-stderr-start {new string('e', 460)} simple-stderr-middle {new string('f', 260)} simple-stderr-tail";
+    var runner = new AgentTaskRunner(
+        kernel,
+        agents,
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", modelOutput)]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, stdout, stderr, clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("simple-model-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-model-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-stdout-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-stdout-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-stderr-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-stderr-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("simple-model-middle", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("simple-stdout-middle", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("simple-stderr-middle", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_evidence_budget_for_complex_tasks")]
+    public async Task BuildTaskBriefKeepsLargerEvidenceBudgetForComplexTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep enough evidence for complex work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var modelOutput = $"complex-model-start {new string('a', 460)} complex-model-middle {new string('b', 260)} complex-model-tail";
+    var stdout = $"complex-stdout-start {new string('c', 460)} complex-stdout-middle {new string('d', 260)} complex-stdout-tail";
+    var stderr = $"complex-stderr-start {new string('e', 460)} complex-stderr-middle {new string('f', 260)} complex-stderr-tail";
+    var runner = new AgentTaskRunner(
+        kernel,
+        agents,
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", modelOutput)]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, stdout, stderr, clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("complex-model-middle", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-stdout-middle", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-stderr-middle", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_timeline_messages")]
     public void BuildTaskBriefTrimsNoisyTimelineMessages()
 {
