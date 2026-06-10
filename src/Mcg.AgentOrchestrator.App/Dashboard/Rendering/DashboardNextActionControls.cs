@@ -68,8 +68,21 @@ public static class DashboardNextActionControls
         {
             AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription => "Prepare subscription handoff",
             AgentExecutionPolicy.AnyAvailable => "Prepare subscription handoff",
-            _ => "Run task"
+            _ => RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
+                ? "Run paid API task"
+                : "Run task"
         };
+    }
+
+    public static string GetExplicitApiRunActionLabel(
+        Goal goal,
+        TaskId taskId,
+        IReadOnlyList<AgentConfigurationValidation>? agents = null,
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
+    {
+        return RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
+            ? "Explicit paid API run"
+            : "Explicit API run";
     }
 
     public static bool CanRunApiExplicitly(

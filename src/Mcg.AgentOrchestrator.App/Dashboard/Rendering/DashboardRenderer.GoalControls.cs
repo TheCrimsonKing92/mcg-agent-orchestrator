@@ -256,7 +256,7 @@ public static partial class DashboardRenderer
         html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildTaskRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
         if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))
         {
-            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">Explicit API run</button>");
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(DashboardNextActionControls.GetExplicitApiRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
         }
 
         RenderApiRunPreview(html, goal, task, options.HealthReport?.Agents, options.AgentDefinitions);
