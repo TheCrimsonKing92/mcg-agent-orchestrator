@@ -1371,6 +1371,56 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_prior_overkill_paid_api_model")]
+    public void DashboardRendererConfirmsPriorOverkillPaidApiModel()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Update the old label.", AgentRole.Developer);
+    var nextTask = new TaskSpec(TaskId.New(), "Update the next label.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Avoid repeating overkill API model", [priorTask, nextTask]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    var agents = new[] { agent };
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+    var preview = AgentTaskRunner.PreviewRun(goal, nextTask, agents);
+    var risk = ApiPromptCostGuard.Evaluate(preview, goal);
+    var goalPrefix = goal.Id.Value[..8];
+    var health = new OrchestratorHealthReport(
+        [],
+        [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
+        []);
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        HealthReport: health,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goalPrefix,
+        AgentDefinitions: agents));
+    var controls = ExtractTaskControls(html, 2);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents).Items.Single();
+
+    Assert.Equal(TaskComplexity.Simple, preview.TaskComplexity);
+    Assert.True(preview.PromptCharacterCount <= risk!.PromptThreshold);
+    Assert.True(risk.HasPriorOverkillFit);
+    Assert.False(risk.PromptExceedsThreshold);
+    Assert.Equal("prior overkill API model", nextDto.Control!.CostRisk);
+    Assert.Equal("run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
+    Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/2/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run paid API task</button>", StringComparison.Ordinal));
+    Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5-codex Simple reasoning medium prompt {preview.PromptCharacterCount} chars max 768 out [potentially paid] [prior overkill API model]", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_complex_paid_api_model_from_exact_preview")]
     public void DashboardRendererConfirmsComplexPaidApiModelFromExactPreview()
 {

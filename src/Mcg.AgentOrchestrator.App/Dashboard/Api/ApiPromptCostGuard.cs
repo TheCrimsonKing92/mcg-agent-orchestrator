@@ -9,7 +9,11 @@ internal sealed record PaidApiPromptRisk(
     int PromptCharacterCount,
     int PromptThreshold,
     bool PromptExceedsThreshold,
-    bool UsesComplexPaidModel);
+    bool UsesComplexPaidModel,
+    bool HasPriorOverkillFit = false,
+    bool HasPriorUnderpoweredFit = false,
+    int PriorOverkillCount = 0,
+    int PriorUnderpoweredCount = 0);
 
 internal static class ApiPromptCostGuard
 {
@@ -20,15 +24,23 @@ private const int ComplexPaidPromptThreshold = 6000;
 
 public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview)
 {
+    return Evaluate(preview, null);
+}
+
+public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview, Goal? goal)
+{
     if (!ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName))
     {
         return null;
     }
 
+    var fit = goal is null ? null : FindModelFit(goal, preview.ProviderName, preview.ModelName);
     var threshold = PromptThreshold(preview.TaskComplexity);
     var promptExceedsThreshold = preview.PromptCharacterCount > threshold;
     var usesComplexPaidModel = preview.TaskComplexity == TaskComplexity.Complex;
-    return !promptExceedsThreshold && !usesComplexPaidModel
+    var hasPriorOverkillFit = fit?.OverkillCount > 0;
+    var hasPriorUnderpoweredFit = fit?.UnderpoweredCount > 0;
+    return !promptExceedsThreshold && !usesComplexPaidModel && !hasPriorOverkillFit && !hasPriorUnderpoweredFit
         ? null
         : new PaidApiPromptRisk(
             preview.ProviderName,
@@ -37,7 +49,11 @@ public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview)
             preview.PromptCharacterCount,
             threshold,
             promptExceedsThreshold,
-            usesComplexPaidModel);
+            usesComplexPaidModel,
+            hasPriorOverkillFit,
+            hasPriorUnderpoweredFit,
+            fit?.OverkillCount ?? 0,
+            fit?.UnderpoweredCount ?? 0);
 }
 
 public static void ThrowIfConfirmationRequired(PaidApiPromptRisk? risk, bool confirmed)
@@ -71,15 +87,53 @@ public static string BuildInlineLabel(PaidApiPromptRisk risk)
         return $"large paid prompt: exceeds {risk.PromptThreshold}";
     }
 
+    if (risk.HasPriorUnderpoweredFit)
+    {
+        return "prior underpowered API model";
+    }
+
+    if (risk.HasPriorOverkillFit)
+    {
+        return "prior overkill API model";
+    }
+
     return "complex paid API model";
 }
 
 private static string BuildMessage(PaidApiPromptRisk risk, string confirmationInstruction)
 {
-    var reason = risk.PromptExceedsThreshold
-        ? $"prompt {risk.PromptCharacterCount} chars exceeds {risk.PromptThreshold}"
-        : "uses complex paid model selection";
+    var reasons = new List<string>();
+    if (risk.PromptExceedsThreshold)
+    {
+        reasons.Add($"prompt {risk.PromptCharacterCount} chars exceeds {risk.PromptThreshold}");
+    }
+
+    if (risk.UsesComplexPaidModel)
+    {
+        reasons.Add("uses complex paid model selection");
+    }
+
+    if (risk.HasPriorOverkillFit)
+    {
+        reasons.Add($"{risk.PriorOverkillCount} prior overkill model-fit note(s); consider a cheaper or local model");
+    }
+
+    if (risk.HasPriorUnderpoweredFit)
+    {
+        reasons.Add($"{risk.PriorUnderpoweredCount} prior underpowered model-fit note(s); consider a stronger model");
+    }
+
+    var reason = string.Join("; ", reasons);
     return $"Paid API run requires explicit confirmation: {risk.ProviderName}/{risk.ModelName} {risk.TaskComplexity} {reason}. {confirmationInstruction}.";
+}
+
+private static ModelFitSummary? FindModelFit(Goal goal, string providerName, string modelName)
+{
+    return ModelFitEvidence
+        .BuildSummary(goal.Tasks.Select(ModelFitEvidence.FindLatestNote))
+        .FirstOrDefault(fit =>
+            fit.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+            fit.ModelName.Equals(modelName, StringComparison.OrdinalIgnoreCase));
 }
 
 private static int PromptThreshold(TaskComplexity complexity)

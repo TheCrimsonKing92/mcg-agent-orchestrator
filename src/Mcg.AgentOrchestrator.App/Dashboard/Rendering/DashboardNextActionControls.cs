@@ -257,7 +257,7 @@ public static class DashboardNextActionControls
         }
 
         return TryPreviewApiRun(goal, task, agentDefinitions) is { } preview &&
-            ApiPromptCostGuard.Evaluate(preview) is not null;
+            ApiPromptCostGuard.Evaluate(preview, goal) is not null;
     }
 
     private static string? BuildApiCostRiskLabel(
@@ -276,7 +276,7 @@ public static class DashboardNextActionControls
         if (task is not null &&
             agentDefinitions is not null &&
             TryPreviewApiRun(goal, task, agentDefinitions) is { } preview &&
-            ApiPromptCostGuard.Evaluate(preview) is { } risk)
+            ApiPromptCostGuard.Evaluate(preview, goal) is { } risk)
         {
             return ApiPromptCostGuard.BuildInlineLabel(risk);
         }

@@ -271,6 +271,60 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(goal.Tasks.Single().LastExecution);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_api_run_blocks_prior_overkill_paid_model_without_large_prompt_confirm")]
+    public void CliApiRunBlocksPriorOverkillPaidModelWithoutLargePromptConfirm()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var priorTask = new TaskSpec(TaskId.New(), "Update the old label.", AgentRole.Developer);
+        var nextTask = new TaskSpec(TaskId.New(), "Update the next label.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Avoid repeating overkill API model", [priorTask, nextTask]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var provider = new FakeSmokeProvider(providerName: "OpenAI");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "manual-verification passed",
+            root,
+            0,
+            "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["api-run", "2", "--confirm-paid-api-run"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-large-paid-api-prompt", ex!.Message);
+        Xunit.Assert.Contains("prior overkill model-fit note", ex.Message);
+        Xunit.Assert.Null(provider.LastRequest);
+        Xunit.Assert.Null(nextTask.LastExecution);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_large_paid_prompt_without_confirm_flag")]
     public void CliApiRunBlocksLargePaidPromptWithoutConfirmFlag()
     {

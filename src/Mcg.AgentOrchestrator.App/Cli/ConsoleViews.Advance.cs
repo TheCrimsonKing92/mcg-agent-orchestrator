@@ -102,7 +102,7 @@ private static string BuildRunAssignedTaskCommand(
     }
 
     command += " --confirm-paid-api-run";
-    return ApiPromptCostGuard.Evaluate(preview) is null
+    return ApiPromptCostGuard.Evaluate(preview, goal) is null
         ? command
         : $"{command} {ApiPromptCostGuard.CliConfirmationFlag}";
 }

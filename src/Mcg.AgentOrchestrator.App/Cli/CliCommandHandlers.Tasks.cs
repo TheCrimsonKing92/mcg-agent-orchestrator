@@ -211,7 +211,7 @@ private static void EnsurePaidApiRunConfirmed(Goal goal, TaskSpec task, AgentDef
     }
 
     ApiPromptCostGuard.ThrowIfConfirmationRequired(
-        ApiPromptCostGuard.Evaluate(preview),
+        ApiPromptCostGuard.Evaluate(preview, goal),
         HasCliConfirmation(parts, ApiPromptCostGuard.CliConfirmationFlag));
 }
 

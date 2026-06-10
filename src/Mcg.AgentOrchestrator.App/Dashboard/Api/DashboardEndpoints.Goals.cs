@@ -509,7 +509,7 @@ internal static partial class DashboardEndpoints
                 StatusCodes.Status400BadRequest);
         }
 
-        var largePromptRisk = ApiPromptCostGuard.Evaluate(preview);
+        var largePromptRisk = ApiPromptCostGuard.Evaluate(preview, goal);
         return largePromptRisk is null || HasQueryConfirmation(context, ApiPromptCostGuard.DashboardConfirmationQueryName)
             ? null
             : Text(

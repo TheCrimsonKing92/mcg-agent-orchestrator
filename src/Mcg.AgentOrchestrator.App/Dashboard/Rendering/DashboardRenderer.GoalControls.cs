@@ -537,7 +537,7 @@ public static partial class DashboardRenderer
         if (agentDefinitions is not null &&
             TryBuildApiRunPreview(goal, task, agents, agentDefinitions) is { } preview)
         {
-            RenderApiRunPreview(html, preview);
+            RenderApiRunPreview(html, goal, preview);
             return;
         }
 
@@ -607,7 +607,7 @@ public static partial class DashboardRenderer
         }
     }
 
-    private static void RenderApiRunPreview(StringBuilder html, AgentTaskRunPreview preview)
+    private static void RenderApiRunPreview(StringBuilder html, Goal goal, AgentTaskRunPreview preview)
     {
         var reasoningLabel = string.IsNullOrWhiteSpace(preview.ReasoningEffort)
             ? string.Empty
@@ -618,7 +618,7 @@ public static partial class DashboardRenderer
         var paidLabel = ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName)
             ? " [potentially paid]"
             : string.Empty;
-        var riskLabel = ApiPromptCostGuard.Evaluate(preview) is { } risk
+        var riskLabel = ApiPromptCostGuard.Evaluate(preview, goal) is { } risk
             ? $" [{ApiPromptCostGuard.BuildInlineLabel(risk)}]"
             : string.Empty;
 
