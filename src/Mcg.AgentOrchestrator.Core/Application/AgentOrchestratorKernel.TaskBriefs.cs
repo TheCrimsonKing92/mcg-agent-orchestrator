@@ -98,10 +98,13 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add(string.Empty);
         }
 
-        lines.Add("## Recent Timeline");
-        foreach (var evt in timeline)
+        if (timeline.Count > 0)
         {
-            lines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true, complexity));
+            lines.Add("## Recent Timeline");
+            foreach (var evt in timeline)
+            {
+                lines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true, complexity));
+            }
         }
 
         return new TaskBrief(

@@ -366,6 +366,7 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains("TaskDelegated", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Goal created.", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Delegated Developer task", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("## Recent Timeline", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_lifecycle_fallback_timeline_for_complex_tasks")]
     public void BuildTaskBriefKeepsLifecycleFallbackTimelineForComplexTasks()
@@ -404,6 +405,7 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains("simple-brief-note-02", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("simple-brief-note-03", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("simple-brief-note-10", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("## Recent Timeline", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_timeline_budget_for_complex_tasks")]
     public void BuildTaskBriefKeepsLargerTimelineBudgetForComplexTasks()

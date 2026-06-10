@@ -478,6 +478,7 @@ public sealed class ModelExecutionTests
     Assert.True(!prompt.Contains("TaskDelegated", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("TaskStarted", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("started task", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("Recent timeline:", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_lifecycle_fallback_timeline_for_complex_tasks")]
@@ -538,6 +539,7 @@ public sealed class ModelExecutionTests
     Assert.True(!prompt.Contains("simple-api-note-04", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("simple-api-note-05", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("simple-api-note-10", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("Recent timeline:", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_timeline_budget_for_complex_tasks")]

@@ -136,6 +136,9 @@ public sealed class AgentTaskRunner
         var responseGuidance = string.IsNullOrWhiteSpace(responseBudgetGuidance)
             ? string.Empty
             : $"Response guidance: {responseBudgetGuidance}{Environment.NewLine}";
+        var timelineSection = string.IsNullOrWhiteSpace(timeline)
+            ? string.Empty
+            : $"{Environment.NewLine}Recent timeline:{Environment.NewLine}{timeline}";
 
         var userPrompt =
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +
@@ -144,8 +147,8 @@ public sealed class AgentTaskRunner
             $"Current task status: {task.Status}{Environment.NewLine}" +
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan)}{Environment.NewLine}" +
             responseGuidance +
-            $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}{Environment.NewLine}" +
-            $"Recent timeline:{Environment.NewLine}{timeline}";
+            $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}" +
+            timelineSection;
 
         if (isLocal)
         {
