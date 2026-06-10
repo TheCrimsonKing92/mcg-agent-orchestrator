@@ -96,9 +96,19 @@ switch ($Action) {
   const prefix = goal.slice(0, 8);
   const selector = 'form[data-action="/api/goals/' + prefix + '/tasks/' + taskNumber + '/complete-verify"]';
   const form = document.querySelector(selector);
-  if (!form) throw new Error('complete-and-verify form not found for goal ' + prefix + ' task ' + taskNumber);
-  form.querySelector('input[name="note"]').value = note;
-  await window.__dashboardSubmitForm(form);
+  if (form) {
+    form.querySelector('input[name="note"]').value = note;
+    await window.__dashboardSubmitForm(form);
+  } else {
+    const response = await fetch('/api/goals/' + prefix + '/tasks/' + taskNumber + '/complete-verify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ passed: true, note })
+    });
+    if (!response.ok) {
+      throw new Error('complete-and-verify API fallback failed with HTTP ' + response.status + ': ' + await response.text());
+    }
+  }
   await new Promise(resolve => setTimeout(resolve, 1800));
   const detail = await fetch('/api/goals/' + prefix, { cache: 'no-store' }).then(response => response.json());
   return {

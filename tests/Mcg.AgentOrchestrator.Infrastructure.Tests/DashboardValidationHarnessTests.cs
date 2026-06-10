@@ -52,6 +52,8 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains(dogfoodAction, text => text.Contains("New-DashboardGoalUrl", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("/goal/", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("complete-verify", StringComparison.Ordinal));
+    Assert.Contains(dogfoodAction, text => text.Contains("complete-and-verify API fallback", StringComparison.Ordinal));
+    Assert.Contains(dogfoodAction, text => text.Contains("JSON.stringify({ passed: true, note })", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("dashboard-smoke.js", StringComparison.Ordinal));
     Assert.Contains(readme, text => text.Contains("Run-DashboardBrowserScript.ps1 .\\scripts\\dashboard-smoke.js", StringComparison.Ordinal));
     Assert.Contains(readme, text => text.Contains("Invoke-DashboardDogfoodAction.ps1", StringComparison.Ordinal));
