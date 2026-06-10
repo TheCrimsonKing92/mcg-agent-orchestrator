@@ -44,18 +44,63 @@ public static VerifySubmissionDto ParseVerifySubmission(string body)
 
 public static ManualVerifySubmissionDto ParseManualVerifySubmission(string body)
 {
-    var submission = JsonSerializer.Deserialize<ManualVerifySubmissionDto>(body, DashboardJson.Options());
-    if (submission is null)
+    using var document = JsonDocument.Parse(body);
+    var root = document.RootElement;
+    if (root.ValueKind != JsonValueKind.Object)
     {
         throw new ArgumentException("Manual verification JSON body was invalid.");
     }
 
-    if (string.IsNullOrWhiteSpace(submission.Note))
+    var hasPassed = TryGetProperty(root, "passed", out var passedElement);
+    var hasStatus = TryGetProperty(root, "status", out var statusElement);
+    if (!TryGetProperty(root, "note", out var noteElement) ||
+        noteElement.ValueKind != JsonValueKind.String ||
+        string.IsNullOrWhiteSpace(noteElement.GetString()))
     {
         throw new ArgumentException("Manual verification JSON must include a non-empty 'note' value.");
     }
 
-    return submission with { Note = submission.Note.Trim() };
+    bool? passed = null;
+    if (hasPassed)
+    {
+        if (passedElement.ValueKind != JsonValueKind.True && passedElement.ValueKind != JsonValueKind.False)
+        {
+            throw new ArgumentException("Manual verification JSON 'passed' must be true or false.");
+        }
+
+        passed = passedElement.GetBoolean();
+    }
+
+    if (hasStatus)
+    {
+        var status = statusElement.ValueKind == JsonValueKind.String
+            ? statusElement.GetString()?.Trim()
+            : null;
+        bool? statusPassed = status?.ToLowerInvariant() switch
+        {
+            "passed" or "pass" or "true" => true,
+            "failed" or "fail" or "false" => false,
+            _ => null
+        };
+        if (statusPassed is null)
+        {
+            throw new ArgumentException("Manual verification JSON 'status' must be passed or failed.");
+        }
+
+        if (passed is not null && passed.Value != statusPassed.Value)
+        {
+            throw new ArgumentException("Manual verification JSON 'passed' and 'status' values conflict.");
+        }
+
+        passed = statusPassed;
+    }
+
+    if (passed is null)
+    {
+        throw new ArgumentException("Manual verification JSON must include 'passed' or 'status'.");
+    }
+
+    return new ManualVerifySubmissionDto(passed.Value, noteElement.GetString()!.Trim());
 }
 
 public static ProgressSubmissionDto ParseProgressSubmission(string body)
@@ -165,5 +210,21 @@ public static ProfileDispatchReadySubmissionDto ParseProfileDispatchReadySubmiss
     }
 
     return new ProfileDispatchReadySubmissionDto(submission.ProfileName.Trim());
+}
+
+private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+{
+    foreach (var property in element.EnumerateObject())
+    {
+        if (property.NameEquals(name) ||
+            property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+        {
+            value = property.Value;
+            return true;
+        }
+    }
+
+    value = default;
+    return false;
 }
 }

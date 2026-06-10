@@ -565,6 +565,31 @@ public sealed class DashboardRenderingTests
     Assert.Contains(json.Message, text => text.Contains("non-empty 'message'", StringComparison.Ordinal));
     Assert.Equal("Fix failed verification", parsed.Message);
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_accepts_manual_verification_status_alias")]
+    public void DashboardRequestParserAcceptsManualVerificationStatusAlias()
+{
+    var passed = DashboardRequestParser.ParseManualVerifySubmission("{\"status\":\"passed\",\"note\":\" Looks correct. \"}");
+    var failed = DashboardRequestParser.ParseManualVerifySubmission("{\"status\":\"failed\",\"note\":\" Missing evidence. \"}");
+
+    Assert.True(passed.Passed);
+    Assert.Equal("Looks correct.", passed.Note);
+    Assert.False(failed.Passed);
+    Assert.Equal("Missing evidence.", failed.Note);
+}
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_rejects_ambiguous_manual_verification_outcome")]
+    public void DashboardRequestParserRejectsAmbiguousManualVerificationOutcome()
+{
+    var missing = Assert.Throws<ArgumentException>(() =>
+        DashboardRequestParser.ParseManualVerifySubmission("{\"note\":\"No outcome.\"}"));
+    var invalid = Assert.Throws<ArgumentException>(() =>
+        DashboardRequestParser.ParseManualVerifySubmission("{\"status\":\"completed\",\"note\":\"No outcome.\"}"));
+    var conflict = Assert.Throws<ArgumentException>(() =>
+        DashboardRequestParser.ParseManualVerifySubmission("{\"passed\":false,\"status\":\"passed\",\"note\":\"Conflict.\"}"));
+
+    Assert.Contains(missing.Message, text => text.Contains("passed' or 'status", StringComparison.Ordinal));
+    Assert.Contains(invalid.Message, text => text.Contains("status", StringComparison.Ordinal));
+    Assert.Contains(conflict.Message, text => text.Contains("conflict", StringComparison.OrdinalIgnoreCase));
+}
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_operator_controls")]
     public void DashboardRendererCanEmitOperatorControls()
 {
