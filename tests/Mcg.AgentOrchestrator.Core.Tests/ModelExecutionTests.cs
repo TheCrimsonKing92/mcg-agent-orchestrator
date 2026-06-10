@@ -36,6 +36,36 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_does_not_complete_when_output_cap_is_hit")]
+    public async Task ExecuteAssignedTaskDoesNotCompleteWhenOutputCapIsHit()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Avoid accepting truncated output");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "API developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-small", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: 2),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var runner = new AgentTaskRunner(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", "Partial output", usage: new ModelUsage(5, 2), stopReason: "length")]),
+        clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.True(task.LastExecution is not null);
+    Assert.Equal(2, task.LastExecution!.MaxOutputTokens);
+    Assert.Equal(2, task.LastExecution.Usage!.OutputTokens);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed && evt.Message.Contains("output may be truncated", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_goal_and_task_primary_context_in_prompt")]
     public async Task ExecuteAssignedTaskTrimsNoisyGoalAndTaskPrimaryContextInPrompt()
 {

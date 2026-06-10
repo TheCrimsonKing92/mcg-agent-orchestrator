@@ -106,6 +106,16 @@ public sealed class AgentTaskRunner
             return new AgentTaskRunResult(goal, task, execution);
         }
 
+        if (HasOutputTokenLimitHit(execution))
+        {
+            _kernel.ReportTaskProgress(
+                goal.Id,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"{agent.Name} output may be truncated at {execution.MaxOutputTokens} token(s); retry with narrower scope or stronger model before accepting.");
+            return new AgentTaskRunResult(goal, task, execution);
+        }
+
         _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed task.");
 
         return new AgentTaskRunResult(goal, task, execution);
@@ -200,5 +210,12 @@ public sealed class AgentTaskRunner
     {
         const int maxLength = 240;
         return value.Length <= maxLength ? value : value[..maxLength] + "...";
+    }
+
+    private static bool HasOutputTokenLimitHit(TaskExecutionRecord execution)
+    {
+        return execution.MaxOutputTokens is > 0 &&
+            execution.Usage?.OutputTokens is { } outputTokens &&
+            outputTokens >= execution.MaxOutputTokens.Value;
     }
 }

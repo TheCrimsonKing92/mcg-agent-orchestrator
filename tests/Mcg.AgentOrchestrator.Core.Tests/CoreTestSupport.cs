@@ -33,12 +33,21 @@ internal sealed class FakeModelProvider : IModelProvider
 {
     private readonly string _responseText;
     private readonly Exception? _exception;
+    private readonly ModelUsage _usage;
+    private readonly string _stopReason;
 
-    public FakeModelProvider(string providerName, string responseText, Exception? exception = null)
+    public FakeModelProvider(
+        string providerName,
+        string responseText,
+        Exception? exception = null,
+        ModelUsage? usage = null,
+        string stopReason = "stop")
     {
         ProviderName = providerName;
         _responseText = responseText;
         _exception = exception;
+        _usage = usage ?? new ModelUsage(100, 25);
+        _stopReason = stopReason;
     }
 
     public string ProviderName { get; }
@@ -57,7 +66,7 @@ internal sealed class FakeModelProvider : IModelProvider
             throw _exception;
         }
 
-        return Task.FromResult(new ModelResponse(_responseText, new ModelUsage(100, 25), "stop"));
+        return Task.FromResult(new ModelResponse(_responseText, _usage, _stopReason));
     }
 }
 
