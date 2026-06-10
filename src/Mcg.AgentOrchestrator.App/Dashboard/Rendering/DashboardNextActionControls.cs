@@ -38,7 +38,7 @@ public static class DashboardNextActionControls
                 new DashboardNextActionControl(
                     "Start prepared work",
                     "POST",
-                    $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true{BuildLargePaidSubscriptionStartSuffix(goal, item.TaskId!)}",
+                    $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true",
                     BuildPreparedDispatchCostRiskLabel(goal, item.TaskId!),
                     BuildPreparedDispatchCostRecommendation(goal, item.TaskId!)),
             NextActionKind.DelegatePendingTask =>
@@ -122,13 +122,7 @@ public static class DashboardNextActionControls
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
-            ? "&confirmPaidApiRun=true"
-            : string.Empty;
-        suffix += RequiresLargePaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
-            ? $"&{ApiPromptCostGuard.DashboardConfirmationQueryName}=true"
-            : string.Empty;
-        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true{suffix}";
+        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true";
     }
 
     public static string BuildExplicitApiRunUrl(
@@ -138,13 +132,7 @@ public static class DashboardNextActionControls
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        var suffix = RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
-            ? "&confirmPaidApiRun=true"
-            : string.Empty;
-        suffix += RequiresLargePaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
-            ? $"&{ApiPromptCostGuard.DashboardConfirmationQueryName}=true"
-            : string.Empty;
-        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true{suffix}";
+        return $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true";
     }
 
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(
@@ -313,19 +301,6 @@ public static class DashboardNextActionControls
         }
 
         return ApiPromptCostGuard.BuildRecommendation(risk);
-    }
-
-    private static string BuildLargePaidSubscriptionStartSuffix(Goal goal, TaskId taskId)
-    {
-        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
-        if (task is null)
-        {
-            return string.Empty;
-        }
-
-        return SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is null
-            ? string.Empty
-            : $"&{SubscriptionPromptCostGuard.DashboardConfirmationQueryName}=true";
     }
 
     private static string? BuildPreparedDispatchCostRiskLabel(Goal goal, TaskId taskId)

@@ -38,8 +38,8 @@ public static partial class DashboardRenderer
         html.AppendLine("<p class=\"section-note\">Use these when you want the orchestrator to choose or assign the next goal-level step.</p>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance\">Run next safe action</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true{BuildLargeSubscriptionConfirmationSuffix(nextSubscriptionRisk)}\">Run next subscription action</button>");
-        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true{BuildLargeSubscriptionConfirmationSuffix(continueSubscriptionRisk)}\">Continue subscription handoff</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true\">Run next subscription action</button>");
+        html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true\">Continue subscription handoff</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/advance-until-blocked\">Continue non-API actions</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/delegate\">Assign tasks to agents</button>");
         html.AppendLine("</div>");
@@ -53,8 +53,8 @@ public static partial class DashboardRenderer
         html.AppendLine("</form>");
         html.AppendLine("<div class=\"buttonbar\">");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/subscription-dispatch-ready\">Prepare subscription handoffs</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true{BuildLargeSubscriptionConfirmationSuffix(subscriptionCost?.ReadyRisk)}\">Start subscription work</button>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true{BuildLargeSubscriptionConfirmationSuffix(subscriptionCost?.PreparedRisk)}\">Start prepared work</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true\">Start subscription work</button>");
+        html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/start-dispatches?confirmBatchStart=true\">Start prepared work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/refresh-dispatches\">Refresh running work</button>");
         html.AppendLine($"<button type=\"button\" data-action-button=\"/api/goals/{goalPrefix}/cancel-dispatches\">Cancel running work</button>");
         html.AppendLine("</div>");
@@ -265,7 +265,7 @@ public static partial class DashboardRenderer
         RenderAdvancedProcessAction(
             html,
             prefix,
-            $"start?confirmDispatchStart=true{BuildLargeSubscriptionConfirmationSuffix(startDispatchRisk)}",
+            "start?confirmDispatchStart=true",
             "Start prepared work",
             GetStartDispatchReadiness(task));
         RenderAdvancedProcessAction(html, prefix, "refresh", "Refresh process", GetRefreshProcessReadiness(task));
@@ -435,13 +435,6 @@ public static partial class DashboardRenderer
             NextActionAutomationKind.StartRecordedDispatch => SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
             _ => null
         };
-    }
-
-    private static string BuildLargeSubscriptionConfirmationSuffix(PaidSubscriptionPromptRisk? risk)
-    {
-        return risk is null
-            ? string.Empty
-            : $"&{SubscriptionPromptCostGuard.DashboardConfirmationQueryName}=true";
     }
 
     private static void RenderSubscriptionCostPreview(StringBuilder html, SubscriptionCostPreview? preview)
