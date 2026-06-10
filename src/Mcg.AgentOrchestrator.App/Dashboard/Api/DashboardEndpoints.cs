@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -199,19 +200,22 @@ internal static partial class DashboardEndpoints
         }
         catch (KeyNotFoundException ex)
         {
-            return Text($"dashboard not found: {ex.Message}", "text/plain; charset=utf-8", StatusCodes.Status404NotFound);
+            return Text(ErrorText("dashboard not found", ex.Message), "text/plain; charset=utf-8", StatusCodes.Status404NotFound);
         }
         catch (ArgumentException ex)
         {
-            return Text($"dashboard invalid request: {ex.Message}", "text/plain; charset=utf-8", StatusCodes.Status400BadRequest);
+            return Text(ErrorText("dashboard invalid request", ex.Message), "text/plain; charset=utf-8", StatusCodes.Status400BadRequest);
         }
         catch (Exception ex)
         {
-            return Text($"dashboard error: {ex.Message}", "text/plain; charset=utf-8", StatusCodes.Status500InternalServerError);
+            return Text(ErrorText("dashboard error", ex.Message), "text/plain; charset=utf-8", StatusCodes.Status500InternalServerError);
         }
     }
 
     private static Task<IResult> Safe(Func<IResult> handler) => Safe(() => Task.FromResult(handler()));
+
+    private static string ErrorText(string prefix, string message) =>
+        $"{prefix}: {OutputTextPreview.CreateTimeline(message).Text}";
 
     private static async Task<string> ReadRequestBodyAsync(HttpRequest request)
     {

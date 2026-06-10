@@ -80,6 +80,9 @@ public sealed class DashboardHostTests
         var js = await client.GetStringAsync(new Uri(new Uri(url), "assets/dashboard.js"));
         using var missingTaskResponse = await client.GetAsync(new Uri(new Uri(url), "api/task/999"));
         var missingTask = await missingTaskResponse.Content.ReadAsStringAsync();
+        var longMissingTaskId = "task-start-" + new string('t', 2000) + "-task-tail";
+        using var longMissingTaskResponse = await client.GetAsync(new Uri(new Uri(url), $"api/task/{Uri.EscapeDataString(longMissingTaskId)}"));
+        var longMissingTask = await longMissingTaskResponse.Content.ReadAsStringAsync();
         var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=25"));
         var continuations = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations"));
         var continuationSummary = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations/summary"));
@@ -142,6 +145,12 @@ public sealed class DashboardHostTests
         Assert.Equal("no-store", cssResponse.Headers.CacheControl?.ToString());
         Assert.Equal(HttpStatusCode.NotFound, missingTaskResponse.StatusCode);
         Assert.Contains(missingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.NotFound, longMissingTaskResponse.StatusCode);
+        Assert.Contains(longMissingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
+        Assert.Contains(longMissingTask, text => text.Contains("task-start", StringComparison.Ordinal));
+        Assert.Contains(longMissingTask, text => text.Contains("task-tail", StringComparison.Ordinal));
+        Assert.Contains(longMissingTask, text => text.Contains("[truncated", StringComparison.Ordinal));
+        Assert.True(!longMissingTask.Contains(new string('t', 2000), StringComparison.Ordinal));
         Assert.Contains(sourceSurvey, text => text.Contains("\"MaxFiles\": 25", StringComparison.Ordinal));
         Assert.Contains(sourceSurvey, text => text.Contains("\"RecommendedCommand\"", StringComparison.Ordinal));
         Assert.Contains(sourceSurvey, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
