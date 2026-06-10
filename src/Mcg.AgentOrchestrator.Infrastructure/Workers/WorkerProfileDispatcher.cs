@@ -40,7 +40,8 @@ public static class WorkerProfileDispatcher
             providerName,
             modelName,
             reasoningEffort,
-            taskComplexity));
+            taskComplexity,
+            preparation.PromptCharacterCount));
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 

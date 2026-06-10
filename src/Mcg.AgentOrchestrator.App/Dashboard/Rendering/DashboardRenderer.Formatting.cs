@@ -121,7 +121,10 @@ public static partial class DashboardRenderer
         var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
             ? string.Empty
             : $" reasoning {Encode(dispatch.ReasoningEffort)}";
-        return $" <span class=\"meta\">{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}</span>";
+        var prompt = dispatch.PromptCharacterCount is null
+            ? string.Empty
+            : $" prompt {dispatch.PromptCharacterCount.Value} chars";
+        return $" <span class=\"meta\">{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}{prompt}</span>";
     }
 
     private static string RenderTaskGate(TaskVerificationGate gate)

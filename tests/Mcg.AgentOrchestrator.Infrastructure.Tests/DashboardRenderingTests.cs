@@ -1127,7 +1127,8 @@ public sealed class DashboardRenderingTests
         "OpenAI",
         "gpt-5.3-codex",
         "medium",
-        TaskComplexity.Simple));
+        TaskComplexity.Simple,
+        321));
 
     var goalPrefix = goal.Id.Value[..8];
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
@@ -1143,13 +1144,15 @@ public sealed class DashboardRenderingTests
         .index + 1;
 
     Assert.Contains(html, text => text.Contains("Prepared handoff for codex-cli.", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Simple reasoning medium", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Simple reasoning medium prompt 321 chars", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Prompt: 321 chars", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Dispatch models: OpenAI/gpt-5.3-codex (Simple) reasoning medium [potentially paid]: 1 dispatch", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>codex exec prompt.md</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("Start prepared work", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"href=\"/api/goals/{goalPrefix}/tasks/{taskNumber}/brief\"", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Dispatch model: OpenAI/gpt-5.3-codex complexity=Simple reasoning=medium", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("Prompt size: 321 chars", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Dispatch models:", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-5.3-codex (Simple) reasoning medium [potentially paid]: 1 dispatch", StringComparison.Ordinal));
     Assert.Contains(evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value).Message, text => text.Contains("using OpenAI/gpt-5.3-codex Simple reasoning medium", StringComparison.Ordinal));
@@ -1164,9 +1167,11 @@ public sealed class DashboardRenderingTests
     Assert.Equal("gpt-5.3-codex", taskDto.LastDispatch.ModelName);
     Assert.Equal("medium", taskDto.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, taskDto.LastDispatch.TaskComplexity);
+    Assert.Equal(321, taskDto.LastDispatch.PromptCharacterCount);
     var summaryDispatch = workSummary.Tasks.Single(item => item.TaskId == task.Id.Value).LastDispatch!;
     Assert.Equal("OpenAI", summaryDispatch.ProviderName);
     Assert.Equal("gpt-5.3-codex", summaryDispatch.ModelName);
+    Assert.Equal(321, summaryDispatch.PromptCharacterCount);
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_keeps_ollama_agent_configuration_local")]

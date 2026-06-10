@@ -43,7 +43,8 @@ public sealed record TaskDispatchRecord(
     string? ProviderName = null,
     string? ModelName = null,
     string? ReasoningEffort = null,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    int? PromptCharacterCount = null);
 
 public sealed record TaskProcessRecord(
     int ProcessId,

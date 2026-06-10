@@ -151,7 +151,8 @@ internal sealed record DispatchSummaryDto(
     string? ProviderName = null,
     string? ModelName = null,
     string? ReasoningEffort = null,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    int? PromptCharacterCount = null);
 
 internal sealed record ProcessSummaryDto(
     int ProcessId,

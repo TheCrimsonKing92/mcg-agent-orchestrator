@@ -54,7 +54,8 @@ public sealed record TaskDispatchSnapshot(
     string? ProviderName = null,
     string? ModelName = null,
     string? ReasoningEffort = null,
-    TaskComplexity? TaskComplexity = null);
+    TaskComplexity? TaskComplexity = null,
+    int? PromptCharacterCount = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

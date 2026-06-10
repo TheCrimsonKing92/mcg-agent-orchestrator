@@ -55,7 +55,15 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 parts[2],
                 parts[3],
                 context.Workspace.PromptDirectory);
-            context.Kernel.RecordTaskDispatch(context.CurrentGoal.Id, workerTask.Id, new TaskDispatchRecord(parts[2], preparation.Command, context.Workspace.RootDirectory, DateTimeOffset.UtcNow));
+            context.Kernel.RecordTaskDispatch(
+                context.CurrentGoal.Id,
+                workerTask.Id,
+                new TaskDispatchRecord(
+                    parts[2],
+                    preparation.Command,
+                    context.Workspace.RootDirectory,
+                    DateTimeOffset.UtcNow,
+                    PromptCharacterCount: preparation.PromptCharacterCount));
             Console.WriteLine($"Prompt: {preparation.PromptPath}");
             ConsoleViews.PrintTask(context.CurrentGoal, workerTask);
             return true;

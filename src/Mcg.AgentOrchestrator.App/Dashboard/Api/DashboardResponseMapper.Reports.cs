@@ -139,7 +139,8 @@ private static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
                 task.LastDispatch.ProviderName,
                 task.LastDispatch.ModelName,
                 task.LastDispatch.ReasoningEffort,
-                task.LastDispatch.TaskComplexity),
+                task.LastDispatch.TaskComplexity,
+                task.LastDispatch.PromptCharacterCount),
         task.LastProcess is null
             ? null
             : new ProcessSummaryDto(

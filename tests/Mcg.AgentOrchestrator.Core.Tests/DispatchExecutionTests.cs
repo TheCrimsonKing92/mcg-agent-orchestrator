@@ -78,7 +78,8 @@ public sealed class DispatchExecutionTests
         "OpenAI",
         "gpt-5.3-codex",
         "medium",
-        TaskComplexity.Simple));
+        TaskComplexity.Simple,
+        1234));
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
@@ -91,6 +92,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal("gpt-5.3-codex", restoredTask.LastDispatch.ModelName);
     Assert.Equal("medium", restoredTask.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, restoredTask.LastDispatch.TaskComplexity);
+    Assert.Equal(1234, restoredTask.LastDispatch.PromptCharacterCount);
     Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_task_on_success")]

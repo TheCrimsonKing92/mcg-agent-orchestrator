@@ -200,6 +200,10 @@ public static partial class DashboardRenderer
         else if (task.Status == WorkTaskStatus.Running && task.LastDispatch is not null)
         {
             html.AppendLine($"<p>Prepared handoff for {Encode(task.LastDispatch.WorkerName)}.</p>");
+            if (task.LastDispatch.PromptCharacterCount is { } promptCharacterCount)
+            {
+                html.AppendLine($"<p class=\"meta\">Prompt: {promptCharacterCount} chars</p>");
+            }
             html.AppendLine($"<p class=\"meta\"><code>{Encode(task.LastDispatch.Command)}</code></p>");
             html.AppendLine("<div class=\"buttonbar\">");
             html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"{prefix}/start?confirmDispatchStart=true\">Start prepared work</button>");

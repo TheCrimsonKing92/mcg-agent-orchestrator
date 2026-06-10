@@ -73,7 +73,8 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
                 task.LastDispatch.ProviderName,
                 task.LastDispatch.ModelName,
                 task.LastDispatch.ReasoningEffort,
-                task.LastDispatch.TaskComplexity),
+                task.LastDispatch.TaskComplexity,
+                task.LastDispatch.PromptCharacterCount),
         ToProcessDto(task.LastProcess),
         task.LastVerification is null
             ? null

@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record WorkerDispatchPreparation(string PromptPath, string Command);
+public sealed record WorkerDispatchPreparation(string PromptPath, string Command, int PromptCharacterCount);
 
 public static class WorkerCommandTemplate
 {
@@ -44,7 +44,7 @@ public static class WorkerCommandTemplate
             }
         }
 
-        return new WorkerDispatchPreparation(promptPath, command);
+        return new WorkerDispatchPreparation(promptPath, command, brief.Content.Length);
     }
 
     private static string Sanitize(string value)

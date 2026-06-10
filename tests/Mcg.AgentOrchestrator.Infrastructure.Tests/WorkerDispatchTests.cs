@@ -23,6 +23,7 @@ public sealed class WorkerDispatchTests
 
     Assert.True(File.Exists(preparation.PromptPath));
     Assert.Equal("brief content", File.ReadAllText(preparation.PromptPath));
+    Assert.Equal("brief content".Length, preparation.PromptCharacterCount);
     Assert.Contains(preparation.Command, text => text.Contains("agent-cli --prompt", StringComparison.Ordinal));
     Assert.Contains(preparation.Command, text => text.Contains("--role Developer", StringComparison.Ordinal));
 }
@@ -49,7 +50,7 @@ public sealed class WorkerDispatchTests
         new WorkerProfile("custom-codex", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-reasoning {apiReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
     ]);
 
-    WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var dispatchResult = WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -68,6 +69,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal("gpt-5.3-codex", task.LastDispatch.ModelName);
     Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
+    Assert.Equal(File.ReadAllText(dispatchResult.PromptPath).Length, task.LastDispatch.PromptCharacterCount);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_already_running_subscription_dispatch")]

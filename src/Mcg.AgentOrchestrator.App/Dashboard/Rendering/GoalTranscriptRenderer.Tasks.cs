@@ -36,6 +36,10 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
         {
             text.AppendLine($"Dispatch model: {task.LastDispatch.ProviderName}/{task.LastDispatch.ModelName} complexity={task.LastDispatch.TaskComplexity?.ToString() ?? "unknown"} reasoning={task.LastDispatch.ReasoningEffort ?? "default"}");
         }
+        if (task.LastDispatch.PromptCharacterCount is { } promptCharacterCount)
+        {
+            text.AppendLine($"Prompt size: {promptCharacterCount} chars");
+        }
         text.AppendLine($"Working directory: {task.LastDispatch.WorkingDirectory}");
         text.AppendLine($"Dispatched: {task.LastDispatch.DispatchedAt:u}");
     }
