@@ -1150,9 +1150,9 @@ public sealed class DashboardRenderingTests
     Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {flexiblePromptChars} chars max 768 out [potentially paid]", StringComparison.Ordinal));
     Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {apiPromptChars} chars max 768 out [potentially paid]", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 4).Contains("API plan:", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("<code>run 3</code>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>subscription-dispatch 1</code>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>subscription-dispatch 2</code>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<code>run 3 --confirm-paid-api-run</code>", StringComparison.Ordinal));
     Assert.False(html.Contains($"subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
 }
 
@@ -1190,9 +1190,14 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goalPrefix,
         AgentDefinitions: agents));
     var controls = ExtractTaskControls(html, 1);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents).Items.Single();
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, agents);
 
     Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
     Assert.True(risk is not null);
+    Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
+    Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", workSummary.NextAction!.SuggestedCommand);
+    Assert.Contains(html, text => text.Contains("<code>run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt</code>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run task</button>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
 }

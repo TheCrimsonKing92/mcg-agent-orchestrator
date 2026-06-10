@@ -97,7 +97,8 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
-        return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(current, goal));
+        var agents = services.LoadAgentCatalog().Agents;
+        return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(current, goal, agents));
     }
 
     private static async Task<IResult> GetSubscriptionPlanAsync(string goalId, DashboardEndpointServices services)

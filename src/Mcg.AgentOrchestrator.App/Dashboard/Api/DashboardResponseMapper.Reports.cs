@@ -107,7 +107,10 @@ public static TaskEvidenceSummaryDto ToTaskEvidenceSummaryDto(Goal goal, TaskEvi
         TimelineText(item.Message));
 }
 
-public static GoalWorkSummaryDto ToGoalWorkSummaryDto(AgentOrchestratorKernel kernel, Goal goal)
+public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
@@ -120,7 +123,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(AgentOrchestratorKernel ke
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList());
 }
 
@@ -276,16 +279,23 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
         ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId));
 }
 
-public static NextActionsDto ToNextActionsDto(Goal goal, GoalNextActions actions)
+public static NextActionsDto ToNextActionsDto(
+    Goal goal,
+    GoalNextActions actions,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     return new NextActionsDto(
         actions.GoalId.Value,
         SummaryText(actions.Objective),
         actions.Status,
-        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1)).ToList());
+        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, agents)).ToList());
 }
 
-public static NextActionDto ToNextActionDto(Goal goal, NextActionItem item, int priority)
+public static NextActionDto ToNextActionDto(
+    Goal goal,
+    NextActionItem item,
+    int priority,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
     return new NextActionDto(
@@ -295,13 +305,16 @@ public static NextActionDto ToNextActionDto(Goal goal, NextActionItem item, int 
         taskNumber,
         item.HumanInputRequestId?.Value,
         TimelineText(item.Message),
-        ConsoleViews.BuildSuggestedCommand(goal, item),
-        ToNextActionControlDto(goal, item));
+        ConsoleViews.BuildSuggestedCommand(goal, item, agents),
+        ToNextActionControlDto(goal, item, agents));
 }
 
-public static NextActionControlDto? ToNextActionControlDto(Goal goal, NextActionItem item)
+public static NextActionControlDto? ToNextActionControlDto(
+    Goal goal,
+    NextActionItem item,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item);
+    var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
     return control is null ? null : new NextActionControlDto(control.Label, control.Method, control.Url);
 }
 

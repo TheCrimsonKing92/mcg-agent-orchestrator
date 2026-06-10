@@ -57,7 +57,8 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        return Json(DashboardResponseMapper.ToNextActionsDto(goal, current.BuildNextActions(goal.Id)));
+        var agents = services.LoadAgentCatalog().Agents;
+        return Json(DashboardResponseMapper.ToNextActionsDto(goal, current.BuildNextActions(goal.Id), agents));
     }
 
     private static IResult GetSourceSurvey(HttpContext context, DashboardEndpointServices services)

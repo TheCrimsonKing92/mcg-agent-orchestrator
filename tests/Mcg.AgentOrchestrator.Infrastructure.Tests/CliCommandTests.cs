@@ -119,6 +119,55 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", command);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_next_action_command_confirms_large_paid_api_run")]
+    public void CliNextActionCommandConfirmsLargePaidApiRun()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "production architecture api cli dashboard provider subscription worker persistence state tests docs " + new string('o', 5000),
+            [
+                new TaskSpec(
+                    TaskId.New(),
+                    "Design and implement complete integration with authentication migration rollback state persistence and dashboard api tests. " + new string('d', 5000),
+                    AgentRole.Developer,
+                    "Run end-to-end integration tests, dashboard smoke tests, api tests, cli tests, and rollback checks. " + new string('v', 5000))
+            ]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var action = kernel.BuildNextActions(goal.Id).Items.Single();
+
+        var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
+
+        Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_next_action_command_prefers_subscription_dispatch_for_subscription_agent")]
+    public void CliNextActionCommandPrefersSubscriptionDispatchForSubscriptionAgent()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Prefer subscription handoff",
+            [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var action = kernel.BuildNextActions(goal.Id).Items.Single();
+
+        var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
+
+        Xunit.Assert.Equal("subscription-dispatch 1", command);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_paid_provider_without_confirm_flag")]
     public void CliApiRunBlocksPaidProviderWithoutConfirmFlag()
     {

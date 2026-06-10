@@ -47,7 +47,10 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
     PrintProcessBatchResult(goal, result.Processes);
 }
 
-public static void PrintNextActions(Goal goal, GoalNextActions actions)
+public static void PrintNextActions(
+    Goal goal,
+    GoalNextActions actions,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
@@ -57,7 +60,7 @@ public static void PrintNextActions(Goal goal, GoalNextActions actions)
     {
         var item = actions.Items[index];
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
-        Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item)}");
+        Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
     }
 
     Console.WriteLine();

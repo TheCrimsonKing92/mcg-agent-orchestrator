@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -42,7 +43,10 @@ public static string BuildSuggestedCommand(NextActionItem item, int? taskNumber)
     };
 }
 
-public static string BuildSuggestedCommand(Goal goal, NextActionItem item)
+public static string BuildSuggestedCommand(
+    Goal goal,
+    NextActionItem item,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     int? taskNumber = null;
     if (item.TaskId is not null)
@@ -51,15 +55,68 @@ public static string BuildSuggestedCommand(Goal goal, NextActionItem item)
     }
 
     var command = BuildSuggestedCommand(item, taskNumber);
-    if (item.Kind != NextActionKind.ExecuteRecordedDispatch || item.TaskId is null)
+    if (item.TaskId is null || taskNumber is null)
     {
         return command;
     }
 
     var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == item.TaskId);
-    return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
-        ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
-        : command;
+    if (task is null)
+    {
+        return command;
+    }
+
+    return item.Kind switch
+    {
+        NextActionKind.ExecuteRecordedDispatch =>
+            SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
+                ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
+                : command,
+        NextActionKind.RunAssignedTask => BuildRunAssignedTaskCommand(goal, task, taskNumber.Value, agents),
+        _ => command
+    };
+}
+
+private static string BuildRunAssignedTaskCommand(
+    Goal goal,
+    TaskSpec task,
+    int taskNumber,
+    IReadOnlyList<AgentDefinition>? agents)
+{
+    var agent = ResolveAssignedAgent(task, agents);
+    if (agent is null)
+    {
+        return $"run {taskNumber}";
+    }
+
+    if (AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+    {
+        return $"subscription-dispatch {taskNumber}";
+    }
+
+    var command = $"run {taskNumber}";
+    var preview = AgentTaskRunner.PreviewRun(goal, task, [agent]);
+    if (!ProviderSmokeRunner.IsPaidProviderName(preview.ProviderName))
+    {
+        return command;
+    }
+
+    command += " --confirm-paid-api-run";
+    return ApiPromptCostGuard.Evaluate(preview) is null
+        ? command
+        : $"{command} {ApiPromptCostGuard.CliConfirmationFlag}";
+}
+
+private static AgentDefinition? ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition>? agents)
+{
+    if (agents is null)
+    {
+        return null;
+    }
+
+    return task.AssignedAgentId is null
+        ? agents.FirstOrDefault(agent => agent.Status == AgentStatus.Available && agent.Role == task.RequiredRole)
+        : agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId);
 }
 }
 

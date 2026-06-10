@@ -274,7 +274,7 @@ public static partial class DashboardRenderer
                 {
                     var item = nextActions.Items[index];
                     html.AppendLine("<tr>");
-                    html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
+                    html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item, options.AgentDefinitions))}</code></td>");
                     if (options.EnableOperatorControls)
                     {
                         html.AppendLine($"<td>{RenderNextActionControl(goal, item, options)}</td>");
@@ -405,7 +405,7 @@ public static partial class DashboardRenderer
         {
             var item = nextActions.Items[index];
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item))}</code></td>");
+            html.AppendLine($"<td>{index + 1}</td><td>{RenderWorkItemReference(goal, item.TaskId)}</td><td>{Encode(Display(item.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td><code>{Encode(BuildSuggestedCommand(goal, item, options.AgentDefinitions))}</code></td>");
             if (options.EnableOperatorControls)
             {
                 html.AppendLine($"<td>{RenderNextActionControl(goal, item, options)}</td>");
