@@ -5,19 +5,31 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class GoalManagementCommandService
 {
-public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTasks(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, WorkerProfile profile)
+public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTasks(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    WorkerProfile profile,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
-    return WorkerProfileDispatcher.PrepareReadyTasks(
-        kernel,
-        goal,
-        profile,
-        workspace.PromptDirectory,
-        workspace.ExecutionDirectory,
-        DateTimeOffset.UtcNow);
+    var results = new List<WorkerProfileDispatchResult>();
+    foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
+    {
+        results.Add(ProfileDispatchTask(kernel, workspace, goal, task, profile, agents));
+    }
+
+    return results;
 }
 
-public static WorkerProfileDispatchResult ProfileDispatchTask(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, TaskSpec task, WorkerProfile profile)
+public static WorkerProfileDispatchResult ProfileDispatchTask(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskSpec task,
+    WorkerProfile profile,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
+    var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
     return WorkerProfileDispatcher.PrepareTask(
         kernel,
         goal,
@@ -25,8 +37,71 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(AgentOrchestratorK
         profile,
         workspace.PromptDirectory,
         workspace.ExecutionDirectory,
-        DateTimeOffset.UtcNow);
+        DateTimeOffset.UtcNow,
+        subscriptionMetadata?.Variables,
+        subscriptionMetadata?.ProviderName,
+        subscriptionMetadata?.ModelName,
+        subscriptionMetadata?.ReasoningEffort,
+        subscriptionMetadata?.Complexity);
 }
+
+private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
+    Goal goal,
+    TaskSpec task,
+    WorkerProfile profile,
+    IReadOnlyList<AgentDefinition>? agents)
+{
+    if (agents is null)
+    {
+        return null;
+    }
+
+    AgentDefinition agent;
+    try
+    {
+        agent = ResolveAssignedAgent(task, agents);
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+    {
+        return null;
+    }
+
+    if (!AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+    {
+        return null;
+    }
+
+    string profileName;
+    try
+    {
+        profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task);
+    }
+    catch (InvalidOperationException)
+    {
+        return null;
+    }
+
+    if (!profile.Name.Equals(profileName, StringComparison.OrdinalIgnoreCase))
+    {
+        return null;
+    }
+
+    var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
+    var providerName = variables.GetValueOrDefault("providerName");
+    var modelName = variables.GetValueOrDefault("subscriptionModelName");
+    var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");
+    var complexity = Enum.TryParse<TaskComplexity>(variables.GetValueOrDefault("taskComplexity"), out var parsedComplexity)
+        ? parsedComplexity
+        : (TaskComplexity?)null;
+    return new ProfileSubscriptionMetadata(variables, providerName, modelName, reasoningEffort, complexity);
+}
+
+private sealed record ProfileSubscriptionMetadata(
+    IReadOnlyDictionary<string, string?> Variables,
+    string? ProviderName,
+    string? ModelName,
+    string? ReasoningEffort,
+    TaskComplexity? Complexity);
 
 public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchReadyTasks(
     AgentOrchestratorKernel kernel,

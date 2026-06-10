@@ -604,6 +604,65 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_preserves_paid_subscription_start_guard")]
+    public void CliProfileDispatchPreservesPaidSubscriptionStartGuard()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan architecture work",
+            [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+
+        var dispatched = CliCommandDispatcher.ExecuteCommand(
+            ["profile-dispatch", "1", "codex-cli"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["start-dispatch", "1", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.True(dispatched);
+        Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
+        Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+        Xunit.Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-large-paid-subscription-start", ex!.Message);
+        Xunit.Assert.Contains("complex paid model", ex.Message);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_execute_dispatch_blocks_large_paid_subscription_prompt_without_confirm_flag")]
     public void CliExecuteDispatchBlocksLargePaidSubscriptionPromptWithoutConfirmFlag()
     {

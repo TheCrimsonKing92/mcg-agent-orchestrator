@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -70,6 +71,47 @@ public sealed class WorkerDispatchTests
     Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
     Assert.Equal(File.ReadAllText(dispatchResult.PromptPath).Length, task.LastDispatch.PromptCharacterCount);
+}
+
+    [Xunit.Fact(DisplayName = "ProfileDispatchTask_enriches_matching_subscription_profile_metadata")]
+    public void ProfileDispatchTaskEnrichesMatchingSubscriptionProfileMetadata()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan architecture work",
+        [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
+
+    var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+        kernel,
+        workspace,
+        goal,
+        task,
+        profile,
+        [agent]);
+    var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
+
+    Assert.True(File.Exists(dispatch.PromptPath));
+    Assert.Contains(task.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    Assert.Equal("high", task.LastDispatch.ReasoningEffort);
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
+    Assert.True(task.LastDispatch.PromptCharacterCount > 0);
+    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(risk!));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_already_running_subscription_dispatch")]

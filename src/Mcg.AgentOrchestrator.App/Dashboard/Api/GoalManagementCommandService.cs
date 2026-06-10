@@ -25,7 +25,7 @@ public static BatchActionResultDto ApplyGoalBatchAction(
 {
     return operation.ToLowerInvariant() switch
     {
-        "profile-dispatch-ready" => ApplyProfileDispatchReady(kernel, workspace, goal, body),
+        "profile-dispatch-ready" => ApplyProfileDispatchReady(kernel, workspace, agents, goal, body),
         "subscription-dispatch-ready" => ApplySubscriptionDispatchReady(kernel, workspace, agents, goal),
         "start-subscription-ready" => ApplyStartSubscriptionReady(kernel, workspace, agents, goal),
         "start-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", StartDispatches(kernel, workspace, goal)),
@@ -35,11 +35,16 @@ public static BatchActionResultDto ApplyGoalBatchAction(
     };
 }
 
-public static BatchActionResultDto ApplyProfileDispatchReady(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, string body)
+public static BatchActionResultDto ApplyProfileDispatchReady(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IReadOnlyList<AgentDefinition> agents,
+    Goal goal,
+    string body)
 {
     var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
     var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-    var results = ProfileDispatchReadyTasks(kernel, workspace, goal, profile);
+    var results = ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents);
     return DashboardResponseMapper.ToBatchActionResultDto(goal, "profile-dispatch-ready", results.Select(result => result.Task).ToList(), results);
 }
 

@@ -34,7 +34,7 @@ public static async Task<object?> ApplyTaskActionAsync(
         case "profile-dispatch":
             var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
             var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-            var profileDispatch = ProfileDispatchTask(kernel, workspace, goal, task, profile);
+            var profileDispatch = ProfileDispatchTask(kernel, workspace, goal, task, profile, agents);
             return DashboardResponseMapper.ToProfileDispatchDto(goal, profileDispatch);
 
         case "subscription-dispatch":

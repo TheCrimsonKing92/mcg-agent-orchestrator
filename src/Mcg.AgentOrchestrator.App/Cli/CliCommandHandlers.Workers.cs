@@ -73,7 +73,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var profileTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var profile = context.WorkerProfiles.GetRequired(parts[2]);
-            var profileDispatch = GoalManagementCommandService.ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile);
+            var profileDispatch = GoalManagementCommandService.ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile, context.Agents);
             Console.WriteLine($"Prompt: {profileDispatch.PromptPath}");
             ConsoleViews.PrintTask(context.CurrentGoal, profileTask);
             return true;
@@ -82,7 +82,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             CliArgumentParser.RequirePartCount(parts, 2, "profile-dispatch-ready <profile-name>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var readyProfile = context.WorkerProfiles.GetRequired(parts[1]);
-            var dispatched = GoalManagementCommandService.ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile);
+            var dispatched = GoalManagementCommandService.ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile, context.Agents);
             foreach (var dispatchResult in dispatched)
             {
                 Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} prompt: {dispatchResult.PromptPath}");
