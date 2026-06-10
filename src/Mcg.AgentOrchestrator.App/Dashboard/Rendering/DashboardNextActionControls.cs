@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
-public sealed record DashboardNextActionControl(string Label, string Method, string Url);
+public sealed record DashboardNextActionControl(string Label, string Method, string Url, string? CostRisk = null);
 
 public static class DashboardNextActionControls
 {
@@ -24,14 +24,16 @@ public static class DashboardNextActionControls
                 new DashboardNextActionControl(
                     GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
                     "POST",
-                    BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions)),
+                    BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions),
+                    BuildApiCostRiskLabel(goal, item.TaskId!, explicitApiRun: false, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
                 new DashboardNextActionControl(
                     "Start prepared work",
                     "POST",
-                    $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true{BuildLargePaidSubscriptionStartSuffix(goal, item.TaskId!)}"),
+                    $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true{BuildLargePaidSubscriptionStartSuffix(goal, item.TaskId!)}",
+                    BuildPreparedDispatchCostRiskLabel(goal, item.TaskId!)),
             NextActionKind.DelegatePendingTask =>
                 new DashboardNextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
             NextActionKind.InspectFailedTask when taskNumber is not null =>
@@ -258,6 +260,30 @@ public static class DashboardNextActionControls
             ApiPromptCostGuard.Evaluate(preview) is not null;
     }
 
+    private static string? BuildApiCostRiskLabel(
+        Goal goal,
+        TaskId taskId,
+        bool explicitApiRun,
+        IReadOnlyList<AgentConfigurationValidation>? agents,
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
+    {
+        if (!RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun, agents, agentDefinitions))
+        {
+            return null;
+        }
+
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        if (task is not null &&
+            agentDefinitions is not null &&
+            TryPreviewApiRun(goal, task, agentDefinitions) is { } preview &&
+            ApiPromptCostGuard.Evaluate(preview) is { } risk)
+        {
+            return ApiPromptCostGuard.BuildInlineLabel(risk);
+        }
+
+        return "paid API";
+    }
+
     private static string BuildLargePaidSubscriptionStartSuffix(Goal goal, TaskId taskId)
     {
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
@@ -269,6 +295,14 @@ public static class DashboardNextActionControls
         return SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is null
             ? string.Empty
             : $"&{SubscriptionPromptCostGuard.DashboardConfirmationQueryName}=true";
+    }
+
+    private static string? BuildPreparedDispatchCostRiskLabel(Goal goal, TaskId taskId)
+    {
+        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
+        return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
+            ? "large paid subscription start"
+            : null;
     }
 
     private static string ResolveApiProviderName(Goal goal, TaskSpec task, AgentConfigurationValidation agent)

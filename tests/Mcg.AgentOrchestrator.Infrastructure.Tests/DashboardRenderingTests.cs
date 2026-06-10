@@ -1022,7 +1022,8 @@ public sealed class DashboardRenderingTests
         "Run paid API task",
         "POST",
         $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true&confirmPaidApiRun=true",
-        [Validation(task.RequiredRole, AgentExecutionPolicy.ApiOnly)]);
+        [Validation(task.RequiredRole, AgentExecutionPolicy.ApiOnly)],
+        "paid API");
     AssertControl(
         goal,
         new NextActionItem(NextActionKind.RefreshRunningProcess, task.Id, null, "Refresh it"),
@@ -1097,8 +1098,11 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", control!.Url);
+    Assert.Equal("large paid subscription start", control.CostRisk);
     Assert.True(nextDto.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.Equal("large paid subscription start", nextDto.Control!.CostRisk);
     Assert.True(workSummary.NextAction!.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.Equal("large paid subscription start", workSummary.NextAction.Control!.CostRisk);
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&amp;confirmLargePaidSubscriptionStart=true\"", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Suggested command: execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
@@ -1209,7 +1213,9 @@ public sealed class DashboardRenderingTests
     Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
     Assert.True(risk is not null);
     Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
+    Assert.Equal(ApiPromptCostGuard.BuildInlineLabel(risk!), nextDto.Control!.CostRisk);
     Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", workSummary.NextAction!.SuggestedCommand);
+    Assert.Equal(ApiPromptCostGuard.BuildInlineLabel(risk!), workSummary.NextAction.Control!.CostRisk);
     Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", stageDto.SuggestedCommand);
     Assert.Contains(html, text => text.Contains("<code>run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt</code>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true&amp;confirmPaidApiRun=true&amp;confirmLargePaidApiPrompt=true\">Run paid API task</button>", StringComparison.Ordinal));
@@ -1560,7 +1566,8 @@ static void AssertControl(
     string label,
     string method,
     string url,
-    IReadOnlyList<AgentConfigurationValidation>? agents = null)
+    IReadOnlyList<AgentConfigurationValidation>? agents = null,
+    string? costRisk = null)
 {
     var control = DashboardNextActionControls.Build(goal, item, agents);
 
@@ -1568,6 +1575,7 @@ static void AssertControl(
     Assert.Equal(label, control!.Label);
     Assert.Equal(method, control.Method);
     Assert.Equal(url, control.Url);
+    Assert.Equal(costRisk, control.CostRisk);
 }
 
 static AgentDefinition Agent(AgentRole role, AgentExecutionPolicy policy)

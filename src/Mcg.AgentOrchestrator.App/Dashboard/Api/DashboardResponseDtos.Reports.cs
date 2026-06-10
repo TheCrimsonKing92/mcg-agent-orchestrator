@@ -248,4 +248,4 @@ internal sealed record NextActionDto(
     string SuggestedCommand,
     NextActionControlDto? Control);
 
-internal sealed record NextActionControlDto(string Label, string Method, string Url);
+internal sealed record NextActionControlDto(string Label, string Method, string Url, string? CostRisk = null);

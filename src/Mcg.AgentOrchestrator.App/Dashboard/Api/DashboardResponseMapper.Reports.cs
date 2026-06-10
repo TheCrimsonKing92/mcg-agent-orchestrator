@@ -321,7 +321,7 @@ public static NextActionControlDto? ToNextActionControlDto(
     IReadOnlyList<AgentDefinition>? agents = null)
 {
     var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
-    return control is null ? null : new NextActionControlDto(control.Label, control.Method, control.Url);
+    return control is null ? null : new NextActionControlDto(control.Label, control.Method, control.Url, control.CostRisk);
 }
 
 public static HumanInputDto ToHumanInputDto(AgentOrchestratorKernel kernel, HumanInputRequest request)
