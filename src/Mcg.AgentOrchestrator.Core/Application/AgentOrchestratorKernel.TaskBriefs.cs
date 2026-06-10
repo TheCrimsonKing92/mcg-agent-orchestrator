@@ -57,7 +57,7 @@ public sealed partial class AgentOrchestratorKernel
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
             lines.Add("## Verification Plan");
-            lines.Add(PromptContextFormatter.TrimPromptBlock(task.VerificationPlan));
+            lines.Add(PromptContextFormatter.TrimVerificationPlanBlock(task.VerificationPlan, complexity));
             lines.Add(string.Empty);
         }
 

@@ -416,7 +416,7 @@ public sealed class ModelExecutionTests
     var agents = DefaultAgents();
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var plan = $"api-plan-start {new string('v', 1600)} api-plan-tail";
+    var plan = $"api-plan-start {new string('v', 460)} api-plan-middle {new string('w', 260)} api-plan-tail";
     kernel.SetTaskVerificationPlan(goal.Id, task.Id, plan);
     var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
     var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
@@ -427,8 +427,44 @@ public sealed class ModelExecutionTests
     Assert.Contains(prompt, text => text.Contains("api-plan-start", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("api-plan-tail", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
-    Assert.True(!prompt.Contains(new string('v', 1600), StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("api-plan-middle", StringComparison.Ordinal));
     Assert.Equal(plan, task.VerificationPlan);
+}
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_verification_plan_budget_for_complex_tasks")]
+    public async Task ExecuteAssignedTaskKeepsLargerVerificationPlanBudgetForComplexTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep complex API verification detail",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var plan = $"complex-api-plan-start {new string('v', 460)} complex-api-plan-middle {new string('w', 260)} complex-api-plan-tail";
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, plan);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("complex-api-plan-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("complex-api-plan-middle", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("complex-api-plan-tail", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_excludes_unrelated_task_timeline_from_prompt")]

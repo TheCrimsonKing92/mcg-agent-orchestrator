@@ -145,7 +145,7 @@ public sealed class AgentTaskRunner
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}{Environment.NewLine}" +
             $"Task role: {task.RequiredRole}{Environment.NewLine}" +
             $"Current task status: {task.Status}{Environment.NewLine}" +
-            $"Verification plan: {FormatVerificationPlan(task.VerificationPlan)}{Environment.NewLine}" +
+            $"Verification plan: {FormatVerificationPlan(task.VerificationPlan, complexity)}{Environment.NewLine}" +
             responseGuidance +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}" +
             timelineSection;
@@ -184,11 +184,11 @@ public sealed class AgentTaskRunner
             : RoutinePaidProviderFallbackMaxOutputTokens;
     }
 
-    private static string FormatVerificationPlan(string? verificationPlan)
+    private static string FormatVerificationPlan(string? verificationPlan, TaskComplexity complexity)
     {
         return string.IsNullOrWhiteSpace(verificationPlan)
             ? "none"
-            : PromptContextFormatter.TrimPromptBlock(verificationPlan);
+            : PromptContextFormatter.TrimVerificationPlanBlock(verificationPlan, complexity);
     }
 
     private static int TimelineEventBudget(TaskComplexity complexity)

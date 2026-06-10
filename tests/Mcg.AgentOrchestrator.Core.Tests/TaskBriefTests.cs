@@ -435,7 +435,7 @@ public sealed class TaskBriefTests
     var goal = kernel.CreateGoal("Trim noisy verification plan");
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var plan = $"plan-start {new string('p', 1600)} plan-tail";
+    var plan = $"plan-start {new string('p', 460)} plan-middle {new string('q', 260)} plan-tail";
     kernel.SetTaskVerificationPlan(goal.Id, task.Id, plan);
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
@@ -443,7 +443,31 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("plan-start", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("plan-tail", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
-    Assert.True(!brief.Contains(new string('p', 1600), StringComparison.Ordinal));
+    Assert.True(!brief.Contains("plan-middle", StringComparison.Ordinal));
+    Assert.Equal(plan, task.VerificationPlan);
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_verification_plan_budget_for_complex_tasks")]
+    public void BuildTaskBriefKeepsLargerVerificationPlanBudgetForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep complex verification detail",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var task = goal.Tasks.Single();
+    var plan = $"complex-plan-start {new string('p', 460)} complex-plan-middle {new string('q', 260)} complex-plan-tail";
+    kernel.SetTaskVerificationPlan(goal.Id, task.Id, plan);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("complex-plan-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-plan-middle", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-plan-tail", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("[truncated", StringComparison.Ordinal));
     Assert.Equal(plan, task.VerificationPlan);
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_dispatch_command")]
