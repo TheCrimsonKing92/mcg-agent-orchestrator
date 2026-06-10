@@ -130,7 +130,10 @@ public static partial class GoalTranscriptRenderer
             ? string.Empty
             : $" reasoning {dispatch.ReasoningEffort}";
         var paid = dispatch.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
-        return $"{dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{paid}: {dispatches}";
+        var prompt = dispatch.PromptCharacterCount is null
+            ? string.Empty
+            : $", prompt {dispatch.PromptCharacterCount.Value} chars";
+        return $"{dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{paid}: {dispatches}{prompt}";
     }
 
     private static string FormatMaxOutputTokens(int? maxOutputTokens)

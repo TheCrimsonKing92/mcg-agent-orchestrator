@@ -104,7 +104,8 @@ internal sealed record DispatchModelSummaryDto(
     int DispatchCount,
     TaskComplexity? TaskComplexity = null,
     string? ReasoningEffort = null,
-    bool IsPotentiallyPaidProvider = false);
+    bool IsPotentiallyPaidProvider = false,
+    int? PromptCharacterCount = null);
 
 internal sealed record TaskEvidenceSummaryDto(
     int TaskNumber,

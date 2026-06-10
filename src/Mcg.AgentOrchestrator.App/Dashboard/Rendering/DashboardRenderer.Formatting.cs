@@ -95,7 +95,10 @@ public static partial class DashboardRenderer
             ? string.Empty
             : $" reasoning {Encode(dispatch.ReasoningEffort)}";
         var paid = dispatch.IsPotentiallyPaidProvider ? " [potentially paid]" : string.Empty;
-        return $"{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}{paid}: {dispatches}";
+        var prompt = dispatch.PromptCharacterCount is null
+            ? string.Empty
+            : $", prompt {dispatch.PromptCharacterCount.Value} chars";
+        return $"{Encode(dispatch.ProviderName)}/{Encode(dispatch.ModelName)}{complexity}{reasoning}{paid}: {dispatches}{prompt}";
     }
 
     private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)

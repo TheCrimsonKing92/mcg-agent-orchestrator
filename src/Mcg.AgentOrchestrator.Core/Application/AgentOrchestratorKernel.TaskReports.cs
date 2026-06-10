@@ -131,7 +131,8 @@ public sealed partial class AgentOrchestratorKernel
                 group.Count(),
                 group.Key.TaskComplexity,
                 group.Key.ReasoningEffort,
-                IsPotentiallyPaidProvider(group.Key.ProviderName!)))
+                IsPotentiallyPaidProvider(group.Key.ProviderName!),
+                SumKnownUsage(group.Select(task => task.LastDispatch!.PromptCharacterCount))))
             .ToList();
     }
 

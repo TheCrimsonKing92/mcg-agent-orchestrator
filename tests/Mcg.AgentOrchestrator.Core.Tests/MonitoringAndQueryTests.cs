@@ -171,7 +171,8 @@ public sealed class MonitoringAndQueryTests
         "OpenAI",
         "gpt-5.3-codex",
         "medium",
-        TaskComplexity.Simple));
+        TaskComplexity.Simple,
+        456));
     kernel.RecordTaskProcessStarted(goal.Id, processTask.Id, new TaskProcessRecord(1234, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
     kernel.ReportTaskProgress(goal.Id, verificationTask.Id, WorkTaskStatus.Completed, "Review done.");
     kernel.RecordTaskVerification(goal.Id, verificationTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, "", "failed", clock.UtcNow));
@@ -208,6 +209,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, dispatchModel.DispatchCount);
     Assert.Equal(TaskComplexity.Simple, dispatchModel.TaskComplexity);
     Assert.Equal("medium", dispatchModel.ReasoningEffort);
+    Assert.Equal(456, dispatchModel.PromptCharacterCount);
     Assert.True(dispatchModel.IsPotentiallyPaidProvider);
     Assert.Equal(TaskEvidenceKind.None, summary.Tasks.Single(item => item.TaskId == inputTask.Id).LatestEvidence);
     Assert.Equal(1, summary.Tasks.Single(item => item.TaskId == inputTask.Id).PendingHumanInputCount);

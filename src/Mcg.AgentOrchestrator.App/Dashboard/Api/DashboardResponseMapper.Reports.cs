@@ -81,7 +81,8 @@ public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvi
             item.DispatchCount,
             item.TaskComplexity,
             item.ReasoningEffort,
-            item.IsPotentiallyPaidProvider)).ToList(),
+            item.IsPotentiallyPaidProvider,
+            item.PromptCharacterCount)).ToList(),
         summary.Tasks.Select(item => ToTaskEvidenceSummaryDto(goal, item)).ToList());
 }
 

@@ -66,7 +66,8 @@ public sealed record DispatchModelSummary(
     int DispatchCount,
     TaskComplexity? TaskComplexity = null,
     string? ReasoningEffort = null,
-    bool IsPotentiallyPaidProvider = false);
+    bool IsPotentiallyPaidProvider = false,
+    int? PromptCharacterCount = null);
 
 public sealed record TaskEvidenceSummary(
     TaskId TaskId,
