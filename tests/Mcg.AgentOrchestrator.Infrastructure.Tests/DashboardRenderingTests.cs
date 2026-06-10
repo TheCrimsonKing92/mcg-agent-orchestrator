@@ -82,7 +82,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Model usage:", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("- OpenAI/gpt-test (Simple) [potentially paid]: 1 run, 1 in / 2 out", StringComparison.Ordinal));
     Assert.Equal(TaskComplexity.Simple, taskDto.LastExecution!.TaskComplexity);
-    Assert.Equal(1024, taskDto.LastExecution.MaxOutputTokens);
+    Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, taskDto.LastExecution.MaxOutputTokens);
     Assert.False(taskDto.LastExecution.OutputTokenLimitHit);
     Assert.Equal(1, evidenceDto.InputTokens);
     Assert.Equal(2, evidenceDto.OutputTokens);
@@ -783,7 +783,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<option value=\"\">Use API model</option>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
-    Assert.Contains(configHtml, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"1024\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"768\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"1200\"", StringComparison.Ordinal));
     AssertOpenAiModelOrderIsCostAware(configHtml);
     AssertOpenAiModelOrderIsCostAware(DashboardAssets.OperatorControlsScript);
@@ -1096,8 +1096,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 1).Contains("API plan:", StringComparison.Ordinal));
-    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 1024 out [potentially paid]", StringComparison.Ordinal));
-    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 1024 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 768 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains("API plan: OpenAI/test Simple reasoning medium max 768 out [potentially paid]", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 4).Contains("API plan:", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>run 2</code>", StringComparison.Ordinal));
@@ -1348,7 +1348,7 @@ static AgentConfigurationValidation Validation(AgentRole role, AgentExecutionPol
         "OpenAI",
         "test",
         "medium",
-        1024,
+        AgentCatalog.RoutineApiMaxOutputTokens,
         policy,
         null,
         null,

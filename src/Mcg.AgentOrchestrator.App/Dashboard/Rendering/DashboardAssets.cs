@@ -110,7 +110,7 @@ function profileOptions(form, preferred){
   });
   return unique.map(name => [name, name || 'None']);
 }
-function maxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '1024' : '8192'; }
+function maxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '768' : '8192'; }
 function complexMaxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '1200' : '8192'; }
 function syncAgentConfig(form, preserve){
   const providerSelect = form.querySelector('select[name="providerName"]');

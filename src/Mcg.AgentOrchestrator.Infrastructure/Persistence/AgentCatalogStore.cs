@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
-    public const int RoutineApiMaxOutputTokens = 1024;
+    public const int RoutineApiMaxOutputTokens = 768;
     public const int ComplexApiMaxOutputTokens = 1200;
     public const string RoutineReasoningEffort = "medium";
     public const string ComplexReasoningEffort = "high";
