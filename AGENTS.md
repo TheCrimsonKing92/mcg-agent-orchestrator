@@ -76,3 +76,5 @@ Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durabl
 For subscription/API-authored work, include a `Model fit:` note with the selected model or launcher, the task shape, and whether it was adequate, overkill, or underpowered. Use this evidence to tune future model selection.
 
 Do not paste full dashboard responses, full prompts, full logs, or long API payloads.
+
+Rotate `DOGFOOD_LOG.md` when it grows past roughly 500 lines: move all but the most recent entries to a dated archive under `docs/` (for example `docs/DOGFOOD_LOG-2026-06.md`) and keep the pointer line at the top of the log current. Do not load archives into context for routine work.
