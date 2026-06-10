@@ -2,19 +2,29 @@
 
 Follow-up work items. Each entry is self-contained: act on it without prior conversation context. When an item is finished, remove the entry and note the closing commit in DOGFOOD_LOG.md or the commit message. Check this file before proposing new follow-up work.
 
-## Local agentic worker profile for file-capable local-model execution
+## Capable local model for the agentic worker bridge
 
-Status: open | Size: medium | Suggested route: operator-driven setup plus dogfood validation
+Status: open, blocked on model capability | Size: small once a model is chosen | Suggested route: operator decision plus one smoke
 
-Why: API model runs are single-shot text completion with no file access, so local models cannot do file work even with goal worktrees available (phase 1, landed 2026-06-10: `GoalWorktrees`, `workspace` CLI command, worktree-aware dispatch). The agreed path is bridging to an agent CLI that targets the local Ollama endpoint, reusing the existing subscription-dispatch machinery (prompt file, background process, logs, verification gates) unchanged.
+Why: the launcher machinery is done (2026-06-10): `qwen-code-cli` is the default Ollama subscription profile, `codex-oss-cli` exists for gpt-oss models, and a profile-dispatch ran end-to-end inside a goal worktree with logs/evidence recorded. What failed is the model: qwen3:8b makes structured tool calls through Qwen Code but botches parameters every attempt and returned an empty response under dispatch; qwen3:14b is too slow on 10GB VRAM; codex+qwen is a protocol dead end (see 2026-06-10 dogfood entry). No installed model can reliably execute even a trivial file-write task.
 
-Where: worker profile catalog (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfiles.cs` defaults), `.orchestrator/workers.json`. Candidate CLIs: Qwen Code (built for qwen models, OpenAI-compatible endpoint) first, Codex CLI `--oss`/custom provider as fallback. Endpoint: `http://127.0.0.1:11434/v1`.
+Options: `ollama pull gpt-oss:20b` (~13GB; codex --oss designed pairing; partial CPU offload on the RTX 3080), or wait for stronger small tool-calling models and re-run the smoke (`qwen --yolo -p "<file-write instruction>"` in a scratch directory).
 
-Done when: a worker profile dispatches a file-touching task to a local-model agent CLI inside the goal worktree, evidence and verification record normally, and the run is classified local/free by the cost guards. Record a model-fit note and a dogfood entry comparing CLI candidates.
+Done when: a local model completes the BRIDGE.md smoke through `profile-dispatch` + `start-dispatch` in a goal worktree, and a passing model-fit note is recorded.
 
-Decision record: goal-branch merge policy is auto-merge on `acceptance` when fast-forward succeeds, suggest the merge command otherwise (decided 2026-06-10).
+Decision record: goal-branch merge policy is auto-merge on `acceptance` when fast-forward succeeds, suggest otherwise (2026-06-10). Qwen Code chosen over codex for qwen models after codex 0.137 removed the chat wire API (2026-06-10).
 
-Optional later phase: native tool loop in `AgentTaskRunner` (read/glob/edit/run tools over Ollama function calling) if bridge CLIs prove too heavy or unreliable at 8B scale.
+Optional later phase: native tool loop in `AgentTaskRunner` (read/glob/edit/run tools over Ollama function calling) if bridge CLIs stay unreliable.
+
+## Dispatch exit code should not auto-pass verification for empty output
+
+Status: open | Size: small | Suggested route: direct edit, simple
+
+Why: in the 2026-06-10 bridge dogfood, a qwen-code dispatch exited 0 with completely empty stdout and the orchestrator recorded it as a passing verification, completing the task. "Did nothing successfully" was indistinguishable from "did the work". AGENTS.md already warns about echo-only dispatches looking completed; this reproduced it with a real launcher.
+
+Where: `RecordDispatchExecutionResult` path (`src/Mcg.AgentOrchestrator.Infrastructure/Processes/LocalDispatchRunner.cs`, `BackgroundDispatchRunner.cs`) and the kernel verification recording it calls.
+
+Done when: a dispatch that exits 0 with empty stdout/stderr does not complete a Developer task on its own; it either records a non-passing verification or flags the task for operator review. Test covers the empty-output case.
 
 ## Structured model-fit field
 
