@@ -300,8 +300,8 @@ public static class DashboardNextActionControls
     private static string? BuildPreparedDispatchCostRiskLabel(Goal goal, TaskId taskId)
     {
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
-        return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
-            ? "large paid subscription start"
+        return task is not null && SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is { } risk
+            ? SubscriptionPromptCostGuard.BuildInlineLabel(risk)
             : null;
     }
 

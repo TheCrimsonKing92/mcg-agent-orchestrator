@@ -1120,6 +1120,40 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Suggested command: execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardNextActionControls_label_complex_paid_prepared_dispatch")]
+    public void DashboardNextActionControlsLabelComplexPaidPreparedDispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Start complex prepared dispatch",
+        [new TaskSpec(TaskId.New(), "Run prepared complex paid work", AgentRole.Developer)]);
+    var agent = Agent(AgentRole.Developer, AgentExecutionPolicy.PreferSubscription);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt.md",
+        "C:\\repo",
+        DateTimeOffset.UtcNow,
+        "OpenAI",
+        "gpt-5.5",
+        "high",
+        TaskComplexity.Complex,
+        500));
+    var action = kernel.BuildNextActions(goal.Id).Items.Single();
+    var goalPrefix = goal.Id.Value[..8];
+
+    var control = DashboardNextActionControls.Build(goal, action);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id)).Items.Single();
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+
+    Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
+    Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true&confirmLargePaidSubscriptionStart=true", control!.Url);
+    Assert.Equal("complex paid subscription model", control.CostRisk);
+    Assert.Equal("complex paid subscription model", nextDto.Control!.CostRisk);
+    Assert.Equal("complex paid subscription model", workSummary.NextAction!.Control!.CostRisk);
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_labels_run_controls_by_execution_policy")]
     public void DashboardRendererLabelsRunControlsByExecutionPolicy()
 {
@@ -1315,7 +1349,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true&confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Large paid subscription start", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains(SubscriptionPromptCostGuard.BuildInlineLabel(risk!), StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"{risk!.PromptCharacterCount} prompt chars across 1 task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
 }

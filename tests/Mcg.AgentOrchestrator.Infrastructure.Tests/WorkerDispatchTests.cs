@@ -815,7 +815,13 @@ public sealed class WorkerDispatchTests
 
     Assert.True(risk is not null);
     Assert.Equal(12001, risk!.PromptCharacterCount);
+    Assert.True(risk.PromptExceedsBatchThreshold);
+    Assert.True(risk.HasOversizedPrompt);
+    Assert.False(risk.TaskCountExceedsThreshold);
+    Assert.False(risk.UsesComplexPaidModel);
+    Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_fanout_with_small_prompts")]
@@ -836,6 +842,11 @@ public sealed class WorkerDispatchTests
     Assert.True(risk is not null);
     Assert.Equal(5, risk!.TaskCount);
     Assert.Equal(2500, risk.PromptCharacterCount);
+    Assert.False(risk.PromptExceedsBatchThreshold);
+    Assert.False(risk.HasOversizedPrompt);
+    Assert.True(risk.TaskCountExceedsThreshold);
+    Assert.False(risk.UsesComplexPaidModel);
+    Assert.Equal("paid subscription fanout", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.True(risk.Details.Any(detail => detail.Contains("Paid task count 5 exceeds 3", StringComparison.Ordinal)));
     Assert.Contains(ex.Message, text => text.Contains("thresholds 12000 chars or 3 task(s)", StringComparison.Ordinal));
 }
@@ -858,6 +869,11 @@ public sealed class WorkerDispatchTests
     Assert.True(risk is not null);
     Assert.Equal(1, risk!.TaskCount);
     Assert.Equal(500, risk.PromptCharacterCount);
+    Assert.False(risk.PromptExceedsBatchThreshold);
+    Assert.False(risk.HasOversizedPrompt);
+    Assert.False(risk.TaskCountExceedsThreshold);
+    Assert.True(risk.UsesComplexPaidModel);
+    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.True(risk.Details.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]

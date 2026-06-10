@@ -8,6 +8,10 @@ internal sealed record PaidSubscriptionPromptRisk(
     int PromptCharacterCount,
     int BatchPromptThreshold,
     int BatchTaskThreshold,
+    bool PromptExceedsBatchThreshold,
+    bool TaskCountExceedsThreshold,
+    bool HasOversizedPrompt,
+    bool UsesComplexPaidModel,
     IReadOnlyList<string> Details);
 
 internal static class SubscriptionPromptCostGuard
@@ -107,6 +111,26 @@ public static string BuildDashboardMessage(PaidSubscriptionPromptRisk risk)
         $"add {DashboardConfirmationQueryName}=true after inspecting the subscription plan");
 }
 
+public static string BuildInlineLabel(PaidSubscriptionPromptRisk risk)
+{
+    if (risk.PromptExceedsBatchThreshold || risk.HasOversizedPrompt)
+    {
+        return "large paid subscription start";
+    }
+
+    if (risk.TaskCountExceedsThreshold)
+    {
+        return "paid subscription fanout";
+    }
+
+    if (risk.UsesComplexPaidModel)
+    {
+        return "complex paid subscription model";
+    }
+
+    return "paid subscription start";
+}
+
 private static string BuildCliMessage(PaidSubscriptionPromptRisk risk)
 {
     return BuildMessage(
@@ -119,7 +143,7 @@ private static string BuildMessage(PaidSubscriptionPromptRisk risk, string confi
     var details = risk.Details.Count == 0
         ? string.Empty
         : " " + string.Join(" ", risk.Details);
-    return $"Large paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s). {confirmationInstruction}.{details}";
+    return $"Paid subscription start requires explicit confirmation: {risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s). {confirmationInstruction}.{details}";
 }
 
 private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCandidate> candidates)
@@ -178,6 +202,10 @@ private static PaidSubscriptionPromptRisk? BuildRisk(IReadOnlyList<PaidPromptCan
         total,
         BatchPaidPromptThreshold,
         BatchPaidTaskThreshold,
+        total > BatchPaidPromptThreshold,
+        tooManyPaidTasks,
+        oversized.Count > 0,
+        complex.Count > 0,
         details);
 }
 

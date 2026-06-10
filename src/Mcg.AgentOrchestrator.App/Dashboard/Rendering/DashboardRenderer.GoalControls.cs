@@ -445,7 +445,7 @@ public static partial class DashboardRenderer
             var readyModels = string.IsNullOrWhiteSpace(modelSummary)
                 ? string.Empty
                 : $" Ready: {modelSummary}.";
-            html.AppendLine($"<p class=\"attention\"><strong>Large paid subscription start</strong><br>{risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).{Encode(details)}{Encode(readyModels)}{Encode(preparedPrompt)}</p>");
+            html.AppendLine($"<p class=\"attention\"><strong>{Encode(SubscriptionPromptCostGuard.BuildInlineLabel(risk))}</strong><br>{risk.PromptCharacterCount} prompt chars across {risk.TaskCount} task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).{Encode(details)}{Encode(readyModels)}{Encode(preparedPrompt)}</p>");
             return;
         }
 
