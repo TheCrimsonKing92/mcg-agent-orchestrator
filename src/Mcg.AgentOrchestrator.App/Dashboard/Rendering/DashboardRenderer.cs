@@ -213,8 +213,8 @@ public static partial class DashboardRenderer
     private static void RenderOpsView(
         StringBuilder html,
         AgentOrchestratorKernel kernel,
-        IReadOnlyList<Goal> goals,
-        IReadOnlyList<Goal> displayedGoals,
+        List<Goal> goals,
+        List<Goal> displayedGoals,
         DashboardRenderOptions options)
     {
         if (options.EnableOperatorControls)
