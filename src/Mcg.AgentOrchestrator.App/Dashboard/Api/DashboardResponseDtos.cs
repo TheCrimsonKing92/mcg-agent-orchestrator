@@ -42,6 +42,7 @@ internal sealed record SubscriptionPlanDto(
     string? ReadyStartCostRisk,
     int? ReadyStartPromptCharacterCount,
     IReadOnlyList<string> ReadyStartCostRiskDetails,
+    string? ReadyStartCostRecommendation,
     IReadOnlyList<SubscriptionPlanModelSummaryDto> ReadyModelUsage,
     IReadOnlyList<SubscriptionPlanItemDto> Items);
 

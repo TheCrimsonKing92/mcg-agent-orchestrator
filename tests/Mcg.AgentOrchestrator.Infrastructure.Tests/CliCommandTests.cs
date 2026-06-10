@@ -858,6 +858,7 @@ public sealed class CliCommandTests
         var output = writer.ToString();
         Xunit.Assert.Contains("Ready start risk: complex paid subscription model", output);
         Xunit.Assert.Contains("--confirm-large-paid-subscription-start", output);
+        Xunit.Assert.Contains("Confirm this task needs the complex paid subscription model", output);
         Xunit.Assert.Contains("uses complex paid model selection", output);
 }
 

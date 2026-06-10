@@ -800,6 +800,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal(complexPromptCharacters, complexSummary.EstimatedPromptCharacterCount);
     Assert.True(complexSummary.IsPotentiallyPaidProvider);
     Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
+    Assert.True(plan.ReadyStartCostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
     Assert.Equal(simplePromptCharacters + complexPromptCharacters, plan.ReadyStartPromptCharacterCount);
     Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
 }

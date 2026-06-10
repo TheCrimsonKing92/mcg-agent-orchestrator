@@ -85,6 +85,7 @@ public static SubscriptionPlanDto BuildSubscriptionPlan(
         readyStartRisk is null ? null : SubscriptionPromptCostGuard.BuildInlineLabel(readyStartRisk),
         readyStartRisk?.PromptCharacterCount,
         readyStartRisk?.Details ?? [],
+        readyStartRisk is null ? null : SubscriptionPromptCostGuard.BuildRecommendation(readyStartRisk),
         readyModelUsage,
         items);
 }

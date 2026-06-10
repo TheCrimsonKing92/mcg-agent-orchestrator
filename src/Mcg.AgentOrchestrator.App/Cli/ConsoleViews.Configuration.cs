@@ -131,10 +131,13 @@ public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
         var prompt = plan.ReadyStartPromptCharacterCount is null
             ? string.Empty
             : $"; {plan.ReadyStartPromptCharacterCount.Value} prompt chars";
+        var recommendation = string.IsNullOrWhiteSpace(plan.ReadyStartCostRecommendation)
+            ? string.Empty
+            : $" {plan.ReadyStartCostRecommendation}";
         var details = plan.ReadyStartCostRiskDetails.Count == 0
             ? string.Empty
             : " " + string.Join(" ", plan.ReadyStartCostRiskDetails.Take(2));
-        Console.WriteLine($"Ready start risk: {plan.ReadyStartCostRisk}{prompt}. Inspect this plan before using {SubscriptionPromptCostGuard.CliConfirmationFlag}.{details}");
+        Console.WriteLine($"Ready start risk: {plan.ReadyStartCostRisk}{prompt}. Inspect this plan before using {SubscriptionPromptCostGuard.CliConfirmationFlag}.{recommendation}{details}");
     }
 
     foreach (var item in plan.Items)
