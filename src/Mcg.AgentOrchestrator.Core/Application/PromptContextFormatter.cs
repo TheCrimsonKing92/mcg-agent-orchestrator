@@ -53,6 +53,13 @@ internal static class PromptContextFormatter
             : TrimBlock(trimmed, SimplePrimaryContextMaxChars, SimplePrimaryContextHeadChars, SimplePrimaryContextTailChars);
     }
 
+    public static string? BuildResponseBudgetGuidance(TaskComplexity complexity)
+    {
+        return complexity == TaskComplexity.Simple
+            ? "Keep the response concise: changed files, verification result, blockers or human input only; omit restated goals and generic progress."
+            : null;
+    }
+
     private static string TrimBlock(string trimmed, int maxChars, int headChars, int tailChars)
     {
         if (trimmed.Length <= maxChars)

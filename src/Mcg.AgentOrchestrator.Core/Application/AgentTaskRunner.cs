@@ -131,6 +131,10 @@ public sealed class AgentTaskRunner
                     goal.Timeline.Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
                     maxEvents: TimelineEventBudget(complexity))
                 .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false, complexity)));
+        var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
+        var responseGuidance = string.IsNullOrWhiteSpace(responseBudgetGuidance)
+            ? string.Empty
+            : $"Response guidance: {responseBudgetGuidance}{Environment.NewLine}";
 
         var userPrompt =
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +
@@ -138,6 +142,7 @@ public sealed class AgentTaskRunner
             $"Task role: {task.RequiredRole}{Environment.NewLine}" +
             $"Current task status: {task.Status}{Environment.NewLine}" +
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan)}{Environment.NewLine}" +
+            responseGuidance +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}{Environment.NewLine}" +
             $"Recent timeline:{Environment.NewLine}{timeline}";
 

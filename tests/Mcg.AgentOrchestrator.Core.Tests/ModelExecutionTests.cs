@@ -25,6 +25,7 @@ public sealed class ModelExecutionTests
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains(task.VerificationPlan!, StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains("Developer Requirements", StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains("changed files", StringComparison.Ordinal));
+    Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains("Keep the response concise", StringComparison.Ordinal));
     Assert.Equal("medium", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal("Implemented requested change.", task.LastExecution!.Output);
@@ -552,6 +553,7 @@ public sealed class ModelExecutionTests
     Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
     Assert.Equal(TaskComplexity.Complex, goal.Tasks[1].LastExecution!.TaskComplexity);
     Assert.Contains(complexPrompt, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+    Assert.True(!complexPrompt.Contains("Keep the response concise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]
     public async Task ExecuteAssignedTaskPausesForAgentRequestedHumanInput()

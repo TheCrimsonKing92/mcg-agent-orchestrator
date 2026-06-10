@@ -20,6 +20,7 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains(task.Description, StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("Developer started.", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/obj/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("/api/source-survey", StringComparison.Ordinal));
@@ -105,6 +106,7 @@ public sealed class TaskBriefTests
 
     Assert.Contains(brief, text => text.Contains("Developer Requirements", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]
     public void BuildTaskBriefIncludesPendingHumanInputAndVerification()

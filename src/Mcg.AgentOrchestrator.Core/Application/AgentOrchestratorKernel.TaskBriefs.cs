@@ -40,9 +40,15 @@ public sealed partial class AgentOrchestratorKernel
             "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
             "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
-            "Prefer the dashboard source survey or /api/source-survey as the starting repository map before broad recursive file reads.",
-            string.Empty
+            "Prefer the dashboard source survey or /api/source-survey as the starting repository map before broad recursive file reads."
         };
+        var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
+        if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
+        {
+            lines.Add(responseBudgetGuidance);
+        }
+
+        lines.Add(string.Empty);
 
         lines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
         lines.Add(string.Empty);
