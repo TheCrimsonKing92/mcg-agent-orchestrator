@@ -18,7 +18,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Researcher Requirements",
                 "- Lead with concrete findings tied to repository-local files, APIs, tests, or primary external sources; include file paths, commands, URLs, or symbol names for each material claim.",
-                "- Prefer source reads that exclude generated artifacts, for example rg with **/bin/** and **/obj/** exclusions; inspect generated output only when it is the subject of the task.",
+                "- Prefer /api/source-survey?max=8 when available, or source reads that exclude generated artifacts such as **/bin/** and **/obj/**; inspect generated output only when it is the subject of the task.",
                 "- Identify integration constraints, dependency risks, contradictory evidence, and unknowns that affect implementation.",
                 "- Separate confirmed facts from inferences; call out stale, missing, or low-confidence evidence and the consequence for implementation.",
                 "- Include the exact repository-local commands or file inspections used as research evidence when available.",
@@ -88,7 +88,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Researcher Requirements",
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
-                "- Exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
+                "- Prefer /api/source-survey?max=8 when available; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
                 "- Separate confirmed facts from inferences, risks, and unknowns."
             ],
             AgentRole.Developer =>

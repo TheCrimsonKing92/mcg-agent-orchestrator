@@ -123,7 +123,7 @@ public sealed partial class AgentOrchestratorKernel
             [
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
-                "When surveying files, start with the dashboard source survey or /api/source-survey, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state."
+                "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state."
             ];
         }
 
@@ -134,7 +134,7 @@ public sealed partial class AgentOrchestratorKernel
             "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
             "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
-            "Prefer the dashboard source survey or /api/source-survey as the starting repository map before broad recursive file reads."
+            "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads."
         ];
     }
 

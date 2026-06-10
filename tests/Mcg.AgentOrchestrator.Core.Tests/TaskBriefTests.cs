@@ -24,10 +24,52 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("**/obj/**", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("/api/source-survey", StringComparison.Ordinal));
+    Assert.Contains(brief.Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_bounded_source_survey_for_complex_tasks")]
+    public void BuildTaskBriefPrefersBoundedSourceSurveyForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Reduce paid model costs",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production architecture for cost-aware model routing across CLI, dashboard, API, workers, and tests.",
+                AgentRole.Researcher)
+        ]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("before broad recursive file reads", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_prefers_bounded_source_survey_for_research_prompts")]
+    public async Task AgentTaskRunnerPrefersBoundedSourceSurveyForResearchPrompts()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Reduce paid model costs",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Inspect dashboard, API, CLI, worker, and test model-routing behavior; report current cost controls.",
+                AgentRole.Researcher)
+        ]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var provider = new FakeModelProvider("OpenAI", "research complete");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]));
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    Assert.True(provider.LastRequest is not null);
+    Assert.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
     public void BuildTaskBriefTrimsNoisyGoalAndTaskPrimaryContext()
