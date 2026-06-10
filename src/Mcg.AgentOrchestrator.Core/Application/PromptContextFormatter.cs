@@ -21,6 +21,9 @@ internal static class PromptContextFormatter
     private const int TimelineMessageMaxChars = 240;
     private const int TimelineMessageHeadChars = 170;
     private const int TimelineMessageTailChars = 60;
+    private const int SimpleTimelineMessageMaxChars = 140;
+    private const int SimpleTimelineMessageHeadChars = 100;
+    private const int SimpleTimelineMessageTailChars = 30;
 
     public static string TrimPromptBlock(string value)
     {
@@ -81,8 +84,13 @@ internal static class PromptContextFormatter
 
     public static string FormatTimelineEvent(ProgressEvent evt, bool includeTimestamp)
     {
+        return FormatTimelineEvent(evt, includeTimestamp, TaskComplexity.Complex);
+    }
+
+    public static string FormatTimelineEvent(ProgressEvent evt, bool includeTimestamp, TaskComplexity complexity)
+    {
         var timestamp = includeTimestamp ? $"{evt.OccurredAt:u} " : string.Empty;
-        return $"- {timestamp}{evt.Kind}: {TrimTimelineMessage(evt.Message)}";
+        return $"- {timestamp}{evt.Kind}: {TrimTimelineMessage(evt.Message, complexity)}";
     }
 
     public static IReadOnlyList<ProgressEvent> SelectPromptTimelineEvents(IEnumerable<ProgressEvent> events, int maxEvents)
@@ -93,18 +101,27 @@ internal static class PromptContextFormatter
         return selected.TakeLast(maxEvents).ToList();
     }
 
-    private static string TrimTimelineMessage(string message)
+    private static string TrimTimelineMessage(string message, TaskComplexity complexity)
     {
         var trimmed = message.Trim();
-        if (trimmed.Length <= TimelineMessageMaxChars)
+        var maxChars = complexity == TaskComplexity.Complex
+            ? TimelineMessageMaxChars
+            : SimpleTimelineMessageMaxChars;
+        if (trimmed.Length <= maxChars)
         {
             return trimmed;
         }
 
-        var omitted = trimmed.Length - TimelineMessageHeadChars - TimelineMessageTailChars;
-        return trimmed[..TimelineMessageHeadChars] +
+        var headChars = complexity == TaskComplexity.Complex
+            ? TimelineMessageHeadChars
+            : SimpleTimelineMessageHeadChars;
+        var tailChars = complexity == TaskComplexity.Complex
+            ? TimelineMessageTailChars
+            : SimpleTimelineMessageTailChars;
+        var omitted = trimmed.Length - headChars - tailChars;
+        return trimmed[..headChars] +
             $" ...[truncated {omitted} chars]... " +
-            trimmed[^TimelineMessageTailChars..];
+            trimmed[^tailChars..];
     }
 
     private static bool IsDecisionRelevantTimelineEvent(ProgressEvent evt)

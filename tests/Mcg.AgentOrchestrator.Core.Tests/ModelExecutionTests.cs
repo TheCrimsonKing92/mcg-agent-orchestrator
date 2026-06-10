@@ -324,6 +324,68 @@ public sealed class ModelExecutionTests
     Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!prompt.Contains(new string('z', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_smaller_timeline_message_budget_for_simple_tasks")]
+    public async Task ExecuteAssignedTaskUsesSmallerTimelineMessageBudgetForSimpleTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep routine timeline prompt entries small",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var note = $"simple-event-start {new string('s', 110)} simple-event-middle {new string('m', 50)} simple-event-tail";
+    kernel.RetryTask(goal.Id, task.Id, note);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("simple-event-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("simple-event-tail", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("simple-event-middle", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_timeline_message_budget_for_complex_tasks")]
+    public async Task ExecuteAssignedTaskKeepsLargerTimelineMessageBudgetForComplexTasks()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep enough timeline detail for complex work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var note = $"complex-event-start {new string('c', 110)} complex-event-middle {new string('m', 50)} complex-event-tail";
+    kernel.RetryTask(goal.Id, task.Id, note);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
+    var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("complex-event-start", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("complex-event-middle", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("complex-event-tail", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("[truncated", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_prefers_decision_timeline_events_over_lifecycle_noise")]
     public async Task ExecuteAssignedTaskPrefersDecisionTimelineEventsOverLifecycleNoise()
 {

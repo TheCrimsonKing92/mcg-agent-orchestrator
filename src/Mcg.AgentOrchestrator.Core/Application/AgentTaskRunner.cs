@@ -130,7 +130,7 @@ public sealed class AgentTaskRunner
             PromptContextFormatter.SelectPromptTimelineEvents(
                     goal.Timeline.Where(evt => evt.TaskId == task.Id || evt.TaskId is null),
                     maxEvents: TimelineEventBudget(complexity))
-                .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false)));
+                .Select(evt => PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: false, complexity)));
 
         var userPrompt =
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +

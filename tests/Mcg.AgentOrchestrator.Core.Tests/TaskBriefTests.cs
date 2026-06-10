@@ -291,6 +291,47 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('x', 900), StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_timeline_message_budget_for_simple_tasks")]
+    public void BuildTaskBriefUsesSmallerTimelineMessageBudgetForSimpleTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep routine brief timeline entries small",
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+    var note = $"simple-brief-event-start {new string('s', 110)} simple-brief-event-middle {new string('m', 50)} simple-brief-event-tail";
+    kernel.RetryTask(goal.Id, task.Id, note);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("simple-brief-event-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("simple-brief-event-tail", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("simple-brief-event-middle", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_timeline_message_budget_for_complex_tasks")]
+    public void BuildTaskBriefKeepsLargerTimelineMessageBudgetForComplexTasks()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Keep enough brief timeline detail for complex work",
+        [
+            new TaskSpec(
+                TaskId.New(),
+                "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.",
+                AgentRole.Developer)
+        ]);
+    var task = goal.Tasks.Single();
+    var note = $"complex-brief-event-start {new string('c', 110)} complex-brief-event-middle {new string('m', 50)} complex-brief-event-tail";
+    kernel.RetryTask(goal.Id, task.Id, note);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("complex-brief-event-start", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-brief-event-middle", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("complex-brief-event-tail", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("[truncated", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_decision_timeline_events_over_lifecycle_noise")]
     public void BuildTaskBriefPrefersDecisionTimelineEventsOverLifecycleNoise()
 {

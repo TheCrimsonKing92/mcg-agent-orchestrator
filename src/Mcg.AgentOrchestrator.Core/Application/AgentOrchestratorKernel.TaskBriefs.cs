@@ -94,7 +94,7 @@ public sealed partial class AgentOrchestratorKernel
         lines.Add("## Recent Timeline");
         foreach (var evt in timeline)
         {
-            lines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true));
+            lines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true, complexity));
         }
 
         return new TaskBrief(
