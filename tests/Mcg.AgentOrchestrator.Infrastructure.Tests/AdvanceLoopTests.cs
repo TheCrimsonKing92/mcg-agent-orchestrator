@@ -430,6 +430,60 @@ public sealed class AdvanceLoopTests
     Assert.Equal(executionRoot, task.LastDispatch!.WorkingDirectory);
     Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{executionRoot}'", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_starts_only_new_subscription_dispatches")]
+    public void StartSubscriptionReadyTasksStartsOnlyNewSubscriptionDispatches()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var prepared = new TaskSpec(TaskId.New(), "Previously prepared local work", AgentRole.Planner, "Record explicit verification.");
+    var subscription = new TaskSpec(TaskId.New(), "Prepare subscription work", AgentRole.Planner, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Start only subscription-ready work", [prepared, subscription]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-planner"),
+        "Subscription planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        prepared.Id,
+        new TaskDispatchRecord("manual", "Start-Sleep -Seconds 30; Write-Output manual", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {promptPath}")
+    ]);
+
+    try
+    {
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            [agent],
+            profiles);
+
+        Assert.Equal(1, result.Dispatches.Count);
+        Assert.Equal(subscription.Id, result.Dispatches.Single().Task.Id);
+        Assert.Equal(1, result.Processes.Tasks.Count);
+        Assert.Equal(subscription.Id, result.Processes.Tasks.Single().Id);
+        Assert.True(subscription.LastDispatch is not null);
+        Assert.True(subscription.LastProcess is { IsRunning: true });
+        Assert.True(prepared.LastDispatch is not null);
+        Assert.True(prepared.LastProcess is null);
+    }
+    finally
+    {
+        if (subscription.LastProcess is { IsRunning: true })
+        {
+            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, subscription.Id);
+        }
+    }
+}
+
     [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_continues_after_subscription_retry_window")]
     public void AdvanceGoalWithSubscriptionsUntilBlockedContinuesAfterSubscriptionRetryWindow()
 {

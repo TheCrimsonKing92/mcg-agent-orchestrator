@@ -72,18 +72,33 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     WorkerProfileCatalog profiles)
 {
     var dispatches = SubscriptionDispatchReadyTasks(kernel, workspace, goal, agents, profiles);
-    var processes = StartDispatches(kernel, workspace, goal);
+    var processes = StartDispatches(
+        kernel,
+        workspace,
+        goal,
+        dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet());
     return new SubscriptionStartResult(dispatches, processes);
 }
 
 public static ProcessBatchExecutionResult StartDispatches(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)
+{
+    return StartDispatches(kernel, workspace, goal, taskIdsToStart: null);
+}
+
+private static ProcessBatchExecutionResult StartDispatches(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    HashSet<TaskId>? taskIdsToStart)
 {
     var runner = new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var started = new List<TaskSpec>();
 
-    foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
+    foreach (var item in plan.Items.Where(item =>
+        item.Status == ProcessBatchItemStatus.Ready &&
+        (taskIdsToStart is null || taskIdsToStart.Contains(item.TaskId))))
     {
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
         runner.StartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
