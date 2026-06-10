@@ -34,6 +34,7 @@ public static class TaskComplexityEstimator
     public static TaskComplexity Estimate(string taskDescription, string goalObjective, AgentRole role)
     {
         if (IsLowImpactDocumentationOrCopyTask(taskDescription) ||
+            IsLowImpactInspectionOrReportTask(taskDescription) ||
             IsLowImpactTestOrVerificationTask(taskDescription))
         {
             return TaskComplexity.Simple;
@@ -140,6 +141,31 @@ public static class TaskComplexityEstimator
             StartsWithAny(lower, "change ", "clarify ", "edit ", "fix ", "rename ", "update ");
 
         return documentationTask || copyTask;
+    }
+
+    private static bool IsLowImpactInspectionOrReportTask(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        var tokens = BuildTokenSet(lower);
+        if (HasRiskSignal(lower, tokens) || HasStrongComplexitySignal(lower))
+        {
+            return false;
+        }
+
+        if (ContainsAny(tokens, "implement", "implementation", "fix", "add", "update", "change", "migrate", "build", "create"))
+        {
+            return false;
+        }
+
+        return ContainsAny(tokens, "inspect", "inventory", "list", "report", "summarize", "summary") &&
+            StartsWithAny(
+                lower,
+                "check ",
+                "inspect ",
+                "inventory ",
+                "list ",
+                "report ",
+                "summarize ");
     }
 
     private static bool IsLowImpactTestOrVerificationTask(string text)

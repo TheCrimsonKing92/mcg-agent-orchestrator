@@ -90,12 +90,34 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Simple, complexity);
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_keeps_report_only_multi_surface_inspection_simple")]
+    public void TaskComplexityEstimatorKeepsReportOnlyMultiSurfaceInspectionSimple()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Inspect current API, CLI, dashboard, provider, subscription worker state, tests, and docs; report existing cost controls.",
+            ComplexGoalObjective,
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
     [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_complex_architecture_docs")]
     public void TaskComplexityEstimatorEscalatesComplexArchitectureDocs()
     {
         var complexity = TaskComplexityEstimator.Estimate(
             "Document production multi-tenant architecture with distributed rollback and data integrity checks.",
             "Maintain architecture docs.",
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_does_not_downgrade_report_tasks_that_change_code")]
+    public void TaskComplexityEstimatorDoesNotDowngradeReportTasksThatChangeCode()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Inspect API, CLI, dashboard, provider, subscription worker state, tests, and docs; implement the missing cost controls.",
+            "Make the orchestrator less costly to run without sacrificing accuracy.",
             AgentRole.Developer);
 
         Assert.Equal(TaskComplexity.Complex, complexity);
