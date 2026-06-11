@@ -40,6 +40,8 @@
       "PowerShell(.\\mcg-orchestrator.cmd refresh-dispatches)",
       "PowerShell(.\\mcg-orchestrator.cmd cancel-dispatch *)",
       "PowerShell(.\\mcg-orchestrator.cmd workspace create)",
+      "PowerShell(.\\mcg-orchestrator.cmd start-dispatch *)",
+      "PowerShell(.\\mcg-orchestrator.cmd execute-dispatch *)",
       "PowerShell(Select-String *)",
       "PowerShell(Test-Path *)",
       "PowerShell(dotnet build-server shutdown)"

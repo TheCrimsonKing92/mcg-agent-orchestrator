@@ -70,6 +70,16 @@ Done when: an offline-adapter run produces a distinct failure (task Failed with 
 
 Verify: a test running a task against the scripted provider asserts no HumanInputRequested event.
 
+## Dispatch commands cannot target a non-latest goal
+
+Status: open | Size: small | Suggested route: direct edit plus brief test
+
+Why: the one-shot CLI resolves `CurrentGoal` to the latest goal at process start, and dispatch-family commands (`subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, `logs`, `cancel-dispatch`) take only a task number with `RequireGoal(context.CurrentGoal)`. Creating goal B while goal A's worker is still running makes A's dispatch unreachable: its completion can never be refreshed/recorded. Discovered 2026-06-10 while starting the self-improvement loop; it forces strictly sequential goals.
+
+Where: `OrchestratorEntityResolver.RequireGoal` callers in `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Workers.cs`; the resolver already supports goal-prefix resolution (`ResolveGoal`) used by `status`/`evidence`.
+
+Done when: dispatch-family commands accept an optional goal prefix (e.g. `refresh-dispatch <goal-prefix> <task-number>` or a `--goal` flag) so two goals can run workers concurrently; a test covers targeting a non-latest goal.
+
 ## Pin provider env vars in the e2e spawn helper
 
 Status: open | Size: small | Suggested route: direct edit, simple
