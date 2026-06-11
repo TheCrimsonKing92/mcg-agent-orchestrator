@@ -81,7 +81,7 @@ const agentProviderOptions = {
   Anthropic: {
     apiModels: [['claude-sonnet-4-6','Claude Sonnet 4.6'], ['claude-haiku-4-5','Claude Haiku 4.5'], ['claude-opus-4-8','Claude Opus 4.8']],
     apiReasoning: [['','Default']],
-    subscriptionModels: [['','Use API model'], ['sonnet','Claude Sonnet (latest)'], ['haiku','Claude Haiku (latest)'], ['opus','Claude Opus (latest)']],
+    subscriptionModels: [['','Use API model'], ['sonnet','Claude Sonnet (latest)'], ['haiku','Claude Haiku (latest)'], ['opus','Claude Opus (latest)'], ['fable','Claude Fable (heaviest tasks)']],
     subscriptionReasoning: [['','Default']],
     defaultSubscriptionModel: '',
     preferredProfile: 'claude-cli'

@@ -652,7 +652,7 @@ public static partial class DashboardRenderer
         }
 
         return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-            ? [("", "Use API model"), ("sonnet", "Claude Sonnet (latest)"), ("haiku", "Claude Haiku (latest)"), ("opus", "Claude Opus (latest)")]
+            ? [("", "Use API model"), ("sonnet", "Claude Sonnet (latest)"), ("haiku", "Claude Haiku (latest)"), ("opus", "Claude Opus (latest)"), ("fable", "Claude Fable (heaviest tasks)")]
             : [("gpt-5.3-codex", "GPT-5.3-Codex"), ("", "Use API model"), ("gpt-5.5", "GPT-5.5 (complex)")];
     }
 
