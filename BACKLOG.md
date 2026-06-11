@@ -30,6 +30,30 @@ Done when: refresh/status views cap stdout/stderr snippets to a small bounded si
 
 Verify: `dotnet test`; a synthetic long-log verification renders bounded output.
 
+## Refresh-dispatch fails when live stdout log is locked
+
+Status: open | Size: small | Suggested route: scoped Developer task
+
+Why: goals 2c8af0da and d47ec298 (2026-06-11) showed `refresh-dispatch 1` can throw `The process cannot access the file ...out.log because it is being used by another process` while the worker/wrapper is still alive. In d47ec298 the branch had already committed, stdout was a locked zero-byte file, and the operator had to cancel the exact process plus `verify-manual` from independent evidence.
+
+Where: `BackgroundDispatchRunner.RefreshLatestProcess` and any helper that reads stdout/stderr before checking process/exit-file state.
+
+Done when: refresh tolerates locked stdout/stderr files by reporting process state and log paths, using best-effort snippets only when readable, and still allowing timeout/exit-file handling to proceed. Tests cover locked or unreadable log files.
+
+Verify: `dotnet test`; a synthetic locked-log dispatch refresh does not throw.
+
+## Avoid repeated Windows firewall prompts for app launches
+
+Status: open | Size: small-medium | Suggested route: scoped Researcher/Developer task
+
+Why: during dogfood on 2026-06-11, Miles repeatedly had to authorize `Mcg.AgentOrchestrator.App` in Windows Firewall. That blocks unattended orchestrator loops when tests or dashboard/prototype launches bind HTTP ports. The loop should either avoid triggering new firewall identities or document/provide a one-time setup path.
+
+Where: dashboard/prototype host launch paths (`DashboardHost`, `prototype-ui`, tests that start the app), publish/build output identity, and any scripts that launch `Mcg.AgentOrchestrator.App`.
+
+Done when: the cause is identified and either mitigated (stable executable/path/URL binding or loop-safe test host behavior) or documented with a one-time operator setup command/check. Tests or a focused smoke validate the chosen behavior where practical.
+
+Verify: run the relevant dashboard/test launch path without repeated firewall prompts, or record the OS-level setup evidence in DOGFOOD_LOG.md.
+
 ## Move subscription-plan projection out of Dashboard.Api
 
 Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring
