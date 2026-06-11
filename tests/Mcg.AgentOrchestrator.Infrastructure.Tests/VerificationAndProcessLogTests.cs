@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Rendering;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -124,6 +125,69 @@ public sealed class VerificationAndProcessLogTests
 
     Assert.True(result.IsRunning);
     Assert.True(task.LastProcess!.IsRunning);
+}
+
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_populates_log_paths_in_verification_record")]
+    public void RefreshLatestProcessPopulatesLogPathsInVerificationRecord()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh populates log paths");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "stdout content");
+    File.WriteAllText(stderrPath, "stderr content");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(task.LastVerification is not null);
+    Assert.Equal(stdoutPath, task.LastVerification!.StandardOutputPath);
+    Assert.Equal(stderrPath, task.LastVerification.StandardErrorPath);
+}
+
+    [Xunit.Fact(DisplayName = "CreateVerificationLog_truncates_long_output_at_2000_chars")]
+    public void CreateVerificationLogTruncatesLongOutputAt2000Chars()
+{
+    var longText = new string('x', 5000);
+
+    var preview = OutputTextPreview.CreateVerificationLog(longText);
+
+    Assert.True(preview.IsTruncated);
+    Assert.Equal(5000, preview.OriginalLength);
+    Assert.True(preview.Text.Length < 3000);
+    Assert.True(preview.Text.Contains("[truncated", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "CreateVerificationLog_includes_log_path_in_truncation_marker")]
+    public void CreateVerificationLogIncludesLogPathInTruncationMarker()
+{
+    var longText = new string('x', 5000);
+    var logPath = @"C:\logs\test.err.log";
+
+    var preview = OutputTextPreview.CreateVerificationLog(longText, logPath);
+
+    Assert.True(preview.IsTruncated);
+    Assert.True(preview.Text.Contains(logPath, StringComparison.Ordinal));
+    Assert.True(preview.Text.Contains("full log:", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "CreateVerificationLog_does_not_truncate_short_output")]
+    public void CreateVerificationLogDoesNotTruncateShortOutput()
+{
+    var shortText = "Build succeeded. 0 warnings.";
+
+    var preview = OutputTextPreview.CreateVerificationLog(shortText);
+
+    Assert.False(preview.IsTruncated);
+    Assert.Equal(shortText, preview.Text);
 }
 }
 

@@ -23,12 +23,12 @@ public static void PrintVerificationHistory(TaskSpec task)
 
         if (!string.IsNullOrWhiteSpace(verification.StandardOutput))
         {
-            Console.WriteLine($"   stdout: {OutputTextPreview.Create(verification.StandardOutput).Text.TrimEnd()}");
+            Console.WriteLine($"   stdout: {OutputTextPreview.CreateVerificationLog(verification.StandardOutput, verification.StandardOutputPath).Text.TrimEnd()}");
         }
 
         if (!string.IsNullOrWhiteSpace(verification.StandardError))
         {
-            Console.WriteLine($"   stderr: {OutputTextPreview.Create(verification.StandardError).Text.TrimEnd()}");
+            Console.WriteLine($"   stderr: {OutputTextPreview.CreateVerificationLog(verification.StandardError, verification.StandardErrorPath).Text.TrimEnd()}");
         }
     }
 }

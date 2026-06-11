@@ -137,8 +137,8 @@ public static TaskVerificationHistoryDto ToVerificationHistoryDto(Goal goal, Tas
         task.Id.Value,
         task.VerificationHistory.Select((verification, index) =>
         {
-            var stdout = OutputTextPreview.Create(verification.StandardOutput);
-            var stderr = OutputTextPreview.Create(verification.StandardError);
+            var stdout = OutputTextPreview.CreateVerificationLog(verification.StandardOutput, verification.StandardOutputPath);
+            var stderr = OutputTextPreview.CreateVerificationLog(verification.StandardError, verification.StandardErrorPath);
             return new VerificationHistoryEntryDto(
                 index + 1,
                 verification.Command,
@@ -151,7 +151,9 @@ public static TaskVerificationHistoryDto ToVerificationHistoryDto(Goal goal, Tas
                 stderr.Text,
                 stderr.IsTruncated,
                 stderr.OriginalLength,
-                verification.CompletedAt);
+                verification.CompletedAt,
+                verification.StandardOutputPath,
+                verification.StandardErrorPath);
         }).ToList());
 }
 

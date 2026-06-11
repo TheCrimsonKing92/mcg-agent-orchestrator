@@ -76,7 +76,9 @@ public sealed class TaskSpec
                     LastVerification.StandardOutput,
                     LastVerification.StandardError,
                     LastVerification.CompletedAt,
-                    LastVerification.ModelFitNote),
+                    LastVerification.ModelFitNote,
+                    LastVerification.StandardOutputPath,
+                    LastVerification.StandardErrorPath),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -85,7 +87,9 @@ public sealed class TaskSpec
                     verification.StandardOutput,
                     verification.StandardError,
                     verification.CompletedAt,
-                    verification.ModelFitNote))
+                    verification.ModelFitNote,
+                    verification.StandardOutputPath,
+                    verification.StandardErrorPath))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -155,7 +159,9 @@ public sealed class TaskSpec
                     verification.StandardOutput,
                     verification.StandardError,
                     verification.CompletedAt,
-                    verification.ModelFitNote));
+                    verification.ModelFitNote,
+                    verification.StandardOutputPath,
+                    verification.StandardErrorPath));
             }
         }
 
@@ -168,7 +174,9 @@ public sealed class TaskSpec
                 snapshot.LastVerification.StandardOutput,
                 snapshot.LastVerification.StandardError,
                 snapshot.LastVerification.CompletedAt,
-                snapshot.LastVerification.ModelFitNote);
+                snapshot.LastVerification.ModelFitNote,
+                snapshot.LastVerification.StandardOutputPath,
+                snapshot.LastVerification.StandardErrorPath);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);

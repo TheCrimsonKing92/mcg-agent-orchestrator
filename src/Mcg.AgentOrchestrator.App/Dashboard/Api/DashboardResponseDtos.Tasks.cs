@@ -110,7 +110,9 @@ internal sealed record VerificationHistoryEntryDto(
     string StandardError,
     bool StandardErrorTruncated,
     int StandardErrorLength,
-    DateTimeOffset CompletedAt);
+    DateTimeOffset CompletedAt,
+    string? StandardOutputPath = null,
+    string? StandardErrorPath = null);
 
 internal sealed record TaskTimelineDto(
     string GoalId,

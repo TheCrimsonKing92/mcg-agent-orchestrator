@@ -146,7 +146,9 @@ public sealed class BackgroundDispatchRunner
             exitCode,
             standardOutput,
             standardError,
-            completed.CompletedAt.Value);
+            completed.CompletedAt.Value,
+            StandardOutputPath: processRecord.StandardOutputPath,
+            StandardErrorPath: processRecord.StandardErrorPath);
 
         kernel.RecordTaskProcessRefreshed(goalId, taskId, completed, verification);
         return completed;

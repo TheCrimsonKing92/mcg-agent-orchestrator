@@ -90,13 +90,13 @@ public static void PrintTask(Goal goal, TaskSpec task)
         if (!string.IsNullOrWhiteSpace(task.LastVerification.StandardOutput))
         {
             Console.WriteLine("stdout:");
-            Console.WriteLine(OutputTextPreview.Create(task.LastVerification.StandardOutput).Text.TrimEnd());
+            Console.WriteLine(OutputTextPreview.CreateVerificationLog(task.LastVerification.StandardOutput, task.LastVerification.StandardOutputPath).Text.TrimEnd());
         }
 
         if (!string.IsNullOrWhiteSpace(task.LastVerification.StandardError))
         {
             Console.WriteLine("stderr:");
-            Console.WriteLine(OutputTextPreview.Create(task.LastVerification.StandardError).Text.TrimEnd());
+            Console.WriteLine(OutputTextPreview.CreateVerificationLog(task.LastVerification.StandardError, task.LastVerification.StandardErrorPath).Text.TrimEnd());
         }
     }
 
