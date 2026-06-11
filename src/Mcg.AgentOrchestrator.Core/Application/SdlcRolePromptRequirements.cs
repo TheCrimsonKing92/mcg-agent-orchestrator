@@ -12,7 +12,8 @@ internal static class SdlcRolePromptRequirements
                 "- Produce a concrete implementation plan with likely files or modules to inspect and the smallest viable change boundary.",
                 "- Challenge ambiguous requirements; name assumptions, sequencing risks, and explicit stop conditions.",
                 "- Define falsifiable proof Developer, Tester, and Reviewer must provide before acceptance.",
-                "- Do not return a generic SDLC checklist or restate the user's goal as a plan."
+                "- Do not return a generic SDLC checklist or restate the user's goal as a plan.",
+                "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
             [
@@ -23,7 +24,8 @@ internal static class SdlcRolePromptRequirements
                 "- Separate confirmed facts from inferences; call out stale, missing, or low-confidence evidence and the consequence for implementation.",
                 "- Include the exact repository-local commands or file inspections used as research evidence when available.",
                 "- If no research is needed, say so briefly and explain why using repository evidence.",
-                "- Do not restate the goal as research output or rely on unsourced assumptions."
+                "- Do not restate the goal as research output or rely on unsourced assumptions.",
+                "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Developer =>
             [
@@ -43,7 +45,8 @@ internal static class SdlcRolePromptRequirements
                 "- Tie each pass/fail conclusion to concrete evidence: command output, changed file behavior, manual smoke steps, or exact reproduction data.",
                 "- Try to falsify the implementation with at least one negative or edge case when practical, and state what failure would have looked like.",
                 "- If a command cannot run, include the exact failure text and the environment condition.",
-                "- Do not ask for shell restoration unless an attempted command actually failed because of execution access."
+                "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
+                "- You may build and run tests but must not modify source files."
             ],
             AgentRole.Reviewer =>
             [
@@ -53,7 +56,8 @@ internal static class SdlcRolePromptRequirements
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
                 "- State residual risk, test gaps, and whether acceptance is justified.",
-                "- Do not approve based only on a summary from another role."
+                "- Do not approve based only on a summary from another role.",
+                "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []
         };
@@ -82,14 +86,16 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Planner Requirements",
                 "- Produce a concrete plan with likely files or modules, smallest viable change boundary, assumptions, and stop conditions.",
-                "- Define falsifiable proof for downstream roles; do not return a generic checklist."
+                "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
+                "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
                 "- Prefer /api/source-survey?max=8 when available; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
-                "- Separate confirmed facts from inferences, risks, and unknowns."
+                "- Separate confirmed facts from inferences, risks, and unknowns.",
+                "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Developer =>
             [
@@ -103,14 +109,16 @@ internal static class SdlcRolePromptRequirements
                 "## Tester Requirements",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
-                "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source."
+                "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
+                "- You may build and run tests but must not modify source files."
             ],
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
                 "- Review in code-review form: findings first, ordered by severity, with file/evidence references.",
                 "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
-                "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation."
+                "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
+                "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []
         };

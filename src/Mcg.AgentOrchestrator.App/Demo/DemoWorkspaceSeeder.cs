@@ -138,14 +138,15 @@ public static class PrototypeWorkspaceSeeder
 
         if (profile.Name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase))
         {
-            return !profile.CommandTemplate.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
+            return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
         }
 
         return profile.Name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) &&
-            !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase);
+            (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("{permissionMode}", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void SeedGoal(AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents, string workspace)

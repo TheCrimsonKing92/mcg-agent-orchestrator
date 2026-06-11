@@ -450,7 +450,7 @@ public sealed class WorkerDispatchTests
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
-    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("--sandbox 'workspace-write'", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
     Assert.False(developer.LastDispatch.Command.Contains("{workingDirectory}", StringComparison.Ordinal));
     Assert.Equal("codex-cli", researcher.LastDispatch!.WorkerName);
@@ -521,7 +521,7 @@ public sealed class WorkerDispatchTests
         dispatchedAt);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode bypassPermissions -p", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode 'plan' -p", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("Get-Content -Raw", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_reasoning_pinning")]
@@ -1302,6 +1302,93 @@ public sealed class WorkerDispatchTests
     Assert.Contains(ex.Message, text => text.Contains("status is Completed", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_read_only_codex_sandbox")]
+    public void WorkerProfileDispatcherResearcherDispatchUsesReadOnlyCodexSandbox()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Survey the codebase configuration");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        researcher,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Contains(researcher.LastDispatch!.Command, text => text.Contains("--sandbox 'read-only'", StringComparison.Ordinal));
+    Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_uses_workspace_write_codex_sandbox")]
+    public void WorkerProfileDispatcherDeveloperDispatchUsesWorkspaceWriteCodexSandbox()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement the feature");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        developer,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Contains(developer.LastDispatch!.Command, text => text.Contains("--sandbox 'workspace-write'", StringComparison.Ordinal));
+    Assert.True(!developer.LastDispatch.Command.Contains("read-only", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
+    public void WorkerProfileDispatcherClaudeResolvesPlanForReviewerAndBypassPermissionsForDeveloper()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var developerGoal = kernel.CreateGoal("Implement the change", [new TaskSpec(TaskId.New(), "Add the feature.", AgentRole.Developer)]);
+    var reviewerGoal = kernel.CreateGoal("Review the change", [new TaskSpec(TaskId.New(), "Review the implementation.", AgentRole.Reviewer)]);
+    var reviewerAgent = new AgentDefinition(
+        new AgentId("anthropic-reviewer"),
+        "Anthropic reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    var developerAgent = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    kernel.ActivateGoal(developerGoal.Id, [developerAgent]);
+    kernel.ActivateGoal(reviewerGoal.Id, [reviewerAgent]);
+    var developerTask = developerGoal.Tasks.Single();
+    var reviewerTask = reviewerGoal.Tasks.Single();
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt);
+
+    Assert.Contains(developerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'bypassPermissions'", StringComparison.Ordinal));
+    Assert.Contains(reviewerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'plan'", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_dispatch_without_supported_assignment")]
     public void WorkerProfileDispatcherRejectsSubscriptionDispatchWithoutSupportedAssignment()
 {

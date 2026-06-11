@@ -33,7 +33,7 @@ public static class WorkerProfileDispatcher
             profile.Name,
             profile.CommandTemplate,
             promptRoot,
-            AddWorkingDirectoryVariable(workingDirectory, variables));
+            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables));
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -407,13 +407,17 @@ public static class WorkerProfileDispatcher
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
-    private static Dictionary<string, string?> AddWorkingDirectoryVariable(
+    private static Dictionary<string, string?> BuildDispatchVariables(
+        AgentRole role,
         string workingDirectory,
         IReadOnlyDictionary<string, string?>? variables)
     {
+        var isWriteCapable = role == AgentRole.Developer || role == AgentRole.Tester;
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["workingDirectory"] = workingDirectory
+            ["workingDirectory"] = workingDirectory,
+            ["sandboxMode"] = isWriteCapable ? "workspace-write" : "read-only",
+            ["permissionMode"] = isWriteCapable ? "bypassPermissions" : "plan"
         };
 
         if (variables is not null)

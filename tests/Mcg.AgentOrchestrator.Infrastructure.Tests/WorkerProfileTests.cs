@@ -20,11 +20,11 @@ public sealed class WorkerProfileTests
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--skip-git-repo-check", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
-    Assert.Contains(codex.CommandTemplate, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
+    Assert.Contains(codex.CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
     Assert.Contains(claude.CommandTemplate, text => text.Contains("claude --model {subscriptionModelName}", StringComparison.Ordinal));
-    Assert.Contains(claude.CommandTemplate, text => text.Contains("--permission-mode bypassPermissions -p", StringComparison.Ordinal));
+    Assert.Contains(claude.CommandTemplate, text => text.Contains("--permission-mode {permissionMode} -p", StringComparison.Ordinal));
     Assert.Contains(claude.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude.CommandTemplate).IsPatchCapable);
 }
@@ -145,7 +145,7 @@ public sealed class WorkerProfileTests
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
-    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode bypassPermissions -p", StringComparison.Ordinal));
+    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode} -p", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_stale_default_subscription_profiles")]
     public void WorkerProfileStoreLoadRepairsStaleDefaultSubscriptionProfiles()
@@ -172,7 +172,7 @@ public sealed class WorkerProfileTests
     WorkerProfileStore.Save(path, saved);
     var restored = WorkerProfileStore.Load(path);
 
-    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--permission-mode bypassPermissions", StringComparison.Ordinal));
+    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--permission-mode {permissionMode}", StringComparison.Ordinal));
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(restored.GetRequired("claude-cli").CommandTemplate).IsPatchCapable);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_required_rejects_missing_or_empty_files")]
@@ -185,5 +185,33 @@ public sealed class WorkerProfileTests
 
     Assert.Throws<FileNotFoundException>(() => WorkerProfileStore.LoadRequired(missing));
     Assert.Throws<InvalidDataException>(() => WorkerProfileStore.LoadRequired(empty));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_codex_profile_with_hardcoded_sandbox")]
+    public void WorkerProfileStoreLoadRepairsCodexProfileWithHardcodedSandbox()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var saved = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"));
+
+    WorkerProfileStore.Save(path, saved);
+    var restored = WorkerProfileStore.Load(path);
+
+    Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
+    Assert.True(!restored.GetRequired("codex-cli").CommandTemplate.Contains("--sandbox workspace-write", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_claude_profile_with_hardcoded_permission_mode")]
+    public void WorkerProfileStoreLoadRepairsClaudeProfileWithHardcodedPermissionMode()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var saved = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})"));
+
+    WorkerProfileStore.Save(path, saved);
+    var restored = WorkerProfileStore.Load(path);
+
+    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--permission-mode {permissionMode}", StringComparison.Ordinal));
+    Assert.True(!restored.GetRequired("claude-cli").CommandTemplate.Contains("--permission-mode bypassPermissions", StringComparison.Ordinal));
 }
 }

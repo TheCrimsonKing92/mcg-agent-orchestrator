@@ -637,6 +637,29 @@ public sealed class TaskBriefTests
     Assert.Contains(prompt, text => text.Contains("prior-task-verification-stdout", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "SdlcRoleRequirements_researcher_brief_includes_no_modify_repository_line")]
+    public void SdlcRoleRequirementsResearcherBriefIncludesNoModifyRepositoryLine()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var researcherGoal = kernel.CreateGoal("Inspect configuration behavior", [new TaskSpec(TaskId.New(), "Survey configuration modules and report patterns.", AgentRole.Researcher)]);
+    var researcherTask = researcherGoal.Tasks.Single();
+
+    var researcherBrief = kernel.BuildTaskBrief(researcherGoal.Id, researcherTask.Id).Content;
+
+    Assert.Contains(researcherBrief, text => text.Contains("Do not modify repository files", StringComparison.Ordinal));
+    Assert.Contains(researcherBrief, text => text.Contains("implementation belongs to the Developer task", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SdlcRoleRequirements_developer_brief_does_not_include_no_modify_repository_line")]
+    public void SdlcRoleRequirementsDeveloperBriefDoesNotIncludeNoModifyRepositoryLine()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var developerGoal = kernel.CreateGoal("Fix a bug", [new TaskSpec(TaskId.New(), "Fix the null reference in the parser.", AgentRole.Developer)]);
+    var developerTask = developerGoal.Tasks.Single();
+
+    var developerBrief = kernel.BuildTaskBrief(developerGoal.Id, developerTask.Id).Content;
+
+    Assert.True(!developerBrief.Contains("Do not modify repository files", StringComparison.Ordinal));
+}
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)
