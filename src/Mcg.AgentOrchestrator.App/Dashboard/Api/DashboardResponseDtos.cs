@@ -216,18 +216,19 @@ internal sealed record DistributedArchitectureDto(
             .Count();
 
         return new DistributedArchitectureDto(
-            workspace.TenantName,
-            workspace.IsTenantScoped,
-            workspace.StatePath,
-            workspace.AgentCatalogPath,
-            workspace.WorkerProfilePath,
-            workspace.PromptDirectory,
-            workspace.LogDirectory,
-            workspace.ContinuationStorePath,
-            workspace.ExecutionDirectory,
-            "File state uses per-path in-process locks, atomic replace, and backup recovery from state.json.bak.",
-            "Goal worktrees isolate file-touching work and acceptance fast-forwards or returns a manual merge command on divergence.",
-            "Subscription dispatches use worker profiles with role-based sandbox/permission placeholders and persisted continuation watches.",
+            TenantName: workspace.TenantName,
+            TenantScoped: workspace.IsTenantScoped,
+            StatePath: workspace.StatePath,
+            AgentCatalogPath: workspace.AgentCatalogPath,
+            WorkerProfilePath: workspace.WorkerProfilePath,
+            PromptDirectory: workspace.PromptDirectory,
+            LogDirectory: workspace.LogDirectory,
+            ContinuationStorePath: workspace.ContinuationStorePath,
+            ExecutionDirectory: workspace.ExecutionDirectory,
+            Persistence: "File state uses per-path in-process locks, atomic replace, and backup recovery from state.json.bak.",
+            RollbackSafety: "Goal worktrees isolate file-touching work and acceptance fast-forwards or returns a manual merge command on divergence.",
+            SubscriptionWorkers: "Subscription dispatches use worker profiles with role-based sandbox/permission placeholders and persisted continuation watches.",
+            ApiSurfaces:
             [
                 "/api/system/architecture reports tenant, storage, provider, worker, dashboard, and rollback topology.",
                 "/api/system/dashboard-host reports bind URLs, restart command, tenant-scoped paths, and hosted source-survey links.",
@@ -235,12 +236,14 @@ internal sealed record DistributedArchitectureDto(
                 "/api/goals/{goalId}/work-summary and /api/tasks/{taskId}/work-summary provide compact handoff context.",
                 "Operator POST endpoints remain disabled on simple-hosted-dashboard for read-only distributed access.",
             ],
+            DashboardModes:
             [
                 "serve-dashboard: local operator mode with write controls.",
                 "hosted-dashboard: network operator mode with write controls.",
                 "simple-hosted-dashboard: network read-only mode for distributed inspection.",
                 "prototype-ui: isolated prototype workspace mode.",
             ],
+            StateStores:
             [
                 $"Kernel state: {workspace.StatePath}",
                 $"Agent catalog: {workspace.AgentCatalogPath}",
@@ -249,6 +252,7 @@ internal sealed record DistributedArchitectureDto(
                 $"Worker logs: {workspace.LogDirectory}",
                 $"Continuation watches: {workspace.ContinuationStorePath}",
             ],
+            DistributedBoundaries:
             [
                 $"Tenant '{workspace.TenantName}' owns an isolated orchestrator directory at {workspace.OrchestratorDirectory}.",
                 $"File-touching goal work resolves through worktrees when present, otherwise {workspace.ExecutionDirectory}.",
@@ -256,6 +260,7 @@ internal sealed record DistributedArchitectureDto(
                 "Subscription execution leaves process boundaries through worker profiles and persisted prompt/log paths.",
                 "Dashboard hosts expose read/write capability by mode instead of by endpoint convention alone.",
             ],
+            SafetyGates:
             [
                 "Tenant names are normalized and reject relative path segments.",
                 "State saves use per-file locks, temp files, atomic replacement, retry, and backup recovery.",
@@ -263,6 +268,7 @@ internal sealed record DistributedArchitectureDto(
                 "Role-based sandbox and permission placeholders keep non-implementation roles read-only.",
                 "Build/test cleanup exposes exact dashboard PIDs instead of broad process termination.",
             ],
+            RollbackProcedure:
             [
                 "Review the goal worktree diff before acceptance.",
                 "Run repository verification from the worktree, independent of worker-reported status.",
@@ -270,11 +276,11 @@ internal sealed record DistributedArchitectureDto(
                 "If main diverged, use the printed manual merge command instead of overwriting shared state.",
                 "If state.json is corrupt, restart from state.json.bak and inspect the failed primary before continuing.",
             ],
-            providerCount,
-            agents.Count,
-            workerProfiles.Profiles.Count,
-            usableProfiles,
-            operatorControlsEnabled);
+            ProviderCount: providerCount,
+            AgentCount: agents.Count,
+            WorkerProfileCount: workerProfiles.Profiles.Count,
+            UsableWorkerProfileCount: usableProfiles,
+            OperatorControlsEnabled: operatorControlsEnabled);
     }
 }
 
