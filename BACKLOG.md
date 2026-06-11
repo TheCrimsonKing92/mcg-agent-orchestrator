@@ -28,6 +28,18 @@ Done when: roughly ten local API runs across task shapes have recorded token usa
 
 Verify: execution records in goal evidence show usage and stop reasons; `OutputTokenLimit.IsHit` flags none falsely.
 
+## Dispatch briefs omit prior-task evidence, so SDLC roles run disconnected
+
+Status: open | Size: medium | Suggested route: scoped Developer task; needs a context-budget decision
+
+Why: in the five-role pipeline, each role's dispatch brief contains only the goal objective plus that task's own history. `BuildTaskBrief` filters the timeline to `evt.TaskId == taskId || evt.TaskId is null` and the Last Model Output / Last Verification sections read from the same task only, so a completed Planner task's plan (recorded as verification stdout) never reaches the Researcher/Developer/Tester/Reviewer briefs. Observed live 2026-06-11 (goal f2e3d68c): the Planner produced a concrete file-level plan; the Researcher's brief carried none of it and the role re-derived from scratch. The brief's "Goal work summary: /api/goals/<prefix>/work-summary" pointer does not help dispatched workers - prior dogfood runs show they cannot reach a live dashboard.
+
+Where: `BuildTaskBrief` in `src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs` (timeline filter at the SelectPromptTimelineEvents call; same-task LastExecution/LastVerification sections); `PromptContextFormatter` trim budgets in the same namespace.
+
+Done when: a dispatch brief for task N includes a bounded "Prior task evidence" section with, at minimum, the latest verification stdout of each completed earlier task in the goal (trimmed via the existing PromptContextFormatter budgets); a test covers a two-task goal where task 2's brief contains task 1's verification evidence.
+
+Verify: `dotnet test`; inspect a generated prompt file for a second task in a multi-task goal.
+
 ## Default codex subscription model is rejected by ChatGPT accounts
 
 Status: open | Size: small | Suggested route: scoped Developer task with file pointers
