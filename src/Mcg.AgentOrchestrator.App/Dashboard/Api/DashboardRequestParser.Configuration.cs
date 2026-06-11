@@ -164,7 +164,7 @@ private static string? DefaultSubscriptionModelAlias(string providerName, AgentE
 
     if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
     {
-        return "gpt-5.3-codex";
+        return AgentCatalog.OpenAiSubscriptionModelAlias;
     }
 
     // Anthropic API model ids are valid claude CLI model names, so the CLI uses the

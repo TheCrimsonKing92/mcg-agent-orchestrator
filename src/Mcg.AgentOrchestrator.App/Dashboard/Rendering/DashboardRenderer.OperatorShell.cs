@@ -569,7 +569,7 @@ public static partial class DashboardRenderer
     {
         if (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
         {
-            return "gpt-5.3-codex";
+            return AgentCatalog.OpenAiSubscriptionModelAlias;
         }
 
         return string.Empty;
@@ -604,7 +604,6 @@ public static partial class DashboardRenderer
                 ("gpt-5.5", "GPT-5.5"),
                 ("gpt-5.5-pro", "GPT-5.5 pro"),
                 ("gpt-5.4-nano", "GPT-5.4 nano"),
-                ("gpt-5.3-codex", "GPT-5.3-Codex"),
                 ("gpt-5-mini", "GPT-5 mini"),
                 ("gpt-5-nano", "GPT-5 nano"),
                 ("gpt-5.2", "GPT-5.2 (previous)")
@@ -653,7 +652,7 @@ public static partial class DashboardRenderer
 
         return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
             ? [("", "Use API model"), ("sonnet", "Claude Sonnet (latest)"), ("haiku", "Claude Haiku (latest)"), ("opus", "Claude Opus (latest)"), ("fable", "Claude Fable (heaviest tasks)")]
-            : [("gpt-5.3-codex", "GPT-5.3-Codex"), ("", "Use API model"), ("gpt-5.5", "GPT-5.5 (complex)")];
+            : [(AgentCatalog.OpenAiSubscriptionModelAlias, "GPT-5.5"), ("", "Use API model")];
     }
 
     private static IReadOnlyList<(string Value, string Label)> SubscriptionReasoningOptions(string provider)

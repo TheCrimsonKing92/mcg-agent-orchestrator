@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
+    public const string OpenAiSubscriptionModelAlias = "gpt-5.5";
+    public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex";
     public const int RoutineApiMaxOutputTokens = 768;
     public const int ComplexApiMaxOutputTokens = 1200;
     public const string RoutineReasoningEffort = "medium";
@@ -38,7 +40,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, ComplexReasoningEffort, ComplexApiMaxOutputTokens);
 
         static SubscriptionLaunchProfile Codex() =>
-            new("codex-cli", "gpt-5.3-codex", RoutineSubscriptionReasoningEffort);
+            new("codex-cli", OpenAiSubscriptionModelAlias, RoutineSubscriptionReasoningEffort);
 
         return new AgentCatalog(
         [
@@ -137,9 +139,22 @@ public static class AgentCatalogStore
             return agent.Subscription;
         }
 
-        return string.IsNullOrWhiteSpace(agent.Subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)
-            ? agent.Subscription with { ReasoningEffort = AgentCatalog.RoutineSubscriptionReasoningEffort }
-            : agent.Subscription;
+        var subscription = agent.Subscription;
+        if (IsOpenAiCodexSubscription(agent, subscription) &&
+            string.Equals(subscription.ModelAlias, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiSubscriptionModelAlias };
+        }
+
+        return string.IsNullOrWhiteSpace(subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)
+            ? subscription with { ReasoningEffort = AgentCatalog.RoutineSubscriptionReasoningEffort }
+            : subscription;
+    }
+
+    private static bool IsOpenAiCodexSubscription(AgentDefinition agent, SubscriptionLaunchProfile subscription)
+    {
+        return agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+            subscription.WorkerProfileName.Equals("codex-cli", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPaidProvider(string providerName)

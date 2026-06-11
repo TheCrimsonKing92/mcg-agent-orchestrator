@@ -166,7 +166,7 @@ public sealed class StatePersistenceAndPerformanceTests
         AgentRole.Planner,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high"),
         ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.3-codex", "high"),
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "high"),
         ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", AgentCatalog.ComplexApiMaxOutputTokens));
 
     AgentCatalogStore.Save(
@@ -327,7 +327,7 @@ public sealed class StatePersistenceAndPerformanceTests
     Assert.True(agent.Subscription is not null);
     var subscription = agent.Subscription!;
     Assert.Equal("codex-cli", subscription.WorkerProfileName);
-    Assert.Equal("gpt-5.3-codex", subscription.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, subscription.ModelAlias);
     Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, subscription.ReasoningEffort);
     Assert.True(agent.ComplexModel is not null);
     Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);

@@ -71,11 +71,11 @@ function summarizeResponse(text){
 }
 const agentProviderOptions = {
   OpenAI: {
-    apiModels: [['gpt-5.4-mini','GPT-5.4 mini'], ['gpt-5.4','GPT-5.4'], ['gpt-5.4-pro','GPT-5.4 pro'], ['gpt-5.5','GPT-5.5'], ['gpt-5.5-pro','GPT-5.5 pro'], ['gpt-5.4-nano','GPT-5.4 nano'], ['gpt-5.3-codex','GPT-5.3-Codex'], ['gpt-5-mini','GPT-5 mini'], ['gpt-5-nano','GPT-5 nano'], ['gpt-5.2','GPT-5.2 (previous)']],
+    apiModels: [['gpt-5.4-mini','GPT-5.4 mini'], ['gpt-5.4','GPT-5.4'], ['gpt-5.4-pro','GPT-5.4 pro'], ['gpt-5.5','GPT-5.5'], ['gpt-5.5-pro','GPT-5.5 pro'], ['gpt-5.4-nano','GPT-5.4 nano'], ['gpt-5-mini','GPT-5 mini'], ['gpt-5-nano','GPT-5 nano'], ['gpt-5.2','GPT-5.2 (previous)']],
     apiReasoning: [['','Default'], ['none','None'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high']],
-    subscriptionModels: [['gpt-5.3-codex','GPT-5.3-Codex'], ['','Use API model'], ['gpt-5.5','GPT-5.5 (complex)']],
+    subscriptionModels: [['gpt-5.5','GPT-5.5'], ['','Use API model']],
     subscriptionReasoning: [['','Default'], ['none','None'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high']],
-    defaultSubscriptionModel: 'gpt-5.3-codex',
+    defaultSubscriptionModel: 'gpt-5.5',
     preferredProfile: 'codex-cli'
   },
   Anthropic: {
