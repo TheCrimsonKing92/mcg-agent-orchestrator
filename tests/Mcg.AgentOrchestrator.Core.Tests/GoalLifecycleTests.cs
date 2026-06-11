@@ -115,6 +115,27 @@ public sealed class GoalLifecycleTests
         evt.Message.Contains("Verification plan updated", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Message.Contains(task.VerificationPlan!, StringComparison.Ordinal)));
 }
+    [Xunit.Fact(DisplayName = "RecordTaskNote_preserves_status_and_flows_into_brief")]
+    public void RecordTaskNotePreservesStatusAndFlowsIntoBrief()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Carry operator guidance");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var originalStatus = task.Status;
+
+    var updated = kernel.RecordTaskNote(goal.Id, task.Id, "Use the existing CLI command style.");
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Equal(task, updated);
+    Assert.Equal(originalStatus, task.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message == "Use the existing CLI command style.");
+    Assert.Contains(brief, text => text.Contains("TaskNote", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Use the existing CLI command style.", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
     public void SnapshotRoundtripPreservesAddedTask()
 {

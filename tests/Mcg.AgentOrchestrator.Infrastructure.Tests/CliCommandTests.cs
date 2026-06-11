@@ -1340,4 +1340,74 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Xunit.Assert.Equal(verification, task.LastVerification);
     }
+
+    [Xunit.Fact(DisplayName = "Cli_note_preserves_task_and_allows_subscription_dispatch_and_retry")]
+    public void CliNotePreservesTaskAndAllowsSubscriptionDispatchAndRetry()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Keep guidance status-neutral", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+
+        var noteChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand("note 1 Preserve dispatch readiness."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        var statusAfterNote = task.Status;
+        var retryChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand("retry 1 Retry remains available."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        var statusAfterRetry = task.Status;
+        var secondNoteChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand("note 1 Dispatch remains available."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        var dispatchChanged = CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(noteChanged);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, statusAfterNote);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "Preserve dispatch readiness.");
+        Xunit.Assert.True(retryChanged);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, statusAfterRetry);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried && evt.Message == "Retry remains available.");
+        Xunit.Assert.True(secondNoteChanged);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "Dispatch remains available.");
+        Xunit.Assert.True(dispatchChanged);
+        Xunit.Assert.NotNull(task.LastDispatch);
+    }
 }

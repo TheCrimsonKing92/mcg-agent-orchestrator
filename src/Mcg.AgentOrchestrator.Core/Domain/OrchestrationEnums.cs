@@ -54,7 +54,8 @@ public enum ProgressKind
     TaskCancelled = 12,
     TaskAdded = 13,
     TaskRetried = 14,
-    TaskVerificationPlanUpdated = 15
+    TaskVerificationPlanUpdated = 15,
+    TaskNote = 16
 }
 
 public enum TaskAttentionKind

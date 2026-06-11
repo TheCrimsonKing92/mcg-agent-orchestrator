@@ -184,6 +184,7 @@ internal static class PromptContextFormatter
             ProgressKind.TaskProcessStarted or
             ProgressKind.TaskCancelled or
             ProgressKind.TaskRetried or
-            ProgressKind.TaskVerificationPlanUpdated;
+            ProgressKind.TaskVerificationPlanUpdated or
+            ProgressKind.TaskNote;
     }
 }

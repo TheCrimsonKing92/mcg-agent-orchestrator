@@ -70,6 +70,20 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordTaskNote(GoalId goalId, TaskId taskId, string message)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var noteMessage = message.Trim();
+        if (string.IsNullOrWhiteSpace(noteMessage))
+        {
+            throw new ArgumentException("Task note message cannot be empty.", nameof(message));
+        }
+
+        Append(goal, taskId, ProgressKind.TaskNote, noteMessage);
+        return task;
+    }
+
     public TaskSpec RetryTask(GoalId goalId, TaskId taskId, string message)
     {
         var goal = GetGoal(goalId);

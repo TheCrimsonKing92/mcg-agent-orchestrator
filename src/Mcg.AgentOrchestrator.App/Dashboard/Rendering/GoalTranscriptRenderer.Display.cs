@@ -34,6 +34,7 @@ public static partial class GoalTranscriptRenderer
         ProgressKind.TaskAdded => "Task added",
         ProgressKind.TaskRetried => "Task retried",
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
+        ProgressKind.TaskNote => "Task note",
         _ => kind.ToString()
     };
 

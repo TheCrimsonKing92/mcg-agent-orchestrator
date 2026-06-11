@@ -19,7 +19,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return rest.Length == 3 ? [command, rest[0], rest[1], rest[2]] : [command, .. rest];
     }
 
-    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
         var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];

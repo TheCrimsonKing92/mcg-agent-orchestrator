@@ -41,6 +41,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("run", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("api-run", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("note", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("brief", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("execute-dispatch", StringComparison.OrdinalIgnoreCase) ||
