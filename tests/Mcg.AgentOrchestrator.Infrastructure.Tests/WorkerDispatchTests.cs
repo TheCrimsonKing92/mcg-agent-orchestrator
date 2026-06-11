@@ -1286,6 +1286,36 @@ public sealed class WorkerDispatchTests
     Assert.Contains(ex.Message, text => text.Contains("already has a dispatch process record", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_shuts_down_dotnet_build_server_after_worker_command")]
+    public void BackgroundDispatchRunnerWrapperShutsDownDotnetBuildServerAfterWorkerCommand()
+{
+    var wrapper = BackgroundDispatchRunner.BuildWrapper(
+        "Write-Output ok",
+        "C:\\logs\\out.log",
+        "C:\\logs\\err.log",
+        "C:\\logs\\exit.txt");
+
+    Assert.Contains(wrapper, text => text.Contains("finally", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("dotnet build-server shutdown", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("*> $null", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText('C:\\logs\\exit.txt', [string]$code)", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("exit $code", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_can_skip_dotnet_build_server_shutdown_for_local_dispatch")]
+    public void BackgroundDispatchRunnerWrapperCanSkipDotnetBuildServerShutdownForLocalDispatch()
+{
+    var wrapper = BackgroundDispatchRunner.BuildWrapper(
+        "Write-Output ok",
+        "C:\\logs\\out.log",
+        "C:\\logs\\err.log",
+        "C:\\logs\\exit.txt",
+        shutdownBuildServerOnExit: false);
+
+    Assert.False(wrapper.Contains("dotnet build-server shutdown", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText('C:\\logs\\exit.txt', [string]$code)", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_completes_when_exit_file_exists_even_if_wrapper_is_running")]
     public void BackgroundDispatchRunnerRefreshCompletesWhenExitFileExistsEvenIfWrapperIsRunning()
 {

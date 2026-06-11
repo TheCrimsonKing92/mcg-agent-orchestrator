@@ -42,7 +42,12 @@ public sealed class BackgroundDispatchRunner
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
 
-        var wrapper = BuildWrapper(dispatch.Command, stdoutPath, stderrPath, exitCodePath);
+        var wrapper = BuildWrapper(
+            dispatch.Command,
+            stdoutPath,
+            stderrPath,
+            exitCodePath,
+            shutdownBuildServerOnExit: !IsLocalDispatch(dispatch));
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -328,12 +333,31 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static string BuildWrapper(string command, string stdoutPath, string stderrPath, string exitCodePath)
+    internal static string BuildWrapper(
+        string command,
+        string stdoutPath,
+        string stderrPath,
+        string exitCodePath,
+        bool shutdownBuildServerOnExit = true)
     {
+        var cleanup = shutdownBuildServerOnExit
+            ? "try { & dotnet build-server shutdown *> $null } catch { }; "
+            : string.Empty;
+
         return
+            "$code = 1; " +
+            "try { " +
             $"& {{ {command} }} 1> {Quote(stdoutPath)} 2> {Quote(stderrPath)}; " +
             "$code = if ($global:LASTEXITCODE -ne $null) { $global:LASTEXITCODE } elseif ($?) { 0 } else { 1 }; " +
-            $"[IO.File]::WriteAllText({Quote(exitCodePath)}, [string]$code); exit $code";
+            "} finally { " +
+            cleanup +
+            $"[IO.File]::WriteAllText({Quote(exitCodePath)}, [string]$code) " +
+            "}; exit $code";
+    }
+
+    private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
+    {
+        return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";

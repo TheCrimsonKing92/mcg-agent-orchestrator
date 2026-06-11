@@ -18,18 +18,6 @@ Done when: a deliberate decision is recorded (raise the per-prompt threshold, ex
 
 Verify: `dotnet test`; a pipeline task-3 dispatch with Simple complexity starts without `--confirm-large-paid-subscription-start`.
 
-## Worktree test runs leave a VBCSCompiler holding obj outputs
-
-Status: open | Size: small | Suggested route: direct edit (worker brief instructions or dispatch wrapper)
-
-Why: after a claude/codex worker runs `dotnet test` in a goal worktree, a VBCSCompiler instance survives and holds the worktree's `Mcg.AgentOrchestrator.Core` obj dll; the operator's first independent `dotnet test` then fails CS2012 and succeeds only after `dotnet build-server shutdown` + retry. Hit on six consecutive goals 2026-06-11; pure ritual overhead.
-
-Where: options - append `dotnet build-server shutdown` guidance to Developer brief instructions (`BuildTaskBriefInstructions` in `AgentOrchestratorKernel.TaskBriefs.cs`), have the dispatch wrapper run it after the worker exits (`BackgroundDispatchRunner`), or standardize `-p:UseSharedCompilation=false` for worktree test runs.
-
-Done when: an operator `dotnet test` in a goal worktree immediately after a worker completes succeeds on the first attempt; the chosen mechanism is documented in AGENTS.md.
-
-Verify: live loop cycle - worker completes, operator runs `dotnet test <worktree>` once, exit 0.
-
 ## Bound refresh-dispatch output for long subscription logs
 
 Status: open | Size: small | Suggested route: scoped Developer task
