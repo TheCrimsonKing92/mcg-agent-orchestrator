@@ -46,6 +46,14 @@ public static Process StartPrototypeDashboardProcess(string appProject, string w
     // regardless of whether a live Ollama server runs on this machine.
     startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
 
+    // Pin provider credentials and model names so spawned-app assertions are
+    // machine-independent regardless of what keys or models the host has set.
+    startInfo.EnvironmentVariables["OPENAI_API_KEY"] = "test-openai-key";
+    startInfo.EnvironmentVariables["ANTHROPIC_API_KEY"] = "test-anthropic-key";
+    startInfo.EnvironmentVariables["OPENAI_MODEL"] = "test-openai-model";
+    startInfo.EnvironmentVariables["ANTHROPIC_MODEL"] = "test-anthropic-model";
+    startInfo.EnvironmentVariables["OLLAMA_MODEL"] = "test-ollama-model";
+
     startInfo.ArgumentList.Add("run");
     startInfo.ArgumentList.Add("--no-build");
     startInfo.ArgumentList.Add("--project");
