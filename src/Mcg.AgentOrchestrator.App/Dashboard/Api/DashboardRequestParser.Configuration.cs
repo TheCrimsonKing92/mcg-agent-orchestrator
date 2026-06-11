@@ -199,15 +199,29 @@ private static int? DefaultComplexMaxOutputTokens(string providerName)
 
 private static ModelProfile? DefaultComplexModel(string providerName)
 {
-    return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
-        ? new ModelProfile(
+    if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+    {
+        return new ModelProfile(
             "OpenAI",
             "gpt-5.5",
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
             SubscriptionMode.ApiKey,
             AgentCatalog.ComplexReasoningEffort,
-            AgentCatalog.ComplexApiMaxOutputTokens)
-        : null;
+            AgentCatalog.ComplexApiMaxOutputTokens);
+    }
+
+    if (providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+    {
+        return new ModelProfile(
+            "Anthropic",
+            "claude-sonnet-4-6",
+            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
+            SubscriptionMode.ApiKey,
+            null,
+            AgentCatalog.ComplexApiMaxOutputTokens);
+    }
+
+    return null;
 }
 
 private static bool IsPaidProvider(string providerName)

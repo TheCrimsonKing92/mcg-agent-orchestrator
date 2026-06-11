@@ -102,8 +102,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("agent", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 4 ? [command, rest[0], rest[1], rest[2], rest[3]] : [command, .. rest];
+        return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
     }
 
     if (command.Equals("tasks", StringComparison.OrdinalIgnoreCase))

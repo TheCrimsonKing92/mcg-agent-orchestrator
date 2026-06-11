@@ -38,8 +38,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "agent":
-            CliArgumentParser.RequirePartCount(parts, 4, "agent <role> <provider> <model> [name]");
-            var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(parts[1], parts[2], parts[3], parts.Count > 4 ? parts[4] : null));
+            CliArgumentParser.RequirePartCount(parts, 4, "agent <role> <provider> <model> [name] [--complex-model <model>]");
+            if (HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null)
+            {
+                throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>]");
+            }
+            var agentName = parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal) ? parts[4] : null;
+            var complexModelName = GetFlagValue(parts, "--complex-model");
+            var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+                parts[1], parts[2], parts[3], agentName,
+                ComplexProviderName: complexModelName is null ? null : parts[2],
+                ComplexModelName: complexModelName));
             context.Agents = new AgentCatalog(context.Agents).UpsertRole(agent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
             ConsoleViews.PrintAgents(context.Agents);
@@ -146,6 +155,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
 {
     return parts.Skip(1).FirstOrDefault(part => !flags.Any(flag => part.Equals(flag, StringComparison.OrdinalIgnoreCase)));
+}
+
+private static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
+{
+    for (var i = 1; i < parts.Count - 1; i++)
+    {
+        if (parts[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+        {
+            return parts[i + 1];
+        }
+    }
+
+    return null;
 }
 
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)

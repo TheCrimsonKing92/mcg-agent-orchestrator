@@ -52,6 +52,27 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         ]);
     }
 
+    public static AgentCatalog AnthropicDefault()
+    {
+        static ModelProfile Haiku() =>
+            new("Anthropic", "claude-haiku-4-5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, null, RoutineApiMaxOutputTokens);
+
+        static ModelProfile Sonnet() =>
+            new("Anthropic", "claude-sonnet-4-6", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, null, ComplexApiMaxOutputTokens);
+
+        static SubscriptionLaunchProfile ClaudeCli() =>
+            new("claude-cli");
+
+        return new AgentCatalog(
+        [
+            new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-reviewer"), "Anthropic reviewer", AgentRole.Reviewer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+        ]);
+    }
+
     public static AgentCatalog OllamaDefault()
     {
         static ModelProfile Qwen3(int maxOutputTokens) =>

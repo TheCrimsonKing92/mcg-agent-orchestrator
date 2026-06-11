@@ -35,6 +35,26 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel!.ReasoningEffort);
     }
 }
+    [Xunit.Fact(DisplayName = "AgentCatalog_AnthropicDefault_pairs_haiku_base_with_sonnet_complex")]
+    public void AgentCatalogAnthropicDefaultPairsHaikuBaseWithSonnetComplex()
+{
+    var catalog = AgentCatalog.AnthropicDefault();
+
+    Assert.Equal(5, catalog.Agents.Count);
+
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        var agent = catalog.GetRequired(role);
+        Assert.Equal("Anthropic", agent.Model.ProviderName);
+        Assert.Equal("claude-haiku-4-5", agent.Model.ModelName);
+        Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, agent.Model.MaxOutputTokens);
+        Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
+        Assert.Equal("claude-cli", agent.Subscription!.WorkerProfileName);
+        Assert.Equal("Anthropic", agent.ComplexModel!.ProviderName);
+        Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
+        Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
+    }
+}
     [Xunit.Fact(DisplayName = "AgentCatalog_upsert_replaces_role")]
     public void AgentCatalogUpsertReplacesRole()
 {

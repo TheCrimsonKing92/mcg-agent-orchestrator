@@ -1449,4 +1449,90 @@ public sealed class CliCommandTests
         Xunit.Assert.True(dispatchChanged);
         Xunit.Assert.NotNull(task.LastDispatch);
     }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_command_creates_agent_with_complex_model_from_flag")]
+    public void CliAgentCommandCreatesAgentWithComplexModelFromFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent", "Developer", "Anthropic", "claude-haiku-4-5", "--complex-model", "claude-sonnet-4-6"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var agent = agents.Single(a => a.Role == AgentRole.Developer);
+        Xunit.Assert.Equal("Anthropic", agent.Model.ProviderName);
+        Xunit.Assert.Equal("claude-haiku-4-5", agent.Model.ModelName);
+        Xunit.Assert.Equal("Anthropic", agent.ComplexModel!.ProviderName);
+        Xunit.Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_command_uses_default_complex_model_when_flag_omitted")]
+    public void CliAgentCommandUsesDefaultComplexModelWhenFlagOmitted()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent", "Developer", "Anthropic", "claude-haiku-4-5"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var agent = agents.Single(a => a.Role == AgentRole.Developer);
+        Xunit.Assert.Equal("Anthropic", agent.Model.ProviderName);
+        Xunit.Assert.Equal("claude-haiku-4-5", agent.Model.ModelName);
+        Xunit.Assert.Equal("Anthropic", agent.ComplexModel!.ProviderName);
+        Xunit.Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_command_rejects_complex_model_flag_without_value")]
+    public void CliAgentCommandRejectsComplexModelFlagWithoutValue()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        ArgumentException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["agent", "Developer", "Anthropic", "claude-haiku-4-5", "--complex-model"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (ArgumentException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--complex-model", ex!.Message);
+    }
 }
