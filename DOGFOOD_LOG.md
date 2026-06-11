@@ -4,6 +4,15 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Cost routing: haiku-by-default for simple Anthropic work (goal 1c874f08)
+
+Goal `1c874f08` (CLI workspace), one Developer task, claude-sonnet-4-6 (commit 28ade0e, fast-forward merge). The CLI `agent` command now accepts `--complex-model <model>` (reusing the dashboard submission path's existing complex-model fields), and a new `AgentCatalog.AnthropicDefault()` pairs claude-haiku-4-5 base with claude-sonnet-4-6 complex across all five roles. With `TaskComplexityEstimator.ResolveModel` already escalating on Complex classification or unresolved underpowered fit notes, Simple-classified Anthropic dispatches now route to haiku automatically. 407/407 green, operator-verified independently (worker count matched this time).
+
+- Live catalog updated post-merge: `agent developer Anthropic claude-haiku-4-5 --complex-model claude-sonnet-4-6`. Watch the next several Simple dispatches for haiku fit notes; underpowered evidence auto-escalates to sonnet by design.
+- Friction: `workspace remove` failed once because the operator shell's working directory still sat inside the worktree; rerun from repo root resumed and completed (second live validation of 9c716c0 resumable removal).
+- Friction (now 4x today): VBCSCompiler CS2012 lock on first operator `dotnet test` in every goal worktree; the post-dispatch shutdown from e7f0a64 does not cover compiler instances spawned by the worker's own test runs. Consider `-p:UseSharedCompilation=false` in worker brief guidance or wrapper environment.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - CLI option + catalog defaults + tests on existing patterns - first-attempt pass; worker self-noted the shape was haiku-eligible, fitting since this goal enables exactly that routing.
+
 ## 2026-06-11 - Reviewer diff evidence + paid output caps raised (goal d729e13c)
 
 Goal `d729e13c` (CLI workspace), two sequential Developer tasks, claude-sonnet-4-6. ApiOnly prompts now include a `## Workspace Diff` section (commit 3c45e62): `AgentTaskRunner` takes an optional `Func<GoalId, string?>` diff provider, `GoalWorktrees.TryGetBranchDiff` supplies stat+patch of `main...HEAD` from the goal worktree, trimmed to 3200 chars with marker; wired at all three CLI/dashboard construction sites. Paid output caps raised 768->2048 routine / 1200->4096 complex on 4/4 over-cap evidence (commit 3d906c6); resolved backlog entry removed. Acceptance fast-forwarded; 403/403 green after operator fix.
