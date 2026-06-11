@@ -75,6 +75,18 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        if (verification.ExitCode == 0 &&
+            string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+            string.IsNullOrWhiteSpace(verification.StandardError))
+        {
+            ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Dispatch exited 0 with no output; verification cannot be confirmed: {task.LastDispatch.Command}");
+            return;
+        }
+
         ReportTaskProgress(
             goalId,
             taskId,
