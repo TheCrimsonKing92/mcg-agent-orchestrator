@@ -50,12 +50,3 @@ Where: `OrchestratorEntityResolver.RequireGoal` callers in `src/Mcg.AgentOrchest
 
 Done when: dispatch-family commands accept an optional goal prefix (e.g. `refresh-dispatch <goal-prefix> <task-number>` or a `--goal` flag) so two goals can run workers concurrently; a test covers targeting a non-latest goal.
 
-## Pin provider env vars in the e2e spawn helper
-
-Status: open | Size: small | Suggested route: direct edit, simple
-
-Why: `StartPrototypeDashboardProcess` in `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InfrastructureTestSupport.cs` now pins `OLLAMA_BASE_URL` to an unreachable endpoint after the dashboard e2e test was found passing only because the Ollama probe was broken. `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` are still inherited from the machine, so the suite asserts different cost-guard text depending on who runs it.
-
-Done when: the spawn helper clears or pins both API-key variables (and `OPENAI_MODEL`/`ANTHROPIC_MODEL`/`OLLAMA_MODEL`) so spawned-app assertions are machine-independent.
-
-Verify: full `dotnet test` passes with `OPENAI_API_KEY` set to a dummy value in the runner's environment.

@@ -121,3 +121,13 @@ Follow-up to the bridge validation after suspecting config interference in the 1
 - qwen-code rewrites the project .qwen/settings.json at process exit with its startup view; external edits between runs are lost (this wiped reasoning:false entries mid-investigation and produced confounded empty-response results). Sequential identical dispatches are safe because the rewrite matches the committed file; do not hand-edit the file while a qwen process is alive.
 
 Working configuration stands as committed: base qwen3:8b (4k ctx) + reasoning:false + absolute paths; 3/3 file-write successes at ~20s. Fragile by construction - revisit when a small model handles the full prompt. Experimental Ollama variants qwen3-14b-16k, qwen3-8b-16k, qwen3-8b-8k remain installed (alias-only, shared blobs).
+
+## 2026-06-11 - Loop iteration: provider env vars pinned in the e2e spawn helper
+
+Goal `d89f3c6c` (CLI workspace), one Developer task, claude-sonnet-4-6 via subscription-dispatch in goal worktree. Fourth loop goal, same cycle as the first three; closes the "Pin provider env vars in the e2e spawn helper" backlog entry (commit d84f198).
+
+- Outcome: `StartPrototypeDashboardProcess` now pins `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`OPENAI_MODEL`/`ANTHROPIC_MODEL`/`OLLAMA_MODEL` to fixed sentinels alongside the existing `OLLAMA_BASE_URL` pin. Worker wall time 97 s. Operator verification matched the backlog's verify condition exactly: full `dotnet test` in the worktree with `OPENAI_API_KEY` set to a dummy value - 358 passed, 0 failed.
+- Cycle note: acceptance auto-fast-forwarded main this time (no operator commits landed between fork and merge), confirming the auto-ff policy works when main is quiescent.
+- Friction (repeat): complexity estimator again classified the "Implement the BACKLOG.md item..." brief as Complex, requiring `--confirm-large-paid-subscription-start` for a five-line test-helper edit. The worker's own fit note agrees the task was small. Second data point for tuning the estimator or keying it off brief size rather than wording.
+- Friction (repeat): a VBCSCompiler left over from the worker's verification run held a lock on the worktree's Core obj dll; first operator `dotnet test` failed CS2012 until a second `dotnet build-server shutdown`.
+- Model fit: Anthropic/claude-sonnet-4-6 - overkill - five-line test-helper edit with exact file pointer - first-attempt pass; worker self-assessed overkill. Candidate shape for haiku or local routing.
