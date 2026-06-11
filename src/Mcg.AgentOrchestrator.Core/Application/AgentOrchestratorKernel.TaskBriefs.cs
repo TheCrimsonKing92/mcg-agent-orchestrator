@@ -11,7 +11,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public TaskSpec GetTask(GoalId goalId, TaskId taskId) => GetGoal(goalId).FindTask(taskId);
 
-    public TaskBrief BuildTaskBrief(GoalId goalId, TaskId taskId, string? modelFitTarget = null)
+    public TaskBrief BuildTaskBrief(GoalId goalId, TaskId taskId, string? modelFitTarget = null, string? workingDirectory = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -37,9 +37,15 @@ public sealed partial class AgentOrchestratorKernel
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",
             $"Task id: {task.Id.Value}",
-            string.Empty,
-            "## Instructions"
         };
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            lines.Add($"Working directory, use absolute paths: {workingDirectory}");
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("## Instructions");
         lines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
