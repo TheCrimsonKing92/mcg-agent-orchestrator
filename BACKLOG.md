@@ -16,16 +16,6 @@ Decision record: merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code ov
 
 Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Dispatch exit code should not auto-pass verification for empty output
-
-Status: open | Size: small | Suggested route: direct edit, simple
-
-Why: in the 2026-06-10 bridge dogfood, a qwen-code dispatch exited 0 with completely empty stdout and the orchestrator recorded it as a passing verification, completing the task. "Did nothing successfully" was indistinguishable from "did the work". AGENTS.md already warns about echo-only dispatches looking completed; this reproduced it with a real launcher. The claude-cli validation (2026-06-10, goal `9630c178`) found a second shape: a permission-less `claude -p` denies the work, replies "BLOCKED ...", and exits 0 - non-empty output, still nothing done. The claude patch-capability gate closes that specific vector at dispatch time, but exit-code auto-pass remains too trusting in general.
-
-Where: `RecordDispatchExecutionResult` path (`src/Mcg.AgentOrchestrator.Infrastructure/Processes/LocalDispatchRunner.cs`, `BackgroundDispatchRunner.cs`) and the kernel verification recording it calls.
-
-Done when: a dispatch that exits 0 with empty stdout/stderr does not complete a Developer task on its own; it either records a non-passing verification or flags the task for operator review. Test covers the empty-output case.
-
 ## Structured model-fit field
 
 Status: open | Size: medium, decomposable | Suggested route: three Simple local-model subtasks with tight briefs

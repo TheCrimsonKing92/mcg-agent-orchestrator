@@ -42,9 +42,14 @@
       "PowerShell(.\\mcg-orchestrator.cmd workspace create)",
       "PowerShell(.\\mcg-orchestrator.cmd start-dispatch *)",
       "PowerShell(.\\mcg-orchestrator.cmd execute-dispatch *)",
+      "PowerShell(.\\mcg-orchestrator.cmd acceptance)",
+      "PowerShell(.\\mcg-orchestrator.cmd acceptance *)",
+      "PowerShell(.\\mcg-orchestrator.cmd workspace remove)",
       "PowerShell(Select-String *)",
       "PowerShell(Test-Path *)",
-      "PowerShell(dotnet build-server shutdown)"
+      "PowerShell(dotnet build-server shutdown)",
+      "PowerShell(Wait-Process *)",
+      "Bash(tasklist.exe *)"
     ]
   }
 }
