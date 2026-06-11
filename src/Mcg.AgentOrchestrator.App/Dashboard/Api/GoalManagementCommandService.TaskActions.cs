@@ -21,7 +21,7 @@ public static async Task<object?> ApplyTaskActionAsync(
             return await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
 
         case "api-run":
-            return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, goal, task.Id);
+            return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
 
         case "dispatch":
             var dispatch = DashboardRequestParser.ParseDispatchSubmission(body);

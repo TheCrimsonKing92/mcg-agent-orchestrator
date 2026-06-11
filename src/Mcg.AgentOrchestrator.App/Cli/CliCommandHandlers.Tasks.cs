@@ -185,7 +185,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
 private static void RunApiTask(CliExecutionContext context, TaskSpec task)
 {
-    var runner = new AgentTaskRunner(context.Kernel, context.Agents, context.Providers);
+    var diffProvider = GoalWorktreeDiffProvider.Create(context.Workspace.ExecutionDirectory);
+    var runner = new AgentTaskRunner(context.Kernel, context.Agents, context.Providers, goalDiffProvider: diffProvider);
     var result = runner.RunAsync(context.CurrentGoal!.Id, task.Id).GetAwaiter().GetResult();
     ConsoleViews.PrintTask(result.Goal, result.Task);
 }

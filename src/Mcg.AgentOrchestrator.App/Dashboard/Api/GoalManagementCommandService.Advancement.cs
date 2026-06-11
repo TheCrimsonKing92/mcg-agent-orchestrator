@@ -118,7 +118,8 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
             $"Automatic continuation stopped before API-backed execution for task {task.Id.Value[..8]}; use the task Run control for an explicit model call.");
     }
 
-    var result = await new AgentTaskRunner(kernel, agents, providers).RunAsync(goal.Id, taskId);
+    var diffProvider = GoalWorktreeDiffProvider.Create(workspace.ExecutionDirectory);
+    var result = await new AgentTaskRunner(kernel, agents, providers, goalDiffProvider: diffProvider).RunAsync(goal.Id, taskId);
     return DashboardResponseMapper.ToTaskDetailDto(result.Goal, goal.Tasks.Single(task => task.Id == taskId));
 }
 
@@ -126,6 +127,7 @@ private static async Task<object?> AdvanceApiRunAssignedTaskAsync(
     AgentOrchestratorKernel kernel,
     IReadOnlyList<AgentDefinition> agents,
     IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
     Goal goal,
     TaskId taskId)
 {
@@ -142,7 +144,8 @@ private static async Task<object?> AdvanceApiRunAssignedTaskAsync(
             $"Explicit API execution for task {task.Id.Value[..8]} is only available before subscription work, model output, or verification evidence exists.");
     }
 
-    var result = await new AgentTaskRunner(kernel, agents, providers).RunAsync(goal.Id, taskId);
+    var diffProvider = GoalWorktreeDiffProvider.Create(workspace.ExecutionDirectory);
+    var result = await new AgentTaskRunner(kernel, agents, providers, goalDiffProvider: diffProvider).RunAsync(goal.Id, taskId);
     return DashboardResponseMapper.ToTaskDetailDto(result.Goal, goal.Tasks.Single(task => task.Id == taskId));
 }
 

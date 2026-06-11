@@ -11,17 +11,20 @@ public sealed class AgentTaskRunner
     private readonly IReadOnlyList<AgentDefinition> _agents;
     private readonly IModelProviderRegistry _providers;
     private readonly IClock _clock;
+    private readonly Func<GoalId, string?>? _goalDiffProvider;
 
     public AgentTaskRunner(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
-        IClock? clock = null)
+        IClock? clock = null,
+        Func<GoalId, string?>? goalDiffProvider = null)
     {
         _kernel = kernel;
         _agents = agents;
         _providers = providers;
         _clock = clock ?? new SystemClock();
+        _goalDiffProvider = goalDiffProvider;
     }
 
     public async Task<AgentTaskRunResult> RunAsync(GoalId goalId, TaskId taskId, CancellationToken cancellationToken = default)
@@ -74,13 +77,15 @@ public sealed class AgentTaskRunner
             BuildModelFitSummary(goal));
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
         var startMessage = BuildStartMessage(agent, resolvedModel);
+        var workspaceDiff = _goalDiffProvider?.Invoke(goalId);
         var request = BuildRequest(
             goal,
             task,
             agent,
             resolvedModel,
             complexity,
-            [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, startMessage, _clock.UtcNow)]);
+            [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, startMessage, _clock.UtcNow)],
+            workspaceDiff);
         _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
         ModelResponse response;
@@ -184,7 +189,8 @@ public sealed class AgentTaskRunner
         AgentDefinition agent,
         ModelProfile resolvedModel,
         TaskComplexity complexity,
-        IReadOnlyList<ProgressEvent>? pendingTimelineEvents = null)
+        IReadOnlyList<ProgressEvent>? pendingTimelineEvents = null,
+        string? workspaceDiff = null)
     {
         var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel);
 
@@ -217,6 +223,10 @@ public sealed class AgentTaskRunner
             ? $"{Environment.NewLine}{string.Join(Environment.NewLine, priorTaskEvidenceLines)}"
             : string.Empty;
 
+        var workspaceDiffSection = !string.IsNullOrWhiteSpace(workspaceDiff)
+            ? $"{Environment.NewLine}{PromptContextFormatter.BuildWorkspaceDiffSection(workspaceDiff)}"
+            : string.Empty;
+
         var userPrompt =
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}{Environment.NewLine}" +
@@ -227,6 +237,7 @@ public sealed class AgentTaskRunner
             modelFitGuidance +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}" +
             priorTaskEvidenceSection +
+            workspaceDiffSection +
             timelineSection;
 
         if (isLocal)

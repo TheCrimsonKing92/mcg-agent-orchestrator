@@ -845,5 +845,99 @@ static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId 
         kernel.RetryTask(goalId, taskId, $"{prefix}-{index:00}");
     }
 }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_includes_workspace_diff_section_when_diff_provider_returns_text")]
+    public async Task ExecuteAssignedTaskIncludesWorkspaceDiffSectionWhenDiffProviderReturnsText()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Add workspace diff to API prompts");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var provider = new FakeModelProvider("OpenAI", "Reviewed branch changes.");
+        var diffText = "diff --git a/Foo.cs b/Foo.cs\n+++ b/Foo.cs\n+public void Bar() {}";
+        var runner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([provider]),
+            clock,
+            goalDiffProvider: _ => diffText);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        var prompt = provider.LastRequest!.Messages.Single().Content;
+        Assert.Contains(prompt, text => text.Contains("## Workspace Diff", StringComparison.Ordinal));
+        Assert.Contains(prompt, text => text.Contains("Foo.cs", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_omits_workspace_diff_section_when_diff_provider_returns_null")]
+    public async Task ExecuteAssignedTaskOmitsWorkspaceDiffSectionWhenDiffProviderReturnsNull()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Omit diff section for goals without worktree");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var provider = new FakeModelProvider("OpenAI", "Completed.");
+        var runner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([provider]),
+            clock,
+            goalDiffProvider: _ => null);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        var prompt = provider.LastRequest!.Messages.Single().Content;
+        Assert.True(!prompt.Contains("## Workspace Diff", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_omits_workspace_diff_section_when_no_diff_provider")]
+    public async Task ExecuteAssignedTaskOmitsWorkspaceDiffSectionWhenNoDiffProvider()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Omit diff section when no provider is wired");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var provider = new FakeModelProvider("OpenAI", "Completed.");
+        var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        var prompt = provider.LastRequest!.Messages.Single().Content;
+        Assert.True(!prompt.Contains("## Workspace Diff", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_truncates_oversized_workspace_diff_with_budget_marker")]
+    public async Task ExecuteAssignedTaskTruncatesOversizedWorkspaceDiffWithBudgetMarker()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Bound large branch diffs in API prompts");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var provider = new FakeModelProvider("OpenAI", "Reviewed changes.");
+        var diffText = $"diff-head-marker {new string('d', 2200)} diff-middle-omitted {new string('e', 1000)} diff-tail-marker";
+        var runner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([provider]),
+            clock,
+            goalDiffProvider: _ => diffText);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        var prompt = provider.LastRequest!.Messages.Single().Content;
+        Assert.Contains(prompt, text => text.Contains("## Workspace Diff", StringComparison.Ordinal));
+        Assert.Contains(prompt, text => text.Contains("diff-head-marker", StringComparison.Ordinal));
+        Assert.Contains(prompt, text => text.Contains("diff-tail-marker", StringComparison.Ordinal));
+        Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+        Assert.True(!prompt.Contains("diff-middle-omitted", StringComparison.Ordinal));
+    }
 }
 

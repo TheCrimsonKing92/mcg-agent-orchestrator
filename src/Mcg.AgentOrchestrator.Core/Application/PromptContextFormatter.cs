@@ -20,6 +20,9 @@ internal static class PromptContextFormatter
     private const int PrimaryContextMaxChars = 2400;
     private const int PrimaryContextHeadChars = 1600;
     private const int PrimaryContextTailChars = 800;
+    private const int WorkspaceDiffMaxChars = 3200;
+    private const int WorkspaceDiffHeadChars = 2200;
+    private const int WorkspaceDiffTailChars = 800;
     private const int PromptTitleMaxChars = 160;
     private const int TimelineMessageMaxChars = 240;
     private const int TimelineMessageHeadChars = 170;
@@ -170,6 +173,12 @@ internal static class PromptContextFormatter
         }
         lines.Add(string.Empty);
         return lines;
+    }
+
+    public static string BuildWorkspaceDiffSection(string diff)
+    {
+        var trimmed = TrimBlock(diff.Trim(), WorkspaceDiffMaxChars, WorkspaceDiffHeadChars, WorkspaceDiffTailChars);
+        return $"## Workspace Diff{Environment.NewLine}{trimmed}";
     }
 
     private static bool IsDecisionRelevantTimelineEvent(ProgressEvent evt)

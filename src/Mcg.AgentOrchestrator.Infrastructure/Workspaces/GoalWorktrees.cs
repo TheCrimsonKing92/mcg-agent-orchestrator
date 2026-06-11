@@ -97,6 +97,33 @@ public static class GoalWorktrees
             : $"Removed workspace; branch {branch} kept because it has unmerged commits.";
     }
 
+    public static string? TryGetBranchDiff(string executionDirectory, GoalId goalId)
+    {
+        var worktreePath = TryResolve(executionDirectory, goalId);
+        if (worktreePath is null)
+        {
+            return null;
+        }
+
+        var statResult = RunGit(worktreePath, "diff", "--stat", "main...HEAD");
+        var patchResult = RunGit(worktreePath, "diff", "main...HEAD");
+
+        if (statResult.ExitCode != 0 && patchResult.ExitCode != 0)
+        {
+            return null;
+        }
+
+        var stat = statResult.Output.Trim();
+        var patch = patchResult.Output.Trim();
+
+        if (string.IsNullOrWhiteSpace(stat) && string.IsNullOrWhiteSpace(patch))
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(stat) ? patch : $"{stat}{Environment.NewLine}---{Environment.NewLine}{patch}";
+    }
+
     public static GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)
     {
         var branch = BranchName(goalId);
