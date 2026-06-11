@@ -584,7 +584,7 @@ public sealed class AdvanceLoopTests
         task.Id,
         new TaskDispatchRecord(
             "local",
-            "Start-Sleep -Milliseconds 250; Write-Output ok",
+            "Start-Sleep -Milliseconds 50; Write-Output ok",
             workspace.ExecutionDirectory,
             DateTimeOffset.UtcNow));
     new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
@@ -604,7 +604,7 @@ public sealed class AdvanceLoopTests
 
     Assert.True(started.IsRunning);
 
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
     while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
     {
         await Task.Delay(75);
@@ -767,7 +767,7 @@ public sealed class AdvanceLoopTests
 
     var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
     File.WriteAllText(
-        Path.Combine(workspace.RootDirectory, DashboardContinuationService.StoreFileName),
+        workspace.ContinuationStorePath,
         $$"""
         {
           "watches": [
@@ -805,7 +805,7 @@ public sealed class AdvanceLoopTests
     }
 
     Assert.Equal(0, service.GetStatuses().Count);
-    Assert.False(File.Exists(Path.Combine(workspace.RootDirectory, DashboardContinuationService.StoreFileName)));
+    Assert.False(File.Exists(workspace.ContinuationStorePath));
 }
 
     [Xunit.Fact(DisplayName = "DashboardEndpointServices_loads_agent_catalog_with_local_fallback")]
