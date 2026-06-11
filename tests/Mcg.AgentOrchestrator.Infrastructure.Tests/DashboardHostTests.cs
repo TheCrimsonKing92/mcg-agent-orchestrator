@@ -8,6 +8,53 @@ using System.Text.Json;
 
 public sealed class DashboardHostTests
 {
+    [Xunit.Fact(DisplayName = "Simple_hosted_dashboard_serves_read_only_metadata_and_survey")]
+    public async Task SimpleHostedDashboardServesReadOnlyMetadataAndSurvey()
+    {
+        var root = CreateTempDirectory();
+        var port = GetAvailablePort();
+        var url = $"http://localhost:{port}/";
+        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
+        using var process = StartDashboardProcess(appProject, root, "simple-hosted-dashboard", url);
+
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            await WaitForHealthAsync(client, url, process);
+
+            var dashboardHostMetadata = await client.GetStringAsync(new Uri(new Uri(url), "api/system/dashboard-host"));
+            var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=8"));
+            using var createGoalResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/goals"),
+                new StringContent(
+                    "{\"objective\":\"should be read only\"}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var createGoal = await createGoalResponse.Content.ReadAsStringAsync();
+
+            using (var hostDocument = JsonDocument.Parse(dashboardHostMetadata))
+            {
+                var host = hostDocument.RootElement;
+                Assert.Equal("simple-hosted-dashboard", host.GetProperty("CommandName").GetString());
+                Assert.False(host.GetProperty("OperatorControlsEnabled").GetBoolean());
+                Assert.True(host.GetProperty("SourceSurveyUrl").GetString()?.EndsWith("/api/source-survey?max=8", StringComparison.Ordinal) is true);
+                Assert.True(host.GetProperty("RestartCommand").GetString()!.Contains("simple-hosted-dashboard", StringComparison.Ordinal));
+            }
+
+            Assert.True(sourceSurvey.Contains("\"MaxFiles\": 8", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.Forbidden, createGoalResponse.StatusCode);
+            Assert.True(createGoal.Contains("dashboard read-only", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Prototype_dashboard_serves_health_and_goal_json_over_kestrel")]
     public async Task PrototypeDashboardServesHealthAndGoalJsonOverKestrel()
 {

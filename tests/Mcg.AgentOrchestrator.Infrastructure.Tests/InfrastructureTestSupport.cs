@@ -30,7 +30,10 @@ public static string CreateTempDirectory()
     return path;
 }
 
-public static Process StartPrototypeDashboardProcess(string appProject, string workingDirectory, string url)
+public static Process StartPrototypeDashboardProcess(string appProject, string workingDirectory, string url) =>
+    StartDashboardProcess(appProject, workingDirectory, "prototype-ui", url);
+
+public static Process StartDashboardProcess(string appProject, string workingDirectory, string command, string url)
 {
     var startInfo = new ProcessStartInfo
     {
@@ -59,7 +62,7 @@ public static Process StartPrototypeDashboardProcess(string appProject, string w
     startInfo.ArgumentList.Add("--project");
     startInfo.ArgumentList.Add(appProject);
     startInfo.ArgumentList.Add("--");
-    startInfo.ArgumentList.Add("prototype-ui");
+    startInfo.ArgumentList.Add(command);
     startInfo.ArgumentList.Add(url);
     startInfo.ArgumentList.Add("--no-open");
 
