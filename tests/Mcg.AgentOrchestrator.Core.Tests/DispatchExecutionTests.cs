@@ -330,6 +330,60 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
         "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
         completedAt);
 }
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_when_exit_code_0_but_no_output")]
+    public void RecordDispatchExecutionResultFailsTaskWhenExitCode0ButNoOutput()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Require output for dispatch success");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "silent-agent run", "C:\\repo", clock.UtcNow));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "silent-agent run",
+        "C:\\repo",
+        0,
+        string.Empty,
+        string.Empty,
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("no output", StringComparison.OrdinalIgnoreCase));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_when_exit_code_0_but_whitespace_only_output")]
+    public void RecordDispatchExecutionResultFailsTaskWhenExitCode0ButWhitespaceOnlyOutput()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Require non-whitespace output for dispatch success");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "whitespace-agent run", "C:\\repo", clock.UtcNow));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "whitespace-agent run",
+        "C:\\repo",
+        0,
+        "   \n  ",
+        "\t",
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("no output", StringComparison.OrdinalIgnoreCase));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_rejects_task_without_dispatch")]
     public void RecordDispatchExecutionResultRejectsTaskWithoutDispatch()
 {
