@@ -572,11 +572,6 @@ public static partial class DashboardRenderer
             return "gpt-5.3-codex";
         }
 
-        if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-        {
-            return "claude-sonnet";
-        }
-
         return string.Empty;
     }
 
@@ -586,8 +581,9 @@ public static partial class DashboardRenderer
         {
             return
             [
-                ("claude-sonnet-4-20250514", "Claude Sonnet 4"),
-                ("claude-opus-4-20250514", "Claude Opus 4")
+                ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+                ("claude-haiku-4-5", "Claude Haiku 4.5"),
+                ("claude-opus-4-8", "Claude Opus 4.8")
             ];
         }
 
@@ -656,7 +652,7 @@ public static partial class DashboardRenderer
         }
 
         return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-            ? [("claude-sonnet", "Claude Sonnet"), ("", "Use API model"), ("claude-opus", "Claude Opus (complex)")]
+            ? [("", "Use API model"), ("sonnet", "Claude Sonnet (latest)"), ("haiku", "Claude Haiku (latest)"), ("opus", "Claude Opus (latest)")]
             : [("gpt-5.3-codex", "GPT-5.3-Codex"), ("", "Use API model"), ("gpt-5.5", "GPT-5.5 (complex)")];
     }
 

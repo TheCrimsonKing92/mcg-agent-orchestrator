@@ -529,7 +529,7 @@ public sealed class DashboardRenderingTests
     var anthropic = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
         "Reviewer",
         "Anthropic",
-        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-6",
         null));
     var ollama = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
         "Tester",
@@ -551,7 +551,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, anthropic.ExecutionPolicy);
     Assert.Equal("claude-cli", anthropic.Subscription!.WorkerProfileName);
-    Assert.Equal("claude-sonnet", anthropic.Subscription.ModelAlias);
+    Assert.True(anthropic.Subscription.ModelAlias is null);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, anthropic.Model.MaxOutputTokens);
     Assert.Equal(SubscriptionMode.ApiKey, anthropic.Model.SubscriptionMode);
     Assert.True(anthropic.ComplexModel is null);
@@ -922,7 +922,7 @@ public sealed class DashboardRenderingTests
     Assert.False(configHtml.Contains("Default CLI model", StringComparison.Ordinal));
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Default CLI model", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("defaultSubscriptionModel: 'gpt-5.3-codex'", StringComparison.Ordinal));
-    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("defaultSubscriptionModel: 'claude-sonnet'", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("['sonnet','Claude Sonnet (latest)']", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("maxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexMaxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexProviderName", StringComparison.Ordinal));

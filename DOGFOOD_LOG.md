@@ -91,6 +91,18 @@ Goal ID: `c2d382096b2245e19a096c9065e2a08d`, task 2 `c471c65f`, profile-dispatch
 - Model fit: Ollama/qwen3:8b - adequate - agentic file write via qwen-code with reasoning disabled - 19s completion, minor content drift.
 - Follow-up: include the dispatch working directory (absolute) in task briefs; commit `.qwen/settings.json` so worktrees inherit it (worktrees only carry committed files).
 
+## 2026-06-10 - Claude bridge validated end-to-end (claude-cli, bypassPermissions)
+
+Goal ID: `9630c178515141909ef19eee0d8c8c46` (CLI workspace), task 1 `844dc4ff`, Developer, subscription-dispatch in goal worktree.
+
+- Pre-flight (direct CLI, outside orchestrator): the shipped default alias `claude-sonnet` is rejected by claude CLI (exit 1) - the claude-cli path could never have dispatched. Without a permission flag, `claude -p` denies the file write, replies BLOCKED, and exits 0 - the exit-code auto-pass would have completed the task with nothing done (same trap as the qwen empty-output case, but with exit 0 AND non-empty output). `--permission-mode acceptEdits` enables file edits; `bypassPermissions` also enables shell commands (parity with codex `workspace-write`).
+- Fixes shipped: default `claude-cli` template now pins `--permission-mode bypassPermissions`; profile repair upgrades stale saved templates; claude-specific patch-capability check blocks Developer dispatch through permission-less claude templates; Anthropic default subscription alias is now null (CLI uses the agent's API model name - Anthropic API ids are valid CLI names); stale `claude-sonnet-4-20250514`/`claude-opus-4-20250514` defaults replaced with `claude-sonnet-4-6`/`claude-haiku-4-5`/`claude-opus-4-8` across provider defaults, dashboard options, and README.
+- End-to-end result: `agent developer Anthropic claude-haiku-4-5` -> `simple-goal` -> `workspace create` -> `subscription-dispatch 1` -> `start-dispatch 1`. Dispatch ran claude in `.orchestrator-worktrees/9630c178`, exit 0 in 118 s; CLAUDE-BRIDGE.md created with exact requested content; worker self-verified via Get-Content and reported changed files. Dirty-workspace guard refused `workspace remove` until forced, as designed.
+- Friction: the worker emitted its fit note as `**Model fit:** Anthropic/claude-haiku-4-5 — adequate — ...` (markdown bold + em dashes), invisible to the line-based parser. Fixed this session: parser now strips markdown decoration and normalizes en/em dashes; test covers the exact emitted line. Structured fit field remains the real fix.
+- Friction: claude warns "no stdin data received in 3s" when stdin is redirected; the dispatcher inherits console stdin so it only delays, never hangs.
+- Model fit: Anthropic/claude-haiku-4-5 - adequate - agentic file write via claude-cli - exact content, self-verified, ~2 min.
+- Follow-up: Developer role in the CLI workspace is now `anthropic-developer` (Anthropic/claude-sonnet-4-6, subscription claude-cli); delete `src\Mcg.AgentOrchestrator.App\.orchestrator\agents.json` to restore the OpenAI default catalog.
+
 ## 2026-06-10 - Context-window forensics correct the qwen verdicts again
 
 Follow-up to the bridge validation after suspecting config interference in the 14b runs. Three real disruptions found:

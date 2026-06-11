@@ -167,9 +167,9 @@ private static string? DefaultSubscriptionModelAlias(string providerName, AgentE
         return "gpt-5.3-codex";
     }
 
-    return providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-        ? "claude-sonnet"
-        : null;
+    // Anthropic API model ids are valid claude CLI model names, so the CLI uses the
+    // agent's model unless the operator pins an explicit alias such as "sonnet".
+    return null;
 }
 
 private static string? DefaultSubscriptionReasoningEffort(string providerName, AgentExecutionPolicy executionPolicy)

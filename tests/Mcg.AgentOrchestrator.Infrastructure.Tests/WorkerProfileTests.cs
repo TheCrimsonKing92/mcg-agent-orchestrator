@@ -23,8 +23,23 @@ public sealed class WorkerProfileTests
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
-    Assert.Contains(claude.CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} -p", StringComparison.Ordinal));
+    Assert.Contains(claude.CommandTemplate, text => text.Contains("claude --model {subscriptionModelName}", StringComparison.Ordinal));
+    Assert.Contains(claude.CommandTemplate, text => text.Contains("--permission-mode bypassPermissions -p", StringComparison.Ordinal));
     Assert.Contains(claude.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
+    Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude.CommandTemplate).IsPatchCapable);
+}
+
+    [Xunit.Fact(DisplayName = "Claude_launcher_without_permission_mode_is_not_patch_capable")]
+    public void ClaudeLauncherWithoutPermissionModeIsNotPatchCapable()
+{
+    var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(
+        "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})");
+
+    Assert.False(capability.IsPatchCapable);
+    Assert.Contains(capability.Detail, text => text.Contains("--permission-mode", StringComparison.Ordinal));
+
+    Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(
+        "claude --model {subscriptionModelName} --permission-mode acceptEdits -p (Get-Content -Raw {promptPath})").IsPatchCapable);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_codex_oss_profile_is_patch_capable_local_bridge")]
@@ -130,7 +145,7 @@ public sealed class WorkerProfileTests
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
-    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} -p", StringComparison.Ordinal));
+    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode bypassPermissions -p", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_stale_default_subscription_profiles")]
     public void WorkerProfileStoreLoadRepairsStaleDefaultSubscriptionProfiles()
@@ -145,6 +160,20 @@ public sealed class WorkerProfileTests
 
     Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_claude_profile_missing_permission_mode")]
+    public void WorkerProfileStoreLoadRepairsClaudeProfileMissingPermissionMode()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var saved = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})"));
+
+    WorkerProfileStore.Save(path, saved);
+    var restored = WorkerProfileStore.Load(path);
+
+    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--permission-mode bypassPermissions", StringComparison.Ordinal));
+    Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(restored.GetRequired("claude-cli").CommandTemplate).IsPatchCapable);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_required_rejects_missing_or_empty_files")]
     public void WorkerProfileStoreLoadRequiredRejectsMissingOrEmptyFiles()

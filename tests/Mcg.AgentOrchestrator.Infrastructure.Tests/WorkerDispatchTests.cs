@@ -504,7 +504,7 @@ public sealed class WorkerDispatchTests
         dispatchedAt);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' -p", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode bypassPermissions -p", StringComparison.Ordinal));
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("Get-Content -Raw", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_reasoning_pinning")]

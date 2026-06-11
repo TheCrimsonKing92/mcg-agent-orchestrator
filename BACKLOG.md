@@ -20,7 +20,7 @@ Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` f
 
 Status: open | Size: small | Suggested route: direct edit, simple
 
-Why: in the 2026-06-10 bridge dogfood, a qwen-code dispatch exited 0 with completely empty stdout and the orchestrator recorded it as a passing verification, completing the task. "Did nothing successfully" was indistinguishable from "did the work". AGENTS.md already warns about echo-only dispatches looking completed; this reproduced it with a real launcher.
+Why: in the 2026-06-10 bridge dogfood, a qwen-code dispatch exited 0 with completely empty stdout and the orchestrator recorded it as a passing verification, completing the task. "Did nothing successfully" was indistinguishable from "did the work". AGENTS.md already warns about echo-only dispatches looking completed; this reproduced it with a real launcher. The claude-cli validation (2026-06-10, goal `9630c178`) found a second shape: a permission-less `claude -p` denies the work, replies "BLOCKED ...", and exits 0 - non-empty output, still nothing done. The claude patch-capability gate closes that specific vector at dispatch time, but exit-code auto-pass remains too trusting in general.
 
 Where: `RecordDispatchExecutionResult` path (`src/Mcg.AgentOrchestrator.Infrastructure/Processes/LocalDispatchRunner.cs`, `BackgroundDispatchRunner.cs`) and the kernel verification recording it calls.
 
@@ -30,7 +30,7 @@ Done when: a dispatch that exits 0 with empty stdout/stderr does not complete a 
 
 Status: open | Size: medium, decomposable | Suggested route: three Simple local-model subtasks with tight briefs
 
-Why: model-fit evidence is scraped from free-text `Model fit:` lines in verification stdout/stderr. Three observed failure modes (2026-06-10 dogfood entry): the model echoes the template verbatim (qwen3:8b live run), prompt-embedded templates are never recorded back as notes (541-goal inventory had 20 template strings and 0 real notes), and an operator note placed mid-line is invisible to the line-based parser.
+Why: model-fit evidence is scraped from free-text `Model fit:` lines in verification stdout/stderr. Four observed failure modes (2026-06-10 dogfood entries): the model echoes the template verbatim (qwen3:8b live run), prompt-embedded templates are never recorded back as notes (541-goal inventory had 20 template strings and 0 real notes), an operator note placed mid-line is invisible to the line-based parser, and markdown-formatting workers decorate the prefix (`**Model fit:**` with em dashes; claude-haiku live run). The fourth is patched (parser normalizes markdown decoration and en/em dashes, 2026-06-10), but the parser remains a scrape.
 
 Where: `src/Mcg.AgentOrchestrator.Core/Reports/ModelFitEvidence.cs` (parser, single template source), `TaskVerificationRecord` in `src/Mcg.AgentOrchestrator.Core/Models/ModelProviderContracts.cs`, `src/Mcg.AgentOrchestrator.Core/Persistence/OrchestratorSnapshots.cs` (snapshot compatibility required - existing state files must still load).
 

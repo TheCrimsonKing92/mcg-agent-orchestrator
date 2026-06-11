@@ -19,10 +19,10 @@ public static class ModelFitEvidence
         {
             foreach (var line in EnumerateVerificationLines(verification))
             {
-                var trimmed = line.Trim();
-                if (trimmed.StartsWith("Model fit:", StringComparison.OrdinalIgnoreCase))
+                var normalized = NormalizeNoteLine(line);
+                if (normalized.StartsWith(NotePrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    return trimmed;
+                    return normalized;
                 }
             }
         }
@@ -36,10 +36,10 @@ public static class ModelFitEvidence
         {
             foreach (var line in EnumerateVerificationLines(verification))
             {
-                var trimmed = line.Trim();
-                if (trimmed.StartsWith("Model fit:", StringComparison.OrdinalIgnoreCase))
+                var normalized = NormalizeNoteLine(line);
+                if (normalized.StartsWith(NotePrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    yield return trimmed;
+                    yield return normalized;
                 }
             }
         }
@@ -73,13 +73,18 @@ public static class ModelFitEvidence
 
     public static ModelFitObservation? TryParseNote(string? note)
     {
-        if (string.IsNullOrWhiteSpace(note) ||
-            !note.TrimStart().StartsWith(NotePrefix, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(note))
         {
             return null;
         }
 
-        var body = note.TrimStart()[NotePrefix.Length..].Trim();
+        var normalized = NormalizeNoteLine(note);
+        if (!normalized.StartsWith(NotePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var body = normalized[NotePrefix.Length..].Trim();
         var parts = body.Split([" - "], StringSplitOptions.None);
         if (parts.Length < 2)
         {
@@ -142,6 +147,19 @@ public static class ModelFitEvidence
         }
 
         return trimmed;
+    }
+
+    // Markdown-formatting workers (claude in particular) emit the note as
+    // "**Model fit:** Provider/model — adequate — ..."; strip emphasis/list
+    // decoration and normalize en/em dashes so the line-based parser sees it.
+    private static string NormalizeNoteLine(string line)
+    {
+        var trimmed = line.Trim().TrimStart('#', '>', '-', '*', '_', ' ');
+        return trimmed
+            .Replace("**", string.Empty)
+            .Replace('–', '-')
+            .Replace('—', '-')
+            .Trim();
     }
 
     private static IEnumerable<string> EnumerateVerificationLines(TaskVerificationRecord verification)

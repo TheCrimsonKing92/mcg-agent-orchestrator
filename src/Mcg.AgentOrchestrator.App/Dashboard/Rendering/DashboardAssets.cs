@@ -79,11 +79,11 @@ const agentProviderOptions = {
     preferredProfile: 'codex-cli'
   },
   Anthropic: {
-    apiModels: [['claude-sonnet-4-20250514','Claude Sonnet 4'], ['claude-opus-4-20250514','Claude Opus 4']],
+    apiModels: [['claude-sonnet-4-6','Claude Sonnet 4.6'], ['claude-haiku-4-5','Claude Haiku 4.5'], ['claude-opus-4-8','Claude Opus 4.8']],
     apiReasoning: [['','Default']],
-    subscriptionModels: [['claude-sonnet','Claude Sonnet'], ['','Use API model'], ['claude-opus','Claude Opus (complex)']],
+    subscriptionModels: [['','Use API model'], ['sonnet','Claude Sonnet (latest)'], ['haiku','Claude Haiku (latest)'], ['opus','Claude Opus (latest)']],
     subscriptionReasoning: [['','Default']],
-    defaultSubscriptionModel: 'claude-sonnet',
+    defaultSubscriptionModel: '',
     preferredProfile: 'claude-cli'
   },
   Ollama: {

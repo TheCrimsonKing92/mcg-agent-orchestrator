@@ -254,7 +254,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 Example:
 
 ```powershell
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Developer Anthropic claude-sonnet-4-20250514 "Claude developer"
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Developer Anthropic claude-sonnet-4-6 "Claude developer"
 ```
 
 Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. Providers must match a registered model provider such as `OpenAI`, `Anthropic`, or `Ollama` for API-backed execution to succeed.
@@ -269,7 +269,7 @@ Set these environment variables to use live API providers:
 $env:OPENAI_API_KEY = "<api-key>"
 $env:OPENAI_MODEL = "gpt-5.2"
 $env:ANTHROPIC_API_KEY = "<api-key>"
-$env:ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+$env:ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ```
 
 The OpenAI adapter calls the Responses API. The Anthropic adapter calls the Messages API.

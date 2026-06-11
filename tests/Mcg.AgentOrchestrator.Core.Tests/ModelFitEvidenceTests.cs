@@ -15,6 +15,20 @@ public sealed class ModelFitEvidenceTests
         Assert.Equal("focused refactor", observation.TaskShape);
     }
 
+    [Xunit.Fact(DisplayName = "ModelFitEvidence_parses_markdown_decorated_note")]
+    public void ModelFitEvidenceParsesMarkdownDecoratedNote()
+    {
+        // Exact shape emitted by a claude-cli worker in the 2026-06-10 dogfood run.
+        var observation = ModelFitEvidence.TryParseNote(
+            "**Model fit:** Anthropic/claude-haiku-4-5 — adequate — simple file creation task — straightforward I/O operation with no complexity.");
+
+        Assert.True(observation is not null, "expected markdown-decorated note to parse");
+        Assert.Equal("Anthropic", observation!.ProviderName);
+        Assert.Equal("claude-haiku-4-5", observation.ModelName);
+        Assert.Equal("adequate", observation.Fit);
+        Assert.Equal("simple file creation task", observation.TaskShape);
+    }
+
     [Xunit.Fact(DisplayName = "ModelFitEvidence_rejects_literal_template_echo")]
     public void ModelFitEvidenceRejectsLiteralTemplateEcho()
     {

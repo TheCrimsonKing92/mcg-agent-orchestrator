@@ -42,6 +42,11 @@ public static class WorkerProfileDiagnostics
             return new WorkerProfilePatchCapability(false, "Command only echoes the prompt path; it cannot patch source.");
         }
 
+        if (IsClaudeCommand(normalized))
+        {
+            return EvaluateClaudePatchCapability(normalized);
+        }
+
         if (!IsCodexCommand(normalized))
         {
             return new WorkerProfilePatchCapability(
@@ -81,7 +86,50 @@ public static class WorkerProfileDiagnostics
             $"Codex launcher is not patch-capable; missing {string.Join(", ", missing)}.");
     }
 
+    private static WorkerProfilePatchCapability EvaluateClaudePatchCapability(string normalized)
+    {
+        var hasNonInteractivePermissionMode =
+            normalized.Contains("--permission-mode acceptEdits", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("--dangerously-skip-permissions", StringComparison.OrdinalIgnoreCase);
+        var readsPromptContent = normalized.Contains("Get-Content -Raw {promptPath}", StringComparison.OrdinalIgnoreCase);
+
+        if (hasNonInteractivePermissionMode && readsPromptContent)
+        {
+            return new WorkerProfilePatchCapability(
+                true,
+                "Claude launcher is patch-capable: non-interactive permission mode and prompt content are configured.");
+        }
+
+        var missing = new List<string>();
+        if (!hasNonInteractivePermissionMode)
+        {
+            // In print mode Claude denies file edits without a permission mode and still exits 0,
+            // so a missing flag silently completes Developer tasks without doing the work.
+            missing.Add("--permission-mode acceptEdits|bypassPermissions");
+        }
+
+        if (!readsPromptContent)
+        {
+            missing.Add("Get-Content -Raw {promptPath}");
+        }
+
+        return new WorkerProfilePatchCapability(
+            false,
+            $"Claude launcher is not patch-capable; missing {string.Join(", ", missing)}.");
+    }
+
     private static bool IsCodexCommand(string commandTemplate)
+    {
+        return IsLauncherCommand(commandTemplate, "codex");
+    }
+
+    private static bool IsClaudeCommand(string commandTemplate)
+    {
+        return IsLauncherCommand(commandTemplate, "claude");
+    }
+
+    private static bool IsLauncherCommand(string commandTemplate, string launcher)
     {
         var trimmed = commandTemplate.TrimStart();
         if (trimmed.StartsWith("& ", StringComparison.Ordinal))
@@ -89,14 +137,14 @@ public static class WorkerProfileDiagnostics
             trimmed = trimmed[2..].TrimStart();
         }
 
-        if (trimmed.StartsWith("\"codex\"", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.StartsWith("'codex'", StringComparison.OrdinalIgnoreCase))
+        if (trimmed.StartsWith($"\"{launcher}\"", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith($"'{launcher}'", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        return trimmed.StartsWith("codex ", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("codex", StringComparison.OrdinalIgnoreCase);
+        return trimmed.StartsWith($"{launcher} ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals(launcher, StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -150,7 +198,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
             new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
             new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL='{subscriptionModelName}'; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})")
+            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})")
         ]);
     }
 }
@@ -235,6 +283,7 @@ public static class WorkerProfileStore
         }
 
         return profile.Name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) &&
-            !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase);
+            (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
+                !WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate).IsPatchCapable);
     }
 }
