@@ -155,3 +155,10 @@ Goal `f2e3d68c` (CLI workspace), the default Planner/Researcher/Developer/Tester
 - Model fit: OpenAI/gpt-5.5 - adequate - planner/tester roles - sharp plan with falsifiable risks; disciplined tester. Researcher overran role, not model capability.
 - Model fit: Ollama/qwen3:8b - underpowered - code review without file access - findings derived from objective text only.
 - Verdict: pipeline mechanics (sequential role dispatch, mixed codex/claude/ollama workers, human-input round-trip) all function, but without cross-task evidence the roles are five disconnected workers and the pipeline's value over `simple-goal` + operator review is negative at ~5x the cost. The "dispatch briefs omit prior-task evidence" backlog item is the gating fix.
+
+## 2026-06-11 - Pipeline handoff gap closed: briefs now carry prior-task evidence (goal a11b7b57)
+
+Goal `a11b7b57` (CLI workspace), one Developer task, claude-sonnet-4-6, simple-goal cycle. Closes the gating backlog item from the pipeline run, same day it was filed (commit 72be355). `BuildTaskBrief` now emits a `## Prior Task Evidence` section: up to the 3 most recent completed earlier tasks in goal order, each as `### {Role}: {title}` plus latest verification stdout trimmed through the existing TrimEvidenceBlock budget; omitted for single-task goals. Two tests cover presence and omission. Worker wall time 5.5 min; 367/367 green, operator-verified independently.
+
+- Next validation: rerun a five-role `goal` pipeline on a future backlog item and confirm the Researcher/Developer briefs actually carry the Planner's plan (and that role drift shrinks when they do).
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature in brief construction with explicit done-conditions - first-attempt pass, 6/6 in the loop so far.
