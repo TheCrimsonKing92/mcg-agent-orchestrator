@@ -18,18 +18,6 @@ Done when: removal is resumable - if the worktree is already unregistered, a rer
 
 Verify: `dotnet test`; simulate a partial removal and rerun `workspace remove`.
 
-## Status-neutral task note command
-
-Status: open | Size: small | Suggested route: direct edit plus test
-
-Why: the only way to put operator guidance into an undispatched task's brief is the timeline, but `progress <n> running <msg>` flips the task to Running, and both `subscription-dispatch` and `retry` refuse Running tasks. The working sequence is a three-step dance (`progress running` → `progress failed` → `retry`) that pollutes the timeline with fake status transitions (observed 2026-06-11, goal f2e3d68c, conveying a regression note to the Developer).
-
-Where: CLI command handling in `src/Mcg.AgentOrchestrator.App/Cli/` (alongside `progress`/`retry`); kernel append path in `AgentOrchestratorKernel` (timeline events with the task's id already flow into briefs via the Recent Timeline section).
-
-Done when: a `note <task-number> <message>` command records a timeline event on the task without changing its status, and the note appears in a subsequently generated brief; a test covers both.
-
-Verify: `dotnet test`; `note` then `brief <n>` shows the message.
-
 ## Reconcile the paid-prompt cost guard with brief growth and estimator wording
 
 Status: open | Size: small-medium | Suggested route: scoped Developer task; needs a threshold decision
@@ -54,16 +42,6 @@ Done when: an operator `dotnet test` in a goal worktree immediately after a work
 
 Verify: live loop cycle - worker completes, operator runs `dotnet test <worktree>` once, exit 0.
 
-## Validate role-sandbox enforcement in a live pipeline run
-
-Status: open, blocked on next pipeline goal | Size: small (observation only)
-
-Why: goal c5e626c4 (2026-06-11) made dispatch sandboxes role-resolved (codex `--sandbox read-only` / claude `--permission-mode plan` for Planner/Researcher/Reviewer). Enforced in code and tests, but no five-role `goal` has dispatched since.
-
-Done when: a live pipeline run shows a Planner/Researcher dispatch command containing the read-only sandbox, the worker completes its role without writing (worktree clean after the role), and the Developer task carries the implementation; result recorded in DOGFOOD_LOG.md and this entry removed.
-
-Verify: dispatch command text in the task record + `git status` in the worktree after the Researcher completes.
-
 ## Move subscription-plan projection out of Dashboard.Api
 
 Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring
@@ -80,10 +58,20 @@ Verify: full `dotnet test`; no `Dashboard.Api` usings remain in `CostControl/`.
 
 Status: open, blocked on data | Size: small per run | Suggested route: Simple local-model report tasks; operator embeds the data
 
-Why: the cap (`RoutinePaidProviderFallbackMaxOutputTokens` in `src/Mcg.AgentOrchestrator.Core/Application/AgentTaskRunner.cs`) has never been exercised - the 2026-06-10 inventory found zero API execution records. First data point: a Simple report task on qwen3:8b produced 851 output tokens, which would have been truncated under 768. n=1, and qwen is verbose; collect more before tuning.
+Why: the cap (`RoutinePaidProviderFallbackMaxOutputTokens` in `src/Mcg.AgentOrchestrator.Core/Application/AgentTaskRunner.cs`) has never been exercised - the 2026-06-10 inventory found zero API execution records. Data points from loop Reviewer/report tasks: 851, 988, 1010, 1139 output tokens; qwen is verbose, so collect more before tuning.
 
 Done when: roughly ten local API runs across task shapes have recorded token usage and stop reasons; then decide keep/raise with the evidence and record the decision in DOGFOOD_LOG.md.
 
 Verify: execution records in goal evidence show usage and stop reasons; `OutputTokenLimit.IsHit` flags none falsely.
 
+## Codex subscription wrapper can hang after final output
 
+Status: open | Size: small-medium | Suggested route: scoped Developer task after reproducing from logs
+
+Why: goal 9d78b9c1 (2026-06-11) saw two codex-cli workers finish useful output and print `tokens used`, but the background PowerShell wrapper stayed running with no exit file. The operator had to `cancel-dispatch` the exact process and then `verify-manual` from log evidence. This makes successful work look cancelled and forces manual evidence repair.
+
+Where: `BackgroundDispatchRunner` / process completion handling in Infrastructure; codex worker profile template and the wrapper command path in `WorkerProfileDispatcher`; logs `9d78b9c1-893452e3-20260611152229.err.log` and `9d78b9c1-a1aa7afc-20260611153025.err.log` in the main `.orchestrator/logs` directory while retained.
+
+Done when: a codex-cli dispatch that reaches final output reliably writes its exit file and refreshes to Completed without operator cancellation, or the runner detects post-output idle/hung wrappers and records a clear failed state with stdout/stderr evidence.
+
+Verify: live codex-cli dispatch exits 0 and `refresh-dispatch` records Completed without `cancel-dispatch`.
