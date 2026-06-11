@@ -5,6 +5,21 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class BackgroundDispatchRunner
 {
+    private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
+    private readonly IClock _clock;
+    private readonly TimeSpan _postOutputIdleTimeout;
+    private readonly Func<int, bool> _isStillRunning;
+
+    public BackgroundDispatchRunner(
+        IClock? clock = null,
+        TimeSpan? postOutputIdleTimeout = null,
+        Func<int, bool>? isStillRunning = null)
+    {
+        _clock = clock ?? new SystemClock();
+        _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
+        _isStillRunning = isStillRunning ?? IsStillRunning;
+    }
+
     public TaskProcessRecord StartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
     {
         var task = kernel.GetTask(goalId, taskId);
@@ -22,7 +37,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         Directory.CreateDirectory(logRoot);
-        var prefix = $"{goalId.Value[..8]}-{taskId.Value[..8]}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
+        var prefix = $"{goalId.Value[..8]}-{taskId.Value[..8]}-{_clock.UtcNow:yyyyMMddHHmmss}";
         var stdoutPath = Path.Combine(logRoot, $"{prefix}.out.log");
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
@@ -57,7 +72,7 @@ public sealed class BackgroundDispatchRunner
             stdoutPath,
             stderrPath,
             exitCodePath,
-            DateTimeOffset.UtcNow,
+            _clock.UtcNow,
             null,
             null);
 
@@ -71,16 +86,52 @@ public sealed class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
-        if (IsStillRunning(processRecord.ProcessId))
+        if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
+            if (_isStillRunning(processRecord.ProcessId))
+            {
+                TryKillProcess(processRecord.ProcessId);
+            }
+
+            return RecordCompletedProcess(kernel, goalId, taskId, processRecord, exitCode);
+        }
+
+        if (_isStillRunning(processRecord.ProcessId))
+        {
+            if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
+            {
+                TryKillProcess(processRecord.ProcessId);
+                TryWriteExitCode(processRecord.ExitCodePath, 1);
+                return RecordCompletedProcess(
+                    kernel,
+                    goalId,
+                    taskId,
+                    processRecord,
+                    1,
+                    diagnostic);
+            }
+
             kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
             return processRecord;
         }
 
-        var exitCode = ReadExitCode(processRecord.ExitCodePath);
+        return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1);
+    }
+
+    private TaskProcessRecord RecordCompletedProcess(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord processRecord,
+        int exitCode,
+        string? standardErrorDiagnostic = null)
+    {
+        TryWriteExitCode(processRecord.ExitCodePath, exitCode);
+        var standardOutput = ReadIfExists(processRecord.StandardOutputPath);
+        var standardError = AppendDiagnostic(ReadIfExists(processRecord.StandardErrorPath), standardErrorDiagnostic);
         var completed = processRecord with
         {
-            CompletedAt = DateTimeOffset.UtcNow,
+            CompletedAt = _clock.UtcNow,
             ExitCode = exitCode
         };
 
@@ -88,8 +139,8 @@ public sealed class BackgroundDispatchRunner
             processRecord.Command,
             processRecord.WorkingDirectory,
             exitCode,
-            ReadIfExists(processRecord.StandardOutputPath),
-            ReadIfExists(processRecord.StandardErrorPath),
+            standardOutput,
+            standardError,
             completed.CompletedAt.Value);
 
         kernel.RecordTaskProcessRefreshed(goalId, taskId, completed, verification);
@@ -118,7 +169,7 @@ public sealed class BackgroundDispatchRunner
 
         var cancelled = processRecord with
         {
-            CompletedAt = DateTimeOffset.UtcNow,
+            CompletedAt = _clock.UtcNow,
             WasCancelled = true
         };
 
@@ -139,19 +190,142 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static int ReadExitCode(string path)
+    private static bool TryReadExitCode(string path, out int exitCode)
     {
         if (!File.Exists(path))
         {
-            return 1;
+            exitCode = 1;
+            return false;
         }
 
-        return int.TryParse(File.ReadAllText(path).Trim(), out var exitCode) ? exitCode : 1;
+        if (int.TryParse(File.ReadAllText(path).Trim(), out exitCode))
+        {
+            return true;
+        }
+
+        exitCode = 1;
+        return true;
     }
 
     private static string ReadIfExists(string path)
     {
         return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+    }
+
+    private bool TryDetectHungCodexWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        if (!IsCodexDispatch(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
+        {
+            return false;
+        }
+
+        var standardOutput = ReadIfExists(processRecord.StandardOutputPath);
+        var standardError = ReadIfExists(processRecord.StandardErrorPath);
+        if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
+        {
+            return false;
+        }
+
+        var lastOutputAt = GetLastOutputWriteTime(processRecord);
+        var idleFor = _clock.UtcNow - lastOutputAt;
+        if (idleFor < _postOutputIdleTimeout)
+        {
+            return false;
+        }
+
+        diagnostic = $"Background dispatch wrapper appears hung after codex final output; no exit file was written after {FormatDuration(idleFor)} of idle logs. Marking dispatch failed with captured stdout/stderr evidence.";
+        return true;
+    }
+
+    private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
+    {
+        if (dispatch is null)
+        {
+            return false;
+        }
+
+        return dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.TrimStart().StartsWith("codex ", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.TrimStart().StartsWith("& codex ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsCodexFinalOutput(string value)
+    {
+        return value.Contains("tokens used", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("token usage", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string AppendDiagnostic(string standardError, string? diagnostic)
+    {
+        if (string.IsNullOrWhiteSpace(diagnostic))
+        {
+            return standardError;
+        }
+
+        return string.IsNullOrEmpty(standardError)
+            ? diagnostic
+            : standardError.TrimEnd() + Environment.NewLine + diagnostic;
+    }
+
+    private DateTimeOffset GetLastOutputWriteTime(TaskProcessRecord processRecord)
+    {
+        var newest = processRecord.StartedAt;
+        foreach (var path in new[] { processRecord.StandardOutputPath, processRecord.StandardErrorPath })
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            var lastWrite = new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
+            if (lastWrite > newest)
+            {
+                newest = lastWrite;
+            }
+        }
+
+        return newest;
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        return duration < TimeSpan.Zero
+            ? TimeSpan.Zero.ToString("c")
+            : duration.ToString("c");
+    }
+
+    private static void TryWriteExitCode(string path, int exitCode)
+    {
+        try
+        {
+            File.WriteAllText(path, exitCode.ToString());
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        try
+        {
+            var process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+        }
+        catch (ArgumentException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private static string BuildWrapper(string command, string stdoutPath, string stderrPath, string exitCodePath)
