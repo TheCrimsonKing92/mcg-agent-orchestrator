@@ -58,6 +58,8 @@ Goals that touch files should get an isolated workspace: `workspace create` adds
 
 Local-model file work goes through the `qwen-code-cli` profile (Qwen Code against Ollama). Two requirements, both validated 2026-06-10: thinking must be disabled via the repo's `.qwen/settings.json` (`generationConfig.reasoning: false` per model; Ollama ignores `/no_think`), and task briefs must state absolute target paths because qwen-code's write tool rejects relative paths and small models do not self-correct. With both in place qwen3:8b completes simple file tasks in ~20 s; expect minor content drift that verification must catch.
 
+Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the model receives the full qwen-code system prompt and returns an empty stream; the default 4k truncation is what makes it work. qwen3:14b cannot finish a qwen-code turn within the ~483 s request timeout on this GPU (use it for single-shot API runs instead). qwen-code rewrites `.qwen/settings.json` at exit with its startup view - never hand-edit that file while a qwen process is running.
+
 When the task involves subscription/dogfood execution:
 
 - Verify worker profiles before starting subscription tasks.
