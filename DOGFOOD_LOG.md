@@ -174,3 +174,10 @@ Goal `e9d05a26`, five-role pipeline, payload "Default codex subscription model i
 - Wall times: Planner 46s, Researcher 17min/104k tokens, Developer 2.2min (verify-only), Tester 2.4min, Reviewer 18s.
 - Model fit: OpenAI/gpt-5.5 - adequate - planner/researcher/tester roles on a scoped default-fix - plan was precise, implementation per plan, disciplined verification.
 - Verdict: with prior-task evidence in briefs the pipeline coordinates instead of colliding. Remaining structural issues: role-boundary enforcement (Researcher implements), API-prompt parity, and the guard/brief-size interaction.
+
+## 2026-06-11 - API-prompt parity: prior-task evidence extracted to a shared helper (goal d51ebbf6)
+
+Goal `d51ebbf6` (CLI workspace), one Developer task, claude-sonnet-4-6, simple-goal cycle, closes the API-parity backlog item filed during the pipeline rerun (commit 76eb37c, fast-forward merge). `PromptContextFormatter.BuildPriorTaskEvidenceLines` now owns the selection/format; `BuildTaskBrief` and `AgentTaskRunner` both call it, so ApiOnly agents (the qwen Reviewer) finally see prior roles' verification stdout. End-to-end test asserts the outgoing provider prompt for task 2 contains task 1's verification stdout. 369/369 green, operator-verified independently. Worker wall time 8 min.
+
+- Friction: `workspace remove` failed because a leaked process held dispatch log files under the worktree's `.orchestrator-prototype` test state (e2e tests spawn real processes); the removal half-completed - worktree unregistered but directory left behind, and a second `workspace remove` then said "no workspace to remove". Manual branch delete + directory removal (after the holder exited) finished the job. Worth hardening: removal should be atomic or resumable, and test-spawned processes should not outlive the suite.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - helper extraction + dual wiring + end-to-end test - first-attempt pass, 7/7 in the loop.

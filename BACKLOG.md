@@ -6,18 +6,6 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## API-run prompts omit prior-task evidence (dispatch briefs fixed, API path not)
-
-Status: open | Size: small | Suggested route: direct edit plus test, mirrors commit 72be355
-
-Why: goal a11b7b57 (2026-06-11) added a bounded `## Prior Task Evidence` section to dispatch briefs in `BuildTaskBrief`, but `AgentTaskRunner` builds API-run prompts separately with the same same-task timeline filter (`evt.TaskId == task.Id || evt.TaskId is null`, ~line 202) and no prior-task section. Observed live in goal e9d05a26: the ApiOnly qwen Reviewer asked HUMAN_INPUT for the correct codex alias - information sitting in the Researcher's completed verification record one task earlier.
-
-Where: `src/Mcg.AgentOrchestrator.Core/Application/AgentTaskRunner.cs` user-prompt assembly (~lines 197-224); reuse the same selection logic as `BuildTaskBrief` (consider extracting a shared helper) and the existing TrimEvidenceBlock budgets; mind local-model prompt size (LocalModelPromptOptimizer, 4k-context Ollama models).
-
-Done when: API-run prompts include the same bounded prior-task evidence section as dispatch briefs (or a tighter local-model variant); a test covers a two-task goal API prompt containing task 1's verification stdout.
-
-Verify: `dotnet test`.
-
 ## Move subscription-plan projection out of Dashboard.Api
 
 Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring
