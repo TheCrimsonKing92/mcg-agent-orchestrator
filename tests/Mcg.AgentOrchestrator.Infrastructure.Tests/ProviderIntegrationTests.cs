@@ -66,7 +66,7 @@ public sealed class ProviderIntegrationTests
 
     await provider.CompleteAsync(TestRequest(new ModelOptions()), CancellationToken.None);
 
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":768", StringComparison.Ordinal));
+    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":2048", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_sends_reasoning_effort_when_configured")]
@@ -126,7 +126,7 @@ public sealed class ProviderIntegrationTests
 
     await provider.CompleteAsync(TestRequest(new ModelOptions()), CancellationToken.None);
 
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_tokens\":768", StringComparison.Ordinal));
+    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_tokens\":2048", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ModelProviders_throw_on_http_error")]

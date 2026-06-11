@@ -915,8 +915,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<option value=\"\">Use API model</option>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
-    Assert.Contains(configHtml, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"768\"", StringComparison.Ordinal));
-    Assert.Contains(configHtml, text => text.Contains("name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"1200\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("name=\"maxOutputTokens\" min=\"1\" placeholder=\"2048\"", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"4096\"", StringComparison.Ordinal));
     AssertOpenAiModelOrderIsCostAware(configHtml);
     AssertOpenAiModelOrderIsCostAware(DashboardAssets.OperatorControlsScript);
     Assert.False(configHtml.Contains("Default CLI model", StringComparison.Ordinal));

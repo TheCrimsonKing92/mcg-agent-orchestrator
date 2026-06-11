@@ -8,8 +8,8 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
     public const string OpenAiSubscriptionModelAlias = "gpt-5.5";
     public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex";
-    public const int RoutineApiMaxOutputTokens = 768;
-    public const int ComplexApiMaxOutputTokens = 1200;
+    public const int RoutineApiMaxOutputTokens = 2048;
+    public const int ComplexApiMaxOutputTokens = 4096;
     public const string RoutineReasoningEffort = "medium";
     public const string RoutineSubscriptionReasoningEffort = "low";
     public const string ComplexReasoningEffort = "high";
