@@ -587,6 +587,35 @@ public sealed class TaskBriefTests
     Assert.Equal(question, kernel.GetHumanInputRequest(request.Id).Question);
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_prior_task_evidence_for_completed_earlier_task")]
+    public void BuildTaskBriefIncludesPriorTaskEvidenceForCompletedEarlierTask()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var task1Spec = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+    var task2Spec = new TaskSpec(TaskId.New(), "Implement the plan", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Build a feature", [task1Spec, task2Spec]);
+    var task1 = goal.Tasks[0];
+    kernel.RecordTaskVerification(goal.Id, task1.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "prior-stdout-evidence", "", clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task2Spec.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Planner", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("prior-stdout-evidence", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_prior_task_evidence_for_single_task_goal")]
+    public void BuildTaskBriefOmitsPriorTaskEvidenceForSingleTaskGoal()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Single task goal", [new TaskSpec(TaskId.New(), "Do the work", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.True(!brief.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+}
+
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)
