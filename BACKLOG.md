@@ -6,6 +6,64 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
+## Harden workspace remove against leaked test-process file locks
+
+Status: open | Size: small | Suggested route: direct edit plus test
+
+Why: twice on 2026-06-11 (goals d51ebbf6, c5e626c4) `workspace remove` half-failed because a process spawned by the worktree's e2e test run still held dispatch log files under `.orchestrator-prototype/workspace/.orchestrator/logs`. The worktree gets unregistered but the directory deletion fails, and a second `workspace remove` reports "no workspace to remove", leaving an orphan directory and a merged-but-undeleted `goal/<prefix>` branch for manual cleanup.
+
+Where: the workspace-remove handler (`HandleWorkspaceCommand` in `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs` and whatever it calls in Infrastructure); the e2e helpers in `tests/Mcg.AgentOrchestrator.Infrastructure.Tests` that spawn real processes (`StartDashboardProcess`) already kill process trees in test code, but dispatch-started processes inside test fixtures can outlive the suite.
+
+Done when: removal is resumable - if the worktree is already unregistered, a rerun still deletes the leftover directory (with retry/backoff for transient locks) and the branch; or removal is atomic (directory delete attempted before unregistering). A test covers the rerun-after-partial-failure path.
+
+Verify: `dotnet test`; simulate a partial removal and rerun `workspace remove`.
+
+## Status-neutral task note command
+
+Status: open | Size: small | Suggested route: direct edit plus test
+
+Why: the only way to put operator guidance into an undispatched task's brief is the timeline, but `progress <n> running <msg>` flips the task to Running, and both `subscription-dispatch` and `retry` refuse Running tasks. The working sequence is a three-step dance (`progress running` → `progress failed` → `retry`) that pollutes the timeline with fake status transitions (observed 2026-06-11, goal f2e3d68c, conveying a regression note to the Developer).
+
+Where: CLI command handling in `src/Mcg.AgentOrchestrator.App/Cli/` (alongside `progress`/`retry`); kernel append path in `AgentOrchestratorKernel` (timeline events with the task's id already flow into briefs via the Recent Timeline section).
+
+Done when: a `note <task-number> <message>` command records a timeline event on the task without changing its status, and the note appears in a subsequently generated brief; a test covers both.
+
+Verify: `dotnet test`; `note` then `brief <n>` shows the message.
+
+## Reconcile the paid-prompt cost guard with brief growth and estimator wording
+
+Status: open | Size: small-medium | Suggested route: scoped Developer task; needs a threshold decision
+
+Why: two interacting frictions make `--confirm-large-paid-subscription-start` near-universal, eroding its signal. (1) The complexity estimator classifies briefs by wording - every detailed "Implement the BACKLOG.md item..." simple-goal brief lands Complex, tripping the guard at ~4-7k chars (threshold reads 12000 chars or 3 tasks, but Complex-model selection alone requires the flag). (2) Since prior-task evidence landed (72be355), pipeline briefs grow as roles complete (4.2k by task 3, 5.0k by task 4 in goal e9d05a26), pushing even Simple generic role briefs past the 4000-char per-prompt threshold. Nine of ten loop dispatches on 2026-06-11 required the flag.
+
+Where: `SubscriptionPromptCostGuard` in `src/Mcg.AgentOrchestrator.App/CostControl/`; `TaskComplexityEstimator` in Core; the per-prompt threshold constant; `PromptContextFormatter.BuildPriorTaskEvidenceLines` budget.
+
+Done when: a deliberate decision is recorded (raise the per-prompt threshold, exempt or separately budget accumulated prior-task evidence, and/or make the estimator weigh more than wording) and implemented so that a routine pipeline role task with inherited evidence does not require the large-paid flag; guard tests pin the new behavior.
+
+Verify: `dotnet test`; a pipeline task-3 dispatch with Simple complexity starts without `--confirm-large-paid-subscription-start`.
+
+## Worktree test runs leave a VBCSCompiler holding obj outputs
+
+Status: open | Size: small | Suggested route: direct edit (worker brief instructions or dispatch wrapper)
+
+Why: after a claude/codex worker runs `dotnet test` in a goal worktree, a VBCSCompiler instance survives and holds the worktree's `Mcg.AgentOrchestrator.Core` obj dll; the operator's first independent `dotnet test` then fails CS2012 and succeeds only after `dotnet build-server shutdown` + retry. Hit on six consecutive goals 2026-06-11; pure ritual overhead.
+
+Where: options - append `dotnet build-server shutdown` guidance to Developer brief instructions (`BuildTaskBriefInstructions` in `AgentOrchestratorKernel.TaskBriefs.cs`), have the dispatch wrapper run it after the worker exits (`BackgroundDispatchRunner`), or standardize `-p:UseSharedCompilation=false` for worktree test runs.
+
+Done when: an operator `dotnet test` in a goal worktree immediately after a worker completes succeeds on the first attempt; the chosen mechanism is documented in AGENTS.md.
+
+Verify: live loop cycle - worker completes, operator runs `dotnet test <worktree>` once, exit 0.
+
+## Validate role-sandbox enforcement in a live pipeline run
+
+Status: open, blocked on next pipeline goal | Size: small (observation only)
+
+Why: goal c5e626c4 (2026-06-11) made dispatch sandboxes role-resolved (codex `--sandbox read-only` / claude `--permission-mode plan` for Planner/Researcher/Reviewer). Enforced in code and tests, but no five-role `goal` has dispatched since.
+
+Done when: a live pipeline run shows a Planner/Researcher dispatch command containing the read-only sandbox, the worker completes its role without writing (worktree clean after the role), and the Developer task carries the implementation; result recorded in DOGFOOD_LOG.md and this entry removed.
+
+Verify: dispatch command text in the task record + `git status` in the worktree after the Researcher completes.
+
 ## Move subscription-plan projection out of Dashboard.Api
 
 Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring
