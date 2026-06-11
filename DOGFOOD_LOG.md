@@ -181,3 +181,13 @@ Goal `d51ebbf6` (CLI workspace), one Developer task, claude-sonnet-4-6, simple-g
 
 - Friction: `workspace remove` failed because a leaked process held dispatch log files under the worktree's `.orchestrator-prototype` test state (e2e tests spawn real processes); the removal half-completed - worktree unregistered but directory left behind, and a second `workspace remove` then said "no workspace to remove". Manual branch delete + directory removal (after the holder exited) finished the job. Worth hardening: removal should be atomic or resumable, and test-spawned processes should not outlive the suite.
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - helper extraction + dual wiring + end-to-end test - first-attempt pass, 7/7 in the loop.
+
+## 2026-06-11 - Role boundaries enforced: sandbox-by-role in dispatch commands (goal c5e626c4)
+
+Goal `c5e626c4` (CLI workspace), one Developer task, claude-sonnet-4-6, simple-goal cycle. Direct response to the Researcher-implements drift observed in both pipeline runs; per operator/Miles decision the boundary is now mechanical, not advisory (commit on goal branch, fast-forward merge to 96b1322). 376/376 green, operator-verified independently.
+
+- Design landed: codex-cli template uses `--sandbox {sandboxMode}` and claude-cli `--permission-mode {permissionMode}`; `WorkerProfileDispatcher.BuildDispatchVariables` resolves them by task role - Developer/Tester get workspace-write / bypassPermissions, Planner/Researcher/Reviewer get read-only / plan. Patch-capability validation accepts the placeholder forms; stale saved templates (old hardcoded flags) repair on load in both WorkerProfileStore and DemoWorkspaceSeeder - the worker found the seeder repair site without it being named in the brief. Role requirements now state the boundary in both full and compact prompt variants (read-only roles: do not modify repository files; Tester: build/run tests but no source changes).
+- Worker wall time 22 min - the largest single-task brief of the loop (6.8k chars, 8 files, 7 new tests + 8 updated assertions), still a first-attempt pass; 8/8 for sonnet on scoped briefs.
+- Friction (repeat): `workspace remove` half-failed again on e2e-test file locks (second occurrence; same manual branch-delete + directory-removal recovery). Now a clear hardening candidate.
+- Validation pending: the next five-role pipeline run is the live test - a Researcher dispatch should carry `--sandbox read-only` and be unable to commit, making the Developer task the implementation point again.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - coordinated multi-file infrastructure change with explicit design in the brief - full scope including an unnamed repair site, no over-engineering.
