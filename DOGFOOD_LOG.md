@@ -79,3 +79,14 @@ Goal ID: `ea57a8e7b4114e8ca6e6431d50e1c6d3` (CLI workspace), task 2 `d2f0286e`, 
 - Friction: dispatch process exit 0 with empty stdout auto-recorded as passing verification and completed the task; "completed" was indistinguishable from "did nothing". Verification-from-exit-code should require non-empty output or task-relevant evidence for Developer tasks.
 - Friction: nvm shims (`codex.ps1`, `qwen.ps1`) hang on open redirected stdin (`Reading additional input from stdin...`); launching with `< NUL` via cmd avoids it. The orchestrator dispatcher inherits console stdin and did not hang.
 - Next lever: `ollama pull gpt-oss:20b` for the codex `--oss` designed pairing (offload penalty on 10GB VRAM), or revisit when stronger small tool-calling models land. The `qwen-code-cli` profile is wired as the Ollama default either way.
+
+## 2026-06-10 - Local bridge validated: qwen-code + reasoning disabled
+
+Goal ID: `c2d382096b2245e19a096c9065e2a08d`, task 2 `c471c65f`, profile-dispatch in goal worktree. Corrects the previous entry`s "model underpowered" verdict.
+
+- Root cause of all prior failures: Ollama`s qwen3 template ignores the `/no_think` soft switch and only honors the API think parameter; on the `/v1` endpoint that is `reasoning_effort` ("none" works, `think: false` is ignored). qwen-code never sent it, so every run paid full thinking overhead, and thinking-polluted turns also botched tool parameters.
+- Fix: `.qwen/settings.json` `modelProviders` entry with `generationConfig.reasoning: false` for the model id + baseUrl. qwen-code honors it for env-selected models. Smoke went from 8+ min timeouts to 18-24 s. Direct API check: qwen3:14b with think off makes a perfect structured `write_file` call in 12.6 s at 6.5 tok/s (partial offload).
+- Second requirement: qwen-code`s write tool demands absolute paths and qwen3:8b does not self-correct relative-path rejections in `-p` mode; task briefs must state the absolute target path. (Operator note: an earlier 14b run also competed with a game for the GPU; uncontended it is still offload-slow on 10 GB.)
+- End-to-end result: dispatch ran qwen3:8b in `.orchestrator-worktrees/c2d38209`, BRIDGE.md created in 19 s with minor content drift (trailing period). Dirty-workspace guard correctly refused `workspace remove` until forced.
+- Model fit: Ollama/qwen3:8b - adequate - agentic file write via qwen-code with reasoning disabled - 19s completion, minor content drift.
+- Follow-up: include the dispatch working directory (absolute) in task briefs; commit `.qwen/settings.json` so worktrees inherit it (worktrees only carry committed files).
