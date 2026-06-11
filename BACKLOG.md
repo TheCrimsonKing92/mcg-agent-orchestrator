@@ -2,19 +2,19 @@
 
 Follow-up work items. Each entry is self-contained: act on it without prior conversation context. When an item is finished, remove the entry and note the closing commit in DOGFOOD_LOG.md or the commit message. Check this file before proposing new follow-up work.
 
-## Capable local model for the agentic worker bridge
+## Include the dispatch working directory in task briefs
 
-Status: open, blocked on model capability | Size: small once a model is chosen | Suggested route: operator decision plus one smoke
+Status: open | Size: small | Suggested route: direct edit plus brief test
 
-Why: the launcher machinery is done (2026-06-10): `qwen-code-cli` is the default Ollama subscription profile, `codex-oss-cli` exists for gpt-oss models, and a profile-dispatch ran end-to-end inside a goal worktree with logs/evidence recorded. What failed is the model: qwen3:8b makes structured tool calls through Qwen Code but botches parameters every attempt and returned an empty response under dispatch; qwen3:14b is too slow on 10GB VRAM; codex+qwen is a protocol dead end (see 2026-06-10 dogfood entry). No installed model can reliably execute even a trivial file-write task.
+Why: the local bridge is validated (2026-06-10, goal `c2d38209`): qwen-code + qwen3:8b with `reasoning: false` completed an agentic file write in a goal worktree in 19 s. But qwen-code's write tool requires absolute paths, qwen3:8b does not self-correct relative-path rejections, and the task brief never states the dispatch working directory - the validation only passed because the operator embedded the worktree path in the task description by hand.
 
-Options: `ollama pull gpt-oss:20b` (~13GB; codex --oss designed pairing; partial CPU offload on the RTX 3080), or wait for stronger small tool-calling models and re-run the smoke (`qwen --yolo -p "<file-write instruction>"` in a scratch directory).
+Where: `BuildTaskBrief` (`src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs`) does not know the working directory; `WorkerProfileDispatcher.PrepareTask` does. Pass it through so the brief states "Working directory (use absolute paths): <path>".
 
-Done when: a local model completes the BRIDGE.md smoke through `profile-dispatch` + `start-dispatch` in a goal worktree, and a passing model-fit note is recorded.
+Done when: dispatched prompt files state the absolute working directory and a brief test asserts it.
 
-Decision record: goal-branch merge policy is auto-merge on `acceptance` when fast-forward succeeds, suggest otherwise (2026-06-10). Qwen Code chosen over codex for qwen models after codex 0.137 removed the chat wire API (2026-06-10).
+Decision record: merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10).
 
-Optional later phase: native tool loop in `AgentTaskRunner` (read/glob/edit/run tools over Ollama function calling) if bridge CLIs stay unreliable.
+Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
 ## Dispatch exit code should not auto-pass verification for empty output
 

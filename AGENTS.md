@@ -54,7 +54,9 @@ Keep prototype state isolated from repository state. Prototype dashboard state l
 
 API model runs (`run`/`api-run`) are pure text completion with no file access; embed any data the model needs in the task description, and route file-touching work through subscription dispatches. Task descriptions also drive complexity classification: start inspection work with `Summarize `/`Report `/`Inspect ` and avoid risk keywords (auth, migration, rollback) unless the task genuinely carries that risk.
 
-Goals that touch files should get an isolated workspace: `workspace create` adds a git worktree under `.orchestrator-worktrees/<goal-prefix>` on branch `goal/<goal-prefix>`, and dispatches/verifications for that goal then run there instead of the shared repository root. `acceptance` fast-forwards the goal branch automatically when possible and prints the manual merge command otherwise; `workspace remove` cleans up after merge.
+Goals that touch files should get an isolated workspace: `workspace create` adds a git worktree under `.orchestrator-worktrees/<goal-prefix>` on branch `goal/<goal-prefix>`, and dispatches/verifications for that goal then run there instead of the shared repository root. `acceptance` fast-forwards the goal branch automatically when possible and prints the manual merge command otherwise; `workspace remove` cleans up after merge. Worktrees contain committed files only - uncommitted config does not ride along.
+
+Local-model file work goes through the `qwen-code-cli` profile (Qwen Code against Ollama). Two requirements, both validated 2026-06-10: thinking must be disabled via the repo's `.qwen/settings.json` (`generationConfig.reasoning: false` per model; Ollama ignores `/no_think`), and task briefs must state absolute target paths because qwen-code's write tool rejects relative paths and small models do not self-correct. With both in place qwen3:8b completes simple file tasks in ~20 s; expect minor content drift that verification must catch.
 
 When the task involves subscription/dogfood execution:
 
