@@ -162,3 +162,15 @@ Goal `a11b7b57` (CLI workspace), one Developer task, claude-sonnet-4-6, simple-g
 
 - Next validation: rerun a five-role `goal` pipeline on a future backlog item and confirm the Researcher/Developer briefs actually carry the Planner's plan (and that role drift shrinks when they do).
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature in brief construction with explicit done-conditions - first-attempt pass, 6/6 in the loop so far.
+
+## 2026-06-11 - Pipeline rerun with handoff live: codex default fixed, coordination confirmed (goal e9d05a26)
+
+Goal `e9d05a26`, five-role pipeline, payload "Default codex subscription model is rejected by ChatGPT accounts". Merged (5b36d5d, merge after operator backlog commit), 369/369 green. Defaults and dashboard options now use `gpt-5.5` via a named `AgentCatalog.OpenAiSubscriptionModelAlias` constant; stale `gpt-5.3-codex` catalog aliases are repaired on load (narrow: OpenAI + codex-cli + exact stale alias; customs preserved). A/B against goal f2e3d68c, same roles and models, handoff fix (72be355) live:
+
+- The Researcher's brief carried `## Prior Task Evidence` with the Planner's plan - first dispatched worker ever to receive cross-task evidence. It STILL implemented the whole feature (role overreach is driven by the "Implement..." objective + writable worktree, not missing context), but this time the implementation conformed to the plan exactly: same boundary, narrow repair semantics, all three dashboard default sources, tests pinning default and repair, backlog entry removed. Contrast: the plan-blind run introduced the plan's predicted bug; the plan-fed run shipped the plan.
+- The Developer recognized from prior-task evidence that commit 5b36d5d already completed the work, verified 368/368, and changed nothing - "already done" handling now works.
+- Reviewer (ApiOnly qwen) is unchanged: file-blind, objective-text review, template echo, HUMAN_INPUT for a fact sitting in the Researcher's verification record. Root cause: `AgentTaskRunner` builds API prompts separately and has no prior-task section - filed as new backlog entry (API-prompt parity). Third routine-task output above the 768 cap (1010 tokens; prior: 851, 988).
+- New friction from the handoff fix itself: briefs grow as roles complete (4.2k chars by task 3, 5.0k by task 4), so every later dispatch trips the 4000-char large-paid-prompt guard even at complexity=Simple. The guard and the evidence section need reconciling (raise threshold, budget the section tighter, or exempt accumulated evidence).
+- Wall times: Planner 46s, Researcher 17min/104k tokens, Developer 2.2min (verify-only), Tester 2.4min, Reviewer 18s.
+- Model fit: OpenAI/gpt-5.5 - adequate - planner/researcher/tester roles on a scoped default-fix - plan was precise, implementation per plan, disciplined verification.
+- Verdict: with prior-task evidence in briefs the pipeline coordinates instead of colliding. Remaining structural issues: role-boundary enforcement (Researcher implements), API-prompt parity, and the guard/brief-size interaction.
