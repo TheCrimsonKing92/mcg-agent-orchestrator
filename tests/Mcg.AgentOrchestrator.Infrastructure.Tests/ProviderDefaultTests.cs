@@ -199,8 +199,8 @@ public sealed class ProviderDefaultTests
         Assert.Contains(provider.LastRequest.Messages.Single().Content, text => text.Contains("/no_think", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "Scripted_provider_requests_configuration_instead_of_fake_completion")]
-    public async Task ScriptedProviderRequestsConfigurationInsteadOfFakeCompletion()
+    [Xunit.Fact(DisplayName = "Scripted_provider_throws_configuration_error_instead_of_completing")]
+    public async Task ScriptedProviderThrowsConfigurationErrorInsteadOfCompleting()
     {
         var provider = new ScriptedModelProvider("OpenAI");
         var request = new ModelRequest(
@@ -208,16 +208,16 @@ public sealed class ProviderDefaultTests
             [new ModelMessage("user", "expensive prompt text should not be echoed")],
             new ModelOptions(ModelName: "gpt-5.4-mini"));
 
-        var response = await provider.CompleteAsync(request, CancellationToken.None);
+        var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await provider.CompleteAsync(request, CancellationToken.None));
 
-        Assert.Equal("offline-scripted", response.StopReason);
-        Assert.Contains(response.Text, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
-        Assert.Contains(response.Text, text => text.Contains("offline adapter", StringComparison.Ordinal));
-        Assert.False(response.Text.Contains("expensive prompt text", StringComparison.Ordinal));
+        Assert.Contains(ex.Message, text => text.Contains("offline adapter", StringComparison.Ordinal));
+        Assert.Contains(ex.Message, text => text.Contains("Configure a live provider", StringComparison.Ordinal));
+        Assert.False(ex.Message.Contains("expensive prompt text", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "Scripted_provider_pauses_task_instead_of_completing_it")]
-    public async Task ScriptedProviderPausesTaskInsteadOfCompletingIt()
+    [Xunit.Fact(DisplayName = "Scripted_provider_fails_task_instead_of_waiting_for_human")]
+    public async Task ScriptedProviderFailsTaskInsteadOfWaitingForHuman()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid false offline completion");
@@ -233,15 +233,12 @@ public sealed class ProviderDefaultTests
             [agent],
             new InMemoryModelProviderRegistry([new ScriptedModelProvider("OpenAI")]));
 
-        await runner.RunAsync(goal.Id, task.Id);
+        await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await runner.RunAsync(goal.Id, task.Id));
 
-        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
-        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
-        Assert.True(task.LastExecution is not null);
-        Assert.Contains(task.LastExecution!.Output, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
-        var request = kernel.GetPendingHumanInput(goal.Id).Single();
-        Assert.Equal(task.Id, request.TaskId);
-        Assert.Contains(request.Question, text => text.Contains("Configure a live provider", StringComparison.Ordinal));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(GoalStatus.Active, goal.Status);
+        Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested));
         Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
     }
 }
