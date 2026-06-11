@@ -211,3 +211,11 @@ Goal `7646c03c`, simple-goal Developer task, rerouted to OpenAI/gpt-5.5 while Cl
 - Friction: the implementation dispatch itself was still supervised by the old runner and reproduced the old hang after full test output; exact `cancel-dispatch` + `verify-manual` repaired evidence. `workspace remove` again half-failed on a locked prototype log; exact stale PIDs 23692/46576/44464 were stopped before deleting the orphan worktree.
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped infrastructure fix plus tests under Claude outage - first-attempt implementation and tests passed; wrapper supervision bug required operator smoke to validate after merge.
 - Model fit: OpenAI/gpt-5.5 - adequate - no-edit smoke validation - produced concise completion evidence and exited cleanly.
+
+## 2026-06-11 - Workspace remove resumes after partial cleanup (goal 2c8af0da)
+
+Goal `2c8af0da`, simple-goal Developer task, OpenAI/gpt-5.5 while Claude was session-limited. `GoalWorktrees.Remove` now handles already-unregistered worktrees by deleting the leftover directory and `goal/<prefix>` branch, with retry/backoff around transient directory delete failures. Regression test simulates a pruned worktree registration with leftover directory/branch; commit `9c716c0` fast-forwarded to main. Operator gate: reviewed diff, `git diff --check`, independent `dotnet test .orchestrator-worktrees\2c8af0da --no-restore --verbosity minimal` passed after the known VBCSCompiler shutdown ritual.
+
+- Live cleanup evidence: first `workspace remove` still failed while a prototype log was actively held, leaving the worktree unregistered with directory + branch remaining; a second `workspace remove` resumed successfully and removed both after the holder released.
+- Friction: `refresh-dispatch` for the completed codex worker printed a huge stderr/prompt/diff payload (`[truncated 350284 chars]`), so a bounded-output backlog item was filed. The VBCSCompiler lock reproduced again with PID 41968.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped Git/worktree infrastructure fix plus regression test - handled the edge case correctly, though high reasoning produced verbose logs.
