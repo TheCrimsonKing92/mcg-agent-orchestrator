@@ -4,6 +4,16 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Firewall prompt root cause: dotnet-run apphost spawn in the hosted e2e test (already fixed by f126524)
+
+Operator-direct forensics with Miles; closes the "Avoid repeated Windows firewall prompts" backlog entry. No code change needed - the fix already landed.
+
+- Root cause: e8b8a33 (06-11 10:08) added the simple-hosted-dashboard e2e test using the old spawn helper, which launched the dashboard via `dotnet run --no-build --project <App.csproj>` - that runs the per-worktree apphost `Mcg.AgentOrchestrator.App.exe`, and `simple-hosted-dashboard` binds `0.0.0.0`. Each goal worktree's first `dotnet test` therefore listened on a wildcard socket from a brand-new exe path, and Windows Firewall prompts per exe path.
+- Evidence: firewall event log (event 2097 "Query User" rule pairs) shows prompts at 10:25, 11:02, 11:15, 12:22, 12:46, 13:07 local on 06-11 - one per goal worktree (9d78b9c1, 7646c03c, 2c8af0da, d47ec298, a1f3368f, bc128354), each inside that goal's worker dispatch window. f126524 (06-11 14:02) switched the spawn to `dotnet <App.dll>`, so the socket owner is `dotnet.exe`, already covered by the standing ".NET Host" allow rules. No prompts after 13:07.
+- Verification: fresh throwaway worktree, full build + 233 Infrastructure tests (including both Kestrel e2e spawns) with a socket monitor polling for worktree-owned listeners - zero firewall events, zero prompts, zero wildcard listeners attributed to worktree processes.
+- Residual: genuine hosted dashboard launches from new exe paths (worktree `dotnet run`/published exe) still prompt once - that is real LAN serving, working as designed. One-time elevated setup for unattended hosted use: `New-NetFirewallRule -DisplayName "MCG Orchestrator hosted dashboard" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5087-5186 -Profile Private`. Twelve stale "Query User" rules for deleted worktree paths remain; remove with an elevated `Get-NetFirewallApplicationFilter | Where-Object { $_.Program -like '*mcg-agent-orchestrator*' -and -not (Test-Path $_.Program) } | Get-NetFirewallRule | Remove-NetFirewallRule`.
+- Note: parse-time port probing (`CanBindAnyIPv4Port`) also performs a real transient `0.0.0.0` listen for hosted commands; it rides on whichever process runs it and needs no separate fix while spawns stay on `dotnet.exe`.
+
 ## 2026-06-11 - Simple hosted dashboard goal task 126009e6df0f40aba2f1c15829a4526d
 
 - Goal/task: hosted Developer task `126009e6df0f40aba2f1c15829a4526d`, objective `Simple hosted dashboard goal`.

@@ -30,18 +30,6 @@ Done when: refresh tolerates locked stdout/stderr files by reporting process sta
 
 Verify: `dotnet test`; a synthetic locked-log dispatch refresh does not throw.
 
-## Avoid repeated Windows firewall prompts for app launches
-
-Status: open | Size: small-medium | Suggested route: scoped Researcher/Developer task
-
-Why: during dogfood on 2026-06-11, Miles repeatedly had to authorize `Mcg.AgentOrchestrator.App` in Windows Firewall. That blocks unattended orchestrator loops when tests or dashboard/prototype launches bind HTTP ports. The loop should either avoid triggering new firewall identities or document/provide a one-time setup path.
-
-Where: dashboard/prototype host launch paths (`DashboardHost`, `prototype-ui`, tests that start the app), publish/build output identity, and any scripts that launch `Mcg.AgentOrchestrator.App`.
-
-Done when: the cause is identified and either mitigated (stable executable/path/URL binding or loop-safe test host behavior) or documented with a one-time operator setup command/check. Tests or a focused smoke validate the chosen behavior where practical.
-
-Verify: run the relevant dashboard/test launch path without repeated firewall prompts, or record the OS-level setup evidence in DOGFOOD_LOG.md.
-
 ## Move subscription-plan projection out of Dashboard.Api
 
 Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring

@@ -93,6 +93,8 @@ Use dashboard cancel/refresh controls or exact known process ids for stuck worke
 
 On Windows, a running dashboard can lock app binaries. Prefer `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/`.
 
+Windows Firewall prompts once per executable path that binds a non-loopback address. Spawn the app as `dotnet <App.dll>` (covered by the standing ".NET Host" allow rule), never `dotnet run`/direct apphost exe, for anything that binds `0.0.0.0` from a worktree or fresh build output; hosted-dashboard launches from new exe paths will otherwise prompt (root cause and one-time setup: DOGFOOD_LOG 2026-06-11 firewall entry).
+
 `mcg-orchestrator.cmd` with no arguments starts an interactive REPL that stays alive and holds build outputs. Always pass a command. If builds fail with "file in use", check for lingering `Mcg.AgentOrchestrator.App`/`dotnet run` processes, then run `dotnet build-server shutdown` to clear stale MSBuild/compiler nodes, before blaming antivirus.
 
 Tests that spawn the real app inherit the machine environment; pin provider env vars (see `StartPrototypeDashboardProcess`) so assertions do not depend on which providers are live on the dev machine.
