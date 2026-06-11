@@ -231,6 +231,48 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("subscription-dispatch 1", command);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_can_target_non_latest_goal")]
+    public void CliSubscriptionDispatchCanTargetNonLatestGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var olderGoal = kernel.CreateGoal(
+            "Keep older worker reachable",
+            [new TaskSpec(TaskId.New(), "Do older work", AgentRole.Developer)]);
+        var latestGoal = kernel.CreateGoal(
+            "Do newer work",
+            [new TaskSpec(TaskId.New(), "Do newer work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = latestGoal;
+        kernel.ActivateGoal(olderGoal.Id, agents);
+        kernel.ActivateGoal(latestGoal.Id, agents);
+        var olderGoalPrefix = olderGoal.Id.Value[..8];
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", olderGoalPrefix, "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(olderGoal.Id, currentGoal!.Id);
+        Xunit.Assert.NotNull(olderGoal.Tasks.Single().LastDispatch);
+        Xunit.Assert.Null(latestGoal.Tasks.Single().LastDispatch);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_paid_provider_without_confirm_flag")]
     public void CliApiRunBlocksPaidProviderWithoutConfirmFlag()
     {
