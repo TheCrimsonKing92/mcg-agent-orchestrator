@@ -50,5 +50,80 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal("hello stderr", logs.StandardError);
     Assert.Equal("0", logs.ExitCode);
 }
+
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_tolerates_locked_stdout_when_process_is_running")]
+    public void RefreshLatestProcessToleratesLockedStdoutWhenProcessIsRunning()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh with locked stdout running");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+
+    using var lockedStdout = new FileStream(stdoutPath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => true);
+    var result = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(result.IsRunning);
+    Assert.True(task.LastProcess!.IsRunning);
+}
+
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_tolerates_locked_stdout_when_process_has_exited")]
+    public void RefreshLatestProcessToleratesLockedStdoutWhenProcessHasExited()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh with locked stdout exited");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+
+    using var lockedStdout = new FileStream(stdoutPath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    var result = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.False(result.IsRunning);
+    Assert.Equal(0, result.ExitCode);
+    Assert.True(task.LastVerification is not null);
+    Assert.True(task.LastVerification!.StandardOutput.Contains(stdoutPath, StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_tolerates_locked_stderr_when_process_is_running")]
+    public void RefreshLatestProcessToleratesLockedStderrWhenProcessIsRunning()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh with locked stderr running");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+
+    using var lockedStderr = new FileStream(stderrPath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => true);
+    var result = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(result.IsRunning);
+    Assert.True(task.LastProcess!.IsRunning);
+}
 }
 

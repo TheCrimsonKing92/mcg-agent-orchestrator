@@ -132,8 +132,8 @@ public sealed class BackgroundDispatchRunner
         string? standardErrorDiagnostic = null)
     {
         TryWriteExitCode(processRecord.ExitCodePath, exitCode);
-        var standardOutput = ReadIfExists(processRecord.StandardOutputPath);
-        var standardError = AppendDiagnostic(ReadIfExists(processRecord.StandardErrorPath), standardErrorDiagnostic);
+        var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
+        var standardError = AppendDiagnostic(ReadBestEffort(processRecord.StandardErrorPath), standardErrorDiagnostic);
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,
@@ -212,9 +212,27 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
-    private static string ReadIfExists(string path)
+    private static string ReadBestEffort(string path)
     {
-        return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        if (!File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (IOException)
+        {
+            return $"[log locked at refresh — see {path}]";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"[log unreadable at refresh — see {path}]";
+        }
     }
 
     private bool TryDetectHungCodexWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
@@ -225,8 +243,8 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var standardOutput = ReadIfExists(processRecord.StandardOutputPath);
-        var standardError = ReadIfExists(processRecord.StandardErrorPath);
+        var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
+        var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
         {
             return false;

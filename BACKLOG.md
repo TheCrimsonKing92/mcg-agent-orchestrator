@@ -18,18 +18,6 @@ Done when: refresh/status views cap stdout/stderr snippets to a small bounded si
 
 Verify: `dotnet test`; a synthetic long-log verification renders bounded output.
 
-## Refresh-dispatch fails when live stdout log is locked
-
-Status: open | Size: small | Suggested route: scoped Developer task
-
-Why: goals 2c8af0da and d47ec298 (2026-06-11) showed `refresh-dispatch 1` can throw `The process cannot access the file ...out.log because it is being used by another process` while the worker/wrapper is still alive. In d47ec298 the branch had already committed, stdout was a locked zero-byte file, and the operator had to cancel the exact process plus `verify-manual` from independent evidence.
-
-Where: `BackgroundDispatchRunner.RefreshLatestProcess` and any helper that reads stdout/stderr before checking process/exit-file state.
-
-Done when: refresh tolerates locked stdout/stderr files by reporting process state and log paths, using best-effort snippets only when readable, and still allowing timeout/exit-file handling to proceed. Tests cover locked or unreadable log files.
-
-Verify: `dotnet test`; a synthetic locked-log dispatch refresh does not throw.
-
 ## Move subscription-plan projection out of Dashboard.Api
 
 Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring
