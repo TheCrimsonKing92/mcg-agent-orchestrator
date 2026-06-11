@@ -49,7 +49,25 @@
       "PowerShell(Test-Path *)",
       "PowerShell(dotnet build-server shutdown)",
       "PowerShell(Wait-Process *)",
-      "Bash(tasklist.exe *)"
+      "Bash(tasklist.exe *)",
+      "Bash(cd C:/Users/miles/vcs/mcg-agent-orchestrator*)",
+      "Bash(cd /c/Users/miles/vcs/mcg-agent-orchestrator*)",
+      "Bash(cd .orchestrator-worktrees/*)",
+      "Bash(./mcg-orchestrator.cmd *)",
+      "Bash(git status*)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git worktree list)",
+      "Bash(dotnet test*)",
+      "Bash(dotnet build*)",
+      "Bash(dotnet build-server *)",
+      "Bash(tail *)",
+      "Bash(head *)",
+      "Bash(grep *)",
+      "Bash(cat *)",
+      "Bash(ls *)"
     ]
   }
 }
