@@ -149,6 +149,29 @@ internal static class PromptContextFormatter
             trimmed[^tailChars..];
     }
 
+    public static IReadOnlyList<string> BuildPriorTaskEvidenceLines(IReadOnlyList<TaskSpec> goalTasks, TaskId taskId, TaskComplexity complexity)
+    {
+        var priorCompletedTasks = goalTasks
+            .TakeWhile(t => t.Id != taskId)
+            .Where(t => t.Status == WorkTaskStatus.Completed && t.LastVerification is not null)
+            .TakeLast(3)
+            .ToList();
+
+        if (priorCompletedTasks.Count == 0)
+        {
+            return [];
+        }
+
+        var lines = new List<string> { "## Prior Task Evidence" };
+        foreach (var priorTask in priorCompletedTasks)
+        {
+            lines.Add($"### {priorTask.RequiredRole}: {TrimPromptTitle(priorTask.Description)}");
+            lines.Add(TrimEvidenceBlock(priorTask.LastVerification!.StandardOutput, complexity));
+        }
+        lines.Add(string.Empty);
+        return lines;
+    }
+
     private static bool IsDecisionRelevantTimelineEvent(ProgressEvent evt)
     {
         return evt.Kind is

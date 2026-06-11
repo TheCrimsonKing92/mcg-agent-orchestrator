@@ -616,6 +616,27 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains("## Prior Task Evidence", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_includes_prior_task_evidence_in_api_run_prompt")]
+    public async Task AgentTaskRunnerIncludesPriorTaskEvidenceInApiRunPrompt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var task1Spec = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+    var task2Spec = new TaskSpec(TaskId.New(), "Implement the plan", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Build a feature", [task1Spec, task2Spec]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task1Spec.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "prior-task-verification-stdout", "", clock.UtcNow));
+    var provider = new FakeModelProvider("OpenAI", "task 2 complete");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task2Spec.Id);
+
+    Assert.True(provider.LastRequest is not null);
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains(prompt, text => text.Contains("prior-task-verification-stdout", StringComparison.Ordinal));
+}
+
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)

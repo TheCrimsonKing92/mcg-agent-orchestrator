@@ -102,22 +102,7 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add(string.Empty);
         }
 
-        var priorCompletedTasks = goal.Tasks
-            .TakeWhile(t => t.Id != taskId)
-            .Where(t => t.Status == WorkTaskStatus.Completed && t.LastVerification is not null)
-            .TakeLast(3)
-            .ToList();
-
-        if (priorCompletedTasks.Count > 0)
-        {
-            lines.Add("## Prior Task Evidence");
-            foreach (var priorTask in priorCompletedTasks)
-            {
-                lines.Add($"### {priorTask.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(priorTask.Description)}");
-                lines.Add(PromptContextFormatter.TrimEvidenceBlock(priorTask.LastVerification!.StandardOutput, complexity));
-            }
-            lines.Add(string.Empty);
-        }
+        lines.AddRange(PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity));
 
         if (timeline.Count > 0)
         {

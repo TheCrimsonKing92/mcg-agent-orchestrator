@@ -212,6 +212,11 @@ public sealed class AgentTaskRunner
             ? string.Empty
             : $"{Environment.NewLine}Recent timeline:{Environment.NewLine}{timeline}";
 
+        var priorTaskEvidenceLines = PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, task.Id, complexity);
+        var priorTaskEvidenceSection = priorTaskEvidenceLines.Count > 0
+            ? $"{Environment.NewLine}{string.Join(Environment.NewLine, priorTaskEvidenceLines)}"
+            : string.Empty;
+
         var userPrompt =
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}{Environment.NewLine}" +
@@ -221,6 +226,7 @@ public sealed class AgentTaskRunner
             responseGuidance +
             modelFitGuidance +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}" +
+            priorTaskEvidenceSection +
             timelineSection;
 
         if (isLocal)
