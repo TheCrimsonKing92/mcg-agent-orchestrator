@@ -92,17 +92,15 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return dispatched.Count > 0;
 
         case "subscription-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "subscription-dispatch <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var subscriptionTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, subscriptionTask, context.Agents, context.WorkerProfiles);
+            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles);
             Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
             Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
-            ConsoleViews.PrintTask(context.CurrentGoal, subscriptionTask);
+            ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);
             return true;
 
         case "subscription-dispatch-ready":
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "subscription-dispatch-ready [goal-prefix|--goal <goal-prefix>]");
             var subscriptionDispatches = GoalManagementCommandService.SubscriptionDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles);
             foreach (var dispatchResult in subscriptionDispatches)
             {
@@ -117,7 +115,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 parts,
                 "--confirm-batch-start",
                 "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-subscription-ready [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
                     context.CurrentGoal,
@@ -130,36 +128,32 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 
         case "execute-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "execute-dispatch <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-dispatch-start",
                 "execute-dispatch requires --confirm-dispatch-start because it can start a worker process.");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var executeTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            var executeTask = ResolveDispatchCommandTask(parts, context, "execute-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
-                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal, executeTask),
+                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal!, executeTask),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             new LocalDispatchRunner()
-                .ExecuteLatestDispatchAsync(context.Kernel, context.CurrentGoal.Id, executeTask.Id)
+                .ExecuteLatestDispatchAsync(context.Kernel, context.CurrentGoal!.Id, executeTask.Id)
                 .GetAwaiter()
                 .GetResult();
-            ConsoleViews.PrintTask(context.CurrentGoal, executeTask);
+            ConsoleViews.PrintTask(context.CurrentGoal!, executeTask);
             return true;
 
         case "start-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "start-dispatch <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-dispatch-start",
                 "start-dispatch requires --confirm-dispatch-start because it can start a worker process.");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var startTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            var startTask = ResolveDispatchCommandTask(parts, context, "start-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
-                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal, startTask),
+                SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal!, startTask),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-            new BackgroundDispatchRunner().StartLatestDispatch(context.Kernel, context.CurrentGoal.Id, startTask.Id, context.Workspace.LogDirectory);
-            ConsoleViews.PrintTask(context.CurrentGoal, startTask);
+            new BackgroundDispatchRunner().StartLatestDispatch(context.Kernel, context.CurrentGoal!.Id, startTask.Id, context.Workspace.LogDirectory);
+            ConsoleViews.PrintTask(context.CurrentGoal!, startTask);
             return true;
 
         case "start-dispatches":
@@ -167,7 +161,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 parts,
                 "--confirm-batch-start",
                 "start-dispatches requires --confirm-batch-start because it can start multiple worker processes.");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-dispatches [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
@@ -176,36 +170,102 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return started.Tasks.Count > 0;
 
         case "refresh-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "refresh-dispatch <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var refreshTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            new BackgroundDispatchRunner().RefreshLatestProcess(context.Kernel, context.CurrentGoal.Id, refreshTask.Id);
-            ConsoleViews.PrintTask(context.CurrentGoal, refreshTask);
+            var refreshTask = ResolveDispatchCommandTask(parts, context, "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            new BackgroundDispatchRunner().RefreshLatestProcess(context.Kernel, context.CurrentGoal!.Id, refreshTask.Id);
+            ConsoleViews.PrintTask(context.CurrentGoal!, refreshTask);
             return true;
 
         case "refresh-dispatches":
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
             var refreshed = GoalManagementCommandService.RefreshDispatches(context.Kernel, context.CurrentGoal);
             ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, refreshed);
             return refreshed.Tasks.Count > 0;
 
         case "logs":
-            CliArgumentParser.RequirePartCount(parts, 2, "logs <task-number> [stdout|stderr|exit|all]");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var logTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            ConsoleViews.PrintProcessLogs(logTask, parts.Count > 2 ? CliArgumentParser.ParseProcessLogStream(parts[2]) : ProcessLogStream.All);
+            // Peel the optional stream keyword from the end before goal-prefix resolution so that
+            // "logs 1 stdout" does not misinterpret "1" as a goal prefix.
+            var logStreamArg = parts.Count >= 3 && IsLogStreamKeyword(parts[^1]) ? parts[^1] : null;
+            var logCoreParts = logStreamArg != null ? (IReadOnlyList<string>)parts.Take(parts.Count - 1).ToList() : parts;
+            var logTask = ResolveDispatchCommandTask(logCoreParts, context, "logs <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [stdout|stderr|exit|all]");
+            ConsoleViews.PrintProcessLogs(logTask, logStreamArg != null ? CliArgumentParser.ParseProcessLogStream(logStreamArg) : ProcessLogStream.All);
             return false;
 
         case "cancel-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 2, "cancel-dispatch <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var cancelTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            new BackgroundDispatchRunner().CancelLatestProcess(context.Kernel, context.CurrentGoal.Id, cancelTask.Id);
-            ConsoleViews.PrintTask(context.CurrentGoal, cancelTask);
+            var cancelTask = ResolveDispatchCommandTask(parts, context, "cancel-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            new BackgroundDispatchRunner().CancelLatestProcess(context.Kernel, context.CurrentGoal!.Id, cancelTask.Id);
+            ConsoleViews.PrintTask(context.CurrentGoal!, cancelTask);
             return true;
 
         default:
             return null;
     }
+}
+
+private static bool IsLogStreamKeyword(string value) =>
+    value is "all" or "stdout" or "out" or "stderr" or "err" or "exit" or "exitcode" or "code";
+
+private static Goal ResolveDispatchCommandGoal(IReadOnlyList<string> parts, CliExecutionContext context, string usage)
+{
+    string? goalPrefix = null;
+    if (parts.Count > 1)
+    {
+        if (parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            if (parts.Count < 3)
+            {
+                throw new ArgumentException($"Usage: {usage}");
+            }
+
+            goalPrefix = parts[2];
+        }
+        else if (!parts[1].StartsWith("--", StringComparison.Ordinal))
+        {
+            goalPrefix = parts[1];
+        }
+    }
+
+    return OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
+}
+
+private static TaskSpec ResolveDispatchCommandTask(IReadOnlyList<string> parts, CliExecutionContext context, string usage)
+{
+    return ResolveDispatchCommandTaskWithNextIndex(parts, context, usage).Task;
+}
+
+private static (TaskSpec Task, int NextIndex) ResolveDispatchCommandTaskWithNextIndex(IReadOnlyList<string> parts, CliExecutionContext context, string usage)
+{
+    if (parts.Count < 2)
+    {
+        throw new ArgumentException($"Usage: {usage}");
+    }
+
+    string? goalPrefix = null;
+    string taskNumber;
+    int nextIndex;
+    if (parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        if (parts.Count < 4)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        goalPrefix = parts[2];
+        taskNumber = parts[3];
+        nextIndex = 4;
+    }
+    else if (parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal))
+    {
+        goalPrefix = parts[1];
+        taskNumber = parts[2];
+        nextIndex = 3;
+    }
+    else
+    {
+        taskNumber = parts[1];
+        nextIndex = 2;
+    }
+
+    context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
+    return (OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, taskNumber), nextIndex);
 }
 }
