@@ -63,15 +63,3 @@ Why: the cap (`RoutinePaidProviderFallbackMaxOutputTokens` in `src/Mcg.AgentOrch
 Done when: roughly ten local API runs across task shapes have recorded token usage and stop reasons; then decide keep/raise with the evidence and record the decision in DOGFOOD_LOG.md.
 
 Verify: execution records in goal evidence show usage and stop reasons; `OutputTokenLimit.IsHit` flags none falsely.
-
-## Codex subscription wrapper can hang after final output
-
-Status: open | Size: small-medium | Suggested route: scoped Developer task after reproducing from logs
-
-Why: goal 9d78b9c1 (2026-06-11) saw two codex-cli workers finish useful output and print `tokens used`, but the background PowerShell wrapper stayed running with no exit file. The operator had to `cancel-dispatch` the exact process and then `verify-manual` from log evidence. This makes successful work look cancelled and forces manual evidence repair.
-
-Where: `BackgroundDispatchRunner` / process completion handling in Infrastructure; codex worker profile template and the wrapper command path in `WorkerProfileDispatcher`; logs `9d78b9c1-893452e3-20260611152229.err.log` and `9d78b9c1-a1aa7afc-20260611153025.err.log` in the main `.orchestrator/logs` directory while retained.
-
-Done when: a codex-cli dispatch that reaches final output reliably writes its exit file and refreshes to Completed without operator cancellation, or the runner detects post-output idle/hung wrappers and records a clear failed state with stdout/stderr evidence.
-
-Verify: live codex-cli dispatch exits 0 and `refresh-dispatch` records Completed without `cancel-dispatch`.

@@ -202,3 +202,12 @@ Goal `9d78b9c1`, five-role pipeline, closes `Status-neutral task note command` a
 - Model fit: OpenAI/gpt-5.5 - adequate - Planner/Researcher/Tester and rerouted Developer; good coordination and implementation, but codex wrapper hang made evidence recording manual.
 - Model fit: Anthropic/claude-sonnet-4-6 - blocked - Developer subscription dispatch failed immediately on account session limit before edits.
 - Model fit: Ollama/qwen3:8b - adequate - evidence-only review without file access; identified the expected dashboard/worktree-state limitation but echoed the fit template style.
+
+## 2026-06-11 - Codex dispatch wrapper hang handled (goal 7646c03c)
+
+Goal `7646c03c`, simple-goal Developer task, rerouted to OpenAI/gpt-5.5 while Claude was session-limited. `BackgroundDispatchRunner` now completes from an existing exit file even when the wrapper process still appears live, and detects idle codex wrappers after final token output as failed with captured stdout/stderr evidence. Tests cover both paths; commit `e4f72b3` fast-forwarded to main. Operator gate: reviewed diff, `git diff --check`, independent `dotnet test --no-restore --verbosity minimal` in the worktree exit 0.
+
+- Live smoke: follow-up no-edit goal `56b6f211` ran codex-cli in an isolated worktree; `refresh-dispatch 1` recorded Completed in 12 s, exit 0, `pid running=False`, no `cancel-dispatch`.
+- Friction: the implementation dispatch itself was still supervised by the old runner and reproduced the old hang after full test output; exact `cancel-dispatch` + `verify-manual` repaired evidence. `workspace remove` again half-failed on a locked prototype log; exact stale PIDs 23692/46576/44464 were stopped before deleting the orphan worktree.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped infrastructure fix plus tests under Claude outage - first-attempt implementation and tests passed; wrapper supervision bug required operator smoke to validate after merge.
+- Model fit: OpenAI/gpt-5.5 - adequate - no-edit smoke validation - produced concise completion evidence and exited cleanly.
