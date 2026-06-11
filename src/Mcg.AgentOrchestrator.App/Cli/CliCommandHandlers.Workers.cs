@@ -182,8 +182,12 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return refreshed.Tasks.Count > 0;
 
         case "logs":
-            var (logTask, logStreamIndex) = ResolveDispatchCommandTaskWithNextIndex(parts, context, "logs <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [stdout|stderr|exit|all]");
-            ConsoleViews.PrintProcessLogs(logTask, parts.Count > logStreamIndex ? CliArgumentParser.ParseProcessLogStream(parts[logStreamIndex]) : ProcessLogStream.All);
+            // Peel the optional stream keyword from the end before goal-prefix resolution so that
+            // "logs 1 stdout" does not misinterpret "1" as a goal prefix.
+            var logStreamArg = parts.Count >= 3 && IsLogStreamKeyword(parts[^1]) ? parts[^1] : null;
+            var logCoreParts = logStreamArg != null ? (IReadOnlyList<string>)parts.Take(parts.Count - 1).ToList() : parts;
+            var logTask = ResolveDispatchCommandTask(logCoreParts, context, "logs <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [stdout|stderr|exit|all]");
+            ConsoleViews.PrintProcessLogs(logTask, logStreamArg != null ? CliArgumentParser.ParseProcessLogStream(logStreamArg) : ProcessLogStream.All);
             return false;
 
         case "cancel-dispatch":
@@ -196,6 +200,9 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return null;
     }
 }
+
+private static bool IsLogStreamKeyword(string value) =>
+    value is "all" or "stdout" or "out" or "stderr" or "err" or "exit" or "exitcode" or "code";
 
 private static Goal ResolveDispatchCommandGoal(IReadOnlyList<string> parts, CliExecutionContext context, string usage)
 {

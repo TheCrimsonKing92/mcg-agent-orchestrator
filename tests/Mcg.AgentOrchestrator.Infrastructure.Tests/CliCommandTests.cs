@@ -273,6 +273,43 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(latestGoal.Tasks.Single().LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_logs_stream_arg_is_not_misinterpreted_as_goal_prefix")]
+    public void CliLogsStreamArgIsNotMisinterpretedAsGoalPrefix()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Read stdout logs", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        // Regression guard: "logs 1 stdout" must resolve task 1 on the current goal, not treat "1"
+        // as a goal prefix and "stdout" as a task number.
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["logs", "1", "stdout"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        // Must fail because the task has no process, not because the goal/task wasn't found.
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("no background process logs", ex!.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_paid_provider_without_confirm_flag")]
     public void CliApiRunBlocksPaidProviderWithoutConfirmFlag()
     {
