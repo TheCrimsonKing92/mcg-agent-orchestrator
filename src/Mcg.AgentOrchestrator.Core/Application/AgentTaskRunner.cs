@@ -2,8 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class AgentTaskRunner
 {
-    private const int RoutinePaidProviderFallbackMaxOutputTokens = 768;
-    private const int ComplexPaidProviderFallbackMaxOutputTokens = 1200;
+    private const int RoutinePaidProviderFallbackMaxOutputTokens = 2048;
+    private const int ComplexPaidProviderFallbackMaxOutputTokens = 4096;
     private const int RoutineLocalProviderFallbackMaxOutputTokens = 2048;
     private const int ComplexLocalProviderFallbackMaxOutputTokens = 8192;
 

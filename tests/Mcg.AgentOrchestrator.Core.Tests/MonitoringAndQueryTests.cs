@@ -200,7 +200,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(100, modelUsage.InputTokens);
     Assert.Equal(25, modelUsage.OutputTokens);
     Assert.Equal(0, modelUsage.OutputTokenLimitHitCount);
-    Assert.Equal(768, modelUsage.MaxOutputTokens);
+    Assert.Equal(2048, modelUsage.MaxOutputTokens);
     Assert.Equal(TaskComplexity.Simple, modelUsage.TaskComplexity);
     Assert.True(modelUsage.PromptCharacterCount > 0);
     Assert.True(modelUsage.IsPotentiallyPaidProvider);

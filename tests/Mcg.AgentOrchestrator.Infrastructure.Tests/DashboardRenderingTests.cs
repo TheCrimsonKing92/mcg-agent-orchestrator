@@ -1365,8 +1365,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/run?confirmTaskRun=true\">Prepare subscription handoff</button>", StringComparison.Ordinal));
     Assert.False(html.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/4/api-run", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 1).Contains("API plan:", StringComparison.Ordinal));
-    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {flexiblePromptChars} chars max 768 out [potentially paid]", StringComparison.Ordinal));
-    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {apiPromptChars} chars max 768 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 2), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {flexiblePromptChars} chars max 2048 out [potentially paid]", StringComparison.Ordinal));
+    Assert.Contains(ExtractTaskControls(html, 3), text => text.Contains($"API plan: OpenAI/test Simple reasoning medium prompt {apiPromptChars} chars max 2048 out [potentially paid]", StringComparison.Ordinal));
     Assert.False(ExtractTaskControls(html, 4).Contains("API plan:", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>subscription-dispatch 1</code>", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("<code>subscription-dispatch 2</code>", StringComparison.Ordinal));
@@ -1429,7 +1429,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true&amp;confirmPaidApiRun=true\">Run paid API task</button>", StringComparison.Ordinal));
     Assert.Contains(controls, text => text.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
     Assert.False(controls.Contains("confirmLargePaidApiPrompt=true", StringComparison.Ordinal));
-    Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
+    Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/test Complex reasoning medium prompt {preview.PromptCharacterCount} chars max 4096 out [potentially paid] [large paid prompt: exceeds {risk!.PromptThreshold}]", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_prior_overkill_paid_api_model")]

@@ -17,13 +17,3 @@ Where: `src/Mcg.AgentOrchestrator.App/CostControl/SubscriptionPromptCostGuard.cs
 Done when: subscription-plan building lives in a non-presentation namespace and CostControl no longer references Dashboard.Api types.
 
 Verify: full `dotnet test`; no `Dashboard.Api` usings remain in `CostControl/`.
-
-## Validate the 768-token routine paid output cap
-
-Status: open, blocked on data | Size: small per run | Suggested route: Simple local-model report tasks; operator embeds the data
-
-Why: the cap (`RoutinePaidProviderFallbackMaxOutputTokens` in `src/Mcg.AgentOrchestrator.Core/Application/AgentTaskRunner.cs`) has never been exercised - the 2026-06-10 inventory found zero API execution records. Data points from loop Reviewer/report tasks: 851, 988, 1010, 1139 output tokens; qwen is verbose, so collect more before tuning.
-
-Done when: roughly ten local API runs across task shapes have recorded token usage and stop reasons; then decide keep/raise with the evidence and record the decision in DOGFOOD_LOG.md.
-
-Verify: execution records in goal evidence show usage and stop reasons; `OutputTokenLimit.IsHit` flags none falsely.
