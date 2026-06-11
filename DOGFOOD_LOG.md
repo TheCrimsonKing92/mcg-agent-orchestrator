@@ -4,6 +4,16 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Context economics: handoff file + dead dashboard URLs removed from briefs (goal 2fff84fd)
+
+Goal `2fff84fd` (CLI workspace), two sequential Developer tasks, claude-sonnet-4-6 (commits eb42b03, ffd9771; fast-forward merge). Per Miles: implement directly, no backlog filing. 411/411 green operator-verified.
+
+- Task 1: dispatch preparation now writes `.orchestrator-handoff.md` into the dispatch working directory with FULL prior-task verification stdout (20k/task bound) for multi-task goals; the brief keeps the trimmed embedded section (ApiOnly parity) plus a pointer line. File is gitignored so worker commits never include it. Rationale: file-access workers get complete fidelity at zero prompt cost; prompt embeds stay orientation-sized.
+- Task 2: briefs no longer point workers at `/api/goals/<prefix>/work-summary` and `/api/system/dashboard-host` - replaced with one line stating context is embedded plus the handoff file, and an explicit instruction not to reach dashboard APIs or orchestrator state (DOGFOOD blockers showed workers repeatedly burning turns on curl 000 and task-not-found attempts).
+- Reviewer agent switched live to Anthropic/claude-haiku-4-5 with sonnet complex escalation (`agent reviewer Anthropic claude-haiku-4-5 --complex-model claude-sonnet-4-6`) per Miles - first haiku Reviewer dispatch will carry plan-mode read-only sandbox and real file access; the qwen ApiOnly reviewer remains a recreatable fallback.
+- Operator-practice friction (2x today): first `workspace remove` fails when the operator shell's CWD sits inside the worktree from gate commands; rerun from repo root resumes cleanly. Practice: run gates as `dotnet test <worktree-path>` from root or cd back before removal.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - brief/dispatch plumbing with gitignore and test fixups - 2/2 first-attempt, including an unprompted cost-guard boundary check in task 2.
+
 ## 2026-06-11 - Cost routing: haiku-by-default for simple Anthropic work (goal 1c874f08)
 
 Goal `1c874f08` (CLI workspace), one Developer task, claude-sonnet-4-6 (commit 28ade0e, fast-forward merge). The CLI `agent` command now accepts `--complex-model <model>` (reusing the dashboard submission path's existing complex-model fields), and a new `AgentCatalog.AnthropicDefault()` pairs claude-haiku-4-5 base with claude-sonnet-4-6 complex across all five roles. With `TaskComplexityEstimator.ResolveModel` already escalating on Complex classification or unresolved underpowered fit notes, Simple-classified Anthropic dispatches now route to haiku automatically. 407/407 green, operator-verified independently (worker count matched this time).
