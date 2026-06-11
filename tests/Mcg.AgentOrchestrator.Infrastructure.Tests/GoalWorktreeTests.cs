@@ -56,6 +56,35 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_resumes_after_unregistered_worktree_leaves_directory")]
+    public void GoalWorktreesRemoveResumesAfterUnregisteredWorktreeLeavesDirectory()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+            File.WriteAllText(Path.Combine(path, "leftover.log"), "held by prior test process");
+
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            Assert.True(Directory.Exists(path));
+            Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
+            Assert.True(BranchExists(repo, branch));
+
+            Assert.Equal("Removed workspace and merged branch " + branch + ".", GoalWorktrees.Remove(repo, goalId));
+
+            Assert.False(Directory.Exists(path));
+            Assert.False(BranchExists(repo, branch));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_suggests_manual_merge_when_branches_diverge")]
     public void GoalWorktreesSuggestsManualMergeWhenBranchesDiverge()
     {
@@ -143,7 +172,26 @@ public sealed class GoalWorktreeTests
         return root;
     }
 
+    private static bool BranchExists(string workingDirectory, string branch)
+    {
+        return RunGitExitCode(workingDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}") == 0;
+    }
+
     private static void RunGit(string workingDirectory, params string[] arguments)
+    {
+        var exitCode = RunGitExitCode(workingDirectory, arguments, out var error);
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        }
+    }
+
+    private static int RunGitExitCode(string workingDirectory, params string[] arguments)
+    {
+        return RunGitExitCode(workingDirectory, arguments, out _);
+    }
+
+    private static int RunGitExitCode(string workingDirectory, string[] arguments, out string error)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -162,12 +210,9 @@ public sealed class GoalWorktreeTests
 
         using var process = Process.Start(startInfo)!;
         process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
+        error = process.StandardError.ReadToEnd();
         process.WaitForExit(60000);
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
-        }
+        return process.ExitCode;
     }
 
     private static void DeleteDirectory(string path)
