@@ -103,6 +103,15 @@ Goal ID: `9630c178515141909ef19eee0d8c8c46` (CLI workspace), task 1 `844dc4ff`, 
 - Model fit: Anthropic/claude-haiku-4-5 - adequate - agentic file write via claude-cli - exact content, self-verified, ~2 min.
 - Follow-up: Developer role in the CLI workspace is now `anthropic-developer` (Anthropic/claude-sonnet-4-6, subscription claude-cli); delete `src\Mcg.AgentOrchestrator.App\.orchestrator\agents.json` to restore the OpenAI default catalog.
 
+## 2026-06-10 - First self-improvement loop: three backlog items via claude-cli workers
+
+Goals `f55dc813`, `b469cc67`, `9d4e59d5` (CLI workspace), one Developer task each, claude-sonnet-4-6 via subscription-dispatch in goal worktrees. The orchestrator implemented its own backlog: A) exit-0/no-output dispatches now fail instead of completing (kernel guard + 2 tests), B) ScriptedModelProvider throws a configuration error instead of impersonating HUMAN_INPUT (worker correctly found and updated 2 pre-existing tests pinning old behavior), C) task briefs now state the dispatch working directory (parameter threading Core->Infrastructure + test).
+
+- Cycle mechanics: simple-goal -> workspace create -> subscription-dispatch -> start-dispatch (orchestrator cost-guard flags as the explicit confirmations) -> Wait-Process watcher -> refresh-dispatch -> operator diff review + independent dotnet test in the worktree -> acceptance -> git merge -> workspace remove. Worker wall times: 3, 6, and 5.5 minutes. All three merged; main green at 358 tests.
+- Friction: dispatch-family CLI commands only target the latest goal, forcing strictly sequential goals (new backlog entry). Acceptance never fast-forwards once main advances mid-goal (operator commits between fork and merge); printed merge command works but the auto-ff policy rarely applies in practice.
+- Friction: complexity estimator classified all three "Implement the BACKLOG.md item..." briefs as Complex, tripping the large-paid-prompt guard at ~4k chars (threshold reads 12000 chars or 3 tasks, but complex-model selection alone requires the flag); harmless with the flag, noisy for a loop.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped backlog items with file pointers and done-conditions - 3/3 first-attempt passes, honest test updates, no scope creep.
+
 ## 2026-06-10 - Context-window forensics correct the qwen verdicts again
 
 Follow-up to the bridge validation after suspecting config interference in the 14b runs. Three real disruptions found:
