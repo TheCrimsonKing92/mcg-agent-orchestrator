@@ -1275,8 +1275,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Cost: large paid subscription start. Inspect the generated prompt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "DashboardNextActionControls_label_complex_paid_prepared_dispatch")]
-    public void DashboardNextActionControlsLabelComplexPaidPreparedDispatch()
+    [Xunit.Fact(DisplayName = "DashboardNextActionControls_allow_complex_paid_prepared_dispatch_under_size_threshold")]
+    public void DashboardNextActionControlsAllowComplexPaidPreparedDispatchUnderSizeThreshold()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1304,12 +1304,12 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", control!.Url);
-    Assert.Equal("complex paid subscription model", control.CostRisk);
-    Assert.True(control.CostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
-    Assert.Equal("complex paid subscription model", nextDto.Control!.CostRisk);
-    Assert.True(nextDto.Control.CostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
-    Assert.Equal("complex paid subscription model", workSummary.NextAction!.Control!.CostRisk);
-    Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
+    Xunit.Assert.Null(control.CostRisk);
+    Xunit.Assert.Null(control.CostRecommendation);
+    Xunit.Assert.Null(nextDto.Control!.CostRisk);
+    Xunit.Assert.Null(nextDto.Control.CostRecommendation);
+    Xunit.Assert.Null(workSummary.NextAction!.Control!.CostRisk);
+    Xunit.Assert.Null(workSummary.NextAction.Control.CostRecommendation);
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_labels_run_controls_by_execution_policy")]
@@ -1650,8 +1650,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(controls, text => text.Contains($"API plan: OpenAI/gpt-5.5 Simple reasoning high prompt {preview.PromptCharacterCount} chars max 1200 out [potentially paid] [complex paid API model]", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_subscription_prompt_from_plan")]
-    public void DashboardRendererConfirmsLargePaidSubscriptionPromptFromPlan()
+    [Xunit.Fact(DisplayName = "DashboardRenderer_allows_subscription_plan_prompt_under_new_threshold")]
+    public void DashboardRendererAllowsSubscriptionPlanPromptUnderNewThreshold()
 {
     var objective = "production architecture api cli dashboard provider subscription worker persistence state tests docs " + new string('o', 5000);
     var description = "Design and implement complete integration with authentication migration rollback state persistence and dashboard api tests. " + new string('d', 5000);
@@ -1671,6 +1671,25 @@ public sealed class DashboardRenderingTests
     var profiles = WorkerProfileCatalog.Default();
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
+    var failedCommand = "codex exec " + new string('c', 5000);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        failedCommand,
+        "C:\\repo",
+        DateTimeOffset.UtcNow,
+        "OpenAI",
+        "gpt-5.3-codex",
+        "medium",
+        TaskComplexity.Complex,
+        9500));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        failedCommand,
+        "C:\\repo",
+        1,
+        new string('s', 5000),
+        new string('e', 5000),
+        DateTimeOffset.UtcNow));
+    kernel.RetryTask(goal.Id, task.Id, "Retry after failed verification.");
     var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
         goal,
         agents,
@@ -1686,16 +1705,13 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents,
         WorkerProfiles: profiles));
 
-    Assert.True(risk is not null);
+    Xunit.Assert.Null(risk);
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Run next subscription action (cost gate: large paid subscription start)", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Continue subscription handoff (cost gate: large paid subscription start)", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("Start subscription work (cost gate: large paid subscription start)", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains(SubscriptionPromptCostGuard.BuildInlineLabel(risk!), StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains($"{risk!.PromptCharacterCount} prompt chars across 1 task(s), thresholds {risk.BatchPromptThreshold} chars or {risk.BatchTaskThreshold} task(s).", StringComparison.Ordinal));
+    Assert.False(html.Contains("cost gate: large paid subscription start", StringComparison.Ordinal));
+    Assert.False(html.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
 }
 

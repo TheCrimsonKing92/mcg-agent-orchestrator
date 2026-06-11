@@ -89,7 +89,8 @@ internal sealed record SubscriptionPlanItemDto(
     string? SubscriptionReasoningEffort = null,
     int? EstimatedPromptCharacterCount = null,
     int RecoverableSubscriptionLimitFailureCount = 0,
-    bool UsesComplexModel = false);
+    bool UsesComplexModel = false,
+    int? CostGuardPromptCharacterCount = null);
 
 internal sealed record ProviderSmokeReportDto(
     string Target,

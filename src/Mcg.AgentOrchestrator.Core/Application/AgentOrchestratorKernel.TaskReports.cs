@@ -2,8 +2,10 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
-    private const int SimplePaidPromptWarningChars = 4000;
-    private const int ComplexPaidPromptWarningChars = 6000;
+    private const int SimplePaidApiPromptWarningChars = 4000;
+    private const int ComplexPaidApiPromptWarningChars = 6000;
+    private const int SimplePaidSubscriptionPromptWarningChars = 6000;
+    private const int ComplexPaidSubscriptionPromptWarningChars = 9000;
 
     public ProcessBatchPlan BuildProcessBatchPlan(GoalId goalId, ProcessBatchActionKind action)
     {
@@ -473,10 +475,14 @@ public sealed partial class AgentOrchestratorKernel
             return string.Empty;
         }
 
-        var threshold = complexity == TaskComplexity.Complex || usesComplexModel
-            ? ComplexPaidPromptWarningChars
-            : SimplePaidPromptWarningChars;
         var sourceLabel = source == PaidCostWarningSource.Subscription ? "subscription" : "API";
+        var threshold = (source, complexity == TaskComplexity.Complex || usesComplexModel) switch
+        {
+            (PaidCostWarningSource.Subscription, true) => ComplexPaidSubscriptionPromptWarningChars,
+            (PaidCostWarningSource.Subscription, false) => SimplePaidSubscriptionPromptWarningChars,
+            (PaidCostWarningSource.Api, true) => ComplexPaidApiPromptWarningChars,
+            _ => SimplePaidApiPromptWarningChars
+        };
         var warnings = new List<string>();
         if (promptCharacterCount.Value > threshold)
         {

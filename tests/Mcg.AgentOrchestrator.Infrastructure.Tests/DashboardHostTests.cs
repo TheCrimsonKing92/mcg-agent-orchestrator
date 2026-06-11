@@ -181,10 +181,7 @@ public sealed class DashboardHostTests
         Assert.Equal(HttpStatusCode.Created, largeAutoHandoffResponse.StatusCode);
         Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"AutoHandoff\"", StringComparison.Ordinal));
         Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"StopReason\"", StringComparison.Ordinal));
-        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
-        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
-        Assert.False(GoalResponseContainsDispatch(largeAutoHandoffGoal));
-        Assert.False(GoalResponseContainsProcess(largeAutoHandoffGoal));
+        Assert.False(largeAutoHandoffGoal.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
         Assert.Contains(simpleGoalDetail, text => text.Contains("\"VerificationSatisfied\"", StringComparison.Ordinal));
         Assert.Contains(simpleGoalDetail, text => text.Contains(simpleGoalId, StringComparison.Ordinal));
         using (var workSummaryDocument = JsonDocument.Parse(simpleGoalWorkSummary))

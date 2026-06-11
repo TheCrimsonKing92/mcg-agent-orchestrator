@@ -353,12 +353,12 @@ public sealed class MonitoringAndQueryTests
         "gpt-5.3-codex",
         "low",
         TaskComplexity.Simple,
-        4001));
+        6001));
 
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
-    Assert.Contains(item.Message, text => text.Contains("large paid subscription prompt 4001 chars (>4000)", StringComparison.Ordinal));
+    Assert.Contains(item.Message, text => text.Contains("large paid subscription prompt 6001 chars (>6000)", StringComparison.Ordinal));
     Assert.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid subscription work", StringComparison.Ordinal));
 }
 

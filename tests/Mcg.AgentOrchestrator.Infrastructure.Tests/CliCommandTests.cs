@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -779,8 +780,8 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_preserves_paid_subscription_start_guard")]
-    public void CliProfileDispatchPreservesPaidSubscriptionStartGuard()
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_allows_complex_paid_subscription_start_under_size_threshold")]
+    public void CliProfileDispatchAllowsComplexPaidSubscriptionStartUnderSizeThreshold()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -824,22 +825,7 @@ public sealed class CliCommandTests
         }
 
         var dispatchOutput = writer.ToString();
-        InvalidOperationException? ex = null;
-        try
-        {
-            CliCommandDispatcher.ExecuteCommand(
-                ["start-dispatch", "1", "--confirm-dispatch-start"],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        catch (InvalidOperationException caught)
-        {
-            ex = caught;
-        }
+        var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
 
         Xunit.Assert.True(dispatched);
         Xunit.Assert.Contains("Cost note: paid subscription handoff prepared", dispatchOutput);
@@ -847,10 +833,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
         Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
         Xunit.Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
-        Xunit.Assert.NotNull(ex);
-        Xunit.Assert.Contains("--confirm-large-paid-subscription-start", ex!.Message);
-        Xunit.Assert.Contains("complex paid model", ex.Message);
-        Xunit.Assert.Contains("Confirm this task needs the complex paid subscription model before start", ex.Message);
+        Xunit.Assert.Null(risk);
         Xunit.Assert.Null(task.LastProcess);
     }
 
@@ -993,10 +976,10 @@ public sealed class CliCommandTests
         }
 
         var output = writer.ToString();
-        Xunit.Assert.Contains("Ready start risk: complex paid subscription model", output);
-        Xunit.Assert.Contains("--confirm-large-paid-subscription-start", output);
-        Xunit.Assert.Contains("Confirm this task needs the complex paid subscription model", output);
-        Xunit.Assert.Contains("uses complex paid model selection", output);
+        Xunit.Assert.DoesNotContain("Ready start risk:", output);
+        Xunit.Assert.DoesNotContain("--confirm-large-paid-subscription-start", output);
+        Xunit.Assert.Contains("gpt-5.5", output);
+        Xunit.Assert.Contains("Complex", output);
 }
 
     [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_model_fit_recommendation")]

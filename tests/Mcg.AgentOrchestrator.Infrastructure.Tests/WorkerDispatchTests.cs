@@ -117,7 +117,7 @@ public sealed class WorkerDispatchTests
     Assert.Equal("high", task.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
     Assert.True(task.LastDispatch.PromptCharacterCount > 0);
-    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(risk!));
+    Xunit.Assert.Null(risk);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_already_running_subscription_dispatch")]
@@ -822,10 +822,10 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, complexSummary.ReadyCount);
     Assert.Equal(complexPromptCharacters, complexSummary.EstimatedPromptCharacterCount);
     Assert.True(complexSummary.IsPotentiallyPaidProvider);
-    Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
-    Assert.True(plan.ReadyStartCostRecommendation?.Contains("Confirm this task needs the complex paid subscription model", StringComparison.Ordinal) == true);
-    Assert.Equal(simplePromptCharacters + complexPromptCharacters, plan.ReadyStartPromptCharacterCount);
-    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
+    Xunit.Assert.Null(plan.ReadyStartCostRisk);
+    Xunit.Assert.Null(plan.ReadyStartCostRecommendation);
+    Xunit.Assert.Null(plan.ReadyStartPromptCharacterCount);
+    Xunit.Assert.Empty(plan.ReadyStartCostRiskDetails);
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionPlan_surfaces_prior_model_fit_for_ready_models")]
@@ -1007,13 +1007,9 @@ public sealed class WorkerDispatchTests
     Assert.Equal("high", item.SubscriptionReasoningEffort);
     Assert.True(summary.UsesComplexModel);
     Assert.Equal("gpt-5.5", summary.ModelName);
-    Assert.Equal("complex paid subscription model", plan.ReadyStartCostRisk);
-    Assert.True(plan.ReadyStartCostRiskDetails.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
-    Assert.True(thresholdRisk is not null);
-    Assert.False(thresholdRisk!.HasOversizedPrompt);
-    Assert.True(thresholdRisk.UsesComplexPaidModel);
-    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(thresholdRisk));
-    Assert.False(thresholdRisk.Details.Any(detail => detail.Contains("exceeds 4000", StringComparison.Ordinal)));
+    Xunit.Assert.Null(plan.ReadyStartCostRisk);
+    Xunit.Assert.Empty(plan.ReadyStartCostRiskDetails);
+    Xunit.Assert.Null(thresholdRisk);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -1029,7 +1025,7 @@ public sealed class WorkerDispatchTests
     Assert.True(nextTask.LastDispatch!.UsesComplexModel);
     Assert.Equal(TaskComplexity.Simple, nextTask.LastDispatch.TaskComplexity);
     Assert.Equal("gpt-5.5", nextTask.LastDispatch.ModelName);
-    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(preparedRisk!));
+    Xunit.Assert.Null(preparedRisk);
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time")]
@@ -1100,12 +1096,13 @@ public sealed class WorkerDispatchTests
 
     Assert.True(risk is not null);
     Assert.Equal(12001, risk!.PromptCharacterCount);
-    Assert.True(risk.PromptExceedsBatchThreshold);
+    Assert.False(risk.PromptExceedsBatchThreshold);
     Assert.True(risk.HasOversizedPrompt);
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.False(risk.UsesComplexPaidModel);
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("thresholds 18000 chars or 3 task(s)", StringComparison.Ordinal));
     Assert.Contains(ex.Message, text => text.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
     Assert.Contains(ex.Message, text => text.Contains("Inspect the generated prompt before paid subscription start", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
@@ -1134,10 +1131,10 @@ public sealed class WorkerDispatchTests
     Assert.False(risk.UsesComplexPaidModel);
     Assert.Equal("paid subscription fanout", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.True(risk.Details.Any(detail => detail.Contains("Paid task count 5 exceeds 3", StringComparison.Ordinal)));
-    Assert.Contains(ex.Message, text => text.Contains("thresholds 12000 chars or 3 task(s)", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("thresholds 18000 chars or 3 task(s)", StringComparison.Ordinal));
 }
-    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_complex_paid_start_with_small_prompt")]
-    public void SubscriptionPromptCostGuardBlocksComplexPaidStartWithSmallPrompt()
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_allows_complex_paid_start_under_size_threshold")]
+    public void SubscriptionPromptCostGuardAllowsComplexPaidStartUnderSizeThreshold()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1152,15 +1149,83 @@ public sealed class WorkerDispatchTests
         WorkerProfileCatalog.Default(),
         _ => 500);
 
+    Xunit.Assert.Null(risk);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_applies_prior_evidence_allowance_to_ready_prompt")]
+    public void SubscriptionPromptCostGuardAppliesPriorEvidenceAllowanceToReadyPrompt()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var priorTasks = Enumerable.Range(1, 3)
+        .Select(index => new TaskSpec(TaskId.New(), $"Report prior result {index}.", AgentRole.Researcher))
+        .ToList();
+    var nextTask = new TaskSpec(TaskId.New(), "Report next result.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Collect pipeline reports", [.. priorTasks, nextTask]);
+    var agent = new AgentDefinition(
+        new AgentId("researcher"),
+        "Researcher",
+        AgentRole.Researcher,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    foreach (var priorTask in priorTasks)
+    {
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "manual-verification passed",
+            "C:\\repo",
+            0,
+            new string('a', 900),
+            string.Empty,
+            DateTimeOffset.UtcNow));
+    }
+
+    var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        _ => 7600,
+        nextTask);
+
+    Assert.True(AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, nextTask.Id) >= PaidPromptThresholds.PriorTaskEvidenceAllowance);
+    Xunit.Assert.Null(risk);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_prompt_total")]
+    public void SubscriptionPromptCostGuardBlocksPaidBatchPromptTotal()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan complex batch subscription work",
+        [
+            new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture with distributed rollback and data integrity checks for service one.", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture with distributed rollback and data integrity checks for service two.", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture with distributed rollback and data integrity checks for service three.", AgentRole.Developer)
+        ]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "medium"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        _ => 8000);
+    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
+
     Assert.True(risk is not null);
-    Assert.Equal(1, risk!.TaskCount);
-    Assert.Equal(500, risk.PromptCharacterCount);
-    Assert.False(risk.PromptExceedsBatchThreshold);
+    Assert.Equal(24000, risk!.PromptCharacterCount);
+    Assert.True(risk.PromptExceedsBatchThreshold);
     Assert.False(risk.HasOversizedPrompt);
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.True(risk.UsesComplexPaidModel);
-    Assert.Equal("complex paid subscription model", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
-    Assert.True(risk.Details.Any(detail => detail.Contains("uses complex paid model selection", StringComparison.Ordinal)));
+    Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
+    Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
     public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()

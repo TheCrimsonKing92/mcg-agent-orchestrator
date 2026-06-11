@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -519,8 +520,8 @@ public sealed class AdvanceLoopTests
     Assert.Equal(task.SubscriptionRetryAfter, result.ContinueAfter);
     Assert.True(DashboardContinuationService.ShouldContinueWatching(result));
 }
-    [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_blocks_large_paid_prompt_before_dispatch")]
-    public void AdvanceGoalWithSubscriptionsUntilBlockedBlocksLargePaidPromptBeforeDispatch()
+    [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_continues_prompt_below_new_large_threshold")]
+    public void AdvanceGoalWithSubscriptionsUntilBlockedContinuesPromptBelowNewLargeThreshold()
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -550,11 +551,11 @@ public sealed class AdvanceLoopTests
         goal);
 
     Assert.True(promptCharacters > 6000);
-    Assert.False(blocked.Executed);
-    Assert.Equal(0, blocked.StepCount);
-    Assert.Equal(NextActionKind.RunAssignedTask, blocked.BlockingAction!.Kind);
-    Assert.Contains(blocked.StopReason, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
-    Assert.True(task.LastDispatch is null);
+    Assert.True(promptCharacters <= PaidPromptThresholds.ComplexPaidPrompt);
+    Assert.True(blocked.Executed);
+    Assert.True(blocked.StepCount > 0);
+    Assert.False(blocked.StopReason.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    Assert.True(task.LastDispatch is not null);
 }
     [Xunit.Fact(DisplayName = "DashboardContinuationService_refreshes_running_process_until_handoff_is_blocked")]
     public async Task DashboardContinuationServiceRefreshesRunningProcessUntilHandoffIsBlocked()

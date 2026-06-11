@@ -11,6 +11,21 @@ public sealed partial class AgentOrchestratorKernel
 
     public TaskSpec GetTask(GoalId goalId, TaskId taskId) => GetGoal(goalId).FindTask(taskId);
 
+    public int EstimatePriorTaskEvidenceCharacterCount(GoalId goalId, TaskId taskId)
+    {
+        return EstimatePriorTaskEvidenceCharacterCount(GetGoal(goalId), taskId);
+    }
+
+    public static int EstimatePriorTaskEvidenceCharacterCount(Goal goal, TaskId taskId)
+    {
+        var task = goal.FindTask(taskId);
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
+        var lines = PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
+        return lines.Count == 0
+            ? 0
+            : string.Join(Environment.NewLine, lines).Length;
+    }
+
     public TaskBrief BuildTaskBrief(GoalId goalId, TaskId taskId, string? modelFitTarget = null, string? workingDirectory = null)
     {
         var goal = GetGoal(goalId);

@@ -41,6 +41,7 @@ internal static class SubscriptionPromptCostGuard
                 item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName ?? "default",
                 item.TaskComplexity,
                 item.EstimatedPromptCharacterCount!.Value,
+                item.CostGuardPromptCharacterCount ?? item.EstimatedPromptCharacterCount!.Value,
                 item.UsesComplexModel))
             .ToList();
 
@@ -63,6 +64,7 @@ internal static class SubscriptionPromptCostGuard
                 item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName ?? "default",
                 item.TaskComplexity,
                 item.EstimatedPromptCharacterCount!.Value,
+                item.CostGuardPromptCharacterCount ?? item.EstimatedPromptCharacterCount!.Value,
                 item.UsesComplexModel))
             .ToList();
 
@@ -89,6 +91,9 @@ internal static class SubscriptionPromptCostGuard
                 task.LastDispatch.ModelName ?? "default",
                 task.LastDispatch.TaskComplexity,
                 task.LastDispatch.PromptCharacterCount!.Value,
+                PaidPromptThresholds.EffectivePromptCharacterCount(
+                    task.LastDispatch.PromptCharacterCount.Value,
+                    AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id)),
                 task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex))
             .ToList();
 
@@ -113,6 +118,9 @@ internal static class SubscriptionPromptCostGuard
                     task.LastDispatch.ModelName ?? "default",
                     task.LastDispatch.TaskComplexity,
                     task.LastDispatch.PromptCharacterCount.Value,
+                    PaidPromptThresholds.EffectivePromptCharacterCount(
+                        task.LastDispatch.PromptCharacterCount.Value,
+                        AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id)),
                     task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex)
             ],
             BuildReadyModelFitSummaries(goal));
@@ -231,9 +239,9 @@ internal static class SubscriptionPromptCostGuard
             .ToList();
         var priorOverkill = modelFitRisks.Where(item => item.PreviousOverkillCount > 0).ToList();
         var priorUnderpowered = modelFitRisks.Where(item => item.PreviousUnderpoweredCount > 0).ToList();
-        var total = candidates.Sum(candidate => candidate.PromptCharacterCount);
+        var total = candidates.Sum(candidate => candidate.CostGuardPromptCharacterCount);
         var oversized = candidates
-            .Where(candidate => candidate.PromptCharacterCount > PromptThreshold(candidate))
+            .Where(candidate => candidate.CostGuardPromptCharacterCount > PromptThreshold(candidate))
             .ToList();
         var complex = candidates
             .Where(candidate => candidate.TaskComplexity == TaskComplexity.Complex || candidate.UsesComplexModel)
@@ -243,7 +251,6 @@ internal static class SubscriptionPromptCostGuard
         if (total <= PaidPromptThresholds.BatchPaidPrompt &&
             !tooManyPaidTasks &&
             oversized.Count == 0 &&
-            complex.Count == 0 &&
             priorOverkill.Count == 0 &&
             priorUnderpowered.Count == 0)
         {
@@ -262,7 +269,7 @@ internal static class SubscriptionPromptCostGuard
         }
 
         details.AddRange(oversized.Take(3).Select(candidate =>
-            $"Task {candidate.TaskNumber} {candidate.ProviderName}/{candidate.ModelName} prompt {candidate.PromptCharacterCount} chars exceeds {PromptThreshold(candidate)}."));
+            $"Task {candidate.TaskNumber} {candidate.ProviderName}/{candidate.ModelName} prompt {candidate.CostGuardPromptCharacterCount} chars exceeds {PromptThreshold(candidate)}."));
 
         if (oversized.Count > 3)
         {
@@ -348,5 +355,6 @@ internal static class SubscriptionPromptCostGuard
         string ModelName,
         TaskComplexity? TaskComplexity,
         int PromptCharacterCount,
+        int CostGuardPromptCharacterCount,
         bool UsesComplexModel = false);
 }

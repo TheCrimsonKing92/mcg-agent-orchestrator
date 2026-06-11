@@ -188,6 +188,11 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
         var estimatedPromptCharacterCount = canPrepare
             ? estimatePromptCharacterCount?.Invoke(task)
             : null;
+        int? costGuardPromptCharacterCount = estimatedPromptCharacterCount is null
+            ? null
+            : PaidPromptThresholds.EffectivePromptCharacterCount(
+                estimatedPromptCharacterCount.Value,
+                AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id));
         var previousLimitFailures = recoverableLimitFailures == 1
             ? "1 previous recoverable subscription usage limit failure"
             : $"{recoverableLimitFailures} previous recoverable subscription usage limit failures";
@@ -239,7 +244,8 @@ public static SubscriptionPlanItemDto BuildSubscriptionPlanItem(
             subscriptionReasoningEffort,
             estimatedPromptCharacterCount,
             recoverableLimitFailures,
-            usesComplexModel);
+            usesComplexModel,
+            costGuardPromptCharacterCount);
     }
     catch (InvalidOperationException ex)
     {

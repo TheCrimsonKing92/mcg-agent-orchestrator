@@ -20,6 +20,8 @@ internal static class ApiPromptCostGuard
 {
     public const string DashboardConfirmationQueryName = "confirmLargePaidApiPrompt";
     public const string CliConfirmationFlag = "--confirm-large-paid-api-prompt";
+    private const int SimplePaidApiPrompt = 4000;
+    private const int ComplexPaidApiPrompt = 6000;
 
     public static PaidApiPromptRisk? Evaluate(AgentTaskRunPreview preview)
     {
@@ -35,7 +37,7 @@ internal static class ApiPromptCostGuard
 
         var fit = goal is null ? null : FindModelFit(goal, preview.ProviderName, preview.ModelName);
         var usesComplexPaidModel = preview.TaskComplexity == TaskComplexity.Complex || preview.UsesComplexModel;
-        var threshold = PaidPromptThresholds.PromptThreshold(preview.TaskComplexity, usesComplexPaidModel);
+        var threshold = usesComplexPaidModel ? ComplexPaidApiPrompt : SimplePaidApiPrompt;
         var promptExceedsThreshold = preview.PromptCharacterCount > threshold;
         var hasPriorOverkillFit = fit?.OverkillCount > 0;
         var hasPriorUnderpoweredFit = fit?.UnderpoweredCount > 0;
