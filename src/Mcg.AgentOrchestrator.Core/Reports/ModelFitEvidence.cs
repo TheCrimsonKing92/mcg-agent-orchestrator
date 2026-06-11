@@ -45,6 +45,20 @@ public static class ModelFitEvidence
         }
     }
 
+    public static string? TryExtractNote(string stdout, string stderr)
+    {
+        foreach (var line in SplitLines(stdout).Concat(SplitLines(stderr)))
+        {
+            var normalized = NormalizeNoteLine(line);
+            if (normalized.StartsWith(NotePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalized;
+            }
+        }
+
+        return null;
+    }
+
     public static List<ModelFitSummary> BuildSummary(IEnumerable<string?> notes)
     {
         return notes

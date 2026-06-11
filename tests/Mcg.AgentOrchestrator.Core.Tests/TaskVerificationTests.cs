@@ -223,6 +223,32 @@ public sealed class TaskVerificationTests
         Assert.Equal<string?>(null, restoredTask.VerificationHistory.Single().ModelFitNote);
     }
 
+    [Xunit.Fact(DisplayName = "RecordVerification_populates_ModelFitNote_from_markdown_decorated_stdout_line")]
+    public void RecordVerificationPopulatesModelFitNoteFromMarkdownDecoratedStdoutLine()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Populate ModelFitNote from stdout");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+        var stdout = "Tests passed.\n**Model fit:** Anthropic/claude-haiku-4-5 — adequate — file write — quick";
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow));
+
+        Assert.Equal(
+            "Model fit: Anthropic/claude-haiku-4-5 - adequate - file write - quick",
+            task.LastVerification!.ModelFitNote);
+        Assert.Equal(
+            "Model fit: Anthropic/claude-haiku-4-5 - adequate - file write - quick",
+            task.VerificationHistory.Single().ModelFitNote);
+    }
+
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_retried_task_without_latest_verification")]
     public void SnapshotRoundtripPreservesRetriedTaskWithoutLatestVerification()
 {

@@ -224,6 +224,15 @@ public sealed class TaskSpec
     internal void RecordVerification(TaskVerificationRecord verification)
     {
         SubscriptionRetryAfter = null;
+        if (verification.ModelFitNote is null)
+        {
+            var note = ModelFitEvidence.TryExtractNote(verification.StandardOutput, verification.StandardError);
+            if (note is not null)
+            {
+                verification = verification with { ModelFitNote = note };
+            }
+        }
+
         _verificationHistory.Add(verification);
         LastVerification = verification;
     }
