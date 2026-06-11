@@ -75,7 +75,8 @@ public sealed class TaskSpec
                     LastVerification.ExitCode,
                     LastVerification.StandardOutput,
                     LastVerification.StandardError,
-                    LastVerification.CompletedAt),
+                    LastVerification.CompletedAt,
+                    LastVerification.ModelFitNote),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -83,7 +84,8 @@ public sealed class TaskSpec
                     verification.ExitCode,
                     verification.StandardOutput,
                     verification.StandardError,
-                    verification.CompletedAt))
+                    verification.CompletedAt,
+                    verification.ModelFitNote))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -152,7 +154,8 @@ public sealed class TaskSpec
                     verification.ExitCode,
                     verification.StandardOutput,
                     verification.StandardError,
-                    verification.CompletedAt));
+                    verification.CompletedAt,
+                    verification.ModelFitNote));
             }
         }
 
@@ -164,7 +167,8 @@ public sealed class TaskSpec
                 snapshot.LastVerification.ExitCode,
                 snapshot.LastVerification.StandardOutput,
                 snapshot.LastVerification.StandardError,
-                snapshot.LastVerification.CompletedAt);
+                snapshot.LastVerification.CompletedAt,
+                snapshot.LastVerification.ModelFitNote);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);

@@ -174,6 +174,55 @@ public sealed class TaskVerificationTests
     Assert.False(restoredTask.VerificationHistory[0].Succeeded);
     Assert.Equal("dotnet test", restoredTask.VerificationHistory[1].Command);
 }
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_ModelFitNote_when_set")]
+    public void SnapshotRoundtripPreservesModelFitNoteWhenSet()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Persist ModelFitNote");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test",
+            "C:\\repo",
+            0,
+            "Passed",
+            string.Empty,
+            clock.UtcNow,
+            ModelFitNote: "claude-sonnet-4-6 - adequate - straightforward test task"));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+
+        Assert.Equal("claude-sonnet-4-6 - adequate - straightforward test task", restoredTask.LastVerification!.ModelFitNote);
+        Assert.Equal("claude-sonnet-4-6 - adequate - straightforward test task", restoredTask.VerificationHistory.Single().ModelFitNote);
+    }
+
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_loads_null_ModelFitNote_when_absent")]
+    public void SnapshotRoundtripLoadsNullModelFitNoteWhenAbsent()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Persist without ModelFitNote");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test",
+            "C:\\repo",
+            0,
+            "Passed",
+            string.Empty,
+            clock.UtcNow));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+
+        Assert.Equal<string?>(null, restoredTask.LastVerification!.ModelFitNote);
+        Assert.Equal<string?>(null, restoredTask.VerificationHistory.Single().ModelFitNote);
+    }
+
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_retried_task_without_latest_verification")]
     public void SnapshotRoundtripPreservesRetriedTaskWithoutLatestVerification()
 {

@@ -45,7 +45,8 @@ public sealed record TaskVerificationSnapshot(
     int ExitCode,
     string StandardOutput,
     string StandardError,
-    DateTimeOffset CompletedAt);
+    DateTimeOffset CompletedAt,
+    string? ModelFitNote = null);
 
 public sealed record TaskDispatchSnapshot(
     string WorkerName,
