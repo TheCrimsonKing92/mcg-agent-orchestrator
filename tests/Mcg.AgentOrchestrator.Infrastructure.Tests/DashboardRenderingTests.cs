@@ -539,7 +539,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(AgentExecutionPolicy.PreferSubscription, openAi.ExecutionPolicy);
     Assert.Equal("codex-cli", openAi.Subscription!.WorkerProfileName);
-    Assert.Equal("gpt-5.3-codex", openAi.Subscription.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, openAi.Subscription.ModelAlias);
     Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, openAi.Subscription.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineReasoningEffort, openAi.Model.ReasoningEffort);
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
@@ -911,7 +911,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(configHtml, text => text.Contains("<select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", StringComparison.Ordinal));
-    Assert.Contains(configHtml, text => text.Contains("<option value=\"gpt-5.3-codex\" selected>GPT-5.3-Codex</option>", StringComparison.Ordinal));
+    Assert.Contains(configHtml, text => text.Contains("<option value=\"gpt-5.5\" selected>GPT-5.5</option>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<option value=\"\">Use API model</option>", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", StringComparison.Ordinal));
     Assert.Contains(configHtml, text => text.Contains("<select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\"", StringComparison.Ordinal));
@@ -921,7 +921,8 @@ public sealed class DashboardRenderingTests
     AssertOpenAiModelOrderIsCostAware(DashboardAssets.OperatorControlsScript);
     Assert.False(configHtml.Contains("Default CLI model", StringComparison.Ordinal));
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Default CLI model", StringComparison.Ordinal));
-    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("defaultSubscriptionModel: 'gpt-5.3-codex'", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("defaultSubscriptionModel: 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.False(DashboardAssets.OperatorControlsScript.Contains("GPT-5.3-Codex", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("['sonnet','Claude Sonnet (latest)']", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("maxTokenPlaceholder(provider)", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("complexMaxTokenPlaceholder(provider)", StringComparison.Ordinal));

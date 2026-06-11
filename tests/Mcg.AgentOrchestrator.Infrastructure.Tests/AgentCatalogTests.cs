@@ -21,7 +21,7 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, agent.Model.MaxOutputTokens);
         Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
-        Assert.Equal("gpt-5.3-codex", agent.Subscription.ModelAlias);
+        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.Subscription.ModelAlias);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
         Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
@@ -113,5 +113,35 @@ public sealed class AgentCatalogTests
     Assert.Equal("custom-subscription", anthropic.Subscription!.ReasoningEffort);
     Assert.True(ollama.Model.MaxOutputTokens is null);
     Assert.True(ollama.Model.ReasoningEffort is null);
+}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_load_repairs_stale_openai_codex_subscription_default")]
+    public void AgentCatalogStoreLoadRepairsStaleOpenAiCodexSubscriptionDefault()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var catalog = new AgentCatalog(
+    [
+        new AgentDefinition(
+            new AgentId("openai-developer"),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "medium")),
+        new AgentDefinition(
+            new AgentId("openai-reviewer"),
+            "OpenAI reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("custom-codex", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "medium"))
+    ]);
+
+    AgentCatalogStore.Save(path, catalog);
+
+    var restored = AgentCatalogStore.Load(path);
+
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
 }
