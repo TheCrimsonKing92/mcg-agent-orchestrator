@@ -50,16 +50,6 @@ Done when: roughly ten local API runs across task shapes have recorded token usa
 
 Verify: execution records in goal evidence show usage and stop reasons; `OutputTokenLimit.IsHit` flags none falsely.
 
-## Stop the offline scripted provider speaking HUMAN_INPUT
-
-Status: open | Size: small | Suggested route: direct edit, simple
-
-Why: when a live provider is unavailable, `ScriptedModelProvider` returns its error as a `HUMAN_INPUT:` line (`src/Mcg.AgentOrchestrator.App/Providers/ScriptedModelProvider.cs:17`), so an infrastructure failure lands the task in WaitingForHuman exactly like a real model question. Recovering takes three steps (answer, progress failed, retry). A provider-configuration failure should fail the run distinctly, not impersonate a conversational turn.
-
-Done when: an offline-adapter run produces a distinct failure (task Failed with a configuration message, or a thrown configuration error) and never creates a human-input request; the recovery path is a single retry.
-
-Verify: a test running a task against the scripted provider asserts no HumanInputRequested event.
-
 ## Dispatch commands cannot target a non-latest goal
 
 Status: open | Size: small | Suggested route: direct edit plus brief test
