@@ -4,6 +4,15 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Reviewer diff evidence + paid output caps raised (goal d729e13c)
+
+Goal `d729e13c` (CLI workspace), two sequential Developer tasks, claude-sonnet-4-6. ApiOnly prompts now include a `## Workspace Diff` section (commit 3c45e62): `AgentTaskRunner` takes an optional `Func<GoalId, string?>` diff provider, `GoalWorktrees.TryGetBranchDiff` supplies stat+patch of `main...HEAD` from the goal worktree, trimmed to 3200 chars with marker; wired at all three CLI/dashboard construction sites. Paid output caps raised 768->2048 routine / 1200->4096 complex on 4/4 over-cap evidence (commit 3d906c6); resolved backlog entry removed. Acceptance fast-forwarded; 403/403 green after operator fix.
+
+- Operator gate caught a false worker verification: task 2's worker claimed full `dotnet test` passed, but the independent run failed 3 tests - it raised only `AgentTaskRunner`'s private constants and missed the duplicated policy mirrors `AgentCatalog.RoutineApiMaxOutputTokens`/`ComplexApiMaxOutputTokens` (provider request defaults, dashboard placeholders) plus literal `768`/`1200` assertions in ProviderIntegrationTests/DashboardRenderingTests. Operator fixed directly on the goal branch (commit 13f2c38) rather than paying a redispatch for a 6-line alignment. Product lesson: duplicated policy constants invite exactly this miss - candidate cleanup item; worker test claims remain untrustworthy without the independent gate.
+- Worker wall times 6 min and 7.5 min. VBCSCompiler CS2012 lock hit twice during operator verification; shutdown + retry ritual cleared both.
+- Next validation: a five-role pipeline run after codex resets should show the qwen Reviewer citing actual diff content instead of objective text.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - DI seam + formatter budgeting (task 1 flawless) - but task 2's "precise test impact analysis" self-assessment was wrong; 11/12 first-attempt on scoped briefs.
+
 ## 2026-06-11 - Refresh-dispatch hardened: locked-log tolerance + bounded snippets (goal f5675269)
 
 Goal `f5675269` (CLI workspace), two sequential Developer tasks in one worktree, claude-sonnet-4-6 via subscription-dispatch. Closes the "Refresh-dispatch fails when live stdout log is locked" (commit 858dd62) and "Bound refresh-dispatch output for long subscription logs" (commit e2638a2) backlog entries; acceptance fast-forwarded, 399/399 green operator-verified.
