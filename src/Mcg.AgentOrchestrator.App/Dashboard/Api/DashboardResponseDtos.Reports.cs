@@ -146,6 +146,7 @@ internal sealed record GoalWorkSummaryDto(
     int PendingHumanInputCount,
     bool VerificationSatisfied,
     NextActionDto? NextAction,
+    DashboardHostInfoDto? Host,
     IReadOnlyList<TaskWorkSummaryDto> Tasks);
 
 internal sealed record TaskWorkContextDto(

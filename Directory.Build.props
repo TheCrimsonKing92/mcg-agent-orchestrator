@@ -3,6 +3,7 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>Recommended</AnalysisMode>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <DefaultItemExcludes>$(DefaultItemExcludes);**\artifacts\**;**\.scratch\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludes>
+    <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
 </Project>

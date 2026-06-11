@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class OrchestratorStateStore
 {
     private const int AtomicWriteAttempts = 10;
+    private const string BackupExtension = ".bak";
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public static AgentOrchestratorKernel Load(string path)
@@ -26,10 +27,7 @@ public static class OrchestratorStateStore
                 return new AgentOrchestratorKernel();
             }
 
-            var json = await File.ReadAllTextAsync(path, cancellationToken);
-            var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json, JsonOptions())
-                ?? new OrchestratorSnapshot([], []);
-            return AgentOrchestratorKernel.FromSnapshot(snapshot);
+            return await LoadFromFileAsync(path, cancellationToken);
         }
         finally
         {
@@ -87,7 +85,18 @@ public static class OrchestratorStateStore
             {
                 try
                 {
+                    var hadExistingState = File.Exists(fullPath);
+                    if (hadExistingState)
+                    {
+                        File.Copy(fullPath, fullPath + BackupExtension, overwrite: true);
+                    }
+
                     File.Move(tempPath, fullPath, overwrite: true);
+                    if (!hadExistingState)
+                    {
+                        TryCreateInitialBackup(fullPath);
+                    }
+
                     return;
                 }
                 catch (Exception ex) when (IsTransientAtomicWriteException(ex) && attempt < AtomicWriteAttempts)
@@ -108,6 +117,37 @@ public static class OrchestratorStateStore
     private static bool IsTransientAtomicWriteException(Exception ex)
     {
         return ex is IOException or UnauthorizedAccessException;
+    }
+
+    private static void TryCreateInitialBackup(string fullPath)
+    {
+        try
+        {
+            File.Copy(fullPath, fullPath + BackupExtension, overwrite: true);
+        }
+        catch (Exception ex) when (IsTransientAtomicWriteException(ex))
+        {
+        }
+    }
+
+    private static async Task<AgentOrchestratorKernel> LoadFromFileAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await LoadSnapshotFileAsync(path, cancellationToken);
+        }
+        catch (JsonException) when (File.Exists(path + BackupExtension))
+        {
+            return await LoadSnapshotFileAsync(path + BackupExtension, cancellationToken);
+        }
+    }
+
+    private static async Task<AgentOrchestratorKernel> LoadSnapshotFileAsync(string path, CancellationToken cancellationToken)
+    {
+        var json = await File.ReadAllTextAsync(path, cancellationToken);
+        var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json, JsonOptions())
+            ?? new OrchestratorSnapshot([], []);
+        return AgentOrchestratorKernel.FromSnapshot(snapshot);
     }
 
     private static JsonSerializerOptions JsonOptions()

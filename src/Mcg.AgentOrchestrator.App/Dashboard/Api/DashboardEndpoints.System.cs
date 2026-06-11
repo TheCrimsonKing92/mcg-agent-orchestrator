@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardEndpoints
@@ -24,7 +26,24 @@ internal static partial class DashboardEndpoints
             services.HostArgs.AutoRefreshSeconds,
             services.HostArgs.OpenBrowser,
             services.HostArgs.EnableOperatorControls,
-            BuildDashboardRestartCommand(services));
+            BuildDashboardRestartCommand(services),
+            services.Workspace.TenantName,
+            services.Workspace.IsTenantScoped,
+            services.Workspace.StatePath,
+            services.Workspace.AgentCatalogPath,
+            services.Workspace.WorkerProfilePath,
+            services.Workspace.ContinuationStorePath);
+    }
+
+    internal static DistributedArchitectureDto BuildArchitectureReport(DashboardEndpointServices services)
+    {
+        var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = Mcg.AgentOrchestrator.Infrastructure.WorkerProfileStore.Load(services.WorkerProfilePath);
+        return DistributedArchitectureDto.Create(
+            services.Workspace,
+            agents,
+            workerProfiles,
+            services.HostArgs.EnableOperatorControls);
     }
 
     private static DashboardBuildTestCleanupDto BuildTestCleanup(DashboardEndpointServices services)
@@ -277,7 +296,7 @@ internal static partial class DashboardEndpoints
     }
 
     private static string BuildDashboardRestartCommand(DashboardEndpointServices services)
-        => DashboardHost.BuildDashboardRestartCommand(services.HostArgs);
+        => DashboardHost.BuildDashboardRestartCommand(services.HostArgs, services.Workspace);
 
     private static string QuotePowerShell(string value)
     {

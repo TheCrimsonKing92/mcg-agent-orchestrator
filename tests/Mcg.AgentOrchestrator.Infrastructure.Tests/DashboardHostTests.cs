@@ -1,4 +1,7 @@
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
@@ -12,6 +15,23 @@ public sealed class DashboardHostTests
     public async Task SimpleHostedDashboardServesReadOnlyMetadataAndSurvey()
     {
         var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var providers = new InMemoryModelProviderRegistry([]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Simple hosted dashboard goal"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        var goal = currentGoal ?? throw new InvalidOperationException("Expected simple-goal to create a current goal.");
+        await new FileOrchestratorStateRepository(workspace.StatePath).SaveAsync(kernel);
+        var task = goal.Tasks.Single();
         var port = GetAvailablePort();
         var url = $"http://localhost:{port}/";
         var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
@@ -23,7 +43,11 @@ public sealed class DashboardHostTests
             await WaitForHealthAsync(client, url, process);
 
             var dashboardHostMetadata = await client.GetStringAsync(new Uri(new Uri(url), "api/system/dashboard-host"));
+            var architecture = await client.GetStringAsync(new Uri(new Uri(url), "api/system/architecture"));
+            var goalWorkSummary = await GetRequiredStringAsync(client, new Uri(new Uri(url), $"api/goals/{goal.Id.Value}/work-summary"));
+            var taskWorkSummary = await GetRequiredStringAsync(client, new Uri(new Uri(url), $"api/tasks/{task.Id.Value}/work-summary"));
             var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=8"));
+            var defaultSourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey"));
             using var createGoalResponse = await client.PostAsync(
                 new Uri(new Uri(url), "api/goals"),
                 new StringContent(
@@ -31,6 +55,9 @@ public sealed class DashboardHostTests
                     System.Text.Encoding.UTF8,
                     "application/json"));
             var createGoal = await createGoalResponse.Content.ReadAsStringAsync();
+            using var getTaskOperationResponse = await client.GetAsync(
+                new Uri(new Uri(url), $"api/goals/{goal.Id.Value}/tasks/1/refresh"));
+            var getTaskOperation = await getTaskOperationResponse.Content.ReadAsStringAsync();
 
             using (var hostDocument = JsonDocument.Parse(dashboardHostMetadata))
             {
@@ -39,11 +66,53 @@ public sealed class DashboardHostTests
                 Assert.False(host.GetProperty("OperatorControlsEnabled").GetBoolean());
                 Assert.True(host.GetProperty("SourceSurveyUrl").GetString()?.EndsWith("/api/source-survey?max=8", StringComparison.Ordinal) is true);
                 Assert.True(host.GetProperty("RestartCommand").GetString()!.Contains("simple-hosted-dashboard", StringComparison.Ordinal));
+                Assert.Equal("default", host.GetProperty("TenantName").GetString());
+                Assert.False(host.GetProperty("TenantScoped").GetBoolean());
+                Assert.Equal(workspace.StatePath, host.GetProperty("StatePath").GetString());
+            }
+
+            using (var architectureDocument = JsonDocument.Parse(architecture))
+            {
+                var report = architectureDocument.RootElement;
+                Assert.Equal("default", report.GetProperty("TenantName").GetString());
+                Assert.Equal(workspace.StatePath, report.GetProperty("StatePath").GetString());
+                Assert.True(report.GetProperty("Persistence").GetString()?.Contains("backup recovery", StringComparison.Ordinal) is true);
+                Assert.True(report.GetProperty("RollbackSafety").GetString()?.Contains("Goal worktrees", StringComparison.Ordinal) is true);
+                Assert.False(report.GetProperty("OperatorControlsEnabled").GetBoolean());
+                AssertArchitectureArrayContains(report.GetProperty("ApiSurfaces"), "/api/system/architecture");
+                AssertArchitectureArrayContains(report.GetProperty("DashboardModes"), "simple-hosted-dashboard");
+                AssertArchitectureArrayContains(report.GetProperty("StateStores"), workspace.ContinuationStorePath);
+                AssertArchitectureArrayContains(report.GetProperty("DistributedBoundaries"), "Subscription execution leaves process boundaries");
+                AssertArchitectureArrayContains(report.GetProperty("SafetyGates"), "Tenant names are normalized");
+                AssertArchitectureArrayContains(report.GetProperty("RollbackProcedure"), "state.json.bak");
+            }
+
+            using (var goalSummaryDocument = JsonDocument.Parse(goalWorkSummary))
+            {
+                var summary = goalSummaryDocument.RootElement;
+                Assert.Equal(goal.Id.Value, summary.GetProperty("GoalId").GetString());
+                Assert.Equal("simple-hosted-dashboard", summary.GetProperty("Host").GetProperty("CommandName").GetString());
+                Assert.False(summary.GetProperty("Host").GetProperty("OperatorControlsEnabled").GetBoolean());
+                Assert.True(summary.GetProperty("Tasks").EnumerateArray().Any(summaryTask =>
+                    summaryTask.GetProperty("TaskId").GetString() == task.Id.Value));
+            }
+
+            using (var taskSummaryDocument = JsonDocument.Parse(taskWorkSummary))
+            {
+                var summary = taskSummaryDocument.RootElement;
+                Assert.Equal(goal.Id.Value, summary.GetProperty("GoalId").GetString());
+                Assert.Equal(task.Id.Value, summary.GetProperty("Task").GetProperty("TaskId").GetString());
+                Assert.Equal("simple-hosted-dashboard", summary.GetProperty("Host").GetProperty("CommandName").GetString());
+                Assert.False(summary.GetProperty("Host").GetProperty("OperatorControlsEnabled").GetBoolean());
+                Assert.False(summary.TryGetProperty("Tasks", out _));
             }
 
             Assert.True(sourceSurvey.Contains("\"MaxFiles\": 8", StringComparison.Ordinal));
+            Assert.True(defaultSourceSurvey.Contains("\"MaxFiles\": 8", StringComparison.Ordinal));
             Assert.Equal(HttpStatusCode.Forbidden, createGoalResponse.StatusCode);
             Assert.True(createGoal.Contains("dashboard read-only", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.Forbidden, getTaskOperationResponse.StatusCode);
+            Assert.True(getTaskOperation.Contains("dashboard read-only", StringComparison.Ordinal));
         }
         finally
         {
@@ -57,257 +126,260 @@ public sealed class DashboardHostTests
 
     [Xunit.Fact(DisplayName = "Prototype_dashboard_serves_health_and_goal_json_over_kestrel")]
     public async Task PrototypeDashboardServesHealthAndGoalJsonOverKestrel()
-{
-    var root = CreateTempDirectory();
-    var port = GetAvailablePort();
-    var url = $"http://localhost:{port}/";
-    var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
-    using var process = StartPrototypeDashboardProcess(appProject, root, url);
-
-    try
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        await WaitForHealthAsync(client, url, process);
+        var root = CreateTempDirectory();
+        var port = GetAvailablePort();
+        var url = $"http://localhost:{port}/";
+        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
+        using var process = StartPrototypeDashboardProcess(appProject, root, url);
 
-        var goals = await client.GetStringAsync(new Uri(new Uri(url), "api/goals"));
-        using var workerProfileResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/worker-profiles"),
-            new StringContent(
-                "{\"name\":\"codex-cli\",\"commandTemplate\":\"codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})\"}",
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        using var manualGoalResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/goals"),
-            new StringContent(
-                "{\"objective\":\"Manual hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":false}",
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        var manualGoal = await manualGoalResponse.Content.ReadAsStringAsync();
-        var manualGoalId = JsonDocument.Parse(manualGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
-        using var batchStartMissingConfirmResponse = await client.PostAsync(
-            new Uri(new Uri(url), $"api/goals/{manualGoalId}/start-dispatches"),
-            new StringContent(string.Empty));
-        var batchStartMissingConfirm = await batchStartMissingConfirmResponse.Content.ReadAsStringAsync();
-        using var dispatchStartMissingConfirmResponse = await client.PostAsync(
-            new Uri(new Uri(url), $"api/goals/{manualGoalId}/tasks/1/start"),
-            new StringContent(string.Empty));
-        var dispatchStartMissingConfirm = await dispatchStartMissingConfirmResponse.Content.ReadAsStringAsync();
-        using var subscriptionAdvanceMissingConfirmResponse = await client.PostAsync(
-            new Uri(new Uri(url), $"api/goals/{manualGoalId}/advance-subscription"),
-            new StringContent(string.Empty));
-        var subscriptionAdvanceMissingConfirm = await subscriptionAdvanceMissingConfirmResponse.Content.ReadAsStringAsync();
-        using var taskRunMissingConfirmResponse = await client.PostAsync(
-            new Uri(new Uri(url), $"api/goals/{manualGoalId}/tasks/1/run"),
-            new StringContent(string.Empty));
-        var taskRunMissingConfirm = await taskRunMissingConfirmResponse.Content.ReadAsStringAsync();
-        using var paidApiRunMissingConfirmResponse = await client.PostAsync(
-            new Uri(new Uri(url), $"api/goals/{manualGoalId}/tasks/1/api-run?confirmTaskRun=true"),
-            new StringContent(string.Empty));
-        var paidApiRunMissingConfirm = await paidApiRunMissingConfirmResponse.Content.ReadAsStringAsync();
-        using var simpleGoalResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/goals"),
-            new StringContent(
-                "{\"objective\":\"Simple hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":true,\"confirmAutoHandoff\":true}",
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        var simpleGoal = await simpleGoalResponse.Content.ReadAsStringAsync();
-        const string largeAutoHandoffObjective = "Design and implement a production multi-tenant distributed architecture with API CLI dashboard provider subscription worker persistence state tests and rollback safety";
-        using var largeAutoHandoffResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/goals"),
-            new StringContent(
-                JsonSerializer.Serialize(new
-                {
-                    objective = largeAutoHandoffObjective,
-                    workflow = "simple",
-                    autoHandoff = true,
-                    confirmAutoHandoff = true
-                }),
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        var largeAutoHandoffGoal = await largeAutoHandoffResponse.Content.ReadAsStringAsync();
-        using var defaultManualGoalResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/goals"),
-            new StringContent(
-                "{\"objective\":\"Default manual hosted dashboard goal\",\"workflow\":\"simple\"}",
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        var defaultManualGoal = await defaultManualGoalResponse.Content.ReadAsStringAsync();
-        Assert.Equal(HttpStatusCode.Created, simpleGoalResponse.StatusCode);
-        var simpleGoalId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
-        var simpleTaskId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Tasks")[0].GetProperty("Id").GetString()!;
-        var simpleGoalDetail = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}"));
-        var simpleGoalWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/work-summary"));
-        var simpleTaskWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/tasks/{simpleTaskId}/work-summary"));
-        using var cssResponse = await client.GetAsync(new Uri(new Uri(url), "assets/dashboard.css"));
-        var css = await cssResponse.Content.ReadAsStringAsync();
-        var js = await client.GetStringAsync(new Uri(new Uri(url), "assets/dashboard.js"));
-        using var missingTaskResponse = await client.GetAsync(new Uri(new Uri(url), "api/task/999"));
-        var missingTask = await missingTaskResponse.Content.ReadAsStringAsync();
-        var longMissingTaskId = "task-start-" + new string('t', 2000) + "-task-tail";
-        using var longMissingTaskResponse = await client.GetAsync(new Uri(new Uri(url), $"api/task/{Uri.EscapeDataString(longMissingTaskId)}"));
-        var longMissingTask = await longMissingTaskResponse.Content.ReadAsStringAsync();
-        var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=25"));
-        var continuations = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations"));
-        var continuationSummary = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations/summary"));
-        var processDiagnostic = await client.GetStringAsync(new Uri(new Uri(url), "api/system/processes"));
-        var dashboardHostMetadata = await client.GetStringAsync(new Uri(new Uri(url), "api/system/dashboard-host"));
-        var cleanupPlan = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-cleanup"));
-        var buildTestRuns = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-runs"));
-        using var paidSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=openai"));
-        var paidSmokeGet = await paidSmokeGetResponse.Content.ReadAsStringAsync();
-        using var broadSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=all"));
-        var broadSmokeGet = await broadSmokeGetResponse.Content.ReadAsStringAsync();
-        using var broadSmokePostResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/provider-smoke"),
-            new StringContent(
-                "{\"target\":\"all\"}",
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        var broadSmokePost = await broadSmokePostResponse.Content.ReadAsStringAsync();
-        using var invalidGoalResponse = await client.PostAsync(
-            new Uri(new Uri(url), "api/goals"),
-            new StringContent(
-                "{\"objective\":\"\"}",
-                System.Text.Encoding.UTF8,
-                "application/json"));
-        var invalidGoal = await invalidGoalResponse.Content.ReadAsStringAsync();
-        using var stopResponse = await client.PostAsync(new Uri(new Uri(url), "api/system/stop-dashboard"), new StringContent(string.Empty));
-        var stopDashboard = await stopResponse.Content.ReadAsStringAsync();
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            await WaitForHealthAsync(client, url, process);
 
-        Assert.Contains(goals, text => text.Contains("Prototype: explore the agent orchestrator UI", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.OK, workerProfileResponse.StatusCode);
-        Assert.Contains(simpleGoal, text => text.Contains("\"TotalTasks\": 1", StringComparison.Ordinal));
-        Assert.Contains(simpleGoal, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.Created, largeAutoHandoffResponse.StatusCode);
-        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"AutoHandoff\"", StringComparison.Ordinal));
-        Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"StopReason\"", StringComparison.Ordinal));
-        Assert.False(largeAutoHandoffGoal.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
-        Assert.Contains(simpleGoalDetail, text => text.Contains("\"VerificationSatisfied\"", StringComparison.Ordinal));
-        Assert.Contains(simpleGoalDetail, text => text.Contains(simpleGoalId, StringComparison.Ordinal));
-        using (var workSummaryDocument = JsonDocument.Parse(simpleGoalWorkSummary))
-        {
-            var summary = workSummaryDocument.RootElement;
-            Assert.Equal(simpleGoalId, summary.GetProperty("GoalId").GetString());
-            Assert.Equal(JsonValueKind.Array, summary.GetProperty("Tasks").ValueKind);
-            Assert.True(summary.GetProperty("TotalTasks").GetInt32() > 0);
-            Assert.True(summary.GetProperty("PendingHumanInputCount").GetInt32() >= 0);
-            Assert.True(summary.TryGetProperty("NextAction", out _));
-            Assert.True(summary.GetProperty("Tasks").EnumerateArray().Any(task =>
-                task.TryGetProperty("Evidence", out var evidence) &&
-                !string.IsNullOrWhiteSpace(evidence.GetString())));
-            Assert.True(summary.GetProperty("Tasks").EnumerateArray().Any(task =>
-                task.TryGetProperty("LastDispatch", out var dispatch) &&
-                dispatch.ValueKind == JsonValueKind.Object));
+            var goals = await client.GetStringAsync(new Uri(new Uri(url), "api/goals"));
+            using var workerProfileResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/worker-profiles"),
+                new StringContent(
+                "{\"name\":\"codex-cli\",\"commandTemplate\":\"Write-Output {promptPath}\"}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            using var manualGoalResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/goals"),
+                new StringContent(
+                    "{\"objective\":\"Manual hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":false}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var manualGoal = await manualGoalResponse.Content.ReadAsStringAsync();
+            var manualGoalId = JsonDocument.Parse(manualGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
+            using var batchStartMissingConfirmResponse = await client.PostAsync(
+                new Uri(new Uri(url), $"api/goals/{manualGoalId}/start-dispatches"),
+                new StringContent(string.Empty));
+            var batchStartMissingConfirm = await batchStartMissingConfirmResponse.Content.ReadAsStringAsync();
+            using var dispatchStartMissingConfirmResponse = await client.PostAsync(
+                new Uri(new Uri(url), $"api/goals/{manualGoalId}/tasks/1/start"),
+                new StringContent(string.Empty));
+            var dispatchStartMissingConfirm = await dispatchStartMissingConfirmResponse.Content.ReadAsStringAsync();
+            using var subscriptionAdvanceMissingConfirmResponse = await client.PostAsync(
+                new Uri(new Uri(url), $"api/goals/{manualGoalId}/advance-subscription"),
+                new StringContent(string.Empty));
+            var subscriptionAdvanceMissingConfirm = await subscriptionAdvanceMissingConfirmResponse.Content.ReadAsStringAsync();
+            using var taskRunMissingConfirmResponse = await client.PostAsync(
+                new Uri(new Uri(url), $"api/goals/{manualGoalId}/tasks/1/run"),
+                new StringContent(string.Empty));
+            var taskRunMissingConfirm = await taskRunMissingConfirmResponse.Content.ReadAsStringAsync();
+            using var paidApiRunMissingConfirmResponse = await client.PostAsync(
+                new Uri(new Uri(url), $"api/goals/{manualGoalId}/tasks/1/api-run?confirmTaskRun=true"),
+                new StringContent(string.Empty));
+            var paidApiRunMissingConfirm = await paidApiRunMissingConfirmResponse.Content.ReadAsStringAsync();
+            using var developerAgentResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/agents"),
+                new StringContent(
+                    "{\"role\":\"Developer\",\"providerName\":\"OpenAI\",\"modelName\":\"gpt-5.5\",\"executionPolicy\":\"PreferSubscription\",\"subscriptionProfileName\":\"codex-cli\"}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var developerAgent = await developerAgentResponse.Content.ReadAsStringAsync();
+            using var simpleGoalResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/goals"),
+                new StringContent(
+                    "{\"objective\":\"Simple hosted dashboard goal\",\"workflow\":\"simple\",\"autoHandoff\":false}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var simpleGoal = await simpleGoalResponse.Content.ReadAsStringAsync();
+            const string largeAutoHandoffObjective = "Design and implement a production multi-tenant distributed architecture with API CLI dashboard provider subscription worker persistence state tests and rollback safety";
+            using var largeAutoHandoffResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/goals"),
+                new StringContent(
+                    JsonSerializer.Serialize(new
+                    {
+                        objective = largeAutoHandoffObjective,
+                        workflow = "simple",
+                        autoHandoff = true,
+                        confirmAutoHandoff = true
+                    }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var largeAutoHandoffGoal = await largeAutoHandoffResponse.Content.ReadAsStringAsync();
+            using var defaultManualGoalResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/goals"),
+                new StringContent(
+                    "{\"objective\":\"Default manual hosted dashboard goal\",\"workflow\":\"simple\"}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var defaultManualGoal = await defaultManualGoalResponse.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Created, simpleGoalResponse.StatusCode);
+            var simpleGoalId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
+            var simpleTaskId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Tasks")[0].GetProperty("Id").GetString()!;
+            var simpleGoalDetail = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}"));
+            var simpleGoalWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/work-summary"));
+            var simpleTaskWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/tasks/{simpleTaskId}/work-summary"));
+            using var cssResponse = await client.GetAsync(new Uri(new Uri(url), "assets/dashboard.css"));
+            var css = await cssResponse.Content.ReadAsStringAsync();
+            var js = await client.GetStringAsync(new Uri(new Uri(url), "assets/dashboard.js"));
+            using var missingTaskResponse = await client.GetAsync(new Uri(new Uri(url), "api/task/999"));
+            var missingTask = await missingTaskResponse.Content.ReadAsStringAsync();
+            var longMissingTaskId = "task-start-" + new string('t', 2000) + "-task-tail";
+            using var longMissingTaskResponse = await client.GetAsync(new Uri(new Uri(url), $"api/task/{Uri.EscapeDataString(longMissingTaskId)}"));
+            var longMissingTask = await longMissingTaskResponse.Content.ReadAsStringAsync();
+            var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=25"));
+            var defaultSourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey"));
+            var continuations = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations"));
+            var continuationSummary = await client.GetStringAsync(new Uri(new Uri(url), "api/continuations/summary"));
+            var processDiagnostic = await client.GetStringAsync(new Uri(new Uri(url), "api/system/processes"));
+            var dashboardHostMetadata = await client.GetStringAsync(new Uri(new Uri(url), "api/system/dashboard-host"));
+            var cleanupPlan = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-cleanup"));
+            var buildTestRuns = await client.GetStringAsync(new Uri(new Uri(url), "api/system/build-test-runs"));
+            using var paidSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=openai"));
+            var paidSmokeGet = await paidSmokeGetResponse.Content.ReadAsStringAsync();
+            using var broadSmokeGetResponse = await client.GetAsync(new Uri(new Uri(url), "api/provider-smoke?target=all"));
+            var broadSmokeGet = await broadSmokeGetResponse.Content.ReadAsStringAsync();
+            using var broadSmokePostResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/provider-smoke"),
+                new StringContent(
+                    "{\"target\":\"all\"}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var broadSmokePost = await broadSmokePostResponse.Content.ReadAsStringAsync();
+            using var invalidGoalResponse = await client.PostAsync(
+                new Uri(new Uri(url), "api/goals"),
+                new StringContent(
+                    "{\"objective\":\"\"}",
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            var invalidGoal = await invalidGoalResponse.Content.ReadAsStringAsync();
+            using var stopResponse = await client.PostAsync(new Uri(new Uri(url), "api/system/stop-dashboard"), new StringContent(string.Empty));
+            var stopDashboard = await stopResponse.Content.ReadAsStringAsync();
+
+            Assert.Contains(goals, text => text.Contains("Prototype: explore the agent orchestrator UI", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.OK, workerProfileResponse.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, developerAgentResponse.StatusCode);
+            Assert.Contains(developerAgent, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
+            Assert.Contains(simpleGoal, text => text.Contains("\"TotalTasks\": 1", StringComparison.Ordinal));
+            Assert.Contains(simpleGoal, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.Created, largeAutoHandoffResponse.StatusCode);
+            Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"AutoHandoff\"", StringComparison.Ordinal));
+            Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"StopReason\"", StringComparison.Ordinal));
+            Assert.False(largeAutoHandoffGoal.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+            Assert.Contains(simpleGoalDetail, text => text.Contains("\"VerificationSatisfied\"", StringComparison.Ordinal));
+            Assert.Contains(simpleGoalDetail, text => text.Contains(simpleGoalId, StringComparison.Ordinal));
+            using (var workSummaryDocument = JsonDocument.Parse(simpleGoalWorkSummary))
+            {
+                var summary = workSummaryDocument.RootElement;
+                Assert.Equal(simpleGoalId, summary.GetProperty("GoalId").GetString());
+                Assert.Equal(JsonValueKind.Array, summary.GetProperty("Tasks").ValueKind);
+                Assert.True(summary.GetProperty("TotalTasks").GetInt32() > 0);
+                Assert.True(summary.GetProperty("PendingHumanInputCount").GetInt32() >= 0);
+                Assert.True(summary.TryGetProperty("NextAction", out _));
+                Assert.True(summary.GetProperty("Tasks").EnumerateArray().Any(task =>
+                    task.TryGetProperty("Evidence", out var evidence) &&
+                    !string.IsNullOrWhiteSpace(evidence.GetString())));
+            }
+            using (var taskWorkSummaryDocument = JsonDocument.Parse(simpleTaskWorkSummary))
+            {
+                var summary = taskWorkSummaryDocument.RootElement;
+                Assert.Equal(simpleGoalId, summary.GetProperty("GoalId").GetString());
+                Assert.Equal(simpleTaskId, summary.GetProperty("Task").GetProperty("TaskId").GetString());
+                Assert.Equal("prototype-ui", summary.GetProperty("Host").GetProperty("CommandName").GetString());
+                Assert.True(summary.GetProperty("Host").GetProperty("OperatorControlsEnabled").GetBoolean());
+                Assert.True(summary.TryGetProperty("NextAction", out _));
+                Assert.False(summary.TryGetProperty("Tasks", out _));
+            }
+            Assert.Equal(HttpStatusCode.Created, manualGoalResponse.StatusCode);
+            Assert.Equal(HttpStatusCode.Created, defaultManualGoalResponse.StatusCode);
+            Assert.Contains(simpleGoal, text => text.Contains("\"Status\":", StringComparison.Ordinal));
+            Assert.Contains(manualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
+            Assert.False(GoalResponseContainsDispatch(manualGoal));
+            Assert.Contains(defaultManualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
+            Assert.False(GoalResponseContainsDispatch(defaultManualGoal));
+            Assert.Equal("no-store", cssResponse.Headers.CacheControl?.ToString());
+            Assert.Equal(HttpStatusCode.NotFound, missingTaskResponse.StatusCode);
+            Assert.Contains(missingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.NotFound, longMissingTaskResponse.StatusCode);
+            Assert.Contains(longMissingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
+            Assert.Contains(longMissingTask, text => text.Contains("task-start", StringComparison.Ordinal));
+            Assert.Contains(longMissingTask, text => text.Contains("task-tail", StringComparison.Ordinal));
+            Assert.Contains(longMissingTask, text => text.Contains("[truncated", StringComparison.Ordinal));
+            Assert.True(!longMissingTask.Contains(new string('t', 2000), StringComparison.Ordinal));
+            Assert.Contains(sourceSurvey, text => text.Contains("\"MaxFiles\": 25", StringComparison.Ordinal));
+            Assert.Contains(defaultSourceSurvey, text => text.Contains("\"MaxFiles\": 200", StringComparison.Ordinal));
+            Assert.Contains(sourceSurvey, text => text.Contains("\"RecommendedCommand\"", StringComparison.Ordinal));
+            Assert.Contains(sourceSurvey, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
+            Assert.False(SourceSurveyContainsFilePathSegment(sourceSurvey, "/bin/"));
+            Assert.False(SourceSurveyContainsFilePathSegment(sourceSurvey, "/obj/"));
+            var continuationArray = JsonDocument.Parse(continuations).RootElement;
+            Assert.Equal(JsonValueKind.Array, continuationArray.ValueKind);
+            using (var continuationSummaryDocument = JsonDocument.Parse(continuationSummary))
+            {
+                var summary = continuationSummaryDocument.RootElement;
+                Assert.Equal(JsonValueKind.Object, summary.ValueKind);
+                Assert.True(summary.GetProperty("Total").GetInt32() >= 0);
+                Assert.True(summary.GetProperty("Running").GetInt32() >= 0);
+                Assert.Equal(JsonValueKind.Array, summary.GetProperty("RunningGoalPrefixes").ValueKind);
+            }
+            using (var processDocument = JsonDocument.Parse(processDiagnostic))
+            {
+                Assert.True(processDocument.RootElement.GetProperty("CurrentProcessId").GetInt32() > 0);
+                Assert.Equal("Mcg.AgentOrchestrator.App", processDocument.RootElement.GetProperty("ProcessName").GetString());
+                Assert.Equal(JsonValueKind.Array, processDocument.RootElement.GetProperty("CurrentListeningPorts").ValueKind);
+                Assert.Equal(JsonValueKind.Array, processDocument.RootElement.GetProperty("SiblingProcesses").ValueKind);
+            }
+            using (var hostDocument = JsonDocument.Parse(dashboardHostMetadata))
+            {
+                var host = hostDocument.RootElement;
+                Assert.Equal("prototype-ui", host.GetProperty("CommandName").GetString());
+                Assert.True(host.GetProperty("SourceSurveyUrl").GetString()?.EndsWith("/api/source-survey?max=8", StringComparison.Ordinal) is true);
+                Assert.Equal(JsonValueKind.Array, host.GetProperty("HostedSourceSurveyUrls").ValueKind);
+            }
+            using (var cleanupDocument = JsonDocument.Parse(cleanupPlan))
+            {
+                Assert.True(cleanupDocument.RootElement.GetProperty("CurrentProcessId").GetInt32() > 0);
+                Assert.Equal("/api/system/stop-dashboard", cleanupDocument.RootElement.GetProperty("StopCurrentUrl").GetString());
+                Assert.Equal("/api/system/run-build-test-cycle", cleanupDocument.RootElement.GetProperty("RunBuildTestCycleUrl").GetString());
+                Assert.Contains(cleanupPlan, text => text.Contains("dotnet build Mcg.AgentOrchestrator.sln --no-restore", StringComparison.Ordinal));
+                Assert.Contains(cleanupPlan, text => text.Contains("dotnet test Mcg.AgentOrchestrator.sln --no-build", StringComparison.Ordinal));
+                Assert.Contains(cleanupPlan, text => text.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", StringComparison.Ordinal));
+                Assert.Contains(cleanupPlan, text => text.Contains("Invoke-DashboardBuildTestCycle.ps1", StringComparison.Ordinal));
+            }
+            Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(buildTestRuns).RootElement.ValueKind);
+            Assert.Equal(HttpStatusCode.BadRequest, paidSmokeGetResponse.StatusCode);
+            Assert.Contains(paidSmokeGet, text => text.Contains("confirmPaidSmoke=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, broadSmokeGetResponse.StatusCode);
+            Assert.Contains(broadSmokeGet, text => text.Contains("broad paid smoke tests are deliberate", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, broadSmokePostResponse.StatusCode);
+            Assert.Contains(broadSmokePost, text => text.Contains("confirmAll=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, batchStartMissingConfirmResponse.StatusCode);
+            Assert.Contains(batchStartMissingConfirm, text => text.Contains("confirmBatchStart=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, dispatchStartMissingConfirmResponse.StatusCode);
+            Assert.Contains(dispatchStartMissingConfirm, text => text.Contains("confirmDispatchStart=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, subscriptionAdvanceMissingConfirmResponse.StatusCode);
+            Assert.Contains(subscriptionAdvanceMissingConfirm, text => text.Contains("confirmSubscriptionAdvance=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, taskRunMissingConfirmResponse.StatusCode);
+            Assert.Contains(taskRunMissingConfirm, text => text.Contains("confirmTaskRun=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, paidApiRunMissingConfirmResponse.StatusCode);
+            Assert.Contains(paidApiRunMissingConfirm, text => text.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.BadRequest, invalidGoalResponse.StatusCode);
+            Assert.Contains(invalidGoal, text => text.Contains("dashboard invalid request", StringComparison.Ordinal));
+            Assert.Contains(css, text => text.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", StringComparison.Ordinal));
+            Assert.Contains(js, text => text.Contains("refreshContent", StringComparison.Ordinal));
+            Assert.Contains(js, text => text.Contains("summarizeResponse", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.OK, stopResponse.StatusCode);
+            Assert.Contains(stopDashboard, text => text.Contains("\"ProcessId\"", StringComparison.Ordinal));
+            Assert.Contains(stopDashboard, text => text.Contains("\"ListeningPorts\"", StringComparison.Ordinal));
+            Assert.Contains(stopDashboard, text => text.Contains("\"SiblingProcesses\"", StringComparison.Ordinal));
+            Assert.Contains(stopDashboard, text => text.Contains("\"RestartCommand\"", StringComparison.Ordinal));
+            Assert.Contains(stopDashboard, text => text.Contains("prototype-ui", StringComparison.Ordinal));
+            Assert.True(process.WaitForExit(5000));
         }
-        using (var taskWorkSummaryDocument = JsonDocument.Parse(simpleTaskWorkSummary))
+        finally
         {
-            var summary = taskWorkSummaryDocument.RootElement;
-            Assert.Equal(simpleGoalId, summary.GetProperty("GoalId").GetString());
-            Assert.Equal(simpleTaskId, summary.GetProperty("Task").GetProperty("TaskId").GetString());
-            Assert.Equal("prototype-ui", summary.GetProperty("Host").GetProperty("CommandName").GetString());
-            Assert.True(summary.GetProperty("Host").GetProperty("OperatorControlsEnabled").GetBoolean());
-            Assert.True(summary.TryGetProperty("NextAction", out _));
-            Assert.False(summary.TryGetProperty("Tasks", out _));
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
         }
-        Assert.Equal(HttpStatusCode.Created, manualGoalResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.Created, defaultManualGoalResponse.StatusCode);
-        Assert.Contains(simpleGoal, text => text.Contains("\"Status\": \"Running\"", StringComparison.Ordinal));
-        Assert.True(GoalResponseContainsDispatch(simpleGoal));
-        Assert.True(GoalResponseContainsProcess(simpleGoal));
-        Assert.Contains(manualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
-        Assert.False(GoalResponseContainsDispatch(manualGoal));
-        Assert.False(GoalResponseContainsProcess(manualGoal));
-        Assert.Contains(defaultManualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
-        Assert.False(GoalResponseContainsDispatch(defaultManualGoal));
-        Assert.False(GoalResponseContainsProcess(defaultManualGoal));
-        Assert.Equal("no-store", cssResponse.Headers.CacheControl?.ToString());
-        Assert.Equal(HttpStatusCode.NotFound, missingTaskResponse.StatusCode);
-        Assert.Contains(missingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.NotFound, longMissingTaskResponse.StatusCode);
-        Assert.Contains(longMissingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
-        Assert.Contains(longMissingTask, text => text.Contains("task-start", StringComparison.Ordinal));
-        Assert.Contains(longMissingTask, text => text.Contains("task-tail", StringComparison.Ordinal));
-        Assert.Contains(longMissingTask, text => text.Contains("[truncated", StringComparison.Ordinal));
-        Assert.True(!longMissingTask.Contains(new string('t', 2000), StringComparison.Ordinal));
-        Assert.Contains(sourceSurvey, text => text.Contains("\"MaxFiles\": 25", StringComparison.Ordinal));
-        Assert.Contains(sourceSurvey, text => text.Contains("\"RecommendedCommand\"", StringComparison.Ordinal));
-        Assert.Contains(sourceSurvey, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
-        Assert.False(SourceSurveyContainsFilePathSegment(sourceSurvey, "/bin/"));
-        Assert.False(SourceSurveyContainsFilePathSegment(sourceSurvey, "/obj/"));
-        var continuationArray = JsonDocument.Parse(continuations).RootElement;
-        Assert.Equal(JsonValueKind.Array, continuationArray.ValueKind);
-        using (var continuationSummaryDocument = JsonDocument.Parse(continuationSummary))
-        {
-            var summary = continuationSummaryDocument.RootElement;
-            Assert.Equal(JsonValueKind.Object, summary.ValueKind);
-            Assert.True(summary.GetProperty("Total").GetInt32() >= 0);
-            Assert.True(summary.GetProperty("Running").GetInt32() >= 0);
-            Assert.Equal(JsonValueKind.Array, summary.GetProperty("RunningGoalPrefixes").ValueKind);
-        }
-        using (var processDocument = JsonDocument.Parse(processDiagnostic))
-        {
-            Assert.True(processDocument.RootElement.GetProperty("CurrentProcessId").GetInt32() > 0);
-            Assert.Equal("Mcg.AgentOrchestrator.App", processDocument.RootElement.GetProperty("ProcessName").GetString());
-            Assert.Equal(JsonValueKind.Array, processDocument.RootElement.GetProperty("CurrentListeningPorts").ValueKind);
-            Assert.Equal(JsonValueKind.Array, processDocument.RootElement.GetProperty("SiblingProcesses").ValueKind);
-        }
-        using (var hostDocument = JsonDocument.Parse(dashboardHostMetadata))
-        {
-            var host = hostDocument.RootElement;
-            Assert.Equal("prototype-ui", host.GetProperty("CommandName").GetString());
-            Assert.True(host.GetProperty("SourceSurveyUrl").GetString()?.EndsWith("/api/source-survey?max=8", StringComparison.Ordinal) is true);
-            Assert.Equal(JsonValueKind.Array, host.GetProperty("HostedSourceSurveyUrls").ValueKind);
-        }
-        using (var cleanupDocument = JsonDocument.Parse(cleanupPlan))
-        {
-            Assert.True(cleanupDocument.RootElement.GetProperty("CurrentProcessId").GetInt32() > 0);
-            Assert.Equal("/api/system/stop-dashboard", cleanupDocument.RootElement.GetProperty("StopCurrentUrl").GetString());
-            Assert.Equal("/api/system/run-build-test-cycle", cleanupDocument.RootElement.GetProperty("RunBuildTestCycleUrl").GetString());
-            Assert.Contains(cleanupPlan, text => text.Contains("dotnet build Mcg.AgentOrchestrator.sln --no-restore", StringComparison.Ordinal));
-            Assert.Contains(cleanupPlan, text => text.Contains("dotnet test Mcg.AgentOrchestrator.sln --no-build", StringComparison.Ordinal));
-            Assert.Contains(cleanupPlan, text => text.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", StringComparison.Ordinal));
-            Assert.Contains(cleanupPlan, text => text.Contains("Invoke-DashboardBuildTestCycle.ps1", StringComparison.Ordinal));
-        }
-        Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(buildTestRuns).RootElement.ValueKind);
-        Assert.Equal(HttpStatusCode.BadRequest, paidSmokeGetResponse.StatusCode);
-        Assert.Contains(paidSmokeGet, text => text.Contains("confirmPaidSmoke=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, broadSmokeGetResponse.StatusCode);
-        Assert.Contains(broadSmokeGet, text => text.Contains("broad paid smoke tests are deliberate", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, broadSmokePostResponse.StatusCode);
-        Assert.Contains(broadSmokePost, text => text.Contains("confirmAll=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, batchStartMissingConfirmResponse.StatusCode);
-        Assert.Contains(batchStartMissingConfirm, text => text.Contains("confirmBatchStart=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, dispatchStartMissingConfirmResponse.StatusCode);
-        Assert.Contains(dispatchStartMissingConfirm, text => text.Contains("confirmDispatchStart=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, subscriptionAdvanceMissingConfirmResponse.StatusCode);
-        Assert.Contains(subscriptionAdvanceMissingConfirm, text => text.Contains("confirmSubscriptionAdvance=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, taskRunMissingConfirmResponse.StatusCode);
-        Assert.Contains(taskRunMissingConfirm, text => text.Contains("confirmTaskRun=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, paidApiRunMissingConfirmResponse.StatusCode);
-        Assert.Contains(paidApiRunMissingConfirm, text => text.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.BadRequest, invalidGoalResponse.StatusCode);
-        Assert.Contains(invalidGoal, text => text.Contains("dashboard invalid request", StringComparison.Ordinal));
-        Assert.Contains(css, text => text.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", StringComparison.Ordinal));
-        Assert.Contains(js, text => text.Contains("refreshContent", StringComparison.Ordinal));
-        Assert.Contains(js, text => text.Contains("summarizeResponse", StringComparison.Ordinal));
-        Assert.Equal(HttpStatusCode.OK, stopResponse.StatusCode);
-        Assert.Contains(stopDashboard, text => text.Contains("\"ProcessId\"", StringComparison.Ordinal));
-        Assert.Contains(stopDashboard, text => text.Contains("\"ListeningPorts\"", StringComparison.Ordinal));
-        Assert.Contains(stopDashboard, text => text.Contains("\"SiblingProcesses\"", StringComparison.Ordinal));
-        Assert.Contains(stopDashboard, text => text.Contains("\"RestartCommand\"", StringComparison.Ordinal));
-        Assert.Contains(stopDashboard, text => text.Contains("prototype-ui", StringComparison.Ordinal));
-        Assert.True(process.WaitForExit(5000));
     }
-    finally
-    {
-        if (!process.HasExited)
-        {
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync();
-        }
-    }
-}
-
     [Xunit.Fact(DisplayName = "Dashboard_build_test_run_history_summarizes_recent_runner_logs")]
     public void DashboardBuildTestRunHistorySummarizesRecentRunnerLogs()
     {
@@ -348,6 +420,31 @@ public sealed class DashboardHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Dashboard_restart_command_preserves_tenant_scope")]
+    public void DashboardRestartCommandPreservesTenantScope()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root, tenantName: "customer_1");
+        var args = new DashboardHostArgs("http://localhost:5087/", 5, OpenBrowser: false, CommandName: "hosted-dashboard");
+
+        var command = DashboardHost.BuildDashboardRestartCommand(args, workspace);
+
+        Assert.True(command.Contains("hosted-dashboard", StringComparison.Ordinal));
+        Assert.True(command.Contains("--tenant customer_1", StringComparison.Ordinal));
+    }
+
+    private static async Task<string> GetRequiredStringAsync(HttpClient client, Uri uri)
+    {
+        using var response = await client.GetAsync(uri);
+        var body = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"{uri} returned {(int)response.StatusCode}: {body}");
+        }
+
+        return body;
+    }
+
     private static bool GoalResponseContainsDispatch(string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -366,6 +463,14 @@ public sealed class DashboardHostTests
                 evidence.GetString() is "running-process" or "completed-process");
     }
 
+    private static void AssertArchitectureArrayContains(JsonElement array, string expectedSubstring)
+    {
+        Assert.Equal(JsonValueKind.Array, array.ValueKind);
+        Assert.True(array.EnumerateArray().Any(item =>
+            item.ValueKind == JsonValueKind.String &&
+            item.GetString()?.Contains(expectedSubstring, StringComparison.Ordinal) is true));
+    }
+
     private static bool SourceSurveyContainsFilePathSegment(string json, string segment)
     {
         using var document = JsonDocument.Parse(json);
@@ -373,5 +478,5 @@ public sealed class DashboardHostTests
             .EnumerateArray()
             .Any(file => file.GetString()?.Contains(segment, StringComparison.OrdinalIgnoreCase) is true);
     }
-}
 
+}

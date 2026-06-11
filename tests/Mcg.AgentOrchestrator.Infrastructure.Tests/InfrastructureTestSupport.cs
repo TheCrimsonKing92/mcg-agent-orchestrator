@@ -35,6 +35,7 @@ public static Process StartPrototypeDashboardProcess(string appProject, string w
 
 public static Process StartDashboardProcess(string appProject, string workingDirectory, string command, string url)
 {
+    var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
     var startInfo = new ProcessStartInfo
     {
         FileName = "dotnet",
@@ -48,6 +49,7 @@ public static Process StartDashboardProcess(string appProject, string workingDir
     // Pin Ollama to an unreachable endpoint so assertions are deterministic
     // regardless of whether a live Ollama server runs on this machine.
     startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
+    startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = FindRepositoryRoot();
 
     // Pin provider credentials and model names so spawned-app assertions are
     // machine-independent regardless of what keys or models the host has set.
@@ -57,17 +59,16 @@ public static Process StartDashboardProcess(string appProject, string workingDir
     startInfo.EnvironmentVariables["ANTHROPIC_MODEL"] = "test-anthropic-model";
     startInfo.EnvironmentVariables["OLLAMA_MODEL"] = "test-ollama-model";
 
-    startInfo.ArgumentList.Add("run");
-    startInfo.ArgumentList.Add("--no-build");
-    startInfo.ArgumentList.Add("--project");
-    startInfo.ArgumentList.Add(appProject);
-    startInfo.ArgumentList.Add("--");
+    startInfo.ArgumentList.Add(appAssembly);
     startInfo.ArgumentList.Add(command);
     startInfo.ArgumentList.Add(url);
     startInfo.ArgumentList.Add("--no-open");
 
-    return Process.Start(startInfo)
+    var process = Process.Start(startInfo)
         ?? throw new InvalidOperationException("Failed to start prototype dashboard process.");
+    process.BeginOutputReadLine();
+    process.BeginErrorReadLine();
+    return process;
 }
 
 public static async Task WaitForHealthAsync(HttpClient client, string url, Process process)
@@ -79,9 +80,7 @@ public static async Task WaitForHealthAsync(HttpClient client, string url, Proce
     {
         if (process.HasExited)
         {
-            var stdout = await process.StandardOutput.ReadToEndAsync();
-            var stderr = await process.StandardError.ReadToEndAsync();
-            throw new InvalidOperationException($"Dashboard exited early with code {process.ExitCode}.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+            throw new InvalidOperationException($"Dashboard exited early with code {process.ExitCode}.");
         }
 
         try

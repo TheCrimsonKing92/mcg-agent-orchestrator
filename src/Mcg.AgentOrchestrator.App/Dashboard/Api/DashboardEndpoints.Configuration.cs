@@ -45,11 +45,10 @@ internal static partial class DashboardEndpoints
         {
             var catalog = WorkerProfileStore.Load(services.WorkerProfilePath);
             var submission = DashboardRequestParser.ParseWorkerProfileSubmission(await ReadRequestBodyAsync(context.Request));
-            var updatedCatalog = catalog.Upsert(new WorkerProfile(submission.Name, submission.CommandTemplate));
+            var submittedProfile = new WorkerProfile(submission.Name, submission.CommandTemplate);
+            var updatedCatalog = catalog.Upsert(submittedProfile);
             WorkerProfileStore.Save(services.WorkerProfilePath, updatedCatalog);
-            var profile = DashboardResponseMapper.ToWorkerProfileDtos(services.LoadAgentCatalog(), updatedCatalog)
-                .Single(profile => profile.Name.Equals(submission.Name, StringComparison.OrdinalIgnoreCase));
-            return Json(profile);
+            return Json(DashboardResponseMapper.ToWorkerProfileDto(submittedProfile, validation: null));
         }
 
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);

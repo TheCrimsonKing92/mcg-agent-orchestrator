@@ -65,7 +65,7 @@ internal static partial class DashboardEndpoints
 
     private static IResult GetSourceSurvey(HttpContext context, DashboardEndpointServices services)
     {
-        var maxFiles = ParseSourceSurveyMaxFiles(context.Request);
+        var maxFiles = ParseSourceSurveyMaxFiles(context.Request, services.HostArgs);
         var report = SourceSurvey.Build(services.Workspace.ExecutionDirectory, maxFiles);
         return Json(DashboardResponseMapper.ToSourceSurveyDto(report));
     }
@@ -131,12 +131,14 @@ internal static partial class DashboardEndpoints
         };
     }
 
-    private static int ParseSourceSurveyMaxFiles(HttpRequest request)
+    private static int ParseSourceSurveyMaxFiles(HttpRequest request, DashboardHostArgs hostArgs)
     {
         var value = DashboardRequestParser.GetQueryValue(request, "max");
         if (string.IsNullOrWhiteSpace(value))
         {
-            return SourceSurvey.DefaultMaxFiles;
+            return hostArgs.EnableOperatorControls
+                ? SourceSurvey.DefaultMaxFiles
+                : DashboardHost.DefaultHostedSourceSurveyMaxFiles;
         }
 
         if (!int.TryParse(value, out var maxFiles) || maxFiles < 1)

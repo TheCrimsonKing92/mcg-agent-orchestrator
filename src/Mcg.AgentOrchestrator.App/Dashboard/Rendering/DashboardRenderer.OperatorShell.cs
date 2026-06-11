@@ -79,7 +79,7 @@ public static partial class DashboardRenderer
             RenderDashboardProcessDiagnostic(html, workspace.ProcessDiagnostic, workspaceLabel);
             RenderBuildTestCleanupPlan(html, workspace);
             RenderBuildTestRunHistory(html, workspace.BuildTestRuns ?? []);
-            html.AppendLine("<div class=\"linkbar\"><a href=\"/api/source-survey?max=8\" target=\"_blank\" rel=\"noreferrer\">Open bounded source survey</a> <a href=\"/api/system/dashboard-host\" target=\"_blank\" rel=\"noreferrer\">Open hosted URL metadata</a> <a href=\"/api/system/processes\" target=\"_blank\" rel=\"noreferrer\">Open process diagnostic</a> <a href=\"/api/system/build-test-cleanup\" target=\"_blank\" rel=\"noreferrer\">Open build/test cleanup plan</a></div>");
+            html.AppendLine("<div class=\"linkbar\"><a href=\"/api/source-survey?max=8\" target=\"_blank\" rel=\"noreferrer\">Open bounded source survey</a> <a href=\"/api/system/dashboard-host\" target=\"_blank\" rel=\"noreferrer\">Open hosted URL metadata</a> <a href=\"/api/system/architecture\" target=\"_blank\" rel=\"noreferrer\">Open architecture report</a> <a href=\"/api/system/processes\" target=\"_blank\" rel=\"noreferrer\">Open process diagnostic</a> <a href=\"/api/system/build-test-cleanup\" target=\"_blank\" rel=\"noreferrer\">Open build/test cleanup plan</a></div>");
             html.AppendLine("<div class=\"buttonbar\">");
             html.AppendLine("<button class=\"primary\" type=\"button\" data-action-button=\"/api/system/run-build-test-cycle\">Run dashboard build/test cycle</button>");
             html.AppendLine("</div>");
@@ -127,6 +127,8 @@ public static partial class DashboardRenderer
         {
             html.AppendLine($"<dt>Source survey</dt><dd><a href=\"{Encode(workspace.SourceSurveyUrl)}\" target=\"_blank\" rel=\"noreferrer\">{Encode(workspace.SourceSurveyUrl)}</a></dd>");
         }
+
+        html.AppendLine("<dt>Architecture</dt><dd><a href=\"/api/system/architecture\" target=\"_blank\" rel=\"noreferrer\">/api/system/architecture</a></dd>");
 
         if (workspace.HostedSourceSurveyUrls is { Count: > 0 })
         {

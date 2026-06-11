@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal sealed class DashboardContinuationService : IDisposable
 {
-    internal const string StoreFileName = "continuation-watches.json";
+    internal const string StoreFileName = OrchestratorWorkspace.ContinuationStoreFileName;
 
     private static readonly JsonSerializerOptions StoreJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -214,7 +214,7 @@ internal sealed class DashboardContinuationService : IDisposable
     }
 
     private static string GetStorePath(DashboardEndpointServices services) =>
-        Path.Combine(services.Workspace.RootDirectory, StoreFileName);
+        services.Workspace.ContinuationStorePath;
 
     private static IReadOnlyList<ContinuationStoreEntry> LoadPersistedWatches(DashboardEndpointServices services)
     {
@@ -268,7 +268,7 @@ internal sealed class DashboardContinuationService : IDisposable
                 return;
             }
 
-            Directory.CreateDirectory(services.Workspace.RootDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(new ContinuationStoreSnapshot(entries), StoreJsonOptions));
         }
         catch (IOException ex)

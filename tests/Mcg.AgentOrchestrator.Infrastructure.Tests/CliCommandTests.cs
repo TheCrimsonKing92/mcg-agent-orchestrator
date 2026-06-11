@@ -88,6 +88,62 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(goal.Tasks.Single().LastExecution);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_tenant_and_architecture_report_tenant_scoped_runtime_paths")]
+    public void CliTenantAndArchitectureReportTenantScopedRuntimePaths()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root, tenantName: "acme");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+
+        try
+        {
+            Console.SetOut(writer);
+
+            var tenantChanged = CliCommandDispatcher.ExecuteCommand(
+                ["tenant"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            var architectureChanged = CliCommandDispatcher.ExecuteCommand(
+                ["architecture"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(tenantChanged);
+            Xunit.Assert.False(architectureChanged);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+        Xunit.Assert.Contains("Tenant: acme", output);
+        Xunit.Assert.Contains("Tenant scoped: True", output);
+        Xunit.Assert.Contains(Path.Combine(".orchestrator", "tenants", "acme", "state.json"), output);
+        Xunit.Assert.Contains("Architecture:", output);
+        Xunit.Assert.Contains("subscriptions: Subscription dispatches use worker profiles with role-based sandbox/permission placeholders", output);
+        Xunit.Assert.Contains("rollback: Goal worktrees isolate file-touching work", output);
+        Xunit.Assert.Contains("state stores:", output);
+        Xunit.Assert.Contains("api surfaces:", output);
+        Xunit.Assert.Contains("/api/system/architecture", output);
+        Xunit.Assert.Contains("safety gates:", output);
+        Xunit.Assert.Contains("Tenant names are normalized", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_next_action_command_confirms_large_paid_prepared_dispatch")]
     public void CliNextActionCommandConfirmsLargePaidPreparedDispatch()
     {
@@ -168,7 +224,7 @@ public sealed class CliCommandTests
         var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
 
         Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
-}
+    }
 
     [Xunit.Fact(DisplayName = "Cli_next_actions_prints_cost_recommendation")]
     public void CliNextActionsPrintsCostRecommendation()
@@ -980,7 +1036,7 @@ public sealed class CliCommandTests
         Xunit.Assert.DoesNotContain("--confirm-large-paid-subscription-start", output);
         Xunit.Assert.Contains("gpt-5.5", output);
         Xunit.Assert.Contains("Complex", output);
-}
+    }
 
     [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_model_fit_recommendation")]
     public void CliSubscriptionPlanPrintsModelFitRecommendation()

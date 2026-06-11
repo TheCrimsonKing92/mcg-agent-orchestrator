@@ -4,6 +4,15 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Simple hosted dashboard goal task 126009e6df0f40aba2f1c15829a4526d
+
+- Goal/task: hosted Developer task `126009e6df0f40aba2f1c15829a4526d`, objective `Simple hosted dashboard goal`.
+- Changed files: `DOGFOOD_LOG.md` only for this evidence entry. No product source edits were required because the simple hosted dashboard behavior is already implemented and covered.
+- Source inspection: `/api/goals/c9417723/work-summary` on `localhost:5087` was unreachable from this worker; focused local search confirmed the simple hosted dashboard tests and prior evidence entries.
+- Verification: `dotnet build tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-restore --verbosity:minimal` exited `0`. `dotnet test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --filter 'SimpleHostedDashboardServesReadOnlyMetadataAndSurvey|SourceSurveyLimitsReturnedFilesButReportsTotalMatches|SourceSurveyExcludesGeneratedScratchAndPrototypeState' --results-directory .\TestResults --logger 'trx;LogFileName=simple-hosted-dashboard-task-126009e6-rerun.trx'` exited `0`; output reported `Passed: 3`, `Failed: 0`.
+- Blockers and direct interventions: live hosted dashboard API was not reachable on `localhost:5087`, so completion could not be posted through dashboard controls from this worker.
+- Model fit: OpenAI/gpt-5.5 - adequate - hosted dashboard evidence task - enough for focused inspection and verification without product edits.
+
 ## 2026-06-09 - Simple hosted dashboard goal task b2fc4e8cc54845f38d60886984b31598
 
 - Goal/task: delegated Developer task `b2fc4e8cc54845f38d60886984b31598`, objective `Simple hosted dashboard goal`.

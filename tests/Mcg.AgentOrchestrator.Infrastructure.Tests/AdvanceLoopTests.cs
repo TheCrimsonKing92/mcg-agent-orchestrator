@@ -590,7 +590,7 @@ public sealed class AdvanceLoopTests
     new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
     await repository.SaveAsync(kernel);
 
-    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(75), 20);
+    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(75), 80);
     using var lifetime = new FakeHostLifetime();
     var services = new DashboardEndpointServices(
         new DashboardStateService(repository),

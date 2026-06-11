@@ -69,9 +69,11 @@ public static class OrchestratorHealthInspector
 
     public static OrchestratorHealthReport InspectCurrentEnvironment(AgentCatalog agents, WorkerProfileCatalog workerProfiles)
     {
-        var environment = Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .ToDictionary(entry => (string)entry.Key, entry => entry.Value?.ToString(), StringComparer.OrdinalIgnoreCase);
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            environment[(string)entry.Key] = entry.Value?.ToString();
+        }
 
         return Inspect(environment, agents, workerProfiles, LocalCommandExists);
     }
@@ -410,34 +412,62 @@ public static class OrchestratorHealthInspector
 
     private static bool LocalCommandExists(string executable)
     {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add("-NoProfile");
-            startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add($"if (Get-Command {Quote(executable)} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}");
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return false;
-            }
-
-            process.WaitForExit(3000);
-            return process.HasExited && process.ExitCode == 0;
-        }
-        catch
+        if (string.IsNullOrWhiteSpace(executable))
         {
             return false;
         }
+
+        if (IsKnownPowerShellCommand(executable))
+        {
+            return true;
+        }
+
+        if (Path.IsPathRooted(executable))
+        {
+            return File.Exists(executable) || CandidateExecutablePaths(executable).Any(File.Exists);
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var candidate in CandidateExecutablePaths(Path.Combine(directory, executable)))
+            {
+                if (File.Exists(candidate))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
-    private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+    private static bool IsKnownPowerShellCommand(string executable) =>
+        executable.Equals("Write-Output", StringComparison.OrdinalIgnoreCase) ||
+        executable.Equals("Write-Host", StringComparison.OrdinalIgnoreCase) ||
+        executable.Equals("echo", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> CandidateExecutablePaths(string basePath)
+    {
+        if (!string.IsNullOrWhiteSpace(Path.GetExtension(basePath)))
+        {
+            yield return basePath;
+            yield break;
+        }
+
+        yield return basePath;
+        var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+        string[] extensions = string.IsNullOrWhiteSpace(pathExt)
+            ? [".COM", ".EXE", ".BAT", ".CMD", ".PS1"]
+            : pathExt.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var extension in extensions)
+        {
+            yield return basePath + extension;
+        }
+    }
 }

@@ -121,7 +121,8 @@ public static TaskEvidenceSummaryDto ToTaskEvidenceSummaryDto(Goal goal, TaskEvi
 public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     AgentOrchestratorKernel kernel,
     Goal goal,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    DashboardHostInfoDto? host = null)
 {
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
@@ -135,6 +136,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
         nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
+        host,
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList());
 }
 

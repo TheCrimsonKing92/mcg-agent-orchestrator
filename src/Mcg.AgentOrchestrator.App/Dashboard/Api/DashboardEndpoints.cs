@@ -45,6 +45,7 @@ internal static partial class DashboardEndpoints
         api.MapGet("/continuations", () => Json(services.Continuations.GetStatuses()));
         api.MapGet("/continuations/summary", () => Json(services.Continuations.GetSummary()));
         api.MapGet("/system/dashboard-host", () => Json(BuildHostInfo(services)));
+        api.MapGet("/system/architecture", () => Json(BuildArchitectureReport(services)));
         if (args.EnableOperatorControls)
         {
             api.MapGet("/system/processes", () => Json(DashboardProcessInspector.InspectCurrent()));
@@ -90,8 +91,7 @@ internal static partial class DashboardEndpoints
         {
             goals.MapPost("/tasks", () => ReadOnly());
             goals.MapPost("/ask", () => ReadOnly());
-            goals.MapGet("/tasks/{taskId}/{operation}", async Task<IResult> (HttpContext context, string goalId, string taskId, string operation) =>
-                await Safe(() => HandleTaskOperationAsync(context, goalId, taskId, operation, services)));
+            goals.MapGet("/tasks/{taskId}/{operation}", () => ReadOnly());
             goals.MapPost("/tasks/{taskId}/{operation}", () => ReadOnly());
             goals.MapPost("/delegate", () => ReadOnly());
             goals.MapPost("/advance", () => ReadOnly());

@@ -13,16 +13,21 @@ internal sealed record DashboardUrlPrefixes(string BindUrlPrefix, string? Public
 
 internal static class DashboardHost
 {
-private const int DefaultOperatorSourceSurveyMaxFiles = 8;
+public const int DefaultHostedSourceSurveyMaxFiles = 8;
 
-public static int RunPrototypeUi(IReadOnlyList<string> parts, IModelProviderRegistry providers, AgentCatalog? agentFallback = null)
+public static int RunPrototypeUi(
+    IReadOnlyList<string> parts,
+    IModelProviderRegistry providers,
+    AgentCatalog? agentFallback = null,
+    string? tenantName = null)
 {
     var hostArgs = ParseDashboardHostArgs(parts, "prototype-ui", defaultOpenBrowser: true);
     var prototypeWorkspacePath = PrototypeWorkspaceSeeder.Create(Environment.CurrentDirectory, agentFallback);
     var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
     var prototypeWorkspace = OrchestratorWorkspace.ForDirectory(
         prototypeWorkspacePath,
-        string.IsNullOrWhiteSpace(executionDirectory) ? Environment.CurrentDirectory : executionDirectory);
+        string.IsNullOrWhiteSpace(executionDirectory) ? Environment.CurrentDirectory : executionDirectory,
+        tenantName);
 
     Console.WriteLine($"Prototype state workspace: {prototypeWorkspace.RootDirectory}");
     Console.WriteLine($"Prototype execution directory: {prototypeWorkspace.ExecutionDirectory}");
@@ -358,7 +363,7 @@ public static async Task RunDashboardHostAsync(
     Console.WriteLine($"Dashboard state workspace: {workspace.RootDirectory}");
     Console.WriteLine($"Dashboard execution directory: {workspace.ExecutionDirectory}");
     Console.WriteLine($"Dashboard page: {dashboardPageUrl}");
-    Console.WriteLine($"Dashboard restart command: {BuildDashboardRestartCommand(args)}");
+    Console.WriteLine($"Dashboard restart command: {BuildDashboardRestartCommand(args, workspace)}");
     var hostedUrlPrefixes = GetHostedUrlPrefixes(args);
     foreach (var hostedUrl in hostedUrlPrefixes.Select(GetDashboardPageUrl))
     {
@@ -464,7 +469,7 @@ public static string GetSourceSurveyUrl(string urlPrefix)
 {
     return new Uri(
         new Uri(EnsureTrailingSlash(urlPrefix)),
-        $"api/source-survey?max={DefaultOperatorSourceSurveyMaxFiles}").ToString();
+        $"api/source-survey?max={DefaultHostedSourceSurveyMaxFiles}").ToString();
 }
 
 public static List<string> GetHostedDashboardPageUrls(string urlPrefix)
@@ -551,6 +556,14 @@ public static string BuildDashboardRestartCommand(DashboardHostArgs args)
         : string.Empty;
     var dashboardUrl = GetRestartUrl(args);
     return $".\\mcg-orchestrator.cmd {args.CommandName} {dashboardUrl}{refresh} --no-open";
+}
+
+public static string BuildDashboardRestartCommand(DashboardHostArgs args, OrchestratorWorkspace workspace)
+{
+    var command = BuildDashboardRestartCommand(args);
+    return workspace.IsTenantScoped
+        ? command + $" --tenant {workspace.TenantName}"
+        : command;
 }
 
 private static string? GetMachineHostName()
