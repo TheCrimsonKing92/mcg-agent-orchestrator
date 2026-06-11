@@ -17,6 +17,11 @@ public static class ModelFitEvidence
     {
         foreach (var verification in task.VerificationHistory.Reverse())
         {
+            if (verification.ModelFitNote is not null)
+            {
+                return verification.ModelFitNote;
+            }
+
             foreach (var line in EnumerateVerificationLines(verification))
             {
                 var normalized = NormalizeNoteLine(line);
@@ -34,6 +39,12 @@ public static class ModelFitEvidence
     {
         foreach (var verification in task.VerificationHistory)
         {
+            if (verification.ModelFitNote is not null)
+            {
+                yield return verification.ModelFitNote;
+                continue;
+            }
+
             foreach (var line in EnumerateVerificationLines(verification))
             {
                 var normalized = NormalizeNoteLine(line);
