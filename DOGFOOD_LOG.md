@@ -90,3 +90,13 @@ Goal ID: `c2d382096b2245e19a096c9065e2a08d`, task 2 `c471c65f`, profile-dispatch
 - End-to-end result: dispatch ran qwen3:8b in `.orchestrator-worktrees/c2d38209`, BRIDGE.md created in 19 s with minor content drift (trailing period). Dirty-workspace guard correctly refused `workspace remove` until forced.
 - Model fit: Ollama/qwen3:8b - adequate - agentic file write via qwen-code with reasoning disabled - 19s completion, minor content drift.
 - Follow-up: include the dispatch working directory (absolute) in task briefs; commit `.qwen/settings.json` so worktrees inherit it (worktrees only carry committed files).
+
+## 2026-06-10 - Context-window forensics correct the qwen verdicts again
+
+Follow-up to the bridge validation after suspecting config interference in the 14b runs. Three real disruptions found:
+
+- Ollama runs models at num_ctx 4096 by default (confirmed via /api/ps during a live run); qwen-code`s system prompt far exceeds that, so every qwen-code request had a truncated prompt. The 8b "successes" worked BECAUSE of truncation: with proper 16k/8k context variants (reasoning still disabled, settings verified in place), qwen3:8b returns an empty stream every time. The full qwen-code system prompt overwhelms it; the 4k-truncated view is accidentally load-bearing. Trailing-period drift occurred under truncation.
+- qwen-code aborts requests at ~483s and earlier surfaced no error mid-run, so 14b looked "hung" when it was generating; with 16k context and thinking disabled it still cannot finish one turn inside 483s on the RTX 3080 (partial offload, ~6.5 tok/s). 14b in the qwen-code loop is compute-bound, conclusively. 14b remains excellent for direct single-shot API calls (perfect tool call, 12.6s).
+- qwen-code rewrites the project .qwen/settings.json at process exit with its startup view; external edits between runs are lost (this wiped reasoning:false entries mid-investigation and produced confounded empty-response results). Sequential identical dispatches are safe because the rewrite matches the committed file; do not hand-edit the file while a qwen process is alive.
+
+Working configuration stands as committed: base qwen3:8b (4k ctx) + reasoning:false + absolute paths; 3/3 file-write successes at ~20s. Fragile by construction - revisit when a small model handles the full prompt. Experimental Ollama variants qwen3-14b-16k, qwen3-8b-16k, qwen3-8b-8k remain installed (alias-only, shared blobs).
