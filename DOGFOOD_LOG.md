@@ -4,6 +4,16 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Refresh-dispatch hardened: locked-log tolerance + bounded snippets (goal f5675269)
+
+Goal `f5675269` (CLI workspace), two sequential Developer tasks in one worktree, claude-sonnet-4-6 via subscription-dispatch. Closes the "Refresh-dispatch fails when live stdout log is locked" (commit 858dd62) and "Bound refresh-dispatch output for long subscription logs" (commit e2638a2) backlog entries; acceptance fast-forwarded, 399/399 green operator-verified.
+
+- Task 1 (5 min): `ReadBestEffort` opens logs with `FileShare.ReadWrite | FileShare.Delete` so refresh reads alongside a live wrapper write handle; IO/access failures degrade to a path-bearing marker instead of throwing; timeout/exit-file handling proceeds. 3 tests.
+- Task 2 (9.5 min): verification snapshots carry `StandardOutputPath`/`StandardErrorPath`; CLI/dashboard verification views render through new `OutputTextPreview.CreateVerificationLog` (2000-char cap, 400-char tail, marker includes the full log path). 4 tests. Workers were told to remove their BACKLOG entries in-commit and both did - no operator backlog toil this goal.
+- Loop quality-of-life observed live: both `refresh-dispatch` calls completed first-try with no locked-log `cancel-dispatch`/`verify-manual` dance (worker exit + wrapper cleanup sufficed this run); the multi-task pattern again coordinated cleanly via prior-task evidence ("build on it, do not revert" honored).
+- Friction (repeat): operator's first independent `dotnet test` in the worktree hit the VBCSCompiler CS2012 lock (PID 59316) despite the post-dispatch `dotnet build-server shutdown` from e7f0a64 - with two sequential workers the second worker's compiler instance survived. Ritual shutdown + retry cleared it.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped infra hardening with explicit file pointers and done-conditions - 2/2 first-attempt passes, 10/10 lifetime for sonnet on scoped briefs.
+
 ## 2026-06-11 - Firewall prompt root cause: dotnet-run apphost spawn in the hosted e2e test (already fixed by f126524)
 
 Operator-direct forensics with Miles; closes the "Avoid repeated Windows firewall prompts" backlog entry. No code change needed - the fix already landed.
