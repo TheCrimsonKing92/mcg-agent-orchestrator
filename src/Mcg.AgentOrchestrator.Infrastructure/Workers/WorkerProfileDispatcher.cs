@@ -34,6 +34,7 @@ public static class WorkerProfileDispatcher
             profile.CommandTemplate,
             promptRoot,
             BuildDispatchVariables(task.RequiredRole, workingDirectory, variables));
+        WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,

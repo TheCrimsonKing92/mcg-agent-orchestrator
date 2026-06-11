@@ -117,7 +117,13 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add(string.Empty);
         }
 
-        lines.AddRange(PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity));
+        var priorEvidence = PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
+        lines.AddRange(priorEvidence);
+        if (priorEvidence.Count > 0 && !string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            lines.Add("Full evidence available at .orchestrator-handoff.md relative to the working directory.");
+            lines.Add(string.Empty);
+        }
 
         if (timeline.Count > 0)
         {

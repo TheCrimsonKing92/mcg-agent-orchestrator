@@ -1576,6 +1576,120 @@ public sealed class WorkerDispatchTests
         DateTimeOffset.UtcNow));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_writes_handoff_file_with_full_evidence")]
+    public void WorkerProfileDispatcherWritesHandoffFileWithFullEvidence()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Fix the login bug.", AgentRole.Developer);
+    var currentTask = new TaskSpec(TaskId.New(), "Add regression test for login.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Stabilize login flow", [priorTask, currentTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    var stdoutHead = new string('a', 20000);
+    var stdoutTail = new string('b', 10000);
+    var fullStdout = stdoutHead + stdoutTail;
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "dotnet test", workingDirectory, 0, fullStdout, string.Empty, DateTimeOffset.UtcNow));
+    var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+
+    var handoffPath = Path.Combine(workingDirectory, ".orchestrator-handoff.md");
+    Assert.True(File.Exists(handoffPath));
+    var content = File.ReadAllText(handoffPath);
+    Assert.Contains(content, text => text.Contains("Developer: Fix the login bug.", StringComparison.Ordinal));
+    Assert.Contains(content, text => text.Contains(stdoutHead, StringComparison.Ordinal));
+    Assert.Contains(content, text => text.Contains("[truncated 10000 chars]", StringComparison.Ordinal));
+    Assert.True(!content.Contains(stdoutTail, StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_overwrites_handoff_file_on_each_dispatch")]
+    public void WorkerProfileDispatcherOverwritesHandoffFileOnEachDispatch()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".orchestrator-handoff.md"), "STALE CONTENT FROM PREVIOUS DISPATCH");
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Prior completed work.", AgentRole.Developer);
+    var currentTask = new TaskSpec(TaskId.New(), "Current work.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Test overwrite behavior", [priorTask, currentTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "dotnet test", workingDirectory, 0, "Tests passed.", string.Empty, DateTimeOffset.UtcNow));
+    var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+
+    var content = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-handoff.md"));
+    Assert.True(!content.Contains("STALE CONTENT", StringComparison.Ordinal));
+    Assert.Contains(content, text => text.Contains("Prior completed work.", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_brief_contains_handoff_file_pointer_line")]
+    public void WorkerProfileDispatcherBriefContainsHandoffFilePointerLine()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Fix the login bug.", AgentRole.Developer);
+    var currentTask = new TaskSpec(TaskId.New(), "Add regression test.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Stabilize login", [priorTask, currentTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "dotnet test", workingDirectory, 0, "Tests passed.", string.Empty, DateTimeOffset.UtcNow));
+    var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    var result = WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+
+    var brief = File.ReadAllText(result.PromptPath);
+    Assert.Contains(brief, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_no_handoff_file_when_no_prior_completed_tasks")]
+    public void WorkerProfileDispatcherNoHandoffFileWhenNoPriorCompletedTasks()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var onlyTask = new TaskSpec(TaskId.New(), "First and only task.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Single task goal", [onlyTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    WorkerProfileDispatcher.PrepareTask(kernel, goal, onlyTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+
+    Assert.False(File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")));
+}
+
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
