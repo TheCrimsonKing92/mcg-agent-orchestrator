@@ -6,6 +6,18 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
+## Reap worktree-referencing build daemons when a dispatch completes
+
+Status: open | Size: small-medium | Suggested route: simple-goal
+
+Why: worker-spawned VBCSCompiler/MSBuild processes outlive their dispatch (idle TTLs of 10-15 minutes) while holding memory-mapped handles on the goal worktree's `obj` assemblies, and `dotnet build-server shutdown` does not reliably reach servers another session started. The next build in that worktree (operator gate or acceptance verification) then fails CS2012 until the exact PID is stopped; observed on goals da957f56 (PID 42716) and 2919a85d (PID 56656) on 2026-06-12. The wrapper env pins prevent daemons from the wrapper's own shell, but a worker's inner tooling can still spawn them.
+
+Where: `BackgroundDispatchRunner` completion path (`RecordCompletedProcess` for non-local dispatches), reusing the lock-holder discovery shipped in `GoalWorktrees.FindLockHolders` (commit 4665729).
+
+Done when: when a non-local dispatch in a goal worktree completes (normally or via hung-wrapper reaping), the runner finds VBCSCompiler/MSBuild processes whose command line references the dispatch working directory (plus build servers with unreadable command lines, matching the FindLockHolders fallback) and stops them by exact PID, recording which PIDs were reaped in the completion evidence. Processes that do not match are never touched; local dispatches are unaffected; failures to kill degrade to a note rather than failing the dispatch.
+
+Verify: focused tests with an injectable process enumerator/killer cover reap-on-completion, no-match leaves processes alone, and kill-failure degradation; run full `dotnet test`.
+
 ## Require a goal worktree before subscription-dispatch records a working directory
 
 Status: open | Size: small | Suggested route: simple-goal
