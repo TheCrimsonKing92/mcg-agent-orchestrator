@@ -39,6 +39,7 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "subscription-dispatch":
             var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+            ApplySubscriptionLimitReviewAcknowledgement(kernel, goal, task, body);
             var subscriptionDispatch = SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles);
             return DashboardResponseMapper.ToProfileDispatchDto(goal, subscriptionDispatch);
 
@@ -104,5 +105,38 @@ public static async Task<object?> ApplyTaskActionAsync(
         default:
             throw new ArgumentException("Task operation must be run, api-run, retry, verification-plan, dispatch, profile-dispatch, subscription-dispatch, start, refresh, cancel, verify, verify-manual, complete-verify, progress, or ask.");
     }
+}
+
+private static void ApplySubscriptionLimitReviewAcknowledgement(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    string body)
+{
+    var review = DashboardRequestParser.ParseLimitReviewSubmission(body);
+    if (review is not null)
+    {
+        if (DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task) < DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold)
+        {
+            throw new ArgumentException("Subscription limit review acknowledgement requires repeated recoverable subscription usage-limit failures.");
+        }
+
+        kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id, review.Note);
+        return;
+    }
+
+    if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out var retryAfter))
+    {
+        throw new ArgumentException($"Task '{task.Id}' hit a recoverable subscription usage limit; retry after {retryAfter:u}.");
+    }
+
+    if (!DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+    {
+        return;
+    }
+
+    var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+    throw new ArgumentException(
+        $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); POST subscription-dispatch with confirmLimitReview=true and a non-empty note before redispatch.");
 }
 }

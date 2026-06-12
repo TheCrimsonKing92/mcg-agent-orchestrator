@@ -46,6 +46,7 @@ public static partial class DashboardRenderer
         ProgressKind.TaskRetried => "Task retried",
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
+        ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
         _ => kind.ToString()
     };
 

@@ -26,6 +26,23 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
     }
 
+    if (command.Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase))
+    {
+        const string limitReviewFlag = "--confirm-limit-review";
+        var flagIndex = remainder.IndexOf(limitReviewFlag, StringComparison.OrdinalIgnoreCase);
+        if (flagIndex >= 0)
+        {
+            var before = remainder[..flagIndex].Trim();
+            var note = remainder[(flagIndex + limitReviewFlag.Length)..].Trim();
+            var beforeParts = string.IsNullOrWhiteSpace(before)
+                ? []
+                : before.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return string.IsNullOrWhiteSpace(note)
+                ? [command, .. beforeParts, limitReviewFlag]
+                : [command, .. beforeParts, limitReviewFlag, note];
+        }
+    }
+
     if (command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase))
     {
         var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);

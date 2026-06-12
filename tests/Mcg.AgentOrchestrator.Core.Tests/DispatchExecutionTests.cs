@@ -215,8 +215,8 @@ public sealed class DispatchExecutionTests
     kernel.RetryTask(goal.Id, task.Id, "Retry after provider window.");
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
 }
-    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_after_repeated_subscription_usage_limits")]
-    public void RecordDispatchExecutionResultFailsAfterRepeatedSubscriptionUsageLimits()
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_keeps_repeated_subscription_usage_limits_retryable")]
+    public void RecordDispatchExecutionResultKeepsRepeatedSubscriptionUsageLimitsRetryable()
 {
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
@@ -239,14 +239,16 @@ public sealed class DispatchExecutionTests
         }
     }
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.True(task.LastVerification is not null);
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastVerification is null);
     Assert.Equal(3, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
-    Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.True(task.SubscriptionRetryAfter is not null);
+    Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
-        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("recoverable subscription usage limit 3 time", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
 }
 
     [Xunit.Fact(DisplayName = "DispatchFailureClassifier_requires_review_after_repeated_subscription_usage_limits")]
@@ -270,6 +272,22 @@ public sealed class DispatchExecutionTests
     Assert.Equal(DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
     Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+
+    kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id, "Reviewed profile and will retry after the provider window.");
+
+    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.Equal(2, task.SubscriptionLimitReviewedFailureCount);
+    Assert.Equal("Reviewed profile and will retry after the provider window.", task.SubscriptionLimitReviewNote);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskSubscriptionLimitReviewAcknowledged &&
+        evt.Message.Contains("Reviewed profile", StringComparison.Ordinal));
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+    Assert.Equal(2, restoredTask.SubscriptionLimitReviewedFailureCount);
+    Assert.Equal("Reviewed profile and will retry after the provider window.", restoredTask.SubscriptionLimitReviewNote);
+    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(restoredTask));
 }
     [Xunit.Fact(DisplayName = "Subscription_retry_after_snapshot_metadata_does_not_require_reparsing_provider_text")]
     public void SubscriptionRetryAfterSnapshotMetadataDoesNotRequireReparsingProviderText()

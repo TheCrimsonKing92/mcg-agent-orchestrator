@@ -92,7 +92,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return dispatched.Count > 0;
 
         case "subscription-dispatch":
-            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>]");
+            AcknowledgeSubscriptionLimitReviewFromCli(context, subscriptionTask, parts);
             var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles);
             Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
             Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
@@ -203,6 +204,30 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
 
 private static bool IsLogStreamKeyword(string value) =>
     value is "all" or "stdout" or "out" or "stderr" or "err" or "exit" or "exitcode" or "code";
+
+private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContext context, TaskSpec task, IReadOnlyList<string> parts)
+{
+    const string flag = "--confirm-limit-review";
+    var note = GetFlagValue(parts, flag);
+    if (note is not null)
+    {
+        context.Kernel.AcknowledgeSubscriptionLimitReview(context.CurrentGoal!.Id, task.Id, note);
+        return;
+    }
+
+    if (HasCliConfirmation(parts, flag))
+    {
+        throw new ArgumentException("Usage: subscription-dispatch <task-number> [--confirm-limit-review <note>]");
+    }
+
+    if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task) &&
+        !DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out _))
+    {
+        var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        throw new InvalidOperationException(
+            $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing, then rerun subscription-dispatch with --confirm-limit-review <note>.");
+    }
+}
 
 private static Goal ResolveDispatchCommandGoal(IReadOnlyList<string> parts, CliExecutionContext context, string usage)
 {

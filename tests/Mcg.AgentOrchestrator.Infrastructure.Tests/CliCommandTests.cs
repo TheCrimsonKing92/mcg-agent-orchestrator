@@ -1450,6 +1450,87 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(task.LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_acknowledges_repeated_limit_review")]
+    public void CliSubscriptionDispatchAcknowledgesRepeatedLimitReview()
+    {
+        var root = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(root, "repo"));
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Review subscription limits", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec attempt 1",
+            root,
+            1,
+            string.Empty,
+            "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+            DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec attempt 2",
+            root,
+            1,
+            string.Empty,
+            "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+            DateTimeOffset.UtcNow));
+
+        var blocked = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var missingNote = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1", "--confirm-limit-review"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand("subscription-dispatch 1 --confirm-limit-review Reviewed profile and timing."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.Contains("--confirm-limit-review <note>", blocked.Message);
+        Xunit.Assert.Contains("--confirm-limit-review <note>", missingNote.Message);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+        Xunit.Assert.Equal("Reviewed profile and timing.", task.SubscriptionLimitReviewNote);
+        Xunit.Assert.Equal(2, task.SubscriptionLimitReviewedFailureCount);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.NotNull(task.LastDispatch);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskSubscriptionLimitReviewAcknowledged &&
+            evt.Message.Contains("Reviewed profile and timing", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_agent_command_creates_agent_with_complex_model_from_flag")]
     public void CliAgentCommandCreatesAgentWithComplexModelFromFlag()
     {

@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -651,6 +652,135 @@ public sealed class DashboardRenderingTests
     Assert.Contains(empty.Message, text => text.Contains("Retry note cannot be empty", StringComparison.Ordinal));
     Assert.Contains(json.Message, text => text.Contains("non-empty 'message'", StringComparison.Ordinal));
     Assert.Equal("Fix failed verification", parsed.Message);
+}
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_limit_review_confirmation_note")]
+    public void DashboardRequestParserRequiresLimitReviewConfirmationNote()
+{
+    Xunit.Assert.Null(DashboardRequestParser.ParseLimitReviewSubmission(""));
+    var missingConfirm = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseLimitReviewSubmission("{\"note\":\"Reviewed\"}"));
+    var missingNote = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseLimitReviewSubmission("{\"confirmLimitReview\":true,\"note\":\"\"}"));
+    var parsed = DashboardRequestParser.ParseLimitReviewSubmission("{\"confirmLimitReview\":true,\"note\":\" Reviewed model timing. \"}");
+
+    Assert.Contains(missingConfirm.Message, text => text.Contains("confirmLimitReview=true", StringComparison.Ordinal));
+    Assert.Contains(missingNote.Message, text => text.Contains("non-empty 'note'", StringComparison.Ordinal));
+    Xunit.Assert.NotNull(parsed);
+    Assert.Equal("Reviewed model timing.", parsed!.Note);
+}
+
+    [Xunit.Fact(DisplayName = "Dashboard_api_subscription_dispatch_acknowledges_limit_review")]
+    public async Task DashboardApiSubscriptionDispatchAcknowledgesLimitReview()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Review dashboard subscription limits", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    IReadOnlyList<AgentDefinition> agents =
+    [
+        new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"))
+    ];
+    var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec attempt 1",
+        root,
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+        DateTimeOffset.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", root, DateTimeOffset.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec attempt 2",
+        root,
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+        DateTimeOffset.UtcNow));
+
+    var blocked = await Xunit.Assert.ThrowsAsync<ArgumentException>(async () => await GoalManagementCommandService.ApplyTaskActionAsync(
+        kernel,
+        agents,
+        providers,
+        workspace,
+        goal,
+        task,
+        "subscription-dispatch",
+        string.Empty));
+
+    var result = await GoalManagementCommandService.ApplyTaskActionAsync(
+        kernel,
+        agents,
+        providers,
+        workspace,
+        goal,
+        task,
+        "subscription-dispatch",
+        "{\"confirmLimitReview\":true,\"note\":\"Reviewed profile from dashboard.\"}");
+
+    Assert.Contains(blocked.Message, text => text.Contains("confirmLimitReview=true", StringComparison.Ordinal));
+    Xunit.Assert.NotNull(result);
+    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.Equal("Reviewed profile from dashboard.", task.SubscriptionLimitReviewNote);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Xunit.Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskSubscriptionLimitReviewAcknowledged &&
+        evt.Message.Contains("Reviewed profile from dashboard", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_shows_limit_review_acknowledgement_form")]
+    public void DashboardRendererShowsLimitReviewAcknowledgementForm()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render subscription limit review", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    IReadOnlyList<AgentDefinition> agents =
+    [
+        new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"))
+    ];
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec attempt 1",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+        DateTimeOffset.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec attempt 2",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+        DateTimeOffset.UtcNow));
+
+    var html = DashboardRenderer.Render(
+        kernel,
+        new DashboardRenderOptions(
+            EnableOperatorControls: true,
+            View: DashboardView.Goal,
+            FocusGoalPrefix: goal.Id.Value[..8],
+            AgentDefinitions: agents));
+
+    Assert.Contains(html, text => text.Contains("name=\"confirmLimitReview\" value=\"true\"", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Limit review note", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Acknowledge and prepare", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_accepts_manual_verification_status_alias")]
     public void DashboardRequestParserAcceptsManualVerificationStatusAlias()

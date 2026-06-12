@@ -146,6 +146,42 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
     return new RetrySubmissionDto(submission.Message.Trim());
 }
 
+public static LimitReviewSubmissionDto? ParseLimitReviewSubmission(string body)
+{
+    if (string.IsNullOrWhiteSpace(body))
+    {
+        return null;
+    }
+
+    var trimmed = body.Trim();
+    if (!trimmed.StartsWith("{", StringComparison.Ordinal))
+    {
+        return new LimitReviewSubmissionDto(true, trimmed);
+    }
+
+    using var document = JsonDocument.Parse(trimmed);
+    var root = document.RootElement;
+    if (root.ValueKind != JsonValueKind.Object)
+    {
+        throw new ArgumentException("Subscription limit review JSON body was invalid.");
+    }
+
+    if (!TryGetProperty(root, "confirmLimitReview", out var confirmElement) ||
+        confirmElement.ValueKind is not JsonValueKind.True)
+    {
+        throw new ArgumentException("Subscription limit review JSON must include confirmLimitReview=true.");
+    }
+
+    if (!TryGetProperty(root, "note", out var noteElement) ||
+        noteElement.ValueKind != JsonValueKind.String ||
+        string.IsNullOrWhiteSpace(noteElement.GetString()))
+    {
+        throw new ArgumentException("Subscription limit review JSON must include a non-empty 'note' value.");
+    }
+
+    return new LimitReviewSubmissionDto(true, noteElement.GetString()!.Trim());
+}
+
 public static VerificationPlanSubmissionDto ParseVerificationPlanSubmission(string body)
 {
     if (string.IsNullOrWhiteSpace(body))

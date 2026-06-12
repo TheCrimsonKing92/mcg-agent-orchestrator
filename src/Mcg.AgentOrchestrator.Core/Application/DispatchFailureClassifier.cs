@@ -29,8 +29,10 @@ public static class DispatchFailureClassifier
 
     public static bool RequiresSubscriptionLimitReview(TaskSpec task)
     {
+        var failureCount = CountRecoverableSubscriptionLimitFailures(task);
         return HasRecoverableSubscriptionLimitHistory(task) &&
-            CountRecoverableSubscriptionLimitFailures(task) >= RecoverableSubscriptionLimitReviewThreshold;
+            failureCount >= RecoverableSubscriptionLimitReviewThreshold &&
+            task.SubscriptionLimitReviewedFailureCount < failureCount;
     }
 
     public static bool IsSubscriptionRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)
@@ -47,7 +49,8 @@ public static class DispatchFailureClassifier
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
-        if (!HasRecoverableSubscriptionLimitHistory(task))
+        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
+            !IsRecoverableSubscriptionLimitFailure(latest))
         {
             return false;
         }
@@ -58,7 +61,7 @@ public static class DispatchFailureClassifier
             return true;
         }
 
-        return TryGetSubscriptionLimitRetryAfter(task.VerificationHistory.Last(), out retryAfter);
+        return TryGetSubscriptionLimitRetryAfter(latest, out retryAfter);
     }
 
     public static bool TryGetSubscriptionLimitRetryAfter(TaskVerificationRecord verification, out DateTimeOffset retryAfter)

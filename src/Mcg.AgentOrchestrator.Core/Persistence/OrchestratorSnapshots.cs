@@ -23,7 +23,10 @@ public sealed record TaskSnapshot(
     TaskDispatchSnapshot? LastDispatch,
     TaskProcessSnapshot? LastProcess,
     string? VerificationPlan = null,
-    DateTimeOffset? SubscriptionRetryAfter = null);
+    DateTimeOffset? SubscriptionRetryAfter = null,
+    string? SubscriptionLimitReviewNote = null,
+    DateTimeOffset? SubscriptionLimitReviewedAt = null,
+    int SubscriptionLimitReviewedFailureCount = 0);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

@@ -22,6 +22,12 @@ public sealed class TaskSpec
 
     public DateTimeOffset? SubscriptionRetryAfter { get; private set; }
 
+    public string? SubscriptionLimitReviewNote { get; private set; }
+
+    public DateTimeOffset? SubscriptionLimitReviewedAt { get; private set; }
+
+    public int SubscriptionLimitReviewedFailureCount { get; private set; }
+
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
 
     public AgentId? AssignedAgentId { get; private set; }
@@ -118,7 +124,10 @@ public sealed class TaskSpec
                     LastProcess.ExitCode,
                     LastProcess.WasCancelled),
             VerificationPlan,
-            SubscriptionRetryAfter);
+            SubscriptionRetryAfter,
+            SubscriptionLimitReviewNote,
+            SubscriptionLimitReviewedAt,
+            SubscriptionLimitReviewedFailureCount);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -216,6 +225,10 @@ public sealed class TaskSpec
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
+        task.RecordSubscriptionLimitReview(
+            snapshot.SubscriptionLimitReviewNote,
+            snapshot.SubscriptionLimitReviewedAt,
+            snapshot.SubscriptionLimitReviewedFailureCount);
         return task;
     }
 
@@ -252,6 +265,13 @@ public sealed class TaskSpec
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 
     internal void ClearSubscriptionRetryAfter() => SubscriptionRetryAfter = null;
+
+    internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)
+    {
+        SubscriptionLimitReviewNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        SubscriptionLimitReviewedAt = reviewedAt;
+        SubscriptionLimitReviewedFailureCount = Math.Max(0, failureCount);
+    }
 
     internal void RecordDispatch(TaskDispatchRecord dispatch)
     {

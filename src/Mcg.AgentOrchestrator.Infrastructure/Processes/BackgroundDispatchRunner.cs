@@ -27,6 +27,11 @@ public sealed class BackgroundDispatchRunner
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
 
+        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, _clock.UtcNow, out var retryAfter))
+        {
+            throw new InvalidOperationException($"Task '{taskId}' hit a recoverable subscription usage limit; retry after {retryAfter:u}.");
+        }
+
         if (task.Status != WorkTaskStatus.Running)
         {
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; prepare or retry the dispatch before starting it.");

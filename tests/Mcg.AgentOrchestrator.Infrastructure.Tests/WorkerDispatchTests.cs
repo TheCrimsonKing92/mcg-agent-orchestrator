@@ -35,6 +35,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(promptRoot);
+    Directory.CreateDirectory(workingDirectory);
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Dispatch configured subscription worker");
@@ -1334,6 +1336,25 @@ public sealed class WorkerDispatchTests
         retryWindowPassed));
     Assert.Contains(ex.Message, text => text.Contains("recoverable subscription usage limit 2 time", StringComparison.Ordinal));
     Assert.Contains(ex.Message, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
+
+    kernel.AcknowledgeSubscriptionLimitReview(goal.Id, developer.Id, "Reviewed profile and provider timing.");
+    var reviewedPlan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
+    var reviewedItem = reviewedPlan.Items.First(item => item.Role == AgentRole.Developer);
+    var result = WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        developer,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        retryWindowPassed);
+
+    Assert.True(reviewedItem.CanPrepare);
+    Assert.Equal(developer.Id, result.Task.Id);
+    Assert.Equal(WorkTaskStatus.Running, developer.Status);
+    Assert.Equal("Reviewed profile and provider timing.", developer.SubscriptionLimitReviewNote);
+    Assert.Equal(2, developer.SubscriptionLimitReviewedFailureCount);
 }
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_rejects_duplicate_process_start")]
     public void BackgroundDispatchRunnerRejectsDuplicateProcessStart()
@@ -1349,6 +1370,54 @@ public sealed class WorkerDispatchTests
     var ex = Assert.Throws<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
     Assert.Contains(ex.Message, text => text.Contains("already has a dispatch process record", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_defers_future_subscription_retry_after_before_start")]
+    public void BackgroundDispatchRunnerDefersFutureSubscriptionRetryAfterBeforeStart()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.UtcNow;
+    var retryAfter = now.AddHours(1);
+    var command = "Write-Output should-not-run";
+    var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+        [
+            new GoalSnapshot(
+                "goal-deferred",
+                "Defer recorded dispatch start",
+                GoalStatus.Active,
+                [
+                    new TaskSnapshot(
+                        "task-deferred",
+                        "Do work",
+                        AgentRole.Developer,
+                        WorkTaskStatus.Running,
+                        "developer",
+                        null,
+                        null,
+                        [
+                            new TaskVerificationSnapshot(
+                                command,
+                                root,
+                                1,
+                                string.Empty,
+                                $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryAfter:h:mm tt}.",
+                                now)
+                        ],
+                        new TaskDispatchSnapshot("local", command, root, now),
+                        null,
+                        SubscriptionRetryAfter: retryAfter)
+                ],
+                [])
+        ],
+        []));
+    var goal = kernel.Goals.Single();
+    var task = goal.Tasks.Single();
+
+    var ex = Assert.Throws<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
+
+    Assert.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
+    Assert.True(ex.Message.Contains(retryAfter.ToString("u"), StringComparison.Ordinal));
+    Xunit.Assert.Null(task.LastProcess);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_shuts_down_dotnet_build_server_after_worker_command")]

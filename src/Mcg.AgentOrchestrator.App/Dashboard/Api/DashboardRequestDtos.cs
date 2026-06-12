@@ -43,6 +43,8 @@ internal sealed record ProgressSubmissionDto(string Status, string Message);
 
 internal sealed record RetrySubmissionDto(string Message);
 
+internal sealed record LimitReviewSubmissionDto(bool ConfirmLimitReview, string Note);
+
 internal sealed record VerificationPlanSubmissionDto(string Plan);
 
 internal sealed record AskSubmissionDto(string Question);

@@ -328,9 +328,21 @@ public static partial class DashboardRenderer
         html.AppendLine("</section>");
         html.AppendLine("<section class=\"task-action-group\">");
         html.AppendLine("<h4>Worker handoff</h4>");
-        html.AppendLine("<div class=\"buttonbar\">");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/subscription-dispatch\">Prepare subscription handoff</button>");
-        html.AppendLine("</div>");
+        if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+        {
+            html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/subscription-dispatch\">");
+            html.AppendLine("<input type=\"hidden\" name=\"confirmLimitReview\" value=\"true\">");
+            html.AppendLine("<div class=\"field\"><label>Limit review note</label><input class=\"wide\" name=\"note\" placeholder=\"Reviewed model, profile, and retry timing.\" required></div>");
+            html.AppendLine("<button type=\"submit\">Acknowledge and prepare</button>");
+            html.AppendLine("</form>");
+        }
+        else
+        {
+            html.AppendLine("<div class=\"buttonbar\">");
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/subscription-dispatch\">Prepare subscription handoff</button>");
+            html.AppendLine("</div>");
+        }
+
         html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/profile-dispatch\">");
         html.AppendLine($"<div class=\"field\"><label for=\"task-profile-{goalPrefix}-{taskNumber}\">Worker profile</label><input id=\"task-profile-{goalPrefix}-{taskNumber}\" name=\"profileName\" value=\"codex-cli\" required></div>");
         html.AppendLine("<button type=\"submit\">Prepare handoff</button>");

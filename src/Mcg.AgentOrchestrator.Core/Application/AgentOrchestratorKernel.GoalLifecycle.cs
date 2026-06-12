@@ -116,6 +116,40 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec AcknowledgeSubscriptionLimitReview(GoalId goalId, TaskId taskId, string note)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var reviewNote = note.Trim();
+        if (string.IsNullOrWhiteSpace(reviewNote))
+        {
+            throw new ArgumentException("Subscription limit review note cannot be empty.", nameof(note));
+        }
+
+        var failureCount = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        if (failureCount < DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold)
+        {
+            throw new InvalidOperationException($"Task '{taskId}' does not have repeated recoverable subscription usage-limit failures to review.");
+        }
+
+        task.RecordSubscriptionLimitReview(reviewNote, _clock.UtcNow, failureCount);
+        if (task.Status == WorkTaskStatus.Failed &&
+            task.VerificationHistory.LastOrDefault() is { Succeeded: false } latest &&
+            DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(latest))
+        {
+            task.ClearLatestVerification();
+            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+        }
+
+        Append(
+            goal,
+            taskId,
+            ProgressKind.TaskSubscriptionLimitReviewAcknowledged,
+            $"Subscription usage-limit review acknowledged after {failureCount} recoverable failure(s): {reviewNote}");
+        RefreshGoalStatus(goal);
+        return task;
+    }
+
     public void ReportTaskProgress(GoalId goalId, TaskId taskId, WorkTaskStatus status, string message)
     {
         if (status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)
