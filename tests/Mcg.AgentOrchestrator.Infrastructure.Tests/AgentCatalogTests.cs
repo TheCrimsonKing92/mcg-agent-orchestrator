@@ -35,6 +35,20 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel!.ReasoningEffort);
     }
 }
+    [Xunit.Fact(DisplayName = "Output_caps_resolve_from_single_policy_source")]
+    public void OutputCapsResolveFromSinglePolicySource()
+{
+    // Pins the catalog cap aliases and Ollama defaults to OutputTokenPolicy so a
+    // future edit cannot reintroduce a second cap literal unnoticed.
+    Assert.Equal(OutputTokenPolicy.RoutinePaidMaxOutputTokens, AgentCatalog.RoutineApiMaxOutputTokens);
+    Assert.Equal(OutputTokenPolicy.ComplexPaidMaxOutputTokens, AgentCatalog.ComplexApiMaxOutputTokens);
+
+    foreach (var agent in AgentCatalog.OllamaDefault().Agents)
+    {
+        Assert.Equal(OutputTokenPolicy.RoutineLocalMaxOutputTokens, agent.Model.MaxOutputTokens);
+        Assert.Equal(OutputTokenPolicy.ComplexLocalMaxOutputTokens, agent.ComplexModel!.MaxOutputTokens);
+    }
+}
     [Xunit.Fact(DisplayName = "AgentCatalog_AnthropicDefault_pairs_haiku_base_with_sonnet_complex")]
     public void AgentCatalogAnthropicDefaultPairsHaikuBaseWithSonnetComplex()
 {

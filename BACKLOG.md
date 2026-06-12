@@ -18,18 +18,6 @@ Done when: after Codex prints final output and the child has no meaningful activ
 
 Verify: focused tests for existing-exit-file completion and idle-final-output handling, plus a live no-edit Codex smoke in an isolated worktree.
 
-## Use one source of truth for paid/local output cap policy
-
-Status: open | Size: small | Suggested route: simple-goal
-
-Why: a recent output-cap change failed tests because `AgentTaskRunner` had private cap constants duplicating `AgentCatalog.RoutineApiMaxOutputTokens` and `AgentCatalog.ComplexApiMaxOutputTokens`. The worker changed one copy and missed the other, producing a false-green worker report.
-
-Where: `AgentTaskRunner` max-output-token resolution, `AgentCatalog`/agent defaults, related tests that pin routine/complex paid output caps.
-
-Done when: output-cap limits live in one Core/Infrastructure policy source consumed by the runner, catalog/defaults, and tests. There are no duplicate policy literals for the routine/complex caps except tests intentionally asserting that single source.
-
-Verify: targeted search for duplicated cap literals/constants, focused cap tests, and full `dotnet test`.
-
 ## Fold independent operator verification into acceptance
 
 Status: open | Size: medium | Suggested route: simple-goal or five-role goal

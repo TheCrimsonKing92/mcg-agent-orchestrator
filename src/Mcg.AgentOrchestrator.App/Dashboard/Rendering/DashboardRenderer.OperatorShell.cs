@@ -626,7 +626,7 @@ public static partial class DashboardRenderer
         return provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
             provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
                 ? AgentCatalog.RoutineApiMaxOutputTokens
-                : 8192;
+                : OutputTokenPolicy.ComplexLocalMaxOutputTokens;
     }
 
     private static int DefaultComplexMaxTokensPlaceholder(string provider)
@@ -634,7 +634,7 @@ public static partial class DashboardRenderer
         return provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
             provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
                 ? AgentCatalog.ComplexApiMaxOutputTokens
-                : 8192;
+                : OutputTokenPolicy.ComplexLocalMaxOutputTokens;
     }
 
     private static IReadOnlyList<(string Value, string Label)> ApiReasoningOptions(string provider)

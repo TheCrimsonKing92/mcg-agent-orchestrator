@@ -8,8 +8,8 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
     public const string OpenAiSubscriptionModelAlias = "gpt-5.5";
     public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex";
-    public const int RoutineApiMaxOutputTokens = 2048;
-    public const int ComplexApiMaxOutputTokens = 4096;
+    public const int RoutineApiMaxOutputTokens = OutputTokenPolicy.RoutinePaidMaxOutputTokens;
+    public const int ComplexApiMaxOutputTokens = OutputTokenPolicy.ComplexPaidMaxOutputTokens;
     public const string RoutineReasoningEffort = "medium";
     public const string RoutineSubscriptionReasoningEffort = "low";
     public const string ComplexReasoningEffort = "high";
@@ -83,11 +83,11 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return new AgentCatalog(
         [
-            new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Coder(2048), ComplexModel: Qwen3(8192)),
-            new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Coder(2048), ComplexModel: Qwen3(8192)),
-            new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(2048), ComplexModel: Qwen3(8192)),
-            new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Coder(2048), ComplexModel: Qwen3(8192)),
-            new(new AgentId("ollama-reviewer"), "Ollama reviewer", AgentRole.Reviewer, Coder(2048), ComplexModel: Qwen3(8192))
+            new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
+            new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
+            new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
+            new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
+            new(new AgentId("ollama-reviewer"), "Ollama reviewer", AgentRole.Reviewer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens))
         ]);
     }
 }

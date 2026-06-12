@@ -2,11 +2,6 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class AgentTaskRunner
 {
-    private const int RoutinePaidProviderFallbackMaxOutputTokens = 2048;
-    private const int ComplexPaidProviderFallbackMaxOutputTokens = 4096;
-    private const int RoutineLocalProviderFallbackMaxOutputTokens = 2048;
-    private const int ComplexLocalProviderFallbackMaxOutputTokens = 8192;
-
     private readonly AgentOrchestratorKernel _kernel;
     private readonly IReadOnlyList<AgentDefinition> _agents;
     private readonly IModelProviderRegistry _providers;
@@ -265,13 +260,13 @@ public sealed class AgentTaskRunner
         if (LocalModelPromptOptimizer.IsLocalProvider(resolvedModel))
         {
             return complexity == TaskComplexity.Complex
-                ? ComplexLocalProviderFallbackMaxOutputTokens
-                : RoutineLocalProviderFallbackMaxOutputTokens;
+                ? OutputTokenPolicy.ComplexLocalMaxOutputTokens
+                : OutputTokenPolicy.RoutineLocalMaxOutputTokens;
         }
 
         return complexity == TaskComplexity.Complex
-            ? ComplexPaidProviderFallbackMaxOutputTokens
-            : RoutinePaidProviderFallbackMaxOutputTokens;
+            ? OutputTokenPolicy.ComplexPaidMaxOutputTokens
+            : OutputTokenPolicy.RoutinePaidMaxOutputTokens;
     }
 
     private static List<ModelFitSummary> BuildModelFitSummary(Goal goal)
