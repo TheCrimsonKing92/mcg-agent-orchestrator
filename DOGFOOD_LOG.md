@@ -4,6 +4,17 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-11 - Five-role pipeline with haiku Reviewer: VBCSCompiler dispatch fix (goal 03192a9b)
+
+Goal `03192a9b`, full Planner/Researcher/Developer/Tester/Reviewer pipeline, payload "worker-spawned VBCSCompiler instances hold worktree obj outputs". Merged (22d1f65, fast-forward), 414/414 green operator-verified - and the post-merge independent `dotnet test` succeeded FIRST TRY from repo root. Non-local dispatch wrappers now set `DOTNET_CLI_USE_MSBUILD_SERVER=0`, `MSBUILDDISABLENODEREUSE=1`, `UseSharedCompilation=false` before the worker command; 3 wrapper tests plus an env-verification e2e.
+
+- First haiku Reviewer run (claude-haiku-4-5, `--permission-mode plan`): 67 seconds, reviewed the ACTUAL working tree - cited the new parameter, all three env vars, and the test inventory, and gave a production-readiness recommendation. Contrast with four file-blind qwen reviews; the haiku Reviewer is the new default, qwen remains the free fallback.
+- First haiku Developer dispatch via the new Simple-complexity routing: implemented the wrapper change and tests correctly in 7.7 min but did NOT commit - operator committed at the gate. Haiku fidelity note: verify commit presence before acceptance on haiku-routed Developer tasks.
+- Researcher (codex read-only) finished in ~3 min with a clean worktree - against 17-18 min plan-blind runs, the handoff file + embedded plan evidence plus the mechanical sandbox have ended Researcher overreach.
+- Usage-limit handling validated live: two pre-reset dispatches auto-classified as recoverable with parsed retry-after; after 2 failures `subscription-dispatch` demands review with NO acknowledgement mechanism - working escape is `verify-manual <n> failed "<review note>"` (supersedes the limit-failure verification) then `retry` + dispatch. Product gap worth a small follow-up: an explicit `--confirm-limit-review` or similar.
+- Model fit: Anthropic/claude-haiku-4-5 - adequate - plan-mode code review with file access - substantive, fast, cheap; also adequate for the scoped Developer change except the missed commit step.
+- Model fit: OpenAI/gpt-5.5 - adequate - planner/researcher/tester roles - researcher stayed in role with evidence + sandbox; tester disciplined.
+
 ## 2026-06-11 - Context economics: handoff file + dead dashboard URLs removed from briefs (goal 2fff84fd)
 
 Goal `2fff84fd` (CLI workspace), two sequential Developer tasks, claude-sonnet-4-6 (commits eb42b03, ffd9771; fast-forward merge). Per Miles: implement directly, no backlog filing. 411/411 green operator-verified.
