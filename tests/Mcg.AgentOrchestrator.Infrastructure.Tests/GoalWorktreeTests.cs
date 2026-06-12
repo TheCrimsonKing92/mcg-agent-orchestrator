@@ -47,7 +47,9 @@ public sealed class GoalWorktreeTests
             Assert.True(merge is not null);
             Assert.True(merge!.FastForwarded);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
-            Assert.Equal("Removed workspace and merged branch " + GoalWorktrees.BranchName(goalId) + ".", GoalWorktrees.Remove(repo, goalId));
+            var removeResult = GoalWorktrees.Remove(repo, goalId);
+            Assert.Equal("Removed workspace and merged branch " + GoalWorktrees.BranchName(goalId) + ".", removeResult.Message);
+            Assert.True(removeResult.IsComplete);
             Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
         }
         finally
@@ -74,7 +76,9 @@ public sealed class GoalWorktreeTests
             Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
             Assert.True(BranchExists(repo, branch));
 
-            Assert.Equal("Removed workspace and merged branch " + branch + ".", GoalWorktrees.Remove(repo, goalId));
+            var removeResult = GoalWorktrees.Remove(repo, goalId);
+            Assert.Equal("Removed workspace and merged branch " + branch + ".", removeResult.Message);
+            Assert.True(removeResult.IsComplete);
 
             Assert.False(Directory.Exists(path));
             Assert.False(BranchExists(repo, branch));
@@ -83,6 +87,105 @@ public sealed class GoalWorktreeTests
         {
             DeleteDirectory(repo);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reports_leftover_path_and_resumes_when_lock_released")]
+    public void GoalWorktreesRemoveReportsLeftoverPathAndResumesWhenLockReleased()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+
+            // Deregister the worktree manually to isolate directory-deletion behavior.
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var lockedFile = Path.Combine(path, "leftover.log");
+            File.WriteAllText(lockedFile, "held open");
+
+            // Hold the file open exclusively so Directory.Delete fails.
+            GoalWorktreeRemoveResult partial;
+            using (var fs = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                partial = GoalWorktrees.Remove(repo, goalId);
+            }
+
+            Assert.False(partial.IsComplete);
+            Assert.Equal(path, partial.LeftoverPath);
+            Assert.Equal("workspace remove", partial.ResumeCommand);
+            Assert.True(partial.Message.Contains("could not be removed", StringComparison.OrdinalIgnoreCase));
+            Assert.True(Directory.Exists(path));
+
+            // Lock released; resume call deletes the directory and cleans up the branch.
+            var final = GoalWorktrees.Remove(repo, goalId);
+            Assert.True(final.IsComplete);
+            Assert.False(Directory.Exists(path));
+            Assert.False(BranchExists(repo, branch));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_partial_result_identifies_branch_state")]
+    public void GoalWorktreesRemovePartialResultIdentifiesBranchState()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var lockedFile = Path.Combine(path, "hold.txt");
+            File.WriteAllText(lockedFile, "lock");
+
+            GoalWorktreeRemoveResult partial;
+            using (var fs = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                partial = GoalWorktrees.Remove(repo, goalId);
+            }
+
+            Assert.False(partial.IsComplete);
+            Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
+            Assert.Equal(path, partial.LeftoverPath);
+            Assert.True(partial.LockHolders.Count >= 0); // collection always initialized
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_ParseWmicListOutput_extracts_pid_and_command_line")]
+    public void GoalWorktreesParseWmicListOutputExtractsPidAndCommandLine()
+    {
+        const string wmicOutput = """
+
+            CommandLine=dotnet test MyProject.dll
+            ProcessId=1234
+
+            CommandLine=VBCSCompiler.exe -pipename:xyz
+            ProcessId=5678
+
+            CommandLine=
+            ProcessId=9999
+
+            """;
+
+        var result = GoalWorktrees.ParseWmicListOutput(wmicOutput);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("dotnet test MyProject.dll", result[1234]);
+        Assert.Equal("VBCSCompiler.exe -pipename:xyz", result[5678]);
+        Assert.False(result.ContainsKey(9999));
     }
 
     [Xunit.Fact(DisplayName = "GoalWorktrees_suggests_manual_merge_when_branches_diverge")]

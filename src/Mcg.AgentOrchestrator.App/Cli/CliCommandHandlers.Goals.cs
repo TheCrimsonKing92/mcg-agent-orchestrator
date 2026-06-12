@@ -211,7 +211,7 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, string? 
             return;
 
         case "remove":
-            Console.WriteLine(GoalWorktrees.Remove(executionDirectory, goal.Id));
+            PrintWorkspaceRemoveResult(GoalWorktrees.Remove(executionDirectory, goal.Id));
             return;
 
         default:
@@ -231,6 +231,32 @@ private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context)
     if (merge is not null)
     {
         Console.WriteLine($"Workspace merge: {FormatWorkspaceMerge(merge)}");
+    }
+}
+
+private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
+{
+    Console.WriteLine(result.Message);
+    if (result.LeftoverPath is not null)
+    {
+        Console.WriteLine($"Leftover path: {result.LeftoverPath}");
+    }
+
+    if (result.LockHolders.Count > 0)
+    {
+        Console.WriteLine("Likely lock holders:");
+        foreach (var holder in result.LockHolders)
+        {
+            var detail = holder.CommandLine is not null
+                ? $": {holder.CommandLine}"
+                : " (command line unavailable)";
+            Console.WriteLine($"  {holder.ProcessName} (PID {holder.ProcessId}){detail}");
+        }
+    }
+
+    if (result.ResumeCommand is not null)
+    {
+        Console.WriteLine($"Resume: {result.ResumeCommand}");
     }
 }
 

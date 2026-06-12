@@ -30,18 +30,6 @@ Done when: acceptance runs the independent verification suite in the goal worktr
 
 Verify: tests cover acceptance refusing a failed verification, accepting a passing verification, and honoring `--skip-verify`. Run full `dotnet test`, then validate in a live goal.
 
-## Make workspace cleanup report lock holders and leave a resumable cleanup command
-
-Status: open | Size: small-medium | Suggested route: simple-goal
-
-Why: goals `feadc825`, `8db3d426`, and `74686f04` fast-forwarded successfully, but cleanup repeatedly unregistered worktrees and left locked directories under `.orchestrator-worktrees`. `dotnet build-server shutdown`, exact post-test dotnet PID stops, and long-path `Remove-Item` did not reliably identify or release the holder. The operator could delete merged branches, but could not identify the remaining holder without broad process risk.
-
-Where: `GoalWorktrees.Remove`, workspace CLI output, cleanup retry/backoff and diagnostics on Windows.
-
-Done when: partial cleanup reports that the worktree was unregistered, whether the goal branch remains, the exact leftover path, and the likely lock-holder process names/PIDs when discoverable. A follow-up `workspace remove` or dedicated cleanup command should resume from that state and avoid throwing a generic directory-in-use error.
-
-Verify: tests simulate already-unregistered leftover worktree directories and locked paths where possible; manual Windows smoke validates actionable output when deletion is blocked. Run full `dotnet test`.
-
 ## Add sequential pipeline auto-advance
 
 Status: open | Size: medium-large | Suggested route: five-role goal after the completion and limit-review guards are fixed
