@@ -6,18 +6,6 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Require file-touching dispatches to leave a clean worktree after committed changes
-
-Status: open | Size: small | Suggested route: simple-goal
-
-Why: goal `feadc825` added commit-or-no-change evidence for Developer/Tester dispatches, but goals `8db3d426` and `74686f04` showed a remaining gap: a worker can commit the intended change and then leave unrelated tracked source edits in the worktree. The current guard accepts any commit after dispatch start, so the operator must detect and avoid dirty post-commit leftovers manually.
-
-Where: `BackgroundDispatchRunner` file-change evidence inspection, task verification evidence, and dispatch tests added around `GoalWorktrees`.
-
-Done when: non-local Developer/Tester dispatches in goal worktrees require the worktree to be clean at completion, whether they made commits or supplied an explicit no-change rationale. Dirty worktrees fail completion with concise `git status --short` evidence even when commits exist.
-
-Verify: focused tests cover commit-plus-dirty failing, commit-plus-clean passing, no-change-plus-dirty failing, and non-file roles unaffected. Run full `dotnet test`.
-
 ## Codex dispatch wrappers can still remain alive after final output without an exit file
 
 Status: open | Size: small-medium | Suggested route: simple-goal
