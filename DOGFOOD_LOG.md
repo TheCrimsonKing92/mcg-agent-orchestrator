@@ -406,3 +406,10 @@ Goal `eecf98f8`, simple-goal Developer task with the rockiest dispatch history o
 - Operator gate: reviewed RunGoalService, CLI wiring, runner race fix, and 280 lines of new tests; acceptance verification passed first attempt.
 - Frictions: task assignment is pinned to an agent id, so swapping the Developer role catalog entry orphans an Assigned task ("agent 'anthropic-developer' was not found"); recovery required restoring the Anthropic catalog entry plus manual worker-dispatch. Backlog candidate: allow re-delegating an Assigned task to the current role agent.
 - Model fit: Anthropic/claude-sonnet-4-6 - underpowered this time due to session limits, not capability; OpenAI/gpt-5.5 - adequate - finished a partially-built medium feature from notes and uncommitted code.
+
+## 2026-06-12 - Subscription-plan projection moved out of Dashboard.Api (goal b3ee4428)
+
+Goal `b3ee4428`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~2.5 min). Plan building and its records now live in `src/Mcg.AgentOrchestrator.App/SubscriptionPlanning/SubscriptionPlanBuilder.cs`; `SubscriptionPromptCostGuard` consumes the app-level plan types, Dashboard.Api maps the plan into its DTOs so API payload shape is unchanged, and `DashboardResponseMapper.Configuration` shed ~360 lines. Worker verification: no `Dashboard.Api` references under `CostControl/`, no `BuildSubscriptionPlan` remnants, full suite green. Commit `06b3328` fast-forwarded to main via acceptance verification. Closes the last pre-existing backlog item; the codex wrapper wrote its exit file promptly again (reap fix holding).
+
+- Operator gate: reviewed diff stats and worker grep evidence; acceptance verification passed first attempt.
+- Model fit: OpenAI/gpt-5.5 - adequate - mechanical solution-wide move refactor - fastest large-item turnaround of the session.
