@@ -6,7 +6,8 @@ public sealed record AcceptanceVerificationResult(
     bool Passed,
     bool Skipped,
     int? ExitCode,
-    string? OutputTail);
+    string? OutputTail,
+    bool Retried = false);
 
 public sealed class GoalAcceptanceVerifier
 {
@@ -32,6 +33,16 @@ public sealed class GoalAcceptanceVerifier
 
         var result = await _runner(["dotnet", "test"], worktreePath, cancellationToken).ConfigureAwait(false);
 
+        var retried = false;
+        if (result.ExitCode != 0 && result.Output.Contains("CS2012", StringComparison.Ordinal))
+        {
+            // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
+            // clears residual compiler processes before the single allowed retry.
+            await _runner(["dotnet", "build-server", "shutdown"], worktreePath, cancellationToken).ConfigureAwait(false);
+            result = await _runner(["dotnet", "test"], worktreePath, cancellationToken).ConfigureAwait(false);
+            retried = true;
+        }
+
         var outputTail = result.ExitCode != 0
             ? TailOutput(result.Output)
             : null;
@@ -40,7 +51,8 @@ public sealed class GoalAcceptanceVerifier
             Passed: result.ExitCode == 0,
             Skipped: false,
             ExitCode: result.ExitCode,
-            OutputTail: outputTail);
+            OutputTail: outputTail,
+            Retried: retried);
     }
 
     private static string? TailOutput(string output)
