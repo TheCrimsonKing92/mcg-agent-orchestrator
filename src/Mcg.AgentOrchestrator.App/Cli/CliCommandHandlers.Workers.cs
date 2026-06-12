@@ -49,19 +49,21 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             CliArgumentParser.RequirePartCount(parts, 4, "worker-dispatch <task-number> <worker-name> <command-template>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id);
+            var workerExecutionDirectory = context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id);
+            var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
             var preparation = WorkerCommandTemplate.Prepare(
                 brief,
                 parts[2],
                 parts[3],
-                context.Workspace.PromptDirectory);
+                context.Workspace.PromptDirectory,
+                WorkerProfileDispatcher.BuildDispatchVariables(workerTask.RequiredRole, workerExecutionDirectory, null));
             context.Kernel.RecordTaskDispatch(
                 context.CurrentGoal.Id,
                 workerTask.Id,
                 new TaskDispatchRecord(
                     parts[2],
                     preparation.Command,
-                    context.Workspace.RootDirectory,
+                    workerExecutionDirectory,
                     DateTimeOffset.UtcNow,
                     PromptCharacterCount: preparation.PromptCharacterCount));
             Console.WriteLine($"Prompt: {preparation.PromptPath}");

@@ -29,6 +29,71 @@ public sealed class WorkerDispatchTests
     Assert.Contains(preparation.Command, text => text.Contains("agent-cli --prompt", StringComparison.Ordinal));
     Assert.Contains(preparation.Command, text => text.Contains("--role Developer", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "WorkerCommandTemplate_rejects_unresolved_variables_before_worker_dispatch_mutation")]
+    public void WorkerCommandTemplateRejectsUnresolvedVariablesBeforeWorkerDispatchMutation()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Do not record unresolved worker dispatches");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var previousDispatch = ReopenTaskWithRecoverableDispatchLimit(kernel, goal, task);
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id, workingDirectory: workingDirectory);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerCommandTemplate.Prepare(
+        brief,
+        "manual-codex",
+        "codex exec --model {subscriptionModelName} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
+        promptRoot,
+        WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workingDirectory, null)));
+
+    Assert.Contains(ex.Message, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("subscription-dispatch", StringComparison.Ordinal));
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(previousDispatch, task.LastDispatch);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_unresolved_profile_variables_before_state_mutation")]
+    public void WorkerProfileDispatcherRejectsUnresolvedProfileVariablesBeforeStateMutation()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Reject cross-profile placeholder mismatch");
+    var agent = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var previousDispatch = ReopenTaskWithRecoverableDispatchLimit(kernel, goal, task);
+    var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        task,
+        profile,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt));
+
+    Assert.Contains(ex.Message, text => text.Contains("codex-cli", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("{subscriptionReasoningEffort}", StringComparison.Ordinal));
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(previousDispatch, task.LastDispatch);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_agent_subscription_profile_and_template_variables")]
     public void WorkerProfileDispatcherUsesAgentSubscriptionProfileAndTemplateVariables()
 {
@@ -1921,6 +1986,32 @@ public sealed class WorkerDispatchTests
     WorkerProfileDispatcher.PrepareTask(kernel, goal, onlyTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
 
     Assert.False(File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")));
+}
+
+    private static TaskDispatchRecord ReopenTaskWithRecoverableDispatchLimit(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task)
+{
+    var previousDispatch = new TaskDispatchRecord(
+        "previous-worker",
+        "previous command",
+        "C:\\repo",
+        DateTimeOffset.Parse("2026-06-01T15:00:00Z"),
+        "OpenAI",
+        "gpt-5.5",
+        "high",
+        TaskComplexity.Simple,
+        123);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, previousDispatch);
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        previousDispatch.Command,
+        previousDispatch.WorkingDirectory,
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        DateTimeOffset.Parse("2026-06-01T15:01:00Z")));
+    return previousDispatch;
 }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateCompletedGoalWorktreeDispatch(

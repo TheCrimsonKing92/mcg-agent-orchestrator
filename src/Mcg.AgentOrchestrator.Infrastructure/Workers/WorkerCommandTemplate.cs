@@ -1,10 +1,11 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record WorkerDispatchPreparation(string PromptPath, string Command, int PromptCharacterCount);
 
-public static class WorkerCommandTemplate
+public static partial class WorkerCommandTemplate
 {
     private const int HandoffVerificationMaxChars = 20000;
 
@@ -72,10 +73,7 @@ public static class WorkerCommandTemplate
             throw new ArgumentException("Value cannot be empty.", nameof(commandTemplate));
         }
 
-        Directory.CreateDirectory(promptRoot);
         var promptPath = Path.Combine(promptRoot, $"{brief.GoalId.Value[..8]}-{brief.TaskId.Value[..8]}-{Sanitize(workerName)}.md");
-        File.WriteAllText(promptPath, brief.Content);
-
         var command = commandTemplate
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{goalId}", brief.GoalId.Value, StringComparison.OrdinalIgnoreCase)
@@ -93,7 +91,30 @@ public static class WorkerCommandTemplate
             }
         }
 
+        ThrowIfUnresolvedTemplateVariables(workerName, command);
+        Directory.CreateDirectory(promptRoot);
+        File.WriteAllText(promptPath, brief.Content);
+
         return new WorkerDispatchPreparation(promptPath, command, brief.Content.Length);
+    }
+
+    private static void ThrowIfUnresolvedTemplateVariables(string workerName, string command)
+    {
+        var variables = TemplateVariableRegex()
+            .Matches(command)
+            .Select(match => match.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (variables.Count == 0)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Worker command template for '{workerName}' left unresolved template variable(s): {string.Join(", ", variables)}. " +
+            "Supported generic variables are {promptPath}, {goalId}, {taskId}, {role}, {title}, {workingDirectory}, {sandboxMode}, and {permissionMode}; " +
+            "subscription variables such as {subscriptionModelName} and {subscriptionReasoningEffort} are supplied only by subscription-dispatch or by profile-dispatch when the selected profile matches the assigned subscription agent.");
     }
 
     private static string Sanitize(string value)
@@ -103,4 +124,7 @@ public static class WorkerCommandTemplate
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+
+    [GeneratedRegex(@"\{[A-Za-z_][A-Za-z0-9_]*\}")]
+    private static partial Regex TemplateVariableRegex();
 }

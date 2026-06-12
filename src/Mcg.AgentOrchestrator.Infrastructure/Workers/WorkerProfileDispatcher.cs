@@ -408,7 +408,7 @@ public static class WorkerProfileDispatcher
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
-    private static Dictionary<string, string?> BuildDispatchVariables(
+    public static Dictionary<string, string?> BuildDispatchVariables(
         AgentRole role,
         string workingDirectory,
         IReadOnlyDictionary<string, string?>? variables)
