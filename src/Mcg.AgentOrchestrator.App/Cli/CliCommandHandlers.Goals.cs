@@ -65,9 +65,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "acceptance":
-            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            var skipVerify = HasCliConfirmation(parts, "--skip-verify");
+            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
             ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
-            PrintAcceptanceWorkspaceMerge(context);
+            PrintAcceptanceWorkspaceMerge(context, skipVerify);
             return false;
 
         case "workspace":
@@ -219,12 +221,35 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, string? 
     }
 }
 
-private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context)
+private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
     if (goal.Status != GoalStatus.Completed)
     {
         return;
+    }
+
+    var worktreePath = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
+    if (worktreePath is not null)
+    {
+        if (skipVerify)
+        {
+            Console.WriteLine("Verification: skipped (--skip-verify)");
+        }
+        else
+        {
+            var verification = context.AcceptanceVerifier.RunAsync(worktreePath).GetAwaiter().GetResult();
+            if (!verification.Passed)
+            {
+                Console.WriteLine($"Verification: failed (exit {verification.ExitCode}); merge blocked");
+                if (!string.IsNullOrWhiteSpace(verification.OutputTail))
+                {
+                    Console.WriteLine(verification.OutputTail);
+                }
+                return;
+            }
+            Console.WriteLine($"Verification: passed (exit {verification.ExitCode})");
+        }
     }
 
     var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);

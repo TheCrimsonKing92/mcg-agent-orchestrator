@@ -28,4 +28,6 @@ public IReadOnlyList<AgentDefinition> Agents { get; set; } = agents;
 public WorkerProfileCatalog WorkerProfiles { get; set; } = workerProfiles;
 
 public Goal? CurrentGoal { get; set; } = currentGoal;
+
+public GoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new();
 }

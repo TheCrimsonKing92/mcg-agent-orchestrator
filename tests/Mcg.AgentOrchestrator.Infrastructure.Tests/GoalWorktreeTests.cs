@@ -262,6 +262,174 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_blocks_merge_when_verification_fails")]
+    public void CliAcceptanceBlocksMergeWhenVerificationFails()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance gate test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "change.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Test run failed\nFailed: 2")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            Console.SetOut(writer);
+            try
+            {
+                CliCommandHandlers.Execute(["acceptance"], context);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var output = writer.ToString();
+            Assert.True(output.Contains("failed (exit 1)", StringComparison.Ordinal));
+            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
+            Assert.True(output.Contains("Test run failed", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "change.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_merges_after_passing_verification")]
+    public void CliAcceptanceMergesAfterPassingVerification()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance gate test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            Console.SetOut(writer);
+            try
+            {
+                CliCommandHandlers.Execute(["acceptance"], context);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var output = writer.ToString();
+            Assert.True(output.Contains("passed (exit 0)", StringComparison.Ordinal));
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_skip_verify_bypasses_verification_and_merges")]
+    public void CliAcceptanceSkipVerifyBypassesVerificationAndMerges()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance gate test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "skip.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var verifierCalled = false;
+            var fakeVerifier = new GoalAcceptanceVerifier((_, _, _) =>
+            {
+                verifierCalled = true;
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "should not run"));
+            });
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            Console.SetOut(writer);
+            try
+            {
+                CliCommandHandlers.Execute(["acceptance", "--skip-verify"], context);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var output = writer.ToString();
+            Assert.False(verifierCalled);
+            Assert.True(output.Contains("skipped (--skip-verify)", StringComparison.Ordinal));
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(repo, "skip.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));
