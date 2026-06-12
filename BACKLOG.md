@@ -6,29 +6,17 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Reject unresolved worker/profile dispatch template variables before task state mutation
+## Require file-touching dispatches to leave a clean worktree after committed changes
 
 Status: open | Size: small | Suggested route: simple-goal
 
-Why: during goal `feadc825`, `profile-dispatch 1 codex-cli` against a task assigned to an Anthropic agent recorded a Running dispatch with literal `{subscriptionModelName}` and `{subscriptionReasoningEffort}` placeholders. No process had started, `cancel-dispatch` could not cancel it, and the operator had to use `progress failed` plus `retry` to recover.
+Why: goal `feadc825` added commit-or-no-change evidence for Developer/Tester dispatches, but goals `8db3d426` and `74686f04` showed a remaining gap: a worker can commit the intended change and then leave unrelated tracked source edits in the worktree. The current guard accepts any commit after dispatch start, so the operator must detect and avoid dirty post-commit leftovers manually.
 
-Where: `WorkerProfileDispatcher`, CLI `profile-dispatch`/`worker-dispatch`, task status mutation and dispatch recording.
+Where: `BackgroundDispatchRunner` file-change evidence inspection, task verification evidence, and dispatch tests added around `GoalWorktrees`.
 
-Done when: dispatch preparation validates that no `{...}` template variables remain in the rendered command before it records dispatch state or marks a task Running. Failures should leave the task in its prior status and print actionable evidence. If cross-profile rerouting is intended, provide an explicit supported way to supply subscription model/reasoning/worktree values.
+Done when: non-local Developer/Tester dispatches in goal worktrees require the worktree to be clean at completion, whether they made commits or supplied an explicit no-change rationale. Dirty worktrees fail completion with concise `git status --short` evidence even when commits exist.
 
-Verify: focused tests cover unresolved placeholders in `profile-dispatch` and `worker-dispatch`, proving task status and last dispatch are unchanged on failure. Run full `dotnet test`.
-
-## Stop full test runs from mutating checked-in source files
-
-Status: open | Size: small-medium | Suggested route: simple-goal
-
-Why: after goal `8db3d426` committed and the worktree was clean, the independent `dotnet test .orchestrator-worktrees\8db3d426 --verbosity minimal` run left tracked source/test files modified in that disposable worktree, including unrelated `rollback-state` and state-store changes. That makes the operator gate ambiguous and blocks normal `workspace remove`.
-
-Where: infrastructure tests that execute CLI/system/dashboard flows, especially tests around state rollback/store behavior and any helper that uses the repository root instead of an isolated temp workspace.
-
-Done when: a full `dotnet test <worktree> --verbosity minimal` leaves `git status --short` clean in the worktree. Tests that need mutable app files or state must use temp directories outside the source tree.
-
-Verify: add a regression test or harness assertion where practical, then run full `dotnet test` and immediately confirm `git status --short` is clean.
+Verify: focused tests cover commit-plus-dirty failing, commit-plus-clean passing, no-change-plus-dirty failing, and non-file roles unaffected. Run full `dotnet test`.
 
 ## Codex dispatch wrappers can still remain alive after final output without an exit file
 
@@ -70,7 +58,7 @@ Verify: tests cover acceptance refusing a failed verification, accepting a passi
 
 Status: open | Size: small-medium | Suggested route: simple-goal
 
-Why: goal `feadc825` fast-forwarded successfully, but `workspace remove` unregistered the worktree and then repeatedly failed to delete `.orchestrator-worktrees/feadc825` because another process held the directory. `dotnet build-server shutdown`, stopping the exact post-test `dotnet` PID, and long-path `Remove-Item` still left a locked orphan directory. The operator could delete the merged branch, but could not identify the remaining holder without broad process risk.
+Why: goals `feadc825`, `8db3d426`, and `74686f04` fast-forwarded successfully, but cleanup repeatedly unregistered worktrees and left locked directories under `.orchestrator-worktrees`. `dotnet build-server shutdown`, exact post-test dotnet PID stops, and long-path `Remove-Item` did not reliably identify or release the holder. The operator could delete merged branches, but could not identify the remaining holder without broad process risk.
 
 Where: `GoalWorktrees.Remove`, workspace CLI output, cleanup retry/backoff and diagnostics on Windows.
 
