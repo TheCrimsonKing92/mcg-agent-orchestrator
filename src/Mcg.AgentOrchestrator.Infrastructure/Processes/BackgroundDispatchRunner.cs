@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -8,10 +9,13 @@ public sealed class BackgroundDispatchRunner
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
+    private readonly TimeSpan _progressStallTimeout;
     private readonly Func<int, bool> _isStillRunning;
     private readonly bool _processStartDisabled;
     private readonly Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>> _findBuildDaemons;
@@ -23,10 +27,12 @@ public sealed class BackgroundDispatchRunner
         Func<int, bool>? isStillRunning = null,
         bool? disableProcessStart = null,
         Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>>? findBuildDaemons = null,
-        Func<int, bool>? tryKillBuildDaemon = null)
+        Func<int, bool>? tryKillBuildDaemon = null,
+        TimeSpan? progressStallTimeout = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
+        _progressStallTimeout = progressStallTimeout ?? DefaultProgressStallTimeout;
         _isStillRunning = isStillRunning ?? IsStillRunning;
         _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
         _findBuildDaemons = findBuildDaemons ?? FindBuildDaemons;
@@ -71,6 +77,7 @@ public sealed class BackgroundDispatchRunner
         var stdoutPath = Path.Combine(logRoot, $"{prefix}.out.log");
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
+        var heartbeatPath = Path.Combine(logRoot, $"{prefix}.heartbeat.json");
 
         var isLocalDispatch = IsLocalDispatch(dispatch);
         var wrapper = BuildWrapper(
@@ -78,6 +85,7 @@ public sealed class BackgroundDispatchRunner
             stdoutPath,
             stderrPath,
             exitCodePath,
+            heartbeatPath,
             shutdownBuildServerOnExit: !isLocalDispatch,
             disableSharedCompilation: !isLocalDispatch);
         var startInfo = new ProcessStartInfo
@@ -153,6 +161,13 @@ public sealed class BackgroundDispatchRunner
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
                 return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, diagnostic);
+            }
+
+            if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
+            {
+                TryKillProcess(processRecord.ProcessId);
+                TryWriteExitCode(processRecord.ExitCodePath, 1);
+                return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, stallDiagnostic);
             }
 
             kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
@@ -594,6 +609,136 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
+    private bool TryDetectProbableProgressStall(
+        TaskSpec task,
+        GoalId goalId,
+        TaskProcessRecord processRecord,
+        out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        if (File.Exists(processRecord.ExitCodePath) ||
+            !TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        {
+            return false;
+        }
+
+        if (RequiresFileChangeEvidence(task) &&
+            task.LastDispatch is { } dispatch &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var wt) &&
+            (wt.HasCommitAfterDispatch || !wt.IsClean))
+        {
+            return false;
+        }
+
+        var idleFor = _clock.UtcNow - heartbeat.LastProgressAt;
+        if (idleFor < _progressStallTimeout)
+        {
+            return false;
+        }
+
+        var observedFor = _clock.UtcNow - heartbeat.LastObservedAt;
+        diagnostic =
+            "Background dispatch made no observable progress before the stall timeout; " +
+            $"wrapper heartbeat state={heartbeat.State}, pid={heartbeat.ProcessId}, child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"}, " +
+            $"stdout_bytes={heartbeat.StandardOutputBytes}, stderr_bytes={heartbeat.StandardErrorBytes}, " +
+            $"last_progress={heartbeat.LastProgressAt:u}, last_observed={heartbeat.LastObservedAt:u}, " +
+            $"idle_for={FormatDuration(idleFor)}, heartbeat_age={FormatDuration(observedFor)}. " +
+            "Wrapper process reaped and dispatch marked failed with captured stdout/stderr evidence.";
+        return true;
+    }
+
+    internal static string GetHeartbeatPath(TaskProcessRecord processRecord)
+    {
+        const string exitSuffix = ".exit.txt";
+        var directory = Path.GetDirectoryName(processRecord.ExitCodePath) ?? string.Empty;
+        var fileName = Path.GetFileName(processRecord.ExitCodePath);
+        return fileName.EndsWith(exitSuffix, StringComparison.OrdinalIgnoreCase)
+            ? Path.Combine(directory, fileName[..^exitSuffix.Length] + ".heartbeat.json")
+            : processRecord.ExitCodePath + ".heartbeat.json";
+    }
+
+    private static bool TryReadHeartbeat(string path, out DispatchHeartbeat heartbeat)
+    {
+        heartbeat = DispatchHeartbeat.Empty;
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var document = JsonDocument.Parse(stream);
+            var root = document.RootElement;
+            if (!TryGetDateTimeOffset(root, "lastObservedAt", out var lastObservedAt) ||
+                !TryGetDateTimeOffset(root, "lastProgressAt", out var lastProgressAt))
+            {
+                return false;
+            }
+
+            heartbeat = new DispatchHeartbeat(
+                GetInt32(root, "pid"),
+                GetNullableInt32(root, "childPid"),
+                GetString(root, "state"),
+                lastObservedAt,
+                lastProgressAt,
+                GetInt64(root, "stdoutBytes"),
+                GetInt64(root, "stderrBytes"));
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetDateTimeOffset(JsonElement root, string propertyName, out DateTimeOffset value)
+    {
+        value = default;
+        return root.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            DateTimeOffset.TryParse(property.GetString(), out value);
+    }
+
+    private static string GetString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString() ?? "unknown"
+            : "unknown";
+    }
+
+    private static int GetInt32(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out var value)
+            ? value
+            : 0;
+    }
+
+    private static int? GetNullableInt32(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return property.TryGetInt32(out var value) ? value : null;
+    }
+
+    private static long GetInt64(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var property) && property.TryGetInt64(out var value)
+            ? value
+            : 0;
+    }
+
     private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
     {
         if (dispatch is null)
@@ -722,6 +867,7 @@ public sealed class BackgroundDispatchRunner
         string stdoutPath,
         string stderrPath,
         string exitCodePath,
+        string? heartbeatPath = null,
         bool shutdownBuildServerOnExit = true,
         bool disableSharedCompilation = true)
     {
@@ -734,14 +880,47 @@ public sealed class BackgroundDispatchRunner
             : string.Empty;
 
         return
-            "$code = 1; " +
+            "$code = 1; $heartbeatJob = $null; " +
+            "$heartbeatPath = " + Quote(heartbeatPath ?? string.Empty) + "; " +
+            "$stdoutPath = " + Quote(stdoutPath) + "; " +
+            "$stderrPath = " + Quote(stderrPath) + "; " +
+            "$exitCodePath = " + Quote(exitCodePath) + "; " +
+            "$startedAt = (Get-Date).ToUniversalTime(); " +
+            "$lastProgressAt = $startedAt; $lastStdoutBytes = -1; $lastStderrBytes = -1; " +
+            "function Get-LogLength([string]$path) { try { if ([IO.File]::Exists($path)) { return [int64](Get-Item -LiteralPath $path).Length } } catch { }; return [int64]0 }; " +
+            "function Write-Heartbeat([string]$state) { " +
+            "if ([string]::IsNullOrWhiteSpace($heartbeatPath)) { return }; " +
+            "$outBytes = Get-LogLength $stdoutPath; $errBytes = Get-LogLength $stderrPath; " +
+            "if (($outBytes -ne $script:lastStdoutBytes) -or ($errBytes -ne $script:lastStderrBytes)) { $script:lastProgressAt = (Get-Date).ToUniversalTime(); $script:lastStdoutBytes = $outBytes; $script:lastStderrBytes = $errBytes }; " +
+            "$payload = [ordered]@{ pid = $PID; childPid = $null; startedAt = $script:startedAt.ToString('o'); lastObservedAt = (Get-Date).ToUniversalTime().ToString('o'); lastProgressAt = $script:lastProgressAt.ToString('o'); state = $state; stdoutBytes = $outBytes; stderrBytes = $errBytes; exitFileExists = [IO.File]::Exists($exitCodePath) }; " +
+            "$tmp = $heartbeatPath + '.tmp'; [IO.File]::WriteAllText($tmp, ($payload | ConvertTo-Json -Compress)); Move-Item -LiteralPath $tmp -Destination $heartbeatPath -Force " +
+            "}; " +
+            "function Start-Heartbeat { " +
+            "if ([string]::IsNullOrWhiteSpace($heartbeatPath)) { return }; " +
+            "$script:heartbeatJob = Start-Job -ScriptBlock { " +
+            "param($heartbeatPath, $stdoutPath, $stderrPath, $exitCodePath, $parentPid, $startedAtText, $intervalMs); " +
+            "$startedAt = [DateTimeOffset]::Parse($startedAtText); $lastProgressAt = $startedAt; $lastStdoutBytes = -1; $lastStderrBytes = -1; " +
+            "function Get-LogLength([string]$path) { try { if ([IO.File]::Exists($path)) { return [int64](Get-Item -LiteralPath $path).Length } } catch { }; return [int64]0 }; " +
+            "while ($true) { " +
+            "$outBytes = Get-LogLength $stdoutPath; $errBytes = Get-LogLength $stderrPath; " +
+            "if (($outBytes -ne $lastStdoutBytes) -or ($errBytes -ne $lastStderrBytes)) { $lastProgressAt = (Get-Date).ToUniversalTime(); $lastStdoutBytes = $outBytes; $lastStderrBytes = $errBytes }; " +
+            "$payload = [ordered]@{ pid = $parentPid; childPid = $null; startedAt = $startedAt.ToString('o'); lastObservedAt = (Get-Date).ToUniversalTime().ToString('o'); lastProgressAt = $lastProgressAt.ToString('o'); state = 'running'; stdoutBytes = $outBytes; stderrBytes = $errBytes; exitFileExists = [IO.File]::Exists($exitCodePath) }; " +
+            "$tmp = $heartbeatPath + '.tmp'; try { [IO.File]::WriteAllText($tmp, ($payload | ConvertTo-Json -Compress)); Move-Item -LiteralPath $tmp -Destination $heartbeatPath -Force } catch { }; " +
+            "Start-Sleep -Milliseconds $intervalMs " +
+            "} " +
+            "} -ArgumentList $heartbeatPath, $stdoutPath, $stderrPath, $exitCodePath, $PID, $startedAt.ToString('o'), " + ((int)HeartbeatInterval.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + " " +
+            "}; " +
             "try { " +
             envSetup +
-            $"& {{ {command} }} 1> {Quote(stdoutPath)} 2> {Quote(stderrPath)}; " +
+            "Write-Heartbeat 'starting'; " +
+            "Start-Heartbeat; " +
+            $"& {{ {command} }} 1> $stdoutPath 2> $stderrPath; " +
             "$code = if ($global:LASTEXITCODE -ne $null) { $global:LASTEXITCODE } elseif ($?) { 0 } else { 1 }; " +
             "} finally { " +
             cleanup +
-            $"[IO.File]::WriteAllText({Quote(exitCodePath)}, [string]$code) " +
+            "if ($heartbeatJob -ne $null) { try { Stop-Job -Job $heartbeatJob -ErrorAction SilentlyContinue; Remove-Job -Job $heartbeatJob -Force -ErrorAction SilentlyContinue } catch { } }; " +
+            "Write-Heartbeat 'exiting'; " +
+            "[IO.File]::WriteAllText($exitCodePath, [string]$code) " +
             "}; exit $code";
     }
 
@@ -753,6 +932,18 @@ public sealed class BackgroundDispatchRunner
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
     private sealed record GitResult(int ExitCode, string Output);
+
+    private sealed record DispatchHeartbeat(
+        int ProcessId,
+        int? ChildProcessId,
+        string State,
+        DateTimeOffset LastObservedAt,
+        DateTimeOffset LastProgressAt,
+        long StandardOutputBytes,
+        long StandardErrorBytes)
+    {
+        public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
+    }
 
     private sealed record GoalWorktreeDispatchEvidence(
         string Branch,

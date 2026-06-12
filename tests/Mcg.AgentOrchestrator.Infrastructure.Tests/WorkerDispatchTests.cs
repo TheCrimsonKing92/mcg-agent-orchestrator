@@ -1672,7 +1672,8 @@ public sealed class WorkerDispatchTests
     Assert.Contains(wrapper, text => text.Contains("finally", StringComparison.Ordinal));
     Assert.Contains(wrapper, text => text.Contains("dotnet build-server shutdown", StringComparison.Ordinal));
     Assert.Contains(wrapper, text => text.Contains("*> $null", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText('C:\\logs\\exit.txt', [string]$code)", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("$exitCodePath = 'C:\\logs\\exit.txt'", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText($exitCodePath, [string]$code)", StringComparison.Ordinal));
     Assert.Contains(wrapper, text => text.Contains("exit $code", StringComparison.Ordinal));
 }
 
@@ -1691,7 +1692,7 @@ public sealed class WorkerDispatchTests
     Assert.False(wrapper.Contains("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal));
     Assert.False(wrapper.Contains("MSBUILDDISABLENODEREUSE", StringComparison.Ordinal));
     Assert.False(wrapper.Contains("UseSharedCompilation", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText('C:\\logs\\exit.txt', [string]$code)", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText($exitCodePath, [string]$code)", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_disables_shared_compilation_by_default")]
@@ -1706,7 +1707,8 @@ public sealed class WorkerDispatchTests
     Assert.Contains(wrapper, text => text.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'", StringComparison.Ordinal));
     Assert.Contains(wrapper, text => text.Contains("$env:MSBUILDDISABLENODEREUSE = '1'", StringComparison.Ordinal));
     Assert.Contains(wrapper, text => text.Contains("$env:UseSharedCompilation = 'false'", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok }", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("Start-Heartbeat", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok } 1> $stdoutPath 2> $stderrPath", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_can_skip_disabling_shared_compilation")]
@@ -1722,7 +1724,24 @@ public sealed class WorkerDispatchTests
     Assert.False(wrapper.Contains("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal));
     Assert.False(wrapper.Contains("MSBUILDDISABLENODEREUSE", StringComparison.Ordinal));
     Assert.False(wrapper.Contains("UseSharedCompilation", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok }", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok } 1> $stdoutPath 2> $stderrPath", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_writes_heartbeat_progress")]
+    public void BackgroundDispatchRunnerWrapperWritesHeartbeatProgress()
+{
+    var wrapper = BackgroundDispatchRunner.BuildWrapper(
+        "Write-Output ok",
+        "C:\\logs\\out.log",
+        "C:\\logs\\err.log",
+        "C:\\logs\\exit.txt",
+        "C:\\logs\\heartbeat.json");
+
+    Assert.Contains(wrapper, text => text.Contains("$heartbeatPath = 'C:\\logs\\heartbeat.json'", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("lastProgressAt", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("stdoutBytes", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("stderrBytes", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("ConvertTo-Json -Compress", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_runs_with_shared_compilation_disabled")]
@@ -1745,6 +1764,7 @@ public sealed class WorkerDispatchTests
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     var output = File.ReadAllLines(process.StandardOutputPath);
+    Assert.True(File.Exists(BackgroundDispatchRunner.GetHeartbeatPath(process)));
     Assert.Equal(3, output.Length);
     Assert.Equal("0", output[0]);
     Assert.Equal("1", output[1]);
@@ -1808,6 +1828,106 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("Implemented the change.", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Tokens used", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_fails_provider_neutral_stall_after_heartbeat_progress_timeout")]
+    public void BackgroundDispatchRunnerRefreshFailsProviderNeutralStallAfterHeartbeatProgressTimeout()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Detect silent subscription stall");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-30)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-30), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, now.AddMinutes(-20), now.AddMinutes(-20), "running", 0, 0);
+
+    var completed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            progressStallTimeout: TimeSpan.FromMinutes(10))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, completed.ExitCode);
+    Assert.Equal(clock.UtcNow, completed.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.True(File.Exists(exit));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("no observable progress", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("heartbeat state=running", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_keeps_recent_heartbeat_running")]
+    public void BackgroundDispatchRunnerRefreshKeepsRecentHeartbeatRunning()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Keep active heartbeat running");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "thinking");
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-30)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-30), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 8, 0);
+
+    var refreshed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            progressStallTimeout: TimeSpan.FromMinutes(10))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(process, refreshed);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
+    Xunit.Assert.Null(task.LastVerification);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_keeps_stale_file_role_heartbeat_when_worktree_changed")]
+    public void BackgroundDispatchRunnerRefreshKeepsStaleFileRoleHeartbeatWhenWorktreeChanged()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Do not kill worker after file progress");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "progress");
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-30)));
+    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-30), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, now.AddMinutes(-20), now.AddMinutes(-20), "running", 0, 0);
+
+    var refreshed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            progressStallTimeout: TimeSpan.FromMinutes(10))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(process, refreshed);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
+    Xunit.Assert.Null(task.LastVerification);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_completes_when_Developer_worktree_evidence_passes")]
@@ -2369,6 +2489,29 @@ public sealed class WorkerDispatchTests
     var process = new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, clock.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return (kernel, goal, task, process);
+}
+
+    private static void WriteHeartbeat(
+    TaskProcessRecord process,
+    DateTimeOffset lastObservedAt,
+    DateTimeOffset lastProgressAt,
+    string state,
+    long stdoutBytes,
+    long stderrBytes)
+{
+    File.WriteAllText(
+        BackgroundDispatchRunner.GetHeartbeatPath(process),
+        "{" +
+        "\"pid\":999999," +
+        "\"childPid\":888888," +
+        $"\"startedAt\":\"{process.StartedAt:O}\"," +
+        $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
+        $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +
+        $"\"state\":\"{state}\"," +
+        $"\"stdoutBytes\":{stdoutBytes}," +
+        $"\"stderrBytes\":{stderrBytes}," +
+        "\"exitFileExists\":false" +
+        "}");
 }
 
     private static string CreateSeededDispatchRepository()
