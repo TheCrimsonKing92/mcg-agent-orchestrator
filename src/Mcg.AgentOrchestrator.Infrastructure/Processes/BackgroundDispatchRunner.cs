@@ -114,14 +114,20 @@ public sealed class BackgroundDispatchRunner
             if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
             {
                 TryKillProcess(processRecord.ProcessId);
+                if (RequiresFileChangeEvidence(task) &&
+                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
+                    wt.IsClean && wt.HasCommitAfterDispatch)
+                {
+                    var reapNote =
+                        "Background dispatch wrapper appears hung after codex final output; no exit file was written. " +
+                        $"Wrapper process reaped; task completed based on file-change evidence " +
+                        $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
+                    TryWriteExitCode(processRecord.ExitCodePath, 0);
+                    return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 0, reapNote);
+                }
+
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return RecordCompletedProcess(
-                    kernel,
-                    goalId,
-                    taskId,
-                    processRecord,
-                    1,
-                    diagnostic);
+                return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, diagnostic);
             }
 
             kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
