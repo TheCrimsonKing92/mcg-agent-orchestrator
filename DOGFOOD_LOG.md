@@ -398,3 +398,11 @@ Goal `b2354317`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via cla
 
 - Operator gate: reviewed diff (guard in both single and batch prepare paths after the existing Ensure* pre-mutation guards); acceptance verification passed 453/453 first attempt.
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - small guard plus wide test migration - accurate self-report on where the effort went.
+
+## 2026-06-12 - Sequential run-goal auto-advance shipped (goal eecf98f8)
+
+Goal `eecf98f8`, simple-goal Developer task with the rockiest dispatch history of the day: claude-sonnet hit its session limit twice (first run died with partial work at ~26 min; resumed run went silent for 45+ minutes in suspected renewed limit backoff and was cancelled), then a manual codex reroute (`worker-dispatch` with literal gpt-5.5 values, since the assigned-agent record cannot be re-pointed after a role catalog swap) finished from the preserved partial work in ~6.5 min. `run-goal [goal-id] --confirm-batch-start [--confirm-large-paid-subscription-start]` wraps `AdvanceGoalWithSubscriptionsUntilBlocked` in a poll loop (injectable sleep/clock): dispatch, start with the same confirmations, poll, continue; stops with per-task summaries and bounded evidence on failure, human input, limit review, retry-after deferral, or missing cost-guard confirmation. Bonus race fix: refresh no longer records a false failure when the exit file exists but is mid-write. Commit `10322f6` fast-forwarded to main; 469/469 via acceptance verification.
+
+- Operator gate: reviewed RunGoalService, CLI wiring, runner race fix, and 280 lines of new tests; acceptance verification passed first attempt.
+- Frictions: task assignment is pinned to an agent id, so swapping the Developer role catalog entry orphans an Assigned task ("agent 'anthropic-developer' was not found"); recovery required restoring the Anthropic catalog entry plus manual worker-dispatch. Backlog candidate: allow re-delegating an Assigned task to the current role agent.
+- Model fit: Anthropic/claude-sonnet-4-6 - underpowered this time due to session limits, not capability; OpenAI/gpt-5.5 - adequate - finished a partially-built medium feature from notes and uncommitted code.
