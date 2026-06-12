@@ -391,3 +391,10 @@ Goal `072d1fc6`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via cla
 - Operator gate: reviewed diff (BackgroundDispatchRunner + tests + backlog removal); acceptance verification passed first attempt - with the CS2012 auto-retry (eaefaf4) now active in the verifier, the residual transient is absorbed invisibly even when it fires.
 - Residual: wmic command-line plumbing is duplicated between BackgroundDispatchRunner and GoalWorktrees (ParseWmicListOutput is shared); cosmetic consolidation candidate.
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - process-hygiene feature with injectable seams and focused tests - first-attempt pass.
+
+## 2026-06-12 - Subscription dispatch now requires a goal worktree for file-touching roles (goal b2354317)
+
+Goal `b2354317`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via claude-cli (~20 min, mostly migrating 16 tests to a fake-worktree pattern). `WorkerProfileDispatcher` now validates before any state mutation that Developer/Tester subscription dispatches run in a goal worktree, detected by `.git` being a file (worktree gitdir pointer) rather than a directory (repo root); failures name `workspace create`. Non-file roles and existing-worktree flows unchanged. Closes the repo-root dispatch hazard observed on goal 42808fff. Commit `96980c8` fast-forwarded to main.
+
+- Operator gate: reviewed diff (guard in both single and batch prepare paths after the existing Ensure* pre-mutation guards); acceptance verification passed 453/453 first attempt.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - small guard plus wide test migration - accurate self-report on where the effort went.
