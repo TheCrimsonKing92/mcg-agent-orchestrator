@@ -4,6 +4,13 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-12 - Local evidence retrieval design recorded
+
+Added `docs/local-evidence-retrieval-design.md` as a design-only plan for cautious local retrieval over existing context artifacts, backlog, dogfood logs, and goal diffs. The design requires pointer-first output, provenance labels, role-aware ranking, skip conditions, and tests for ranking, staleness, injection safety, and prompt-budget behavior before any runtime implementation. No MCP, resource server, embeddings, background indexer, or worker dispatch behavior was added. The local-evidence-retrieval backlog item is closed.
+
+- Operator gate: direct docs change only; reviewed against backlog done condition. No tests run because no runtime code changed.
+- Model fit: local Codex session - adequate - design-only context-economics planning with web-informed retrieval/caching tradeoffs.
+
 ## 2026-06-12 - Prompt briefs enforce role and file-access budgets (goal d1e8ce01)
 
 Goal `d1e8ce01`, Developer task, OpenAI/gpt-5.5 via codex-cli. `BuildTaskBrief` now applies deterministic character budgets by role and file-access mode, collapsing lower-priority file-access sections to context artifact pointers only when the rendered brief exceeds the role budget. `current-task.md` now carries current retry dispatch/verification evidence so collapsed sections point at an artifact with the needed detail. The prompt-context-budget backlog item is closed.
