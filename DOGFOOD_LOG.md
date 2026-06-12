@@ -420,3 +420,12 @@ Goal `a68a758b`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~5 mi
 
 - Operator gate: reviewed diff (kernel, CLI, enums, 197 test lines); acceptance verification passed first attempt.
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped kernel/CLI recovery-path feature - clean first attempt.
+
+## 2026-06-12 - Heartbeat stalls and file-backed worker context shipped (goal b8dc0816)
+
+Operator-direct prelude commit `0e385a4` added wrapper heartbeat JSON plus refresh-time provider-neutral stall classification: refresh now fails a live process only when a heartbeat exists, no exit file exists, no stdout/stderr byte progress crossed the timeout, and file-role worktree progress is absent. Verification before commit: focused BackgroundDispatchRunner tests 23/23, orchestration filters 25/25, full suite 470/470. Then goal `b8dc0816` ran the full Planner/Researcher/Developer/Tester/Reviewer pipeline through `run-goal` to implement file-backed pipeline context artifacts. Commit `43e55be` writes `.orchestrator-context/<goal-id>/manifest.md`, `objective.md`, `current-task.md`, `prior-task-evidence.md`, and trimmed repo guidance copies for subscription/file-access dispatches, while prompts keep bounded inline evidence plus an exact manifest pointer and API/no-file brief paths remain filesystem-free.
+
+- Live pipeline result: Planner, Researcher, Developer, and Reviewer completed via subscription workers; Tester codex dispatch hit OpenAI retry-after until 2026-06-13 16:58Z, so operator Tester evidence used focused WorkerProfileDispatcher tests 33/33 and full worktree `dotnet test` Core 166/166 + Infrastructure 305/305.
+- Operator gate: reviewed context artifact diff, clean worktree, `git diff --check`, full independent test, Reviewer evidence, and acceptance verification. `acceptance b8dc0816` fast-forwarded main; `workspace remove b8dc0816` succeeded.
+- Friction: the interrupted earlier `run-goal` for heartbeat visibility left assigned goal `8b64de95` unused; the useful next product step is explicit lifecycle/goal cancellation or supersession so abandoned validation goals do not linger as Active.
+- Model fit: OpenAI/gpt-5.5 - adequate - Planner/Researcher/Developer pipeline roles produced coordinated implementation; OpenAI/gpt-5.5 Tester was unavailable due subscription retry-after; Anthropic/claude-haiku-4-5 - adequate - review-only role caught no blocking issues.
