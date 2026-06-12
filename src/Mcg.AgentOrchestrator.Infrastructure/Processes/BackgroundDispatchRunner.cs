@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -207,7 +208,9 @@ public sealed class BackgroundDispatchRunner
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
             }
-            else if (!HasExplicitNoChangeRationale(standardOutput, standardError) && !worktreeEvidence.HasCommitAfterDispatch)
+            else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
+                !HasExplicitNoChangeRationale(standardOutput, standardError) &&
+                !worktreeEvidence.HasCommitAfterDispatch)
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
@@ -254,6 +257,54 @@ public sealed class BackgroundDispatchRunner
         return task.LastDispatch is { } dispatch &&
             !IsLocalDispatch(dispatch) &&
             task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+    }
+
+    private static bool RequiresPostDispatchCommitEvidence(TaskSpec task, string standardOutput, string standardError)
+    {
+        return task.RequiredRole switch
+        {
+            AgentRole.Developer => true,
+            AgentRole.Tester => !IsVerificationOnlyTesterCompletion(task, standardOutput, standardError),
+            _ => false
+        };
+    }
+
+    private static bool IsVerificationOnlyTesterCompletion(TaskSpec task, string standardOutput, string standardError)
+    {
+        return task.RequiredRole == AgentRole.Tester &&
+            !TesterTaskRequestsFileChanges(task) &&
+            HasVerificationEvidence(standardOutput, standardError);
+    }
+
+    private static bool TesterTaskRequestsFileChanges(TaskSpec task)
+    {
+        var text = $"{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
+        return Regex.IsMatch(
+            text,
+            @"\b(add|create|write|implement|update|modify|edit|fix)\b.{0,80}\b(test|tests|coverage|fixture|fixtures|source|file|files)\b|" +
+            @"\b(test|tests|coverage|fixture|fixtures|source|file|files)\b.{0,80}\b(add|create|write|implement|update|modify|edit|fix)\b",
+            RegexOptions.CultureInvariant);
+    }
+
+    private static bool HasVerificationEvidence(string standardOutput, string standardError)
+    {
+        var output = $"{standardOutput}\n{standardError}";
+        if (output.Contains("test run successful", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var hasVerificationTerm =
+            output.Contains("test", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("suite", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("verification", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("smoke", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("check", StringComparison.OrdinalIgnoreCase);
+
+        return hasVerificationTerm &&
+            (Regex.IsMatch(output, @"\bPassed:\s*[1-9]\d*\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+             Regex.IsMatch(output, @"\b\d+\s*/\s*\d+\b", RegexOptions.CultureInvariant) ||
+             Regex.IsMatch(output, @"\bexit code\s*0\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
     }
 
     private static bool HasExplicitNoChangeRationale(string standardOutput, string standardError)

@@ -2026,8 +2026,8 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_commit_or_no_change_evidence_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithoutCommitOrNoChangeEvidenceFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_unchanged_dispatch_fails")]
+    public void BackgroundDispatchRunnerDeveloperUnchangedDispatchFails()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2044,6 +2044,73 @@ public sealed class WorkerDispatchTests
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("branch=goal/", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
+    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_verification_only_clean_dispatch_passes")]
+    public void BackgroundDispatchRunnerTesterVerificationOnlyCleanDispatchPasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "dotnet test --filter OrchestratorHealthInspector\r\nPassed! - Failed: 0, Passed: 16, Skipped: 0, Total: 16.\r\nFull suite Core 172/172 + Infrastructure 326/326.",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.False(task.LastVerification.StandardError.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_without_passing_evidence_fails")]
+    public void BackgroundDispatchRunnerTesterCleanDispatchWithoutPassingEvidenceFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Ran dotnet test --filter OrchestratorHealthInspector.",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_without_evidence_fails")]
+    public void BackgroundDispatchRunnerTesterExpectedFileChangeWithoutEvidenceFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Added focused regression tests and ran dotnet test --filter BackgroundDispatchRunner.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        taskDescription: "Add focused regression tests for the dispatch guard",
+        verificationPlan: "Update tests and run the focused dispatch guard coverage.");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
     Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
 }
@@ -2517,10 +2584,12 @@ public sealed class WorkerDispatchTests
         string standardOutput,
         string standardError,
         IClock clock,
-        Action<string>? mutateWorktree = null)
+        Action<string>? mutateWorktree = null,
+        string? taskDescription = null,
+        string? verificationPlan = null)
 {
     var kernel = new AgentOrchestratorKernel();
-    var taskSpec = new TaskSpec(TaskId.New(), $"{role} task.", role);
+    var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
     var goal = kernel.CreateGoal("Dispatch evidence goal", [taskSpec]);
     var agent = new AgentDefinition(
         new AgentId(role.ToString().ToLowerInvariant()),
