@@ -97,6 +97,15 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintTask(context.CurrentGoal, retryTask);
             return true;
 
+        case "re-delegate":
+        case "redelegate":
+            CliArgumentParser.RequirePartCount(parts, 2, "re-delegate <task-number>");
+            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            var redelegateTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            context.Kernel.RedelegateTask(context.CurrentGoal.Id, redelegateTask.Id, context.Agents);
+            ConsoleViews.PrintTask(context.CurrentGoal, redelegateTask);
+            return true;
+
         case "note":
             CliArgumentParser.RequirePartCount(parts, 3, "note <task-number> <message>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);

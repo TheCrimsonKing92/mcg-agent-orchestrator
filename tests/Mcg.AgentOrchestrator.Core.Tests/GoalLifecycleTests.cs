@@ -71,6 +71,58 @@ public sealed class GoalLifecycleTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskAdded);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskDelegated);
 }
+    [Xunit.Fact(DisplayName = "RedelegateTask_reassigns_assigned_task_to_current_role_agent")]
+    public void RedelegateTaskReassignsAssignedTaskToCurrentRoleAgent()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Recover orphaned assignment", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    var oldAgent = TestAgent("anthropic-developer", "Anthropic developer", AgentRole.Developer);
+    var newAgent = TestAgent("openai-developer", "OpenAI developer", AgentRole.Developer);
+    kernel.ActivateGoal(goal.Id, [oldAgent]);
+    var task = goal.Tasks.Single();
+
+    var updated = kernel.RedelegateTask(goal.Id, task.Id, [newAgent]);
+
+    Assert.Equal(task, updated);
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(newAgent.Id, task.AssignedAgentId);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRedelegated &&
+        evt.Message.Contains(oldAgent.Id.Value, StringComparison.Ordinal) &&
+        evt.Message.Contains(newAgent.Id.Value, StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "RedelegateTask_reassigns_failed_task_to_current_role_agent")]
+    public void RedelegateTaskReassignsFailedTaskToCurrentRoleAgent()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Recover failed assignment", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    var oldAgent = TestAgent("anthropic-developer", "Anthropic developer", AgentRole.Developer);
+    var newAgent = TestAgent("openai-developer", "OpenAI developer", AgentRole.Developer);
+    kernel.ActivateGoal(goal.Id, [oldAgent]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Assigned agent was removed.");
+
+    kernel.RedelegateTask(goal.Id, task.Id, [newAgent]);
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(newAgent.Id, task.AssignedAgentId);
+}
+    [Xunit.Fact(DisplayName = "RedelegateTask_refuses_running_task_with_recovery_guidance")]
+    public void RedelegateTaskRefusesRunningTaskWithRecoveryGuidance()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Avoid moving live work", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    var agent = TestAgent("developer", "Developer", AgentRole.Developer);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
+
+    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RedelegateTask(goal.Id, task.Id, [agent]));
+
+    Assert.Contains(ex.Message, text => text.Contains("cancel or refresh", StringComparison.Ordinal));
+    Assert.Equal(agent.Id, task.AssignedAgentId);
+}
     [Xunit.Fact(DisplayName = "CreateDefaultSoftwareDevelopmentTasks_include_verification_plans")]
     public void CreateDefaultSoftwareDevelopmentTasksIncludeVerificationPlans()
 {
@@ -163,6 +215,14 @@ static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, Agent
     Assert.Contains(brief, text => text.Contains(heading, StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains(detail, StringComparison.Ordinal));
 }
+
+static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
+    new(
+        new AgentId(id),
+        name,
+        role,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_verification_plan")]
     public void SnapshotRoundtripPreservesVerificationPlan()
 {

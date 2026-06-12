@@ -499,6 +499,47 @@ public sealed class WorkerDispatchTests
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains(prompt, text => text.Contains($"Working directory, use absolute paths: {workingDirectory}", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_assigned_agent_when_catalog_still_contains_it")]
+    public void WorkerProfileDispatcherKeepsAssignedAgentWhenCatalogStillContainsIt()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Keep pinned assignment", [new TaskSpec(TaskId.New(), "Summarize context", AgentRole.Planner)]);
+    var assignedAgent = new AgentDefinition(
+        new AgentId("anthropic-planner"),
+        "Anthropic planner",
+        AgentRole.Planner,
+        new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli"));
+    var otherRoleAgent = new AgentDefinition(
+        new AgentId("openai-planner"),
+        "OpenAI planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [assignedAgent]);
+    var task = goal.Tasks.Single();
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [otherRoleAgent, assignedAgent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Equal(assignedAgent.Id, task.AssignedAgentId);
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_subscription_tasks_by_assigned_provider")]
     public void WorkerProfileDispatcherPreparesSubscriptionTasksByAssignedProvider()
 {

@@ -1541,6 +1541,102 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(task.LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_re_delegate_reassigns_orphaned_task_and_subscription_dispatch_uses_new_agent")]
+    public void CliReDelegateReassignsOrphanedTaskAndSubscriptionDispatchUsesNewAgent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Recover orphaned assignment", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var oldAgent = new AgentDefinition(
+            new AgentId("anthropic-developer"),
+            "Anthropic developer",
+            AgentRole.Developer,
+            new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("claude-cli"));
+        var newAgent = new AgentDefinition(
+            new AgentId("openai-developer"),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        IReadOnlyList<AgentDefinition> agents = [oldAgent];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        agents = [newAgent];
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+
+        var redelegated = CliCommandDispatcher.ExecuteCommand(
+            ["re-delegate", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        var dispatched = CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(redelegated);
+        Xunit.Assert.True(dispatched);
+        Xunit.Assert.Equal(newAgent.Id, task.AssignedAgentId);
+        Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
+        Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskRedelegated &&
+            evt.Message.Contains(oldAgent.Id.Value, StringComparison.Ordinal) &&
+            evt.Message.Contains(newAgent.Id.Value, StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_re_delegate_refuses_running_task_with_cancel_or_refresh_guidance")]
+    public void CliReDelegateRefusesRunningTaskWithCancelOrRefreshGuidance()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Do not move running work", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["re-delegate", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("cancel or refresh", ex.Message);
+        Xunit.Assert.Equal(new AgentId("developer"), task.AssignedAgentId);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_acknowledges_repeated_limit_review")]
     public void CliSubscriptionDispatchAcknowledgesRepeatedLimitReview()
     {

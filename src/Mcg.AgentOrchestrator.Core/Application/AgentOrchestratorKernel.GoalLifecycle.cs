@@ -116,6 +116,39 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RedelegateTask(GoalId goalId, TaskId taskId, IReadOnlyList<AgentDefinition> availableAgents)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+
+        if (task.Status == WorkTaskStatus.Running || task.LastProcess is { IsRunning: true })
+        {
+            throw new InvalidOperationException($"Task '{taskId}' is running; cancel or refresh it before re-delegating.");
+        }
+
+        if (task.Status is not (WorkTaskStatus.Assigned or WorkTaskStatus.Failed))
+        {
+            throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; only Assigned or Failed tasks can be re-delegated.");
+        }
+
+        var agent = availableAgents.FirstOrDefault(candidate =>
+            candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole);
+        if (agent is null)
+        {
+            throw new KeyNotFoundException($"No available {task.RequiredRole} agent was found for task '{taskId}'.");
+        }
+
+        var previousAgentId = task.AssignedAgentId?.Value ?? "none";
+        task.AssignTo(agent.Id);
+        Append(
+            goal,
+            task.Id,
+            ProgressKind.TaskRedelegated,
+            $"Re-delegated {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name}).");
+        RefreshGoalStatus(goal);
+        return task;
+    }
+
     public TaskSpec AcknowledgeSubscriptionLimitReview(GoalId goalId, TaskId taskId, string note)
     {
         var goal = GetGoal(goalId);
