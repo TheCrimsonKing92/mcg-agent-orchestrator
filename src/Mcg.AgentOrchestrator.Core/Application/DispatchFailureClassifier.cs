@@ -15,6 +15,25 @@ public static class DispatchFailureClassifier
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
+    public static bool HasProviderNeutralProgressStallFailure(TaskSpec task)
+    {
+        return task.Status == WorkTaskStatus.Failed &&
+            task.LastVerification is { Succeeded: false } latest &&
+            IsProviderNeutralProgressStallFailure(latest);
+    }
+
+    public static bool IsProviderNeutralProgressStallFailure(TaskVerificationRecord verification)
+    {
+        var output = string.Join(
+            Environment.NewLine,
+            verification.StandardOutput,
+            verification.StandardError);
+
+        return output.Contains("no observable progress", StringComparison.OrdinalIgnoreCase) &&
+            output.Contains("stall timeout", StringComparison.OrdinalIgnoreCase) &&
+            output.Contains("heartbeat", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool HasRecoverableSubscriptionLimitHistory(TaskSpec task)
     {
         return task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Pending &&

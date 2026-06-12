@@ -10,6 +10,7 @@ internal static class RunGoalService
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(5);
     internal delegate Task SleepFunc(TimeSpan delay, CancellationToken ct);
     private const int OutputTailLineCount = 20;
+    private const int MaxAutomaticFailoverAttemptsPerTask = 3;
 
     internal sealed record RunGoalResult(
         bool Executed,
@@ -32,6 +33,10 @@ internal static class RunGoalService
         string Reason,
         string? OutputTail);
 
+    private sealed record AutomaticFailoverEvidence(
+        string Reason,
+        int FailureCount);
+
     public static async Task<RunGoalResult> RunAsync(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
@@ -49,6 +54,9 @@ internal static class RunGoalService
         var clockImpl = clock ?? new SystemClock();
         var completedTasks = new List<RunGoalTaskSummary>();
         var completedTaskIds = new HashSet<TaskId>();
+        var failedAgentsByTask = new Dictionary<TaskId, HashSet<AgentId>>();
+        var failoverAttemptsByTask = new Dictionary<TaskId, int>();
+        var handledEvidenceCountsByTask = new Dictionary<TaskId, int>();
         var executed = false;
 
         while (!cancellationToken.IsCancellationRequested)
@@ -60,7 +68,32 @@ internal static class RunGoalService
 
             if (result.StepCount > 0) executed = true;
 
+            if (TryApplyAutomaticFailover(
+                kernel,
+                agents,
+                goal,
+                result,
+                clockImpl,
+                failedAgentsByTask,
+                failoverAttemptsByTask,
+                handledEvidenceCountsByTask,
+                out var failoverStopReason))
+            {
+                executed = true;
+                continue;
+            }
+
             AddNewTerminalTaskSummaries(goal, completedTasks, completedTaskIds, priorStatuses);
+
+            if (failoverStopReason is not null)
+            {
+                return new RunGoalResult(
+                    executed,
+                    failoverStopReason,
+                    result.BlockingAction,
+                    completedTasks,
+                    BuildStopEvidence(goal, result with { StopReason = failoverStopReason }, clockImpl));
+            }
 
             if (result.ContinueAfter.HasValue)
             {
@@ -157,7 +190,7 @@ internal static class RunGoalService
 
     private static string? BuildOutputTail(TaskSpec task)
     {
-        var verification = task.LastVerification;
+        var verification = task.LastVerification ?? task.VerificationHistory.LastOrDefault();
         if (verification is null)
         {
             return null;
@@ -177,5 +210,137 @@ internal static class RunGoalService
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .TakeLast(OutputTailLineCount);
         return OutputTextPreview.CreateVerificationLog(string.Join(Environment.NewLine, lines)).Text;
+    }
+
+    private static bool TryApplyAutomaticFailover(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<AgentDefinition> agents,
+        Goal goal,
+        AdvanceLoopResultDto result,
+        IClock clock,
+        Dictionary<TaskId, HashSet<AgentId>> failedAgentsByTask,
+        Dictionary<TaskId, int> failoverAttemptsByTask,
+        Dictionary<TaskId, int> handledEvidenceCountsByTask,
+        out string? stopReason)
+    {
+        stopReason = null;
+        if (!TryResolveAutomaticFailoverTask(goal, result, clock, out var task, out var evidence))
+        {
+            return false;
+        }
+
+        if (handledEvidenceCountsByTask.GetValueOrDefault(task.Id) >= evidence.FailureCount)
+        {
+            return false;
+        }
+
+        if (task.AssignedAgentId is not { } failedAgentId)
+        {
+            stopReason = $"Automatic failover stopped for task {task.Id.Value[..8]}: the {task.RequiredRole} task has no assigned agent. Add an available alternate {task.RequiredRole} agent to the active agent list, then re-run run-goal or re-delegate manually.";
+            return false;
+        }
+
+        var failedAgents = GetFailedAgents(failedAgentsByTask, task.Id);
+        failedAgents.Add(failedAgentId);
+
+        var attempts = failoverAttemptsByTask.GetValueOrDefault(task.Id);
+        if (attempts >= MaxAutomaticFailoverAttemptsPerTask)
+        {
+            stopReason = $"Automatic failover stopped for task {task.Id.Value[..8]} after {attempts} attempt(s) for {evidence.Reason}; cap is {MaxAutomaticFailoverAttemptsPerTask}. Add a fresh alternate {task.RequiredRole} agent or inspect the preserved failure evidence before continuing.";
+            return false;
+        }
+
+        var alternate = agents.FirstOrDefault(agent =>
+            agent.Status == AgentStatus.Available &&
+            agent.Role == task.RequiredRole &&
+            agent.Id != failedAgentId &&
+            !failedAgents.Contains(agent.Id) &&
+            AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy));
+
+        if (alternate is null)
+        {
+            var failedList = string.Join(", ", failedAgents.Select(agentId => agentId.Value).Order(StringComparer.OrdinalIgnoreCase));
+            stopReason = $"Automatic failover stopped for task {task.Id.Value[..8]} after {evidence.Reason}: no available unused alternate subscription-capable {task.RequiredRole} agent exists in the active agent list. Current failed agent: {failedAgentId.Value}. Previously failed agent(s): {failedList}. Add a different available {task.RequiredRole} agent, then re-run run-goal or use re-delegate.";
+            return false;
+        }
+
+        kernel.RedelegateTask(goal.Id, task.Id, [alternate]);
+        failoverAttemptsByTask[task.Id] = attempts + 1;
+        handledEvidenceCountsByTask[task.Id] = evidence.FailureCount;
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            $"Automatic run-goal failover after {evidence.Reason} from agent '{failedAgentId.Value}'; retrying with alternate agent '{alternate.Id.Value}'.");
+        return true;
+    }
+
+    private static bool TryResolveAutomaticFailoverTask(
+        Goal goal,
+        AdvanceLoopResultDto result,
+        IClock clock,
+        out TaskSpec task,
+        out AutomaticFailoverEvidence evidence)
+    {
+        var candidates = new List<TaskSpec>();
+        if (ResolveStopTask(goal, result.BlockingAction) is { } stopTask)
+        {
+            candidates.Add(stopTask);
+        }
+
+        candidates.AddRange(goal.Tasks.Where(candidate => !candidates.Contains(candidate)));
+        foreach (var candidate in candidates)
+        {
+            if (TryGetAutomaticFailoverEvidence(candidate, clock.UtcNow, out evidence))
+            {
+                task = candidate;
+                return true;
+            }
+        }
+
+        task = null!;
+        evidence = null!;
+        return false;
+    }
+
+    private static bool TryGetAutomaticFailoverEvidence(TaskSpec task, DateTimeOffset now, out AutomaticFailoverEvidence evidence)
+    {
+        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+        {
+            evidence = new AutomaticFailoverEvidence(
+                $"recoverable subscription usage limit retry deferral until {retryAfter:u}",
+                DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+            return true;
+        }
+
+        if (DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task))
+        {
+            var count = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            evidence = new AutomaticFailoverEvidence(
+                $"recoverable subscription usage limit evidence ({count} failure(s))",
+                count);
+            return true;
+        }
+
+        if (DispatchFailureClassifier.HasProviderNeutralProgressStallFailure(task))
+        {
+            evidence = new AutomaticFailoverEvidence(
+                "provider-neutral heartbeat/progress stall evidence",
+                task.VerificationHistory.Count(DispatchFailureClassifier.IsProviderNeutralProgressStallFailure));
+            return true;
+        }
+
+        evidence = null!;
+        return false;
+    }
+
+    private static HashSet<AgentId> GetFailedAgents(Dictionary<TaskId, HashSet<AgentId>> failedAgentsByTask, TaskId taskId)
+    {
+        if (!failedAgentsByTask.TryGetValue(taskId, out var failedAgents))
+        {
+            failedAgents = [];
+            failedAgentsByTask.Add(taskId, failedAgents);
+        }
+
+        return failedAgents;
     }
 }
