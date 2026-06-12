@@ -18,18 +18,6 @@ Done when: after Codex prints final output and the child has no meaningful activ
 
 Verify: focused tests for existing-exit-file completion and idle-final-output handling, plus a live no-edit Codex smoke in an isolated worktree.
 
-## Fold independent operator verification into acceptance
-
-Status: open | Size: medium | Suggested route: simple-goal or five-role goal
-
-Why: the manual gate before `acceptance` is repeated and easy to miss: inspect goal diff, shut down build servers if needed, run tests in the worktree, and only then merge. It caught a false worker claim in live dogfood. The VBCSCompiler wrapper fix and bounded output rendering make this practical to automate.
-
-Where: `acceptance` CLI/API flow, goal worktree services, verification command execution and concise result reporting.
-
-Done when: acceptance runs the independent verification suite in the goal worktree before fast-forward/merge, refuses to merge on verification failure, and records concise evidence. Provide an explicit `--skip-verify` escape for rare operator-controlled cases.
-
-Verify: tests cover acceptance refusing a failed verification, accepting a passing verification, and honoring `--skip-verify`. Run full `dotnet test`, then validate in a live goal.
-
 ## Add sequential pipeline auto-advance
 
 Status: open | Size: medium-large | Suggested route: five-role goal after the completion and limit-review guards are fixed
