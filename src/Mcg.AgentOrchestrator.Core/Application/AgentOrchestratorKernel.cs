@@ -39,6 +39,21 @@ public sealed partial class AgentOrchestratorKernel
         return kernel;
     }
 
+    public void ReplaceWithSnapshot(OrchestratorSnapshot snapshot)
+    {
+        _goals.Clear();
+        _humanInputRequests.Clear();
+
+        foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
+        {
+            _goals.Add(goal.Id, goal);
+        }
+
+        foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
+        {
+            _humanInputRequests.Add(request.Id, request);
+        }
+    }
 
 
 

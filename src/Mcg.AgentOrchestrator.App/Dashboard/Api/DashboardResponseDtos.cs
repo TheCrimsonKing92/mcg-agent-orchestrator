@@ -232,6 +232,7 @@ internal sealed record DistributedArchitectureDto(
             [
                 "/api/system/architecture reports tenant, storage, provider, worker, dashboard, and rollback topology.",
                 "/api/system/dashboard-host reports bind URLs, restart command, tenant-scoped paths, and hosted source-survey links.",
+                "/api/system/state-rollback restores state.json from state.json.bak in operator dashboard modes only.",
                 "/api/source-survey?max=8 provides bounded repository discovery for distributed workers.",
                 "/api/goals/{goalId}/work-summary and /api/tasks/{taskId}/work-summary provide compact handoff context.",
                 "Operator POST endpoints remain disabled on simple-hosted-dashboard for read-only distributed access.",
@@ -264,6 +265,7 @@ internal sealed record DistributedArchitectureDto(
             [
                 "Tenant names are normalized and reject relative path segments.",
                 "State saves use per-file locks, temp files, atomic replacement, retry, and backup recovery.",
+                "State rollback requires explicit CLI/API confirmation and archives the previous primary before restore.",
                 "Subscription worker starts require explicit confirmation and paid-cost guard acknowledgements.",
                 "Role-based sandbox and permission placeholders keep non-implementation roles read-only.",
                 "Build/test cleanup exposes exact dashboard PIDs instead of broad process termination.",
@@ -275,6 +277,7 @@ internal sealed record DistributedArchitectureDto(
                 "Use acceptance to fast-forward the goal branch when main has not advanced.",
                 "If main diverged, use the printed manual merge command instead of overwriting shared state.",
                 "If state.json is corrupt, restart from state.json.bak and inspect the failed primary before continuing.",
+                "Use state-rollback --confirm-state-rollback or POST /api/system/state-rollback?confirm=state-rollback to replace primary state from the backup.",
             ],
             ProviderCount: providerCount,
             AgentCount: agents.Count,

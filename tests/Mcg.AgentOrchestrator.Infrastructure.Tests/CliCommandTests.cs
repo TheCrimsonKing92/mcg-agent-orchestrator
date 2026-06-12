@@ -144,6 +144,47 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Tenant names are normalized", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_state_rollback_requires_confirmation_and_restores_in_memory_kernel")]
+    public void CliStateRollbackRequiresConfirmationAndRestoresInMemoryKernel()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root, tenantName: "acme");
+        var first = new AgentOrchestratorKernel();
+        first.CreateGoal("Rollback target");
+        OrchestratorStateStore.Save(workspace.StatePath, first);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("Current primary");
+        OrchestratorStateStore.Save(workspace.StatePath, kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = kernel.Goals.Single();
+
+        var blocked = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["state-rollback"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["state-rollback", "--confirm-state-rollback"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.Contains("--confirm-state-rollback", blocked.Message);
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Equal("Rollback target", kernel.Goals.Single().Objective);
+        Xunit.Assert.Equal(kernel.Goals.Single().Id, currentGoal!.Id);
+        Xunit.Assert.Equal("Rollback target", OrchestratorStateStore.Load(workspace.StatePath).Goals.Single().Objective);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_next_action_command_confirms_large_paid_prepared_dispatch")]
     public void CliNextActionCommandConfirmsLargePaidPreparedDispatch()
     {

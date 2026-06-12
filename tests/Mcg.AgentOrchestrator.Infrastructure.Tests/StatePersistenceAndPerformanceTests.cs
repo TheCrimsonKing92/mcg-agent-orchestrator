@@ -307,6 +307,53 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal("Previous valid state", restored.Goals.Single().Objective);
     }
 
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_explicit_rollback_restores_backup_and_archives_primary")]
+    public void OrchestratorStateStoreExplicitRollbackRestoresBackupAndArchivesPrimary()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var first = new AgentOrchestratorKernel();
+        first.CreateGoal("Rollback target");
+        OrchestratorStateStore.Save(path, first);
+        var second = new AgentOrchestratorKernel();
+        second.CreateGoal("Archive current primary");
+        OrchestratorStateStore.Save(path, second);
+
+        var rollback = OrchestratorStateStore.RestoreBackup(path);
+        var restored = OrchestratorStateStore.Load(path);
+
+        Assert.Equal("Rollback target", restored.Goals.Single().Objective);
+        Assert.Equal(Path.GetFullPath(path), rollback.StatePath);
+        Assert.Equal(Path.GetFullPath(path) + ".bak", rollback.BackupPath);
+        Xunit.Assert.NotNull(rollback.ArchivedStatePath);
+        Assert.True(File.Exists(rollback.ArchivedStatePath!));
+        Assert.Equal("Archive current primary", OrchestratorStateStore.Load(rollback.ArchivedStatePath!).Goals.Single().Objective);
+        Assert.Equal(1, rollback.GoalCount);
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_retries_transient_rollback_replace_access_denial")]
+    public async Task OrchestratorStateStoreRetriesTransientRollbackReplaceAccessDenial()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var first = new AgentOrchestratorKernel();
+        first.CreateGoal("Rollback retry target");
+        OrchestratorStateStore.Save(path, first);
+        var second = new AgentOrchestratorKernel();
+        second.CreateGoal("Locked current primary");
+        OrchestratorStateStore.Save(path, second);
+
+        await using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var rollback = OrchestratorStateStore.RestoreBackupAsync(path);
+        await Task.Delay(125);
+        await hold.DisposeAsync();
+        await rollback;
+
+        var restored = OrchestratorStateStore.Load(path);
+        Assert.Equal("Rollback retry target", restored.Goals.Single().Objective);
+        Assert.Equal(0, Directory.EnumerateFiles(Path.GetDirectoryName(path)!, ".state.json.rollback.*.tmp").Count());
+    }
+
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_handles_concurrent_atomic_saves")]
     public async Task OrchestratorStateStoreHandlesConcurrentAtomicSaves()
     {

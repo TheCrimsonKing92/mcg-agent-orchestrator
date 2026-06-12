@@ -116,6 +116,21 @@ internal sealed class DashboardStateService(IOrchestratorStateRepository reposit
         }
     }
 
+    public async Task<OrchestratorStateRollbackResult> RestoreBackupAsync(
+        string statePath,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutationGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await OrchestratorStateStore.RestoreBackupAsync(statePath, cancellationToken);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         _mutationGate.Dispose();

@@ -56,6 +56,43 @@ public static class OrchestratorStateStore
         }
     }
 
+    public static OrchestratorStateRollbackResult RestoreBackup(string path)
+    {
+        return RestoreBackupAsync(path).GetAwaiter().GetResult();
+    }
+
+    public static async Task<OrchestratorStateRollbackResult> RestoreBackupAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var gate = GetFileLock(path);
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var backupPath = fullPath + BackupExtension;
+            if (!File.Exists(backupPath))
+            {
+                throw new InvalidOperationException($"State backup was not found: {backupPath}");
+            }
+
+            var restored = await LoadSnapshotFileAsync(backupPath, cancellationToken);
+            EnsureParentDirectory(fullPath);
+            var backupContent = await File.ReadAllTextAsync(backupPath, cancellationToken);
+            var archivedStatePath = ArchiveCurrentState(fullPath);
+            await ReplacePrimaryFromBackupAsync(fullPath, backupContent, cancellationToken);
+
+            return new OrchestratorStateRollbackResult(
+                fullPath,
+                backupPath,
+                archivedStatePath,
+                restored.Goals.Count,
+                restored.HumanInputRequests.Count);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     private static SemaphoreSlim GetFileLock(string path)
     {
         return FileLocks.GetOrAdd(Path.GetFullPath(path), _ => new SemaphoreSlim(1, 1));
@@ -97,6 +134,53 @@ public static class OrchestratorStateStore
                         TryCreateInitialBackup(fullPath);
                     }
 
+                    return;
+                }
+                catch (Exception ex) when (IsTransientAtomicWriteException(ex) && attempt < AtomicWriteAttempts)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
+                }
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
+    private static string? ArchiveCurrentState(string fullPath)
+    {
+        if (!File.Exists(fullPath))
+        {
+            return null;
+        }
+
+        var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var archivePath = Path.Combine(
+            Path.GetDirectoryName(fullPath) ?? AppContext.BaseDirectory,
+            $"{Path.GetFileName(fullPath)}.pre-rollback-{stamp}-{Guid.NewGuid():n}.json");
+        File.Copy(fullPath, archivePath, overwrite: false);
+        return archivePath;
+    }
+
+    private static async Task ReplacePrimaryFromBackupAsync(string fullPath, string backupContent, CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(fullPath) ?? AppContext.BaseDirectory;
+        var tempPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(fullPath)}.rollback.{Guid.NewGuid():n}.tmp");
+
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, backupContent, cancellationToken);
+            for (var attempt = 1; attempt <= AtomicWriteAttempts; attempt++)
+            {
+                try
+                {
+                    File.Move(tempPath, fullPath, overwrite: true);
                     return;
                 }
                 catch (Exception ex) when (IsTransientAtomicWriteException(ex) && attempt < AtomicWriteAttempts)
@@ -160,6 +244,13 @@ public static class OrchestratorStateStore
         return options;
     }
 }
+
+public sealed record OrchestratorStateRollbackResult(
+    string StatePath,
+    string BackupPath,
+    string? ArchivedStatePath,
+    int GoalCount,
+    int HumanInputRequestCount);
 
 public interface IOrchestratorStateRepository
 {

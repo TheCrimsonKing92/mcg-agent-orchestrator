@@ -560,10 +560,16 @@ public static string BuildDashboardRestartCommand(DashboardHostArgs args)
 
 public static string BuildDashboardRestartCommand(DashboardHostArgs args, OrchestratorWorkspace workspace)
 {
-    var command = BuildDashboardRestartCommand(args);
-    return workspace.IsTenantScoped
-        ? command + $" --tenant {workspace.TenantName}"
-        : command;
+    if (!workspace.IsTenantScoped)
+    {
+        return BuildDashboardRestartCommand(args);
+    }
+
+    var refresh = args.AutoRefreshSeconds is > 0
+        ? $" --refresh {args.AutoRefreshSeconds.Value}"
+        : string.Empty;
+    var dashboardUrl = GetRestartUrl(args);
+    return $".\\mcg-orchestrator.cmd --tenant {workspace.TenantName} {args.CommandName} {dashboardUrl}{refresh} --no-open";
 }
 
 private static string? GetMachineHostName()

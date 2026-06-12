@@ -34,6 +34,15 @@ internal static partial class ConsoleViews
         Console.WriteLine($"Continuations: {workspace.ContinuationStorePath}");
     }
 
+    public static void PrintStateRollback(OrchestratorStateRollbackResult rollback)
+    {
+        Console.WriteLine("State rollback restored backup.");
+        Console.WriteLine($"  state: {rollback.StatePath}");
+        Console.WriteLine($"  backup: {rollback.BackupPath}");
+        Console.WriteLine($"  archived previous state: {rollback.ArchivedStatePath ?? "none"}");
+        Console.WriteLine($"  restored goals: {rollback.GoalCount}; human inputs: {rollback.HumanInputRequestCount}");
+    }
+
     public static void PrintWorkerProfileChecks(AgentCatalog agents, WorkerProfileCatalog catalog, string? name)
     {
         var selected = string.IsNullOrWhiteSpace(name)

@@ -295,6 +295,17 @@ internal static partial class DashboardEndpoints
                 : "Dashboard stop requested for the current PID. Sibling dashboard processes are still listed; stop only exact stale PIDs before build/test if locks remain."));
     }
 
+    private static async Task<IResult> RestoreStateBackupAsync(HttpContext context, DashboardEndpointServices services)
+    {
+        var confirm = context.Request.Query["confirm"].ToString();
+        if (!confirm.Equals("state-rollback", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("State rollback restores state.json from state.json.bak. Add ?confirm=state-rollback after confirming no dashboard or worker is writing state.");
+        }
+
+        return Json(await services.State.RestoreBackupAsync(services.Workspace.StatePath, context.RequestAborted));
+    }
+
     private static string BuildDashboardRestartCommand(DashboardEndpointServices services)
         => DashboardHost.BuildDashboardRestartCommand(services.HostArgs, services.Workspace);
 

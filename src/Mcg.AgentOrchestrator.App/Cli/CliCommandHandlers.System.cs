@@ -22,6 +22,19 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;
 
+            case "state-rollback":
+                if (!parts.Any(part => part.Equals("--confirm-state-rollback", StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new InvalidOperationException("State rollback restores state.json from state.json.bak. Re-run with --confirm-state-rollback after confirming no dashboard or worker is writing state.");
+                }
+
+                var rollback = OrchestratorStateStore.RestoreBackup(context.StatePath);
+                var restored = OrchestratorStateStore.Load(context.StatePath);
+                context.Kernel.ReplaceWithSnapshot(restored.ExportSnapshot());
+                context.CurrentGoal = OrchestratorEntityResolver.GetLatestGoal(context.Kernel);
+                ConsoleViews.PrintStateRollback(rollback);
+                return false;
+
             case "provider-smoke":
                 var smokeArgs = parts.Skip(1)
                     .Where(part => !part.Equals("--confirm-all", StringComparison.OrdinalIgnoreCase))
