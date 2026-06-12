@@ -6,18 +6,6 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Require commit or explicit no-change evidence for Developer/Tester dispatch completion
-
-Status: open | Size: small-medium | Suggested route: simple-goal
-
-Why: live dogfood goal `03192a9b` showed a haiku Developer correctly edited files but did not commit. The task still recorded `TaskCompleted` because exit code 0 plus non-empty output satisfied the current subscription dispatch guard. That is a false-completion class for file-touching roles, especially now that haiku is used for smaller Developer tasks.
-
-Where: subscription/background dispatch completion handling in App/Infrastructure, goal worktree detection, task verification records, and existing dispatch tests around `BackgroundDispatchRunner`/worker dispatch.
-
-Done when: for Developer and Tester dispatches that run in a goal worktree, completion requires either a new commit on the goal branch after dispatch start or an explicit no-change rationale in worker output with a clean worktree. If neither exists, record the task as failed with concise evidence that includes branch/commit/worktree status. Planner/Researcher/Reviewer behavior is unchanged.
-
-Verify: add focused tests for a file-touching role that exits 0 with output but no commit, a dirty-worktree no-commit case, a committed-change pass, and an explicit no-change pass. Run full `dotnet test`.
-
 ## Add usage-limit review acknowledgement for repeated recoverable subscription failures
 
 Status: open | Size: small-medium | Suggested route: simple-goal
@@ -29,6 +17,18 @@ Where: subscription dispatch planning/start commands, retry-limit review state, 
 Done when: CLI accepts `--confirm-limit-review "<note>"` on the appropriate dispatch command, records the review note, clears or supersedes the limit-review block, and allows retry/dispatch to proceed. Dashboard/API parity offers the same acknowledgement path. If `SubscriptionRetryAfter` is known and still in the future, `start-dispatch` reports the defer-until time and does not burn another attempt.
 
 Verify: focused tests cover the CLI acknowledgement, dashboard/API acknowledgement if applicable, persisted review evidence, and future retry-after deferral. Run full `dotnet test`.
+
+## Reject unresolved worker/profile dispatch template variables before task state mutation
+
+Status: open | Size: small | Suggested route: simple-goal
+
+Why: during goal `feadc825`, `profile-dispatch 1 codex-cli` against a task assigned to an Anthropic agent recorded a Running dispatch with literal `{subscriptionModelName}` and `{subscriptionReasoningEffort}` placeholders. No process had started, `cancel-dispatch` could not cancel it, and the operator had to use `progress failed` plus `retry` to recover.
+
+Where: `WorkerProfileDispatcher`, CLI `profile-dispatch`/`worker-dispatch`, task status mutation and dispatch recording.
+
+Done when: dispatch preparation validates that no `{...}` template variables remain in the rendered command before it records dispatch state or marks a task Running. Failures should leave the task in its prior status and print actionable evidence. If cross-profile rerouting is intended, provide an explicit supported way to supply subscription model/reasoning/worktree values.
+
+Verify: focused tests cover unresolved placeholders in `profile-dispatch` and `worker-dispatch`, proving task status and last dispatch are unchanged on failure. Run full `dotnet test`.
 
 ## Use one source of truth for paid/local output cap policy
 
@@ -53,6 +53,18 @@ Where: `acceptance` CLI/API flow, goal worktree services, verification command e
 Done when: acceptance runs the independent verification suite in the goal worktree before fast-forward/merge, refuses to merge on verification failure, and records concise evidence. Provide an explicit `--skip-verify` escape for rare operator-controlled cases.
 
 Verify: tests cover acceptance refusing a failed verification, accepting a passing verification, and honoring `--skip-verify`. Run full `dotnet test`, then validate in a live goal.
+
+## Make workspace cleanup report lock holders and leave a resumable cleanup command
+
+Status: open | Size: small-medium | Suggested route: simple-goal
+
+Why: goal `feadc825` fast-forwarded successfully, but `workspace remove` unregistered the worktree and then repeatedly failed to delete `.orchestrator-worktrees/feadc825` because another process held the directory. `dotnet build-server shutdown`, stopping the exact post-test `dotnet` PID, and long-path `Remove-Item` still left a locked orphan directory. The operator could delete the merged branch, but could not identify the remaining holder without broad process risk.
+
+Where: `GoalWorktrees.Remove`, workspace CLI output, cleanup retry/backoff and diagnostics on Windows.
+
+Done when: partial cleanup reports that the worktree was unregistered, whether the goal branch remains, the exact leftover path, and the likely lock-holder process names/PIDs when discoverable. A follow-up `workspace remove` or dedicated cleanup command should resume from that state and avoid throwing a generic directory-in-use error.
+
+Verify: tests simulate already-unregistered leftover worktree directories and locked paths where possible; manual Windows smoke validates actionable output when deletion is blocked. Run full `dotnet test`.
 
 ## Add sequential pipeline auto-advance
 
