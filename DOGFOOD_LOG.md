@@ -452,3 +452,11 @@ Goal `efad9a91`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~4 mi
 - Operator gate: reviewed CLI workspace diff and regression; focused GoalWorktreeTests 13/13 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 307/307; acceptance verification passed.
 - Residual: superseded goal `8b64de95` has preserved uncommitted heartbeat-visibility edits in its worktree; do not remove that workspace until salvaged or explicitly discarded.
 - Model fit: OpenAI/gpt-5.5 - adequate - small CLI targeting fix with focused regression.
+
+## 2026-06-12 - Dispatch heartbeat status is operator-visible (goal c5a794cb)
+
+Goal `c5a794cb`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~6.8 min). `ProcessLogReader` now reads the heartbeat sidecar with graceful missing/unreadable/invalid states, and CLI task details, CLI process logs, dashboard/API task detail DTOs, process log DTOs, work-summary process summaries, dashboard process rendering, and transcript output expose heartbeat path, availability, state, pid/child pid, last observed/progress timestamps, age/idle durations, and stdout/stderr byte counts. This salvaged the useful idea from superseded goal `8b64de95` without merging its stale branch. Commit `75ce187` fast-forwarded to main and workspace removal succeeded; the old `8b64de95` worktree and branch were removed after salvage.
+
+- Operator gate: reviewed diff and worker log; focused heartbeat tests 5/5 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 311/311; `git diff --check` and acceptance verification passed.
+- Friction closed: operators can now see heartbeat/progress data before the stall watchdog trips.
+- Model fit: OpenAI/gpt-5.5 - adequate - broad but mechanical surface-wiring task with focused tests.
