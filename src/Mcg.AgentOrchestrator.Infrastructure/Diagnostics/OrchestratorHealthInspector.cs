@@ -424,7 +424,7 @@ public static class OrchestratorHealthInspector
 
     private static string ExtractExecutable(string commandTemplate)
     {
-        var trimmed = commandTemplate.Trim();
+        var trimmed = ExtractExecutableStatement(commandTemplate);
         if (trimmed.StartsWith("& ", StringComparison.Ordinal))
         {
             trimmed = trimmed[2..].TrimStart();
@@ -445,6 +445,75 @@ public static class OrchestratorHealthInspector
         var separator = trimmed.IndexOfAny([' ', '\t']);
         return separator < 0 ? trimmed : trimmed[..separator];
     }
+
+    private static string ExtractExecutableStatement(string commandTemplate)
+    {
+        foreach (var statement in SplitPowerShellStatements(commandTemplate))
+        {
+            var trimmed = statement.Trim();
+            if (trimmed.Length == 0 || IsPowerShellSetupStatement(trimmed))
+            {
+                continue;
+            }
+
+            return trimmed;
+        }
+
+        return string.Empty;
+    }
+
+    private static IEnumerable<string> SplitPowerShellStatements(string commandTemplate)
+    {
+        var start = 0;
+        char? quote = null;
+        for (var index = 0; index < commandTemplate.Length; index++)
+        {
+            var current = commandTemplate[index];
+            if (quote is not null)
+            {
+                if (current == quote)
+                {
+                    quote = null;
+                }
+
+                continue;
+            }
+
+            if (current is '\'' or '"')
+            {
+                quote = current;
+                continue;
+            }
+
+            if (current == ';')
+            {
+                yield return commandTemplate[start..index];
+                start = index + 1;
+            }
+        }
+
+        yield return commandTemplate[start..];
+    }
+
+    private static bool IsPowerShellSetupStatement(string statement) =>
+        IsPowerShellEnvironmentAssignment(statement) ||
+        IsPowerShellLocationStatement(statement);
+
+    private static bool IsPowerShellEnvironmentAssignment(string statement)
+    {
+        if (!statement.StartsWith("$env:", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var separator = statement.IndexOf('=');
+        return separator > "$env:".Length;
+    }
+
+    private static bool IsPowerShellLocationStatement(string statement) =>
+        statement.StartsWith("Set-Location ", StringComparison.OrdinalIgnoreCase) ||
+        statement.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) ||
+        statement.StartsWith("Push-Location ", StringComparison.OrdinalIgnoreCase);
 
     private static bool LocalCommandExists(string executable)
     {

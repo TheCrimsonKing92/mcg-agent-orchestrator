@@ -319,6 +319,30 @@ public sealed class HealthInspectorTests
     Assert.False(report.WorkerProfiles.Single(profile => profile.Name == "missing").IsResolvable);
     Assert.Equal("missing-cli", report.WorkerProfiles.Single(profile => profile.Name == "missing").Executable);
 }
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_resolves_env_prefixed_qwen_profiles")]
+    public void OrchestratorHealthInspectorResolvesEnvPrefixedQwenProfiles()
+{
+    var catalog = new WorkerProfileCatalog(
+    [
+        WorkerProfileCatalog.Default().GetRequired("qwen-code-cli"),
+        new WorkerProfile(
+            "qwen-local",
+            "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; qwen --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})")
+    ]);
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+        AgentCatalog.Default(),
+        catalog,
+        command => command == "qwen");
+
+    var qwenCode = report.WorkerProfiles.Single(profile => profile.Name == "qwen-code-cli");
+    var qwenLocal = report.WorkerProfiles.Single(profile => profile.Name == "qwen-local");
+    Assert.True(qwenCode.IsResolvable);
+    Assert.Equal("qwen", qwenCode.Executable);
+    Assert.True(qwenLocal.IsResolvable);
+    Assert.Equal("qwen", qwenLocal.Executable);
+}
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_warns_on_echo_only_worker_profiles")]
     public void OrchestratorHealthInspectorWarnsOnEchoOnlyWorkerProfiles()
 {
