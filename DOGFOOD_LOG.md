@@ -468,3 +468,11 @@ Goal `e5e718ae`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~9.6 
 - Operator gate: reviewed failover policy and tests; focused RunGoalService tests 10/10 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 315/315; `git diff --check` and acceptance verification passed.
 - Residual: current saved catalog has only one implementation-role agent, so live failover requires configuring an alternate same-role agent first.
 - Model fit: OpenAI/gpt-5.5 - adequate - policy-heavy run-loop change with focused hermetic tests.
+
+## 2026-06-12 - CLI can add same-role alternate agents (goal 0af36831)
+
+Goal `0af36831`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. New `agent-add <role> <provider> <model> [name] [--complex-model <model>]` appends or replaces an agent by generated id without deleting the existing role primary, while `agent <role> ...` keeps its role-replacement behavior. Agent listing now marks primary vs alternate, catalog persistence round-trips same-role alternates, simple-goal activation still chooses the first available role agent, and run-goal failover can use a catalog-added alternate. Worker commit `b46a194` fast-forwarded to main and workspace removal succeeded.
+
+- Operator gate: reviewed CLI/catalog/failover diffs; fixed an interactive parser gap so multi-word `agent-add` names are folded before flags in REPL mode too; focused tests 11/11 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 323/323; `git diff --check` and acceptance verification passed.
+- Friction closed: live failover no longer requires hand-editing `agents.json` to make same-role alternates visible.
+- Model fit: OpenAI/gpt-5.5 - adequate - small CLI/catalog extension with targeted tests; operator follow-up caught a REPL-only argument parsing gap.
