@@ -1,6 +1,7 @@
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
@@ -54,6 +55,10 @@ private static void RenderTask(StringBuilder text, Goal goal, int taskNumber, Ta
         text.AppendLine($"Started: {task.LastProcess.StartedAt:u}");
         text.AppendLine($"Completed: {task.LastProcess.CompletedAt?.ToString("u") ?? "n/a"}");
         text.AppendLine($"Exit code: {task.LastProcess.ExitCode?.ToString() ?? "n/a"}");
+        foreach (var line in ProcessHeartbeatText.FormatLines(ProcessLogReader.ReadHeartbeat(task.LastProcess)))
+        {
+            text.AppendLine(line);
+        }
     }
 
     text.AppendLine("Verification history:");

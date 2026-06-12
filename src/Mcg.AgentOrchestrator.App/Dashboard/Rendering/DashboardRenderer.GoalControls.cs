@@ -249,6 +249,7 @@ public static partial class DashboardRenderer
         {
             html.AppendLine($"<p>Background process is running: pid {task.LastProcess.ProcessId}</p>");
             html.AppendLine($"<p class=\"meta\"><code>{Encode(task.LastProcess.Command)}</code></p>");
+            html.AppendLine(RenderHeartbeatStatus(ProcessLogReader.ReadHeartbeat(task.LastProcess)));
             html.AppendLine("<div class=\"buttonbar\">");
             html.AppendLine($"<button class=\"primary\" type=\"button\" data-action-button=\"{prefix}/refresh\">Refresh process</button>");
             html.AppendLine($"<button type=\"button\" data-action-button=\"{prefix}/cancel\">Cancel process</button>");

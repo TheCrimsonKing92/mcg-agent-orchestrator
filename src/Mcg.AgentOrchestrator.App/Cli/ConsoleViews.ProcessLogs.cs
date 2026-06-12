@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -10,6 +11,11 @@ public static void PrintProcessLogs(TaskSpec task, ProcessLogStream stream)
     var process = task.LastProcess
         ?? throw new InvalidOperationException("Task has no background process logs.");
     var logs = ProcessLogReader.Read(process);
+
+    foreach (var line in ProcessHeartbeatText.FormatLines(logs.Heartbeat))
+    {
+        Console.WriteLine(line);
+    }
 
     if (stream is ProcessLogStream.All or ProcessLogStream.Stdout)
     {

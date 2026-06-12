@@ -412,6 +412,53 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("no background process logs", ex!.Message);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_task_details_and_logs_render_dispatch_heartbeat_status")]
+    public void CliTaskDetailsAndLogsRenderDispatchHeartbeatStatus()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Render heartbeat cli", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var process = new TaskProcessRecord(
+            777,
+            "codex exec prompt.md",
+            root,
+            Path.Combine(root, "worker.out.log"),
+            Path.Combine(root, "worker.err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, "hello stdout");
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), """
+{"pid":777,"childPid":888,"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":123,"stderrBytes":45}
+""");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        using var writer = new StringWriter();
+        var originalOut = Console.Out;
+
+        try
+        {
+            Console.SetOut(writer);
+            ConsoleViews.PrintTask(goal, task);
+            ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+
+        Xunit.Assert.Contains("heartbeat: available state=running pid=777 child_pid=888", output);
+        Xunit.Assert.Contains($"heartbeat path: {BackgroundDispatchRunner.GetHeartbeatPath(process)}", output);
+        Xunit.Assert.Contains("log bytes: stdout=123 stderr=45", output);
+        Xunit.Assert.Contains("stdout: ", output);
+        Xunit.Assert.Contains("hello stdout", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_paid_provider_without_confirm_flag")]
     public void CliApiRunBlocksPaidProviderWithoutConfirmFlag()
     {

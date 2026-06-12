@@ -189,7 +189,8 @@ internal sealed record ProcessSummaryDto(
     bool WasCancelled,
     string StandardOutputPath,
     string StandardErrorPath,
-    string ExitCodePath);
+    string ExitCodePath,
+    DispatchHeartbeatDto Heartbeat);
 
 internal sealed record VerificationSummaryDto(
     int ExitCode,

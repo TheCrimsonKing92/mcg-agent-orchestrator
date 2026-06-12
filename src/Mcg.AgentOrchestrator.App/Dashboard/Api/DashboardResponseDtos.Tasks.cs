@@ -70,7 +70,8 @@ internal sealed record ProcessDto(
     bool WasCancelled,
     string StandardOutputPath,
     string StandardErrorPath,
-    string ExitCodePath);
+    string ExitCodePath,
+    DispatchHeartbeatDto Heartbeat);
 
 internal sealed record ProcessLogDto(
     string GoalId,
@@ -84,7 +85,22 @@ internal sealed record ProcessLogDto(
     string StandardErrorPath,
     string StandardError,
     string ExitCodePath,
-    string ExitCodeText);
+    string ExitCodeText,
+    DispatchHeartbeatDto Heartbeat);
+
+internal sealed record DispatchHeartbeatDto(
+    string Path,
+    bool IsAvailable,
+    string? UnavailableReason,
+    int ProcessId,
+    int? ChildProcessId,
+    string State,
+    DateTimeOffset? LastObservedAt,
+    DateTimeOffset? LastProgressAt,
+    double? HeartbeatAgeSeconds,
+    double? IdleDurationSeconds,
+    long StandardOutputBytes,
+    long StandardErrorBytes);
 
 internal sealed record TaskVerificationHistoryDto(
     string GoalId,

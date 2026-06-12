@@ -79,6 +79,10 @@ public static void PrintTask(Goal goal, TaskSpec task)
         }
         Console.WriteLine($"stdout path: {task.LastProcess.StandardOutputPath}");
         Console.WriteLine($"stderr path: {task.LastProcess.StandardErrorPath}");
+        foreach (var line in ProcessHeartbeatText.FormatLines(ProcessLogReader.ReadHeartbeat(task.LastProcess)))
+        {
+            Console.WriteLine(line);
+        }
     }
 
     if (task.LastVerification is not null)

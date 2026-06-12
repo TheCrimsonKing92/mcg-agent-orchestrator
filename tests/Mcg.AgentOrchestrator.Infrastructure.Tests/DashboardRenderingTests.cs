@@ -2110,6 +2110,54 @@ public sealed class DashboardRenderingTests
     Assert.Contains(noProcessControls, text => text.Contains("Task has no background process to cancel.", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_surfaces_dispatch_heartbeat_status_for_running_processes")]
+    public void DashboardSurfacesDispatchHeartbeatStatusForRunningProcesses()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render heartbeat", [new TaskSpec(TaskId.New(), "Run process", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.Single();
+    var exitPath = Path.Combine(root, "worker.exit.txt");
+    var process = new TaskProcessRecord(
+        321,
+        "codex exec prompt.md",
+        root,
+        Path.Combine(root, "worker.out.log"),
+        Path.Combine(root, "worker.err.log"),
+        exitPath,
+        DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
+        null,
+        null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
+    File.WriteAllText(heartbeatPath, """
+{"pid":321,"childPid":654,"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":99,"stderrBytes":11}
+""");
+
+    var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+    var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
+
+    Assert.True(detail.LastProcess!.Heartbeat.IsAvailable);
+    Assert.Equal(heartbeatPath, detail.LastProcess.Heartbeat.Path);
+    Assert.Equal("running", detail.LastProcess.Heartbeat.State);
+    Assert.Equal(654, detail.LastProcess.Heartbeat.ChildProcessId);
+    Assert.Equal(99, detail.LastProcess.Heartbeat.StandardOutputBytes);
+    Assert.Equal(11, detail.LastProcess.Heartbeat.StandardErrorBytes);
+    Assert.True(logs.Heartbeat.IsAvailable);
+    Assert.Equal(heartbeatPath, logs.Heartbeat.Path);
+    Assert.Equal(heartbeatPath, workSummary.Tasks.Single().LastProcess!.Heartbeat.Path);
+    Assert.Contains(html, text => text.Contains("heartbeat running", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("stdout_bytes=99", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains(heartbeatPath, StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("heartbeat: available state=running pid=321 child_pid=654", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("log bytes: stdout=99 stderr=11", StringComparison.Ordinal));
+}
+
 static void AssertControl(
     Goal goal,
     NextActionItem item,

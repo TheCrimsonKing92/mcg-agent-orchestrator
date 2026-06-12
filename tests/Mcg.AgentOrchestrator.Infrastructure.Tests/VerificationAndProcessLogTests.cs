@@ -50,6 +50,54 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal("hello stdout", logs.StandardOutput);
     Assert.Equal("hello stderr", logs.StandardError);
     Assert.Equal("0", logs.ExitCode);
+    Assert.False(logs.Heartbeat.IsAvailable);
+    Assert.Equal("missing", logs.Heartbeat.UnavailableReason);
+}
+
+    [Xunit.Fact(DisplayName = "ProcessLogReader_reads_dispatch_heartbeat_status")]
+    public void ProcessLogReaderReadsDispatchHeartbeatStatus()
+{
+    var root = CreateTempDirectory();
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var process = CreateProcessRecord(root, exit);
+    var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
+    File.WriteAllText(heartbeatPath, """
+{"pid":123,"childPid":456,"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7}
+""");
+
+    var heartbeat = ProcessLogReader.ReadHeartbeat(process, DateTimeOffset.Parse("2026-06-12T20:00:30Z"));
+
+    Assert.True(heartbeat.IsAvailable);
+    Assert.Equal(heartbeatPath, heartbeat.Path);
+    Assert.True(heartbeat.UnavailableReason is null);
+    Assert.Equal(123, heartbeat.ProcessId);
+    Assert.Equal(456, heartbeat.ChildProcessId);
+    Assert.Equal("running", heartbeat.State);
+    Assert.Equal(TimeSpan.FromSeconds(20), heartbeat.HeartbeatAge);
+    Assert.Equal(TimeSpan.FromSeconds(30), heartbeat.IdleDuration);
+    Assert.Equal(42, heartbeat.StandardOutputBytes);
+    Assert.Equal(7, heartbeat.StandardErrorBytes);
+}
+
+    [Xunit.Fact(DisplayName = "ProcessLogReader_degrades_missing_or_invalid_heartbeat_to_unavailable")]
+    public void ProcessLogReaderDegradesMissingOrInvalidHeartbeatToUnavailable()
+{
+    var root = CreateTempDirectory();
+    var missingProcess = CreateProcessRecord(root, Path.Combine(root, "missing.exit.txt"));
+    var missing = ProcessLogReader.ReadHeartbeat(missingProcess);
+
+    Assert.False(missing.IsAvailable);
+    Assert.Equal("missing", missing.UnavailableReason);
+    Assert.Equal(BackgroundDispatchRunner.GetHeartbeatPath(missingProcess), missing.Path);
+
+    var invalidProcess = CreateProcessRecord(root, Path.Combine(root, "invalid.exit.txt"));
+    File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(invalidProcess), "{not-json");
+
+    var invalid = ProcessLogReader.ReadHeartbeat(invalidProcess);
+
+    Assert.False(invalid.IsAvailable);
+    Assert.Equal("invalid", invalid.UnavailableReason);
+    Assert.Equal(BackgroundDispatchRunner.GetHeartbeatPath(invalidProcess), invalid.Path);
 }
 
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_tolerates_locked_stdout_when_process_is_running")]
@@ -304,6 +352,20 @@ public sealed class VerificationAndProcessLogTests
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.False(findCalled);
+}
+
+private static TaskProcessRecord CreateProcessRecord(string root, string exitPath)
+{
+    return new TaskProcessRecord(
+        123,
+        "fake-cmd",
+        root,
+        Path.Combine(root, "worker.out.log"),
+        Path.Combine(root, "worker.err.log"),
+        exitPath,
+        DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
+        null,
+        null);
 }
 }
 

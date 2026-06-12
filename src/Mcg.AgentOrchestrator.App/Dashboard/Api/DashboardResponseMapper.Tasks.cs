@@ -106,7 +106,8 @@ public static ProcessDto? ToProcessDto(TaskProcessRecord? process)
             process.WasCancelled,
             process.StandardOutputPath,
             process.StandardErrorPath,
-            process.ExitCodePath);
+            process.ExitCodePath,
+            ToDispatchHeartbeatDto(ProcessLogReader.ReadHeartbeat(process)));
 }
 
 public static ProcessLogDto ToProcessLogDto(Goal goal, TaskSpec task)
@@ -126,7 +127,25 @@ public static ProcessLogDto ToProcessLogDto(Goal goal, TaskSpec task)
         logs.StandardErrorPath,
         logs.StandardError,
         logs.ExitCodePath,
-        logs.ExitCode);
+        logs.ExitCode,
+        ToDispatchHeartbeatDto(logs.Heartbeat));
+}
+
+private static DispatchHeartbeatDto ToDispatchHeartbeatDto(DispatchHeartbeatStatus heartbeat)
+{
+    return new DispatchHeartbeatDto(
+        heartbeat.Path,
+        heartbeat.IsAvailable,
+        heartbeat.UnavailableReason,
+        heartbeat.ProcessId,
+        heartbeat.ChildProcessId,
+        heartbeat.State,
+        heartbeat.LastObservedAt,
+        heartbeat.LastProgressAt,
+        heartbeat.HeartbeatAge?.TotalSeconds,
+        heartbeat.IdleDuration?.TotalSeconds,
+        heartbeat.StandardOutputBytes,
+        heartbeat.StandardErrorBytes);
 }
 
 public static TaskVerificationHistoryDto ToVerificationHistoryDto(Goal goal, TaskSpec task)

@@ -37,9 +37,10 @@ public static partial class DashboardRenderer
 
         if (task.LastProcess is not null)
         {
+            var heartbeat = RenderHeartbeatStatus(ProcessLogReader.ReadHeartbeat(task.LastProcess));
             return task.LastProcess.IsRunning
-                ? $"<div>Process running: pid {task.LastProcess.ProcessId}</div>"
-                : $"<div>Process exit {Encode(task.LastProcess.ExitCode?.ToString() ?? "n/a")}</div>";
+                ? $"<div>Process running: pid {task.LastProcess.ProcessId}</div>{heartbeat}"
+                : $"<div>Process exit {Encode(task.LastProcess.ExitCode?.ToString() ?? "n/a")}</div>{heartbeat}";
         }
 
         if (task.LastDispatch is not null)
@@ -66,6 +67,11 @@ public static partial class DashboardRenderer
             : string.Empty;
 
         return $"<div>Model: {Encode(execution.ProviderName)}/{Encode(execution.ModelName)} by {Encode(execution.AgentName)} <span class=\"meta\">tokens {inputTokens} in / {outputTokens} out &middot; prompt {prompt} chars &middot; max {maxOutputTokens} out &middot; stop reason {Encode(execution.StopReason)}{capWarning}</span></div>";
+    }
+
+    private static string RenderHeartbeatStatus(DispatchHeartbeatStatus heartbeat)
+    {
+        return $"<div class=\"meta\">{Encode(ProcessHeartbeatText.FormatInline(heartbeat))}</div>";
     }
 
     private static string RenderVerificationPlan(TaskSpec task)

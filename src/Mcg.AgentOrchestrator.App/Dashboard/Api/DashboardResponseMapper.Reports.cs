@@ -192,7 +192,8 @@ public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
                 task.LastProcess.WasCancelled,
                 task.LastProcess.StandardOutputPath,
                 task.LastProcess.StandardErrorPath,
-                task.LastProcess.ExitCodePath),
+                task.LastProcess.ExitCodePath,
+                ToDispatchHeartbeatDto(ProcessLogReader.ReadHeartbeat(task.LastProcess))),
         task.LastVerification is null
             ? null
             : new VerificationSummaryDto(
