@@ -683,6 +683,62 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains("Read digest.md first", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_budgets_late_pipeline_file_context_without_dropping_api_evidence")]
+    public void BuildTaskBriefBudgetsLatePipelineFileContextWithoutDroppingApiEvidence()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var priorPlanner = new TaskSpec(TaskId.New(), "Plan the implementation sequence.", AgentRole.Planner);
+    var priorResearcher = new TaskSpec(TaskId.New(), "Inspect the prompt construction path.", AgentRole.Researcher);
+    var priorTester = new TaskSpec(TaskId.New(), "Verify previous prompt behavior.", AgentRole.Tester);
+    var priorReviewer = new TaskSpec(TaskId.New(), "Review prompt evidence retention.", AgentRole.Reviewer);
+    var currentTask = new TaskSpec(
+        TaskId.New(),
+        $"Design and implement production prompt budget controls. task-start {new string('t', 1800)} task-tail",
+        AgentRole.Developer,
+        $"verification-plan-start {new string('v', 1400)} verification-plan-tail");
+    var goal = kernel.CreateGoal(
+        $"Reduce subscription prompt bloat for late pipeline work. goal-start {new string('g', 1800)} goal-tail",
+        [priorPlanner, priorResearcher, priorTester, priorReviewer, currentTask]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    CompleteWithEvidence(kernel, goal.Id, priorPlanner.Id, "planner evidence");
+    CompleteWithEvidence(kernel, goal.Id, priorResearcher.Id, "researcher evidence");
+    CompleteWithEvidence(kernel, goal.Id, priorTester.Id, "tester evidence");
+    CompleteWithEvidence(kernel, goal.Id, priorReviewer.Id, $"api-inline-evidence-token {new string('p', 1600)} reviewer evidence tail");
+    kernel.RecordTaskDispatch(goal.Id, currentTask.Id, new TaskDispatchRecord(
+        "codex-cli",
+        $"codex exec prompt-start {new string('c', 1800)} prompt-tail",
+        "C:\\repo",
+        clock.UtcNow));
+    kernel.RecordTaskVerification(goal.Id, currentTask.Id, new TaskVerificationRecord(
+        "dotnet test",
+        "C:\\repo",
+        1,
+        $"current-verification-stdout-start {new string('s', 1800)} current-verification-stdout-tail",
+        $"current-verification-stderr-start {new string('e', 1800)} current-verification-stderr-tail",
+        clock.UtcNow));
+    for (var index = 1; index <= 24; index++)
+    {
+        kernel.RecordTaskNote(goal.Id, currentTask.Id, $"timeline-overflow-note-{index:00} {new string('n', 420)}");
+    }
+
+    var fileAccessBrief = kernel.BuildTaskBrief(
+        goal.Id,
+        currentTask.Id,
+        workingDirectory: "C:\\repo",
+        contextDirectory: "C:\\repo\\.orchestrator-context\\goal").Content;
+    var apiBrief = kernel.BuildTaskBrief(goal.Id, currentTask.Id).Content;
+
+    Assert.True(fileAccessBrief.Length <= 9000);
+    Assert.Contains(fileAccessBrief, text => text.Contains("current-task.md in the context directory", StringComparison.Ordinal));
+    Assert.Contains(fileAccessBrief, text => text.Contains("inline verification output collapsed", StringComparison.Ordinal));
+    Assert.Contains(fileAccessBrief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
+    Assert.True(!fileAccessBrief.Contains("api-inline-evidence-token", StringComparison.Ordinal));
+    Assert.Contains(apiBrief, text => text.Contains("api-inline-evidence-token", StringComparison.Ordinal));
+    Assert.Contains(apiBrief, text => text.Contains("reviewer evidence tail", StringComparison.Ordinal));
+    Assert.True(apiBrief.Length > fileAccessBrief.Length);
+}
+
     [Xunit.Fact(DisplayName = "SdlcRoleRequirements_researcher_brief_includes_no_modify_repository_line")]
     public void SdlcRoleRequirementsResearcherBriefIncludesNoModifyRepositoryLine()
 {
@@ -712,6 +768,17 @@ static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId 
     {
         kernel.RetryTask(goalId, taskId, $"{prefix}-{index:00}");
     }
+}
+
+static void CompleteWithEvidence(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string evidence)
+{
+    kernel.RecordTaskVerification(goalId, taskId, new TaskVerificationRecord(
+        "dotnet test",
+        "C:\\repo",
+        0,
+        evidence,
+        string.Empty,
+        DateTimeOffset.UtcNow));
 }
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()

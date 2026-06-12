@@ -6,6 +6,7 @@ public static class WorkerContextArtifacts
 {
     private const int PriorVerificationMaxChars = 40000;
     private const int GuidanceFileMaxChars = 30000;
+    private const int CurrentEvidenceMaxChars = 20000;
     private const int DigestTextMaxChars = 700;
     private const int DigestEvidenceMaxChars = 500;
     private const int SummaryFieldMaxChars = 350;
@@ -161,6 +162,46 @@ public static class WorkerContextArtifacts
             lines.Add(task.VerificationPlan);
         }
 
+        if (task.LastExecution is not null)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Last Model Output");
+            lines.Add(TrimArtifactBlock(task.LastExecution.Output, CurrentEvidenceMaxChars));
+        }
+
+        if (task.LastDispatch is not null)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Last Dispatch");
+            lines.Add($"Worker: {task.LastDispatch.WorkerName}");
+            lines.Add($"Command: {task.LastDispatch.Command}");
+            lines.Add($"Working directory: {task.LastDispatch.WorkingDirectory}");
+        }
+
+        if (task.LastVerification is not null)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Last Verification");
+            lines.Add($"Command: {task.LastVerification.Command}");
+            lines.Add($"Working directory: {task.LastVerification.WorkingDirectory}");
+            lines.Add($"Exit code: {task.LastVerification.ExitCode}");
+            lines.Add($"Verification history count: {task.VerificationHistory.Count}");
+            if (!string.IsNullOrWhiteSpace(task.LastVerification.ModelFitNote))
+            {
+                lines.Add($"Model fit: {task.LastVerification.ModelFitNote}");
+            }
+
+            lines.Add(string.Empty);
+            lines.Add("### Stdout");
+            lines.Add(TrimArtifactBlock(task.LastVerification.StandardOutput, CurrentEvidenceMaxChars));
+            if (!string.IsNullOrWhiteSpace(task.LastVerification.StandardError))
+            {
+                lines.Add(string.Empty);
+                lines.Add("### Stderr");
+                lines.Add(TrimArtifactBlock(task.LastVerification.StandardError, CurrentEvidenceMaxChars));
+            }
+        }
+
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -272,7 +313,7 @@ public static class WorkerContextArtifacts
             "## Artifacts",
             "- digest.md: compact role-aware summary of objective, current task, prior outcomes, verification status, evidence pointers, and open risks/blockers.",
             "- objective.md: full goal objective and goal status.",
-            "- current-task.md: current task description, role, working directory, and verification plan.",
+            "- current-task.md: current task description, role, working directory, verification plan, and retry evidence when present.",
             "- prior-task-summaries.md: compact prior task summaries with changed files, behavior changes, verification commands/results, risks, and model fit.",
             "- prior-task-evidence.md: prior completed task verification evidence with a larger file budget than inline prompts."
         };

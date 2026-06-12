@@ -44,7 +44,8 @@ public sealed partial class AgentOrchestratorKernel
             maxEvents: TimelineEventBudget(complexity),
             complexity);
 
-        var lines = new List<string>
+        var usesFileAccessContext = !string.IsNullOrWhiteSpace(workingDirectory) && !string.IsNullOrWhiteSpace(contextDirectory);
+        var headerLines = new List<string>
         {
             "# Agent Task Brief",
             string.Empty,
@@ -60,93 +61,165 @@ public sealed partial class AgentOrchestratorKernel
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
-            lines.Add($"Working directory, use absolute paths: {workingDirectory}");
+            headerLines.Add($"Working directory, use absolute paths: {workingDirectory}");
         }
 
         if (!string.IsNullOrWhiteSpace(contextDirectory))
         {
-            lines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first, then {Path.Combine(contextDirectory, "prior-task-summaries.md")} for prior summaries before prior-task-evidence.md; use manifest.md for role-specific artifact priorities and repo-local guidance references.");
+            headerLines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first, then {Path.Combine(contextDirectory, "prior-task-summaries.md")} for prior summaries before prior-task-evidence.md; use manifest.md for role-specific artifact priorities and repo-local guidance references.");
         }
 
-        lines.Add(string.Empty);
-        lines.Add("## Instructions");
-        lines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget));
+        var segments = new List<TaskBriefSegment>
+        {
+            TaskBriefSegment.Fixed(headerLines)
+        };
+
+        var instructionLines = new List<string>
+        {
+            string.Empty,
+            "## Instructions"
+        };
+        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
-            lines.Add(responseBudgetGuidance);
+            instructionLines.Add(responseBudgetGuidance);
         }
 
-        lines.Add(string.Empty);
+        instructionLines.Add(string.Empty);
+        segments.Add(TaskBriefSegment.Fixed(instructionLines));
 
-        lines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
-        lines.Add(string.Empty);
+        var roleLines = new List<string>();
+        roleLines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
+        roleLines.Add(string.Empty);
+        segments.Add(TaskBriefSegment.Fixed(roleLines));
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
-            lines.Add("## Verification Plan");
-            lines.Add(PromptContextFormatter.TrimVerificationPlanBlock(task.VerificationPlan, complexity));
-            lines.Add(string.Empty);
+            segments.Add(new TaskBriefSegment(
+                [
+                    "## Verification Plan",
+                    PromptContextFormatter.TrimVerificationPlanBlock(task.VerificationPlan, complexity),
+                    string.Empty
+                ],
+                [
+                    "## Verification Plan",
+                    "Read current-task.md in the context directory for the full verification plan; inline plan collapsed to stay under the role file-access prompt budget.",
+                    string.Empty
+                ],
+                CollapsePriority: 50));
         }
 
         if (pendingInput.Count > 0)
         {
-            lines.Add("## Pending Human Input");
+            var pendingInputLines = new List<string> { "## Pending Human Input" };
             foreach (var request in pendingInput)
             {
-                lines.Add($"- {request.Id}: {PromptContextFormatter.TrimPromptBlock(request.Question)}");
+                pendingInputLines.Add($"- {request.Id}: {PromptContextFormatter.TrimPromptBlock(request.Question)}");
             }
-            lines.Add(string.Empty);
+            pendingInputLines.Add(string.Empty);
+            segments.Add(TaskBriefSegment.Fixed(pendingInputLines));
         }
 
         if (task.LastExecution is not null)
         {
-            lines.Add("## Last Model Output");
-            lines.Add(PromptContextFormatter.TrimEvidenceBlock(task.LastExecution.Output, complexity));
-            lines.Add(string.Empty);
+            segments.Add(new TaskBriefSegment(
+                [
+                    "## Last Model Output",
+                    PromptContextFormatter.TrimEvidenceBlock(task.LastExecution.Output, complexity),
+                    string.Empty
+                ],
+                [
+                    "## Last Model Output",
+                    "Read current-task.md in the context directory for last model output; inline output collapsed to stay under the role file-access prompt budget.",
+                    string.Empty
+                ],
+                CollapsePriority: 30));
         }
 
         if (task.LastDispatch is not null)
         {
-            lines.Add("## Last Dispatch");
-            lines.Add($"Worker: {task.LastDispatch.WorkerName}");
-            lines.Add($"Command: {PromptContextFormatter.TrimPromptBlock(task.LastDispatch.Command)}");
-            lines.Add($"Working directory: {task.LastDispatch.WorkingDirectory}");
-            lines.Add(string.Empty);
+            segments.Add(new TaskBriefSegment(
+                [
+                    "## Last Dispatch",
+                    $"Worker: {task.LastDispatch.WorkerName}",
+                    $"Command: {PromptContextFormatter.TrimPromptBlock(task.LastDispatch.Command)}",
+                    $"Working directory: {task.LastDispatch.WorkingDirectory}",
+                    string.Empty
+                ],
+                [
+                    "## Last Dispatch",
+                    "Read current-task.md in the context directory for last dispatch details; inline command collapsed to stay under the role file-access prompt budget.",
+                    string.Empty
+                ],
+                CollapsePriority: 20));
         }
 
         if (task.LastVerification is not null)
         {
-            lines.Add("## Last Verification");
-            lines.Add($"Command: {task.LastVerification.Command}");
-            lines.Add($"Exit code: {task.LastVerification.ExitCode}");
-            lines.Add($"Verification history count: {task.VerificationHistory.Count}");
-            lines.Add($"Stdout: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardOutput, complexity)}");
-            lines.Add($"Stderr: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardError, complexity)}");
-            lines.Add(string.Empty);
+            segments.Add(new TaskBriefSegment(
+                [
+                    "## Last Verification",
+                    $"Command: {task.LastVerification.Command}",
+                    $"Exit code: {task.LastVerification.ExitCode}",
+                    $"Verification history count: {task.VerificationHistory.Count}",
+                    $"Stdout: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardOutput, complexity)}",
+                    $"Stderr: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardError, complexity)}",
+                    string.Empty
+                ],
+                [
+                    "## Last Verification",
+                    $"Command: {task.LastVerification.Command}",
+                    $"Exit code: {task.LastVerification.ExitCode}",
+                    $"Verification history count: {task.VerificationHistory.Count}",
+                    "Read current-task.md in the context directory for stdout and stderr; inline verification output collapsed to stay under the role file-access prompt budget.",
+                    string.Empty
+                ],
+                CollapsePriority: 40));
         }
 
-        var usesFileAccessContext = !string.IsNullOrWhiteSpace(workingDirectory) && !string.IsNullOrWhiteSpace(contextDirectory);
         var priorEvidence = usesFileAccessContext
             ? PromptContextFormatter.BuildPriorTaskEvidencePointerLines(goal.Tasks, taskId)
             : PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
-        lines.AddRange(priorEvidence);
         if (priorEvidence.Count > 0 && !string.IsNullOrWhiteSpace(workingDirectory))
         {
-            lines.Add(string.IsNullOrWhiteSpace(contextDirectory)
+            var priorEvidenceLines = priorEvidence.ToList();
+            priorEvidenceLines.Add(string.IsNullOrWhiteSpace(contextDirectory)
                 ? "Full evidence available at .orchestrator-handoff.md relative to the working directory."
                 : "Full evidence available in the context files; keep inline prior evidence as orientation only.");
-            lines.Add(string.Empty);
+            priorEvidenceLines.Add(string.Empty);
+            segments.Add(new TaskBriefSegment(
+                priorEvidenceLines,
+                [
+                    "## Prior Task Evidence",
+                    "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit; open prior-task-evidence.md second only when fuller verification output is needed.",
+                    string.Empty
+                ],
+                CollapsePriority: 10));
+        }
+        else if (priorEvidence.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(priorEvidence));
         }
 
         if (timeline.Count > 0)
         {
-            lines.Add("## Recent Timeline");
+            var timelineLines = new List<string> { "## Recent Timeline" };
             foreach (var evt in timeline)
             {
-                lines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true, complexity));
+                timelineLines.Add(PromptContextFormatter.FormatTimelineEvent(evt, includeTimestamp: true, complexity));
             }
+
+            segments.Add(new TaskBriefSegment(
+                timelineLines,
+                [
+                    "## Recent Timeline",
+                    "Read digest.md and current-task.md in the context directory for current status; inline timeline collapsed to stay under the role file-access prompt budget."
+                ],
+                CollapsePriority: 0));
         }
+
+        var lines = ApplyTaskBriefBudget(segments, task.RequiredRole, usesFileAccessContext);
 
         return new TaskBrief(
             goal.Id,
@@ -154,6 +227,52 @@ public sealed partial class AgentOrchestratorKernel
             task.RequiredRole,
             $"{task.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(task.Description)}",
             string.Join(Environment.NewLine, lines));
+    }
+
+    private static List<string> ApplyTaskBriefBudget(
+        IReadOnlyList<TaskBriefSegment> segments,
+        AgentRole role,
+        bool usesFileAccessContext)
+    {
+        var budget = PromptContextFormatter.TaskBriefCharacterBudget(role, usesFileAccessContext);
+        var rendered = RenderTaskBriefSegments(segments);
+        if (!usesFileAccessContext || CountTaskBriefCharacters(rendered) <= budget)
+        {
+            return rendered;
+        }
+
+        var collapsedSegments = segments.ToList();
+        foreach (var index in collapsedSegments
+            .Select((segment, index) => new { segment, index })
+            .Where(item => item.segment.CollapsedLines is not null)
+            .OrderBy(item => item.segment.CollapsePriority)
+            .Select(item => item.index))
+        {
+            var segment = collapsedSegments[index];
+            collapsedSegments[index] = segment with
+            {
+                Lines = segment.CollapsedLines!,
+                CollapsedLines = null
+            };
+
+            rendered = RenderTaskBriefSegments(collapsedSegments);
+            if (CountTaskBriefCharacters(rendered) <= budget)
+            {
+                break;
+            }
+        }
+
+        return rendered;
+    }
+
+    private static List<string> RenderTaskBriefSegments(IEnumerable<TaskBriefSegment> segments)
+    {
+        return segments.SelectMany(segment => segment.Lines).ToList();
+    }
+
+    private static int CountTaskBriefCharacters(IReadOnlyList<string> lines)
+    {
+        return string.Join(Environment.NewLine, lines).Length;
     }
 
     private static int TimelineEventBudget(TaskComplexity complexity)
@@ -209,5 +328,13 @@ public sealed partial class AgentOrchestratorKernel
             ProgressKind.TaskVerificationRecorded => task.LastVerification?.CompletedAt == evt.OccurredAt,
             _ => false
         };
+    }
+
+    private sealed record TaskBriefSegment(
+        IReadOnlyList<string> Lines,
+        IReadOnlyList<string>? CollapsedLines = null,
+        int CollapsePriority = int.MaxValue)
+    {
+        public static TaskBriefSegment Fixed(IReadOnlyList<string> lines) => new(lines);
     }
 }

@@ -31,6 +31,32 @@ internal static class PromptContextFormatter
     private const int SimpleTimelineMessageHeadChars = 100;
     private const int SimpleTimelineMessageTailChars = 30;
 
+    public static int TaskBriefCharacterBudget(AgentRole role, bool usesFileAccessContext)
+    {
+        if (!usesFileAccessContext)
+        {
+            return role switch
+            {
+                AgentRole.Planner => 12000,
+                AgentRole.Researcher => 14000,
+                AgentRole.Developer => 16000,
+                AgentRole.Tester => 15000,
+                AgentRole.Reviewer => 14000,
+                _ => 12000
+            };
+        }
+
+        return role switch
+        {
+            AgentRole.Planner => 7000,
+            AgentRole.Researcher => 8000,
+            AgentRole.Developer => 9000,
+            AgentRole.Tester => 8500,
+            AgentRole.Reviewer => 8000,
+            _ => 7000
+        };
+    }
+
     public static string TrimPromptBlock(string value)
     {
         var trimmed = value.Trim();

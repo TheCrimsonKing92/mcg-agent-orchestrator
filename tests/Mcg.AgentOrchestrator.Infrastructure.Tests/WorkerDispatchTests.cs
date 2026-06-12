@@ -2552,6 +2552,47 @@ public sealed class WorkerDispatchTests
     Assert.True(!prompt.Contains(artifactOnlyTail, StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_current_retry_evidence_for_collapsed_prompt_pointers")]
+    public void WorkerContextArtifactsWritesCurrentRetryEvidenceForCollapsedPromptPointers()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var clock = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var currentTask = new TaskSpec(TaskId.New(), "Fix prompt budget retry.", AgentRole.Developer, "Run focused prompt tests.");
+    var goal = kernel.CreateGoal("Carry retry evidence in context artifacts", [currentTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.RecordTaskDispatch(goal.Id, currentTask.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec retry-prompt.md",
+        workingDirectory,
+        clock));
+    kernel.RecordTaskVerification(goal.Id, currentTask.Id, new TaskVerificationRecord(
+        "dotnet test --filter TaskBriefTests",
+        workingDirectory,
+        1,
+        "current retry stdout evidence",
+        "current retry stderr evidence",
+        clock));
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, currentTask, workingDirectory);
+
+    var currentTaskArtifact = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
+    var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
+    Assert.Contains(currentTaskArtifact, text => text.Contains("## Last Dispatch", StringComparison.Ordinal));
+    Assert.Contains(currentTaskArtifact, text => text.Contains("codex exec retry-prompt.md", StringComparison.Ordinal));
+    Assert.Contains(currentTaskArtifact, text => text.Contains("## Last Verification", StringComparison.Ordinal));
+    Assert.Contains(currentTaskArtifact, text => text.Contains("current retry stdout evidence", StringComparison.Ordinal));
+    Assert.Contains(currentTaskArtifact, text => text.Contains("current retry stderr evidence", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("retry evidence when present", StringComparison.Ordinal));
+}
+
     [Xunit.Theory(DisplayName = "WorkerContextArtifacts_writes_role_specific_priorities_and_prior_summaries")]
     [Xunit.InlineData(AgentRole.Developer, "current-task.md: anchor implementation scope", "prior behavior")]
     [Xunit.InlineData(AgentRole.Tester, "identify changed files, behavior claims, risks, and verification gaps", "required checks")]

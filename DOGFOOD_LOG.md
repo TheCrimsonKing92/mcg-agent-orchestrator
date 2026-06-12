@@ -4,6 +4,13 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-12 - Prompt briefs enforce role and file-access budgets (goal d1e8ce01)
+
+Goal `d1e8ce01`, Developer task, OpenAI/gpt-5.5 via codex-cli. `BuildTaskBrief` now applies deterministic character budgets by role and file-access mode, collapsing lower-priority file-access sections to context artifact pointers only when the rendered brief exceeds the role budget. `current-task.md` now carries current retry dispatch/verification evidence so collapsed sections point at an artifact with the needed detail. The prompt-context-budget backlog item is closed.
+
+- Operator gate: reviewed prompt/context artifact diffs; focused TaskBriefTests 34/34; focused WorkerContextArtifacts/WorkerProfileDispatcher tests 4/4; full worktree suite Core 188/188 + Infrastructure 335/335.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped prompt budgeting and artifact coverage with focused regressions.
+
 ## 2026-06-12 - Subscription retry-after classification ignores quoted fixture text
 
 The apparent OpenAI/gpt-5.5 Tester retry-after on goal `b8dc0816` was not real account exhaustion. The dispatch transcript contained a test fixture line quoting `ERROR: You've hit your usage limit ... try again at 4:58 PM`, and the classifier scanned the full stdout/stderr blob, so it parsed fixture text as provider stderr. `DispatchFailureClassifier` now considers only provider-shaped error lines (`ERROR:` or PowerShell native command wrappers such as `node.exe : ERROR:`) and parses retry-after from that same line. Regression tests cover both the real provider shape and the quoted `WorkerDispatchTests.cs:2509` transcript shape. Verification: focused DispatchExecutionTests 17/17; full suite Core 168/168 + Infrastructure 305/305.
