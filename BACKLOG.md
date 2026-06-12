@@ -2,12 +2,6 @@
 
 Follow-up work items. Each entry is self-contained: act on it without prior conversation context. When an item is finished, remove the entry and note the closing commit in DOGFOOD_LOG.md or the commit message. Check this file before proposing new follow-up work.
 
-## Add role-specific context manifests and task summaries
-
-Context: commit `d0e4ef9` added `.orchestrator-context/<goal-id>/digest.md` and collapsed inline prior evidence to pointers for file-access subscription briefs. The next context-economics step is to stop treating every role as needing the same artifact emphasis. Planner, Researcher, Developer, Tester, and Reviewer should get role-specific context guidance in `manifest.md`/`digest.md`, and each completed task should have a compact durable task-summary artifact or structured section that later roles can consume before opening full stdout.
-
-Done condition: generated context includes role-specific artifact priorities and compact prior task summaries with changed files, behavior changes, verification commands/results, risks, and model fit. Later prompts point to summaries first, full evidence second. Add focused tests for at least Developer, Tester, and Reviewer context bundles.
-
 ## Add prompt context budgets by role and file-access mode
 
 Context: file-backed context reduces prompt bloat, but prompt size still depends on objective/task text, inline pointers, role requirements, and timelines. The next guardrail should make prompt budgets explicit instead of relying only on the large-paid-prompt guard.

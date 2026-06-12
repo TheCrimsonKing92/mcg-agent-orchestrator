@@ -87,3 +87,11 @@ Goal `8d9409f6`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `Agen
 
 - Operator gate: worker produced the correct edits and tests but failed the dirty-worktree guard because it did not commit; operator committed `74431c5`, recorded manual verification, and acceptance passed. Focused core directive/dispatch/API tests 60/60; full worktree suite Core 187/187 + Infrastructure 331/331; `git diff --check` passed.
 - Model fit: OpenAI/gpt-5.5 - adequate - narrow parser fix with focused regressions; worker was capable but missed the required commit step.
+
+## 2026-06-12 - Role-specific context summaries shipped (goal 76fbdfb0)
+
+Goal `76fbdfb0`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. Context artifacts now include `prior-task-summaries.md`, `manifest.md`/`digest.md` include role-specific artifact priorities, and file-access prompts point workers to compact summaries before full `prior-task-evidence.md`. Summaries extract changed files, behavior changes, verification command/result, risks, and model fit from prior verification evidence. Commit `332df12` fast-forwarded to main and workspace removal succeeded; no MCP or runtime retrieval subsystem was added.
+
+- Operator gate: reviewed prompt/context/test diffs; focused TaskBrief tests 34/34, focused WorkerContextArtifacts/WorkerProfileDispatcher tests 37/37, full worktree suite Core 187/187 + Infrastructure 334/334; `git diff --check` and acceptance verification passed.
+- Proof of context-economics improvement: later file-access prompts now carry artifact pointers and ordering instead of full prior stdout, while `prior-task-summaries.md` preserves the decision-changing prior evidence in files the worker can read on demand.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped context artifact and prompt-contract update with focused regression coverage.
