@@ -6,18 +6,6 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Add usage-limit review acknowledgement for repeated recoverable subscription failures
-
-Status: open | Size: small-medium | Suggested route: simple-goal
-
-Why: after two recoverable subscription usage-limit failures, `subscription-dispatch` requires operator review but exposes no acknowledgement mechanism, leaving the task stuck. The current workaround is `verify-manual <n> failed "<review note>"` followed by `retry`, which is not discoverable and overloads verification semantics.
-
-Where: subscription dispatch planning/start commands, retry-limit review state, task verification/history records, and dashboard parity controls if present.
-
-Done when: CLI accepts `--confirm-limit-review "<note>"` on the appropriate dispatch command, records the review note, clears or supersedes the limit-review block, and allows retry/dispatch to proceed. Dashboard/API parity offers the same acknowledgement path. If `SubscriptionRetryAfter` is known and still in the future, `start-dispatch` reports the defer-until time and does not burn another attempt.
-
-Verify: focused tests cover the CLI acknowledgement, dashboard/API acknowledgement if applicable, persisted review evidence, and future retry-after deferral. Run full `dotnet test`.
-
 ## Reject unresolved worker/profile dispatch template variables before task state mutation
 
 Status: open | Size: small | Suggested route: simple-goal
@@ -29,6 +17,30 @@ Where: `WorkerProfileDispatcher`, CLI `profile-dispatch`/`worker-dispatch`, task
 Done when: dispatch preparation validates that no `{...}` template variables remain in the rendered command before it records dispatch state or marks a task Running. Failures should leave the task in its prior status and print actionable evidence. If cross-profile rerouting is intended, provide an explicit supported way to supply subscription model/reasoning/worktree values.
 
 Verify: focused tests cover unresolved placeholders in `profile-dispatch` and `worker-dispatch`, proving task status and last dispatch are unchanged on failure. Run full `dotnet test`.
+
+## Stop full test runs from mutating checked-in source files
+
+Status: open | Size: small-medium | Suggested route: simple-goal
+
+Why: after goal `8db3d426` committed and the worktree was clean, the independent `dotnet test .orchestrator-worktrees\8db3d426 --verbosity minimal` run left tracked source/test files modified in that disposable worktree, including unrelated `rollback-state` and state-store changes. That makes the operator gate ambiguous and blocks normal `workspace remove`.
+
+Where: infrastructure tests that execute CLI/system/dashboard flows, especially tests around state rollback/store behavior and any helper that uses the repository root instead of an isolated temp workspace.
+
+Done when: a full `dotnet test <worktree> --verbosity minimal` leaves `git status --short` clean in the worktree. Tests that need mutable app files or state must use temp directories outside the source tree.
+
+Verify: add a regression test or harness assertion where practical, then run full `dotnet test` and immediately confirm `git status --short` is clean.
+
+## Codex dispatch wrappers can still remain alive after final output without an exit file
+
+Status: open | Size: small-medium | Suggested route: simple-goal
+
+Why: goals `feadc825` and `8db3d426` both used Codex workers that printed final output, committed, and reported `Model fit:`, but the PowerShell wrapper process stayed live and no exit file was written. The operator still had to use exact `cancel-dispatch` plus `verify-manual` after confirming branch/test evidence.
+
+Where: `BackgroundDispatchRunner` wrapper construction, exit-file supervision, idle/final-output detection, and `refresh-dispatch` handling for Codex subprocess trees on Windows.
+
+Done when: after Codex prints final output and the child has no meaningful activity, `refresh-dispatch` can close the task from reliable evidence or fail with bounded captured logs without requiring manual cancellation. Normal successful Codex dispatches should produce an exit file promptly.
+
+Verify: focused tests for existing-exit-file completion and idle-final-output handling, plus a live no-edit Codex smoke in an isolated worktree.
 
 ## Use one source of truth for paid/local output cap policy
 
