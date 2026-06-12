@@ -436,3 +436,11 @@ The apparent OpenAI/gpt-5.5 Tester retry-after on goal `b8dc0816` was not real a
 
 - Friction: the bug blocked a simple-goal intended to fix itself (`78d45759`) before dispatch by reusing the contaminated retry metadata path; direct operator fix was appropriate because the orchestrator path was self-blocked.
 - Model fit: operator/manual - adequate - root cause was local state/classifier logic, not model capability or subscription capacity.
+
+## 2026-06-12 - Goal cancellation/supersession command shipped (goal d85cc946)
+
+Goal `d85cc946`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~5.5 min). New `cancel-goal <goal-id> <reason> --confirm-goal-stop` and `supersede-goal <goal-id> <reason> --confirm-goal-stop` commands mark abandoned goals terminally `Cancelled` or `Superseded`, persist goal-level timeline reasons, refuse completed goals, and refuse goals with live dispatch processes until they are cancelled/refreshed. Dashboard/transcript display and next-action output now treat stopped goals coherently. Worker committed `e3e9cca`; operator follow-up `3d57831` added `.orchestrator-context/` to `.gitignore` after the dispatch guard correctly failed a dirty worktree containing only generated context artifacts. Acceptance fast-forwarded main and workspace removal succeeded.
+
+- Operator gate: reviewed lifecycle/CLI/parser/rendering diffs; focused GoalLifecycleTests 21/21; focused CLI cancel-goal regression 1/1 after build-server shutdown; full worktree suite Core 172/172 + Infrastructure 306/306; acceptance verification passed.
+- Friction closed: generated worker context artifacts no longer make file-role dispatches appear dirty.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped lifecycle command with tests; operator follow-up handled discovered generated-file hygiene.
