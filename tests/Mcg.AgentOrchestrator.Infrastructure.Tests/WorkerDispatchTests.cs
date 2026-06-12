@@ -1375,10 +1375,71 @@ public sealed class WorkerDispatchTests
         "C:\\logs\\out.log",
         "C:\\logs\\err.log",
         "C:\\logs\\exit.txt",
-        shutdownBuildServerOnExit: false);
+        shutdownBuildServerOnExit: false,
+        disableSharedCompilation: false);
 
     Assert.False(wrapper.Contains("dotnet build-server shutdown", StringComparison.Ordinal));
+    Assert.False(wrapper.Contains("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal));
+    Assert.False(wrapper.Contains("MSBUILDDISABLENODEREUSE", StringComparison.Ordinal));
+    Assert.False(wrapper.Contains("UseSharedCompilation", StringComparison.Ordinal));
     Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText('C:\\logs\\exit.txt', [string]$code)", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_disables_shared_compilation_by_default")]
+    public void BackgroundDispatchRunnerWrapperDisablesSharedCompilationByDefault()
+{
+    var wrapper = BackgroundDispatchRunner.BuildWrapper(
+        "Write-Output ok",
+        "C:\\logs\\out.log",
+        "C:\\logs\\err.log",
+        "C:\\logs\\exit.txt");
+
+    Assert.Contains(wrapper, text => text.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("$env:MSBUILDDISABLENODEREUSE = '1'", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("$env:UseSharedCompilation = 'false'", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok }", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_can_skip_disabling_shared_compilation")]
+    public void BackgroundDispatchRunnerWrapperCanSkipDisablingSharedCompilation()
+{
+    var wrapper = BackgroundDispatchRunner.BuildWrapper(
+        "Write-Output ok",
+        "C:\\logs\\out.log",
+        "C:\\logs\\err.log",
+        "C:\\logs\\exit.txt",
+        disableSharedCompilation: false);
+
+    Assert.False(wrapper.Contains("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal));
+    Assert.False(wrapper.Contains("MSBUILDDISABLENODEREUSE", StringComparison.Ordinal));
+    Assert.False(wrapper.Contains("UseSharedCompilation", StringComparison.Ordinal));
+    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok }", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_runs_with_shared_compilation_disabled")]
+    public void BackgroundDispatchRunnerNonLocalDispatchRunsWithSharedCompilationDisabled()
+{
+    var root = CreateTempDirectory();
+    var logs = Path.Combine(root, "logs");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Disable shared compilation for worker dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "Write-Output $env:DOTNET_CLI_USE_MSBUILD_SERVER; Write-Output $env:MSBUILDDISABLENODEREUSE; Write-Output $env:UseSharedCompilation",
+        root,
+        DateTimeOffset.UtcNow));
+
+    var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
+    WaitForExitFile(process.ExitCodePath);
+    new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    var output = File.ReadAllLines(process.StandardOutputPath);
+    Assert.Equal(3, output.Length);
+    Assert.Equal("0", output[0]);
+    Assert.Equal("1", output[1]);
+    Assert.Equal("false", output[2]);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_completes_when_exit_file_exists_even_if_wrapper_is_running")]
@@ -1688,6 +1749,20 @@ public sealed class WorkerDispatchTests
     WorkerProfileDispatcher.PrepareTask(kernel, goal, onlyTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
 
     Assert.False(File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")));
+}
+
+    private static void WaitForExitFile(string path)
+{
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+    while (!File.Exists(path) && DateTimeOffset.UtcNow < deadline)
+    {
+        Thread.Sleep(50);
+    }
+
+    if (!File.Exists(path))
+    {
+        throw new TimeoutException($"Timed out waiting for exit file '{path}'.");
+    }
 }
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock

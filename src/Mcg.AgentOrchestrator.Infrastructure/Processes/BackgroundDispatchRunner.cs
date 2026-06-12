@@ -42,12 +42,14 @@ public sealed class BackgroundDispatchRunner
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
 
+        var isLocalDispatch = IsLocalDispatch(dispatch);
         var wrapper = BuildWrapper(
             dispatch.Command,
             stdoutPath,
             stderrPath,
             exitCodePath,
-            shutdownBuildServerOnExit: !IsLocalDispatch(dispatch));
+            shutdownBuildServerOnExit: !isLocalDispatch,
+            disableSharedCompilation: !isLocalDispatch);
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -358,15 +360,21 @@ public sealed class BackgroundDispatchRunner
         string stdoutPath,
         string stderrPath,
         string exitCodePath,
-        bool shutdownBuildServerOnExit = true)
+        bool shutdownBuildServerOnExit = true,
+        bool disableSharedCompilation = true)
     {
         var cleanup = shutdownBuildServerOnExit
             ? "try { & dotnet build-server shutdown *> $null } catch { }; "
             : string.Empty;
 
+        var envSetup = disableSharedCompilation
+            ? "$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'; $env:MSBUILDDISABLENODEREUSE = '1'; $env:UseSharedCompilation = 'false'; "
+            : string.Empty;
+
         return
             "$code = 1; " +
             "try { " +
+            envSetup +
             $"& {{ {command} }} 1> {Quote(stdoutPath)} 2> {Quote(stderrPath)}; " +
             "$code = if ($global:LASTEXITCODE -ne $null) { $global:LASTEXITCODE } elseif ($?) { 0 } else { 1 }; " +
             "} finally { " +
