@@ -18,15 +18,3 @@ Where: task delegation/assignment in AgentOrchestratorKernel, CLI surface near r
 Done when: an operator command (a retry flag or a re-delegate command) reassigns an Assigned or Failed task to the catalog's current agent for its role, recording a timeline event; dispatch preparation then resolves the new agent normally.
 
 Verify: focused tests for reassignment after a role catalog swap and unchanged behavior when the assigned agent still exists; full `dotnet test`.
-
-## Move subscription-plan projection out of Dashboard.Api
-
-Status: open | Size: large | Suggested route: not local-model work; needs solution-wide refactoring
-
-Why: cost guards moved to `Mcg.AgentOrchestrator.App.CostControl`, but `SubscriptionPromptCostGuard` still calls `DashboardResponseMapper.BuildSubscriptionPlan` and consumes `SubscriptionPlanItemDto`/`SubscriptionPlanModelSummaryDto`, so cost policy still depends on dashboard projection types.
-
-Where: `src/Mcg.AgentOrchestrator.App/CostControl/SubscriptionPromptCostGuard.cs`, `BuildSubscriptionPlan` in `src/Mcg.AgentOrchestrator.App/Dashboard/Api/DashboardResponseMapper.Configuration.cs` (also pulls in OrchestratorHealthInspector).
-
-Done when: subscription-plan building lives in a non-presentation namespace and CostControl no longer references Dashboard.Api types.
-
-Verify: full `dotnet test`; no `Dashboard.Api` usings remain in `CostControl/`.
