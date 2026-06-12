@@ -49,7 +49,7 @@ public static Process StartDashboardProcess(string appProject, string workingDir
     // Pin Ollama to an unreachable endpoint so assertions are deterministic
     // regardless of whether a live Ollama server runs on this machine.
     startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
-    startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = FindRepositoryRoot();
+    startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
     // Spawned-app dispatch starts must never launch real subscription CLIs:
     // codex/claude authenticate from account state, not the API keys pinned

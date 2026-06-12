@@ -6,18 +6,6 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Isolate test-spawned orchestrators from the real repository root
-
-Status: open | Size: small-medium | Suggested route: simple-goal
-
-Why: `InfrastructureTestSupport.StartDashboardProcess` pins `MCG_ORCHESTRATOR_REPOSITORY_ROOT` to the real repository, so goals created by spawned-app e2e tests resolve worktrees and dispatch working directories under the real `.orchestrator-worktrees`. Before the `MCG_ORCHESTRATOR_DISABLE_DISPATCH_START` kill switch (commit e3e1fe4), auto-handoff e2e tests launched real codex CLI runs that edited live goal worktrees and burned subscription usage across many test runs (discovered 2026-06-12). The kill switch stops process starts, but test goals still point at real repo paths.
-
-Where: `InfrastructureTestSupport.StartDashboardProcess`, repository-root resolution in the App, goal worktree path resolution for spawned test apps.
-
-Done when: spawned-app tests resolve repository root and worktrees to a temp location (or a bare fixture repo), so no test-created goal can reference real worktrees even if process starts are re-enabled. The kill switch stays as defense in depth.
-
-Verify: e2e dashboard tests pass with worktree paths under the test temp directory; full `dotnet test` spawns zero codex/claude processes (assert via process scan in the test or manual smoke).
-
 ## Require a goal worktree before subscription-dispatch records a working directory
 
 Status: open | Size: small | Suggested route: simple-goal
