@@ -144,10 +144,18 @@ public sealed class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         if (RequiresFileChangeEvidence(task) &&
             TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence) &&
-            exitCode == 0 &&
-            !HasExplicitNoChangeRationale(standardOutput, standardError))
+            exitCode == 0)
         {
-            if (!worktreeEvidence.HasCommitAfterDispatch)
+            if (!worktreeEvidence.IsClean)
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
+                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
+            }
+            else if (!HasExplicitNoChangeRationale(standardOutput, standardError) && !worktreeEvidence.HasCommitAfterDispatch)
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
@@ -156,20 +164,6 @@ public sealed class BackgroundDispatchRunner
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
             }
-        }
-
-        if (RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
-            exitCode == 0 &&
-            HasExplicitNoChangeRationale(standardOutput, standardError) &&
-            !worktreeEvidence.IsClean)
-        {
-            exitCode = 1;
-            standardErrorDiagnostic = AppendDiagnostic(
-                standardErrorDiagnostic ?? string.Empty,
-                "Developer/Tester dispatch provided explicit no-change rationale but left the worktree dirty. " +
-                $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
         }
 
         standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
@@ -229,7 +223,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         var head = RunGit(workingDirectory, "rev-parse", "--short", "HEAD");
-        var status = RunGit(workingDirectory, "status", "--porcelain");
+        var status = RunGit(workingDirectory, "status", "--short");
         var dispatch = RunGit(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
         var commitsAfterDispatch = 0;
         if (dispatch.ExitCode == 0)
@@ -243,9 +237,26 @@ public sealed class BackgroundDispatchRunner
             branch.Output.Trim(),
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output),
-            string.IsNullOrWhiteSpace(status.Output) ? "clean" : "dirty",
+            status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output) ? "clean" : "dirty",
+            FormatStatusShort(status),
             commitsAfterDispatch);
         return true;
+    }
+
+    private static string FormatStatusShort(GitResult status)
+    {
+        if (status.ExitCode != 0)
+        {
+            return "unavailable";
+        }
+
+        var entries = status.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(8)
+            .ToArray();
+        return entries.Length == 0
+            ? "clean"
+            : string.Join(" | ", entries);
     }
 
     public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
@@ -522,10 +533,11 @@ public sealed class BackgroundDispatchRunner
         string Head,
         bool IsClean,
         string WorktreeStatus,
+        string StatusShort,
         int CommitsAfterDispatch)
     {
         public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
 
-        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", 0);
+        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0);
     }
 }
