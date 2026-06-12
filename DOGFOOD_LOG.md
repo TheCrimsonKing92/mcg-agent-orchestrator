@@ -460,3 +460,11 @@ Goal `c5a794cb`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~6.8 
 - Operator gate: reviewed diff and worker log; focused heartbeat tests 5/5 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 311/311; `git diff --check` and acceptance verification passed.
 - Friction closed: operators can now see heartbeat/progress data before the stall watchdog trips.
 - Model fit: OpenAI/gpt-5.5 - adequate - broad but mechanical surface-wiring task with focused tests.
+
+## 2026-06-12 - run-goal can fail over to configured alternate agents (goal e5e718ae)
+
+Goal `e5e718ae`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~9.6 min). `RunGoalService` now detects recoverable subscription usage-limit evidence and provider-neutral heartbeat/progress stall evidence, then automatically re-delegates to an available unused same-role subscription-capable alternate agent from the active agent list and continues the normal subscription run. It does not invent hidden providers, does not loop back to failed agents, caps automatic failovers per task, preserves failure evidence, and stops with explicit guidance when no alternate exists. Commit `daee6ca` fast-forwarded to main and workspace removal succeeded.
+
+- Operator gate: reviewed failover policy and tests; focused RunGoalService tests 10/10 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 315/315; `git diff --check` and acceptance verification passed.
+- Residual: current saved catalog has only one implementation-role agent, so live failover requires configuring an alternate same-role agent first.
+- Model fit: OpenAI/gpt-5.5 - adequate - policy-heavy run-loop change with focused hermetic tests.
