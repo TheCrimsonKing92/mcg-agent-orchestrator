@@ -6,17 +6,29 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Codex dispatch wrappers can still remain alive after final output without an exit file
+## Isolate test-spawned orchestrators from the real repository root
 
 Status: open | Size: small-medium | Suggested route: simple-goal
 
-Why: goals `feadc825` and `8db3d426` both used Codex workers that printed final output, committed, and reported `Model fit:`, but the PowerShell wrapper process stayed live and no exit file was written. The operator still had to use exact `cancel-dispatch` plus `verify-manual` after confirming branch/test evidence.
+Why: `InfrastructureTestSupport.StartDashboardProcess` pins `MCG_ORCHESTRATOR_REPOSITORY_ROOT` to the real repository, so goals created by spawned-app e2e tests resolve worktrees and dispatch working directories under the real `.orchestrator-worktrees`. Before the `MCG_ORCHESTRATOR_DISABLE_DISPATCH_START` kill switch (commit e3e1fe4), auto-handoff e2e tests launched real codex CLI runs that edited live goal worktrees and burned subscription usage across many test runs (discovered 2026-06-12). The kill switch stops process starts, but test goals still point at real repo paths.
 
-Where: `BackgroundDispatchRunner` wrapper construction, exit-file supervision, idle/final-output detection, and `refresh-dispatch` handling for Codex subprocess trees on Windows.
+Where: `InfrastructureTestSupport.StartDashboardProcess`, repository-root resolution in the App, goal worktree path resolution for spawned test apps.
 
-Done when: after Codex prints final output and the child has no meaningful activity, `refresh-dispatch` can close the task from reliable evidence or fail with bounded captured logs without requiring manual cancellation. Normal successful Codex dispatches should produce an exit file promptly.
+Done when: spawned-app tests resolve repository root and worktrees to a temp location (or a bare fixture repo), so no test-created goal can reference real worktrees even if process starts are re-enabled. The kill switch stays as defense in depth.
 
-Verify: focused tests for existing-exit-file completion and idle-final-output handling, plus a live no-edit Codex smoke in an isolated worktree.
+Verify: e2e dashboard tests pass with worktree paths under the test temp directory; full `dotnet test` spawns zero codex/claude processes (assert via process scan in the test or manual smoke).
+
+## Require a goal worktree before subscription-dispatch records a working directory
+
+Status: open | Size: small | Suggested route: simple-goal
+
+Why: running `subscription-dispatch` before `workspace create` records a dispatch with the repository root as working directory; the operator must `progress failed` + `retry` to re-prepare. Observed live on goal 42808fff (2026-06-12).
+
+Where: `WorkerProfileDispatcher.PrepareTask` / dispatch preparation working-directory resolution.
+
+Done when: preparing a Developer/Tester subscription dispatch for a goal without a worktree either creates the worktree first or fails with a message naming `workspace create`; repo-root dispatch recording for file-touching roles is impossible.
+
+Verify: focused tests for prepare-without-worktree behavior; full `dotnet test`.
 
 ## Add sequential pipeline auto-advance
 
