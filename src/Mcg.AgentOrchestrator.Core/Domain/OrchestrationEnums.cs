@@ -23,7 +23,8 @@ public enum GoalStatus
     WaitingForHuman,
     Completed,
     Failed,
-    Cancelled
+    Cancelled,
+    Superseded
 }
 
 public enum WorkTaskStatus
@@ -57,7 +58,9 @@ public enum ProgressKind
     TaskVerificationPlanUpdated = 15,
     TaskNote = 16,
     TaskSubscriptionLimitReviewAcknowledged = 17,
-    TaskRedelegated = 18
+    TaskRedelegated = 18,
+    GoalCancelled = 19,
+    GoalSuperseded = 20
 }
 
 public enum TaskAttentionKind

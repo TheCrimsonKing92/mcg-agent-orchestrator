@@ -1806,4 +1806,52 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--complex-model", ex!.Message);
     }
+
+    [Xunit.Fact(DisplayName = "Cli_cancel_goal_requires_confirmation_for_active_goal_and_records_reason")]
+    public void CliCancelGoalRequiresConfirmationForActiveGoalAndRecordsReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Stop stale validation", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var goalPrefix = goal.Id.Value[..8];
+
+        var blocked = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"cancel-goal {goalPrefix} Operator stopped stale validation."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"cancel-goal {goalPrefix} Operator stopped stale validation. --confirm-goal-stop"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.Contains("--confirm-goal-stop", blocked.Message);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(GoalStatus.Cancelled, goal.Status);
+        Xunit.Assert.Equal(goal.Id, currentGoal!.Id);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalCancelled &&
+            evt.Message == "Operator stopped stale validation.");
+    }
 }

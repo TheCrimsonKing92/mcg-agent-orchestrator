@@ -238,6 +238,76 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal("Run dotnet test after implementation.", restoredTask.VerificationPlan);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
 }
+    [Xunit.Fact(DisplayName = "CancelGoal_marks_active_assigned_goal_cancelled_with_reason")]
+    public void CancelGoalMarksActiveAssignedGoalCancelledWithReason()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Abandon validation", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [TestAgent("developer", "Developer", AgentRole.Developer)]);
+
+    var cancelled = kernel.CancelGoal(goal.Id, "Superseded by a cleaner validation goal.");
+
+    Assert.Equal(goal, cancelled);
+    Assert.Equal(GoalStatus.Cancelled, goal.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId is null &&
+        evt.Kind == ProgressKind.GoalCancelled &&
+        evt.Message == "Superseded by a cleaner validation goal.");
+    var next = kernel.BuildNextActions(goal.Id);
+    Assert.Single(next.Items);
+    Assert.True(next.Items[0].Message.Contains("Cancelled", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SupersedeGoal_persists_terminal_status_and_timeline_reason")]
+    public void SupersedeGoalPersistsTerminalStatusAndTimelineReason()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Replace validation", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+
+    kernel.SupersedeGoal(goal.Id, "Replacement goal has narrower evidence.");
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredGoal = restored.GetGoal(goal.Id);
+
+    Assert.Equal(GoalStatus.Superseded, restoredGoal.Status);
+    Assert.Contains(restoredGoal.Timeline, evt =>
+        evt.TaskId is null &&
+        evt.Kind == ProgressKind.GoalSuperseded &&
+        evt.Message == "Replacement goal has narrower evidence.");
+}
+    [Xunit.Fact(DisplayName = "CancelGoal_preserves_completed_goal")]
+    public void CancelGoalPreservesCompletedGoal()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Already accepted", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "No longer needed."));
+
+    Assert.True(ex.Message.Contains("Completed", StringComparison.Ordinal));
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.False(goal.Timeline.Any(evt => evt.Kind == ProgressKind.GoalCancelled));
+}
+    [Xunit.Fact(DisplayName = "CancelGoal_refuses_goal_with_live_running_process")]
+    public void CancelGoalRefusesGoalWithLiveRunningProcess()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Do not abandon live dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [TestAgent("developer", "Developer", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "codex exec prompt.md", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
+
+    var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "Abandon."));
+
+    Assert.True(ex.Message.Contains("running dispatch", StringComparison.OrdinalIgnoreCase));
+    Assert.True(ex.Message.Contains("1234", StringComparison.Ordinal));
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.False(goal.Timeline.Any(evt => evt.Kind == ProgressKind.GoalCancelled));
+}
     [Xunit.Fact(DisplayName = "Task_progress_updates_goal_timeline")]
     public void TaskProgressUpdatesGoalTimeline()
 {

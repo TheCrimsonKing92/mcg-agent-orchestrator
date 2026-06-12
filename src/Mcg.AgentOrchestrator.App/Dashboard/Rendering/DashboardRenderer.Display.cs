@@ -12,6 +12,7 @@ public static partial class DashboardRenderer
         GoalStatus.Completed => "Completed",
         GoalStatus.Failed => "Failed",
         GoalStatus.Cancelled => "Cancelled",
+        GoalStatus.Superseded => "Superseded",
         _ => status.ToString()
     };
 
@@ -47,6 +48,8 @@ public static partial class DashboardRenderer
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
+        ProgressKind.GoalCancelled => "Goal cancelled",
+        ProgressKind.GoalSuperseded => "Goal superseded",
         _ => kind.ToString()
     };
 

@@ -81,6 +81,16 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var items = new List<NextActionItem>();
 
+        if (IsTerminalGoalStatus(goal.Status))
+        {
+            items.Add(new NextActionItem(
+                NextActionKind.MonitorGoal,
+                null,
+                null,
+                $"Goal is {goal.Status}; no further action is required."));
+            return new GoalNextActions(goal.Id, goal.Objective, goal.Status, items);
+        }
+
         foreach (var request in GetPendingHumanInput(goalId).OrderBy(request => request.RequestedAt))
         {
             items.Add(new NextActionItem(

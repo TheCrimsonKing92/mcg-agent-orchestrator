@@ -7,6 +7,7 @@ public static partial class GoalTranscriptRenderer
     private static string Display(GoalStatus status) => status switch
     {
         GoalStatus.WaitingForHuman => "Waiting for human",
+        GoalStatus.Superseded => "Superseded",
         _ => status.ToString()
     };
 
@@ -36,6 +37,8 @@ public static partial class GoalTranscriptRenderer
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
+        ProgressKind.GoalCancelled => "Goal cancelled",
+        ProgressKind.GoalSuperseded => "Goal superseded",
         _ => kind.ToString()
     };
 

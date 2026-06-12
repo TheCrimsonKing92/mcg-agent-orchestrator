@@ -4,6 +4,11 @@ public sealed partial class AgentOrchestratorKernel
 {
     private void RefreshGoalStatus(Goal goal)
     {
+        if (IsTerminalGoalStatus(goal.Status))
+        {
+            return;
+        }
+
         if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
         {
             goal.SetStatus(GoalStatus.WaitingForHuman);
@@ -18,6 +23,9 @@ public sealed partial class AgentOrchestratorKernel
 
         goal.SetStatus(GoalStatus.Active);
     }
+
+    private static bool IsTerminalGoalStatus(GoalStatus status) =>
+        status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
     private static TaskVerificationGate BuildTaskVerificationGate(TaskSpec task)
     {

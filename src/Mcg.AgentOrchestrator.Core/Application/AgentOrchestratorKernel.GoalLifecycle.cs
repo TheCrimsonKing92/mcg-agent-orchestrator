@@ -183,6 +183,47 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public Goal CancelGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Cancelled, reason);
+
+    public Goal SupersedeGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Superseded, reason);
+
+    private Goal StopGoal(GoalId goalId, GoalStatus terminalStatus, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var stopReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(stopReason))
+        {
+            throw new ArgumentException("Goal stop reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status == GoalStatus.Completed)
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' is Completed and cannot be cancelled or superseded.");
+        }
+
+        if (IsTerminalGoalStatus(goal.Status))
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' is already {goal.Status}.");
+        }
+
+        var runningTasks = goal.Tasks
+            .Where(task => task.LastProcess is { IsRunning: true })
+            .ToList();
+        if (runningTasks.Count > 0)
+        {
+            var taskList = string.Join(", ", runningTasks.Select(task => $"{task.Id.Value[..8]} pid={task.LastProcess!.ProcessId}"));
+            throw new InvalidOperationException($"Goal '{goalId}' has running dispatch process(es): {taskList}. Cancel or refresh them before stopping the goal.");
+        }
+
+        goal.SetStatus(terminalStatus);
+        Append(
+            goal,
+            null,
+            terminalStatus == GoalStatus.Superseded ? ProgressKind.GoalSuperseded : ProgressKind.GoalCancelled,
+            stopReason);
+        return goal;
+    }
+
     public void ReportTaskProgress(GoalId goalId, TaskId taskId, WorkTaskStatus status, string message)
     {
         if (status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)

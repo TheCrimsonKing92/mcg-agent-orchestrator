@@ -26,6 +26,13 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
     }
 
+    if (command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+    }
+
     if (command.Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase))
     {
         const string limitReviewFlag = "--confirm-limit-review";

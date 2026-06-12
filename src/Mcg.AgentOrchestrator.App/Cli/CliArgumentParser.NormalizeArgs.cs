@@ -25,6 +25,14 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             : args;
     }
 
+    if (command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return args.Length >= 3
+            ? [command, args[1], string.Join(' ', args.Skip(2))]
+            : args;
+    }
+
     if (command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3

@@ -29,6 +29,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
+        case "cancel-goal":
+        case "supersede-goal":
+            CliArgumentParser.RequirePartCount(parts, 3, $"{command} <goal-id-prefix> <reason> [--confirm-goal-stop]");
+            context.CurrentGoal = HandleGoalStopCommand(context, parts, command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase));
+            ConsoleViews.PrintGoal(context.CurrentGoal);
+            return true;
+
         case "goals":
             ConsoleViews.PrintGoals(context.Kernel);
             return false;
@@ -206,6 +213,33 @@ private static bool HasCliConfirmation(IReadOnlyList<string> parts, string flag)
 {
     return parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase));
 }
+
+private static Goal HandleGoalStopCommand(CliExecutionContext context, IReadOnlyList<string> parts, bool supersede)
+{
+    var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+    if (RequiresGoalStopConfirmation(context.CurrentGoal, goal) && !HasGoalStopConfirmation(parts))
+    {
+        throw new InvalidOperationException($"{parts[0]} requires --confirm-goal-stop for active or non-current goals.");
+    }
+
+    var reason = RemoveFlag(parts[2], "--confirm-goal-stop");
+    return supersede
+        ? context.Kernel.SupersedeGoal(goal.Id, reason)
+        : context.Kernel.CancelGoal(goal.Id, reason);
+}
+
+private static bool RequiresGoalStopConfirmation(Goal? currentGoal, Goal goal)
+{
+    var isCurrent = currentGoal is not null && currentGoal.Id == goal.Id;
+    return !isCurrent || goal.Status == GoalStatus.Active;
+}
+
+private static bool HasGoalStopConfirmation(IReadOnlyList<string> parts) =>
+    parts.Any(part => part.Equals("--confirm-goal-stop", StringComparison.OrdinalIgnoreCase) ||
+        part.Contains("--confirm-goal-stop", StringComparison.OrdinalIgnoreCase));
+
+private static string RemoveFlag(string value, string flag) =>
+    value.Replace(flag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
 
 private static void HandleWorkspaceCommand(CliExecutionContext context, string? action)
 {
