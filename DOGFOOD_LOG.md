@@ -368,3 +368,10 @@ Goal `2919a85d`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via cla
 Goal `19f62671`, no-edit codex smoke via codex-cli (OpenAI/gpt-5.5, Simple/low). The wrapper wrote `exit.txt` 0 promptly on completion, `refresh-dispatch` closed the task with no manual `cancel-dispatch`, and the repo stayed untouched. Closes the BACKLOG item "Codex dispatch wrappers can still remain alive after final output without an exit file" (fix `4edde9f`, merge `21ebfa8`); note the historical hangs were likely aggravated by the test-escape codex runs competing for the account (see e3e1fe4 entry).
 
 - Model fit: OpenAI/gpt-5.5 - adequate - one-sentence no-edit smoke - trivially completed.
+
+## 2026-06-12 - Test-spawned orchestrators isolated from the real repository root (goal 0dec5ac1)
+
+Goal `0dec5ac1`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via claude-cli (~2 min). `InfrastructureTestSupport.StartDashboardProcess` now pins `MCG_ORCHESTRATOR_REPOSITORY_ROOT` to the per-test temp directory instead of `FindRepositoryRoot()`, so spawned-app goals resolve worktrees and dispatch working directories under temp; combined with the `MCG_ORCHESTRATOR_DISABLE_DISPATCH_START` kill switch (e3e1fe4) test goals can neither start real CLIs nor reference real worktrees. Source-survey e2e assertions pass against the empty temp root, so the conditional fixture-repo seeding from the brief was unnecessary. Commit `a49c193` fast-forwarded to main; contamination stashes and `.scratch/codex-leftovers-42808fff` dropped per Miles.
+
+- Operator gate: reviewed the one-line env change plus backlog removal; acceptance verification ran the worktree suite independently (442/442) after one transient first-attempt CS2012 (third occurrence of that flake - GoalAcceptanceVerifier should retry CS2012 once before failing; candidate small follow-up).
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - one-line isolation change with full-suite validation - fastest goal turnaround yet.
