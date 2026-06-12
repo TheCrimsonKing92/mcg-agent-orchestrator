@@ -805,6 +805,28 @@ public sealed class ModelExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_ignores_explicit_no_human_input_summary")]
+    public async Task ExecuteAssignedTaskIgnoresExplicitNoHumanInputSummary()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Complete without operator input");
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var provider = new FakeModelProvider("OpenAI", "Implemented requested change.\nHuman input: none");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, task.Id);
+
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested));
+}
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_marks_task_failed_when_provider_throws")]
     public async Task ExecuteAssignedTaskMarksTaskFailedWhenProviderThrows()
 {

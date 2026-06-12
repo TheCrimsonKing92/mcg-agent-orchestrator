@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static class AgentOutputDirectives
 {
+    private static readonly string[] NoHumanInputMarkers = ["none", "no", "not needed", "no input needed"];
+
     public static string? TryParseHumanInputRequest(string output)
     {
         foreach (var line in output.Split(["\r\n", "\n"], StringSplitOptions.None))
@@ -20,8 +22,18 @@ public static class AgentOutputDirectives
 
     private static string? TryReadDirective(string value, string prefix)
     {
-        return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? value[prefix.Length..].Trim()
-            : null;
+        if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var directiveValue = value[prefix.Length..].Trim();
+        return IsNoHumanInputMarker(directiveValue) ? null : directiveValue;
+    }
+
+    private static bool IsNoHumanInputMarker(string value)
+    {
+        var normalized = value.Trim().TrimEnd('.', '!', ';', ':').Trim();
+        return NoHumanInputMarkers.Contains(normalized, StringComparer.OrdinalIgnoreCase);
     }
 }

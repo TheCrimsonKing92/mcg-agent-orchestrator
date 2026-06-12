@@ -149,6 +149,34 @@ public sealed class DispatchExecutionTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_ignores_explicit_no_human_input_summary")]
+    public void RecordDispatchExecutionResultIgnoresExplicitNoHumanInputSummary()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Complete dispatch without operator input");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    var verification = new TaskVerificationRecord(
+        "agent run",
+        "C:\\repo",
+        0,
+        "Implemented setup.\nHuman input: not needed.",
+        string.Empty,
+        clock.UtcNow);
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(verification, task.LastVerification);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested));
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_on_nonzero_exit")]
     public void RecordDispatchExecutionResultFailsTaskOnNonzeroExit()
 {
