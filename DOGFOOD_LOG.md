@@ -72,3 +72,11 @@ Goal `0fec1d7c`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `Orch
 
 - Operator gate: reviewed executable parsing and tests; focused OrchestratorHealthInspector tests 17/17 after one CS2012 retry; full worktree suite Core 172/172 + Infrastructure 330/330; `git diff --check`, root `doctor`, and acceptance verification passed.
 - Model fit: OpenAI/gpt-5.5 - adequate - small parser fix with narrow health-inspector coverage.
+
+## 2026-06-12 - Context digest and non-length complexity signals shipped (goal a2bec209)
+
+Goal `a2bec209`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `WorkerContextArtifacts` now writes `digest.md` beside objective/current-task/prior-evidence artifacts, `manifest.md` lists it, and file-access subscription briefs tell workers to read `digest.md` first while collapsing inline prior evidence to compact pointers. API/no-file briefs still retain richer inline prior evidence. `TaskComplexityEstimator` now scores action verbs, code-change intent, cross-surface impact, verification breadth, risk/safety, and role rather than leaning mainly on text length. Commit `d0e4ef9` fast-forwarded to main and workspace removal succeeded.
+
+- Operator gate: reviewed context artifact, prompt, complexity, and tests; focused TaskBrief/TaskComplexity tests 54/54, focused WorkerProfileDispatcher tests 34/34, full worktree suite Core 176/176 + Infrastructure 331/331; `git diff --check` and acceptance verification passed.
+- Friction found: worker final output line `Human input: none.` was parsed as a human-input request; operator answered it and recorded a backlog item to ignore explicit no-input lines.
+- Model fit: OpenAI/gpt-5.5 - adequate - broad but cohesive context-economics slice with focused prompt-size and classifier tests.
