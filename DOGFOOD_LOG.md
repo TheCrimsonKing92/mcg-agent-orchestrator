@@ -476,3 +476,11 @@ Goal `0af36831`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. New `
 - Operator gate: reviewed CLI/catalog/failover diffs; fixed an interactive parser gap so multi-word `agent-add` names are folded before flags in REPL mode too; focused tests 11/11 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 323/323; `git diff --check` and acceptance verification passed.
 - Friction closed: live failover no longer requires hand-editing `agents.json` to make same-role alternates visible.
 - Model fit: OpenAI/gpt-5.5 - adequate - small CLI/catalog extension with targeted tests; operator follow-up caught a REPL-only argument parsing gap.
+
+## 2026-06-12 - Five-role run-goal validation and failover readiness doctor (goal 889baf96)
+
+Configured same-role alternates with `agent-add` for all five roles, then ran a live `goal` through `run-goal --confirm-batch-start --confirm-large-paid-subscription-start`. Planner, Researcher, Developer, Tester, and Reviewer all completed; commit `af27b86` adds setup-doctor/health visibility for subscription failover readiness, including per-role `alternate-ready` and compact alternate id/name details in CLI and dashboard health output. Root `doctor` now reports all five configured roles with `alternate-ready=True`. Acceptance fast-forwarded main and workspace removal succeeded.
+
+- Operator gate: reviewed health inspector, CLI, dashboard, and tests; patched alternate detection to use role ordering instead of reference identity; focused health/dashboard tests 82/82 after one CS2012 retry; full worktree suite Core 172/172 + Infrastructure 326/326; `git diff --check` and acceptance verification passed.
+- Friction found: Tester produced valid verification evidence but was false-failed by the no-file-change guard because it was a verification-only task; operator added manual verification and recorded a backlog item to distinguish Tester verification-only success from file-touching expectations.
+- Model fit: OpenAI/gpt-5.5 - adequate for Planner/Researcher/Developer/Tester on this narrow feature; Anthropic/claude-haiku-4-5 - adequate for Reviewer.
