@@ -383,3 +383,11 @@ Goal `3992c679`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via cla
 - Operator gate: reviewed diff (16-line verifier change plus dedicated test file); acceptance verification passed 446/446 first attempt and fast-forwarded.
 - Residual: the CLI acceptance output does not yet print the `Retried` flag; cosmetic only.
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - small guarded-retry change with hermetic tests - first-attempt pass.
+
+## 2026-06-12 - Worktree build daemons reaped at dispatch completion (goal 072d1fc6)
+
+Goal `072d1fc6`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via claude-cli (~4 min). `RecordCompletedProcess` for non-local dispatches now finds VBCSCompiler/MSBuild processes whose command line references the dispatch working directory (or is unreadable, matching the FindLockHolders fallback), kills them by exact PID, and appends a reap note to completion evidence; kill failures degrade to a note. Closes the root cause of the operator-facing CS2012 flake: worker-spawned compile servers outliving their dispatch with handles on worktree obj assemblies. Injectable enumerator/killer seams keep the new VerificationAndProcessLogTests hermetic. Commit `f50430d` fast-forwarded to main.
+
+- Operator gate: reviewed diff (BackgroundDispatchRunner + tests + backlog removal); acceptance verification passed first attempt - with the CS2012 auto-retry (eaefaf4) now active in the verifier, the residual transient is absorbed invisibly even when it fires.
+- Residual: wmic command-line plumbing is duplicated between BackgroundDispatchRunner and GoalWorktrees (ParseWmicListOutput is shared); cosmetic consolidation candidate.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - process-hygiene feature with injectable seams and focused tests - first-attempt pass.
