@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -764,7 +765,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, agents);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
 
     var developer = plan.Items.First(item => item.Role == AgentRole.Developer);
     Assert.True(developer.ProfileExists);
@@ -791,7 +792,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, agents);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("custom-agent", "agent-cli {promptPath}"));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
 
     var reviewer = plan.Items.First(item => item.Role == AgentRole.Reviewer);
     Assert.True(reviewer.ProfileExists);
@@ -816,7 +817,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, agents);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("custom-agent", "agent-cli --model {subscriptionModelName} {promptPath}"));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
 
     var reviewer = plan.Items.First(item => item.Role == AgentRole.Reviewer);
     Assert.True(reviewer.ProfileExists);
@@ -832,7 +833,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, agents);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
 
     var developer = plan.Items.First(item => item.Role == AgentRole.Developer);
     var planner = plan.Items.First(item => item.Role == AgentRole.Planner);
@@ -861,7 +862,7 @@ public sealed class WorkerDispatchTests
         ComplexModel: new ModelProfile("Anthropic", "claude-opus-4.1", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+    var plan = SubscriptionPlanBuilder.Build(
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
@@ -932,7 +933,7 @@ public sealed class WorkerDispatchTests
         string.Empty,
         DateTimeOffset.UtcNow));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+    var plan = SubscriptionPlanBuilder.Build(
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
@@ -985,7 +986,7 @@ public sealed class WorkerDispatchTests
         string.Empty,
         DateTimeOffset.UtcNow.AddMinutes(1)));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+    var plan = SubscriptionPlanBuilder.Build(
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
@@ -1025,7 +1026,7 @@ public sealed class WorkerDispatchTests
         string.Empty,
         DateTimeOffset.UtcNow));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+    var plan = SubscriptionPlanBuilder.Build(
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
@@ -1065,7 +1066,7 @@ public sealed class WorkerDispatchTests
         string.Empty,
         DateTimeOffset.UtcNow));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+    var plan = SubscriptionPlanBuilder.Build(
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
@@ -1137,7 +1138,7 @@ public sealed class WorkerDispatchTests
         $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
         now.AddMinutes(5)));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
 
     var item = plan.Items.First(item => item.Role == AgentRole.Developer);
     Assert.Equal(1, plan.RetryDeferredCount);
@@ -1391,7 +1392,7 @@ public sealed class WorkerDispatchTests
         "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
         secondFailureAt));
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
     var item = plan.Items.First(item => item.Role == AgentRole.Developer);
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
@@ -1421,7 +1422,7 @@ public sealed class WorkerDispatchTests
     Assert.Contains(ex.Message, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
 
     kernel.AcknowledgeSubscriptionLimitReview(goal.Id, developer.Id, "Reviewed profile and provider timing.");
-    var reviewedPlan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, WorkerProfileCatalog.Default());
+    var reviewedPlan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
     var reviewedItem = reviewedPlan.Items.First(item => item.Role == AgentRole.Developer);
     var result = WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,

@@ -28,7 +28,7 @@ internal static class SubscriptionPromptCostGuard
         Func<TaskSpec, int?> estimatePromptCharacterCount,
         TaskSpec? onlyTask = null)
     {
-        var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, agents, profiles, estimatePromptCharacterCount);
+        var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, estimatePromptCharacterCount);
         var candidates = plan.Items
             .Where(item => item.CanPrepare &&
                 (onlyTask is null || item.TaskId.Equals(onlyTask.Id.Value, StringComparison.Ordinal)) &&
@@ -50,8 +50,8 @@ internal static class SubscriptionPromptCostGuard
     }
 
     public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
-        IReadOnlyList<SubscriptionPlanItemDto> items,
-        IReadOnlyList<SubscriptionPlanModelSummaryDto>? readyModelUsage = null)
+        IReadOnlyList<SubscriptionPlanItem> items,
+        IReadOnlyList<SubscriptionPlanModelSummary>? readyModelUsage = null)
     {
         var candidates = items
             .Where(item => item.CanPrepare &&
@@ -224,7 +224,7 @@ internal static class SubscriptionPromptCostGuard
 
     private static PaidSubscriptionPromptRisk? BuildRisk(
         IReadOnlyList<PaidPromptCandidate> candidates,
-        IReadOnlyList<SubscriptionPlanModelSummaryDto>? readyModelUsage = null)
+        IReadOnlyList<SubscriptionPlanModelSummary>? readyModelUsage = null)
     {
         if (candidates.Count == 0)
         {
@@ -314,11 +314,11 @@ internal static class SubscriptionPromptCostGuard
             details);
     }
 
-    private static List<SubscriptionPlanModelSummaryDto> BuildReadyModelFitSummaries(Goal goal)
+    private static List<SubscriptionPlanModelSummary> BuildReadyModelFitSummaries(Goal goal)
     {
         return ModelFitEvidence
             .BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes))
-            .Select(fit => new SubscriptionPlanModelSummaryDto(
+            .Select(fit => new SubscriptionPlanModelSummary(
                 fit.ProviderName,
                 fit.ModelName,
                 0,

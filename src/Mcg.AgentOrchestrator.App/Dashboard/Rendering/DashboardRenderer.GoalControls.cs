@@ -444,7 +444,7 @@ public static partial class DashboardRenderer
             return null;
         }
 
-        var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        var plan = SubscriptionPlanBuilder.Build(
             goal,
             options.AgentDefinitions,
             options.WorkerProfiles,
@@ -541,7 +541,7 @@ public static partial class DashboardRenderer
         html.AppendLine($"<p class=\"meta\">Subscription plan: {Encode(summary)}{Encode(preparedPrompt)}</p>");
     }
 
-    private static string FormatSubscriptionPlanModel(SubscriptionPlanModelSummaryDto item)
+    private static string FormatSubscriptionPlanModel(SubscriptionPlanModelSummary item)
     {
         var complexity = item.TaskComplexity is null ? string.Empty : $" {item.TaskComplexity.Value}";
         var reasoning = string.IsNullOrWhiteSpace(item.ReasoningEffort) ? string.Empty : $" reasoning {item.ReasoningEffort}";
@@ -550,7 +550,7 @@ public static partial class DashboardRenderer
         return $"{item.ProviderName}/{item.ModelName}{complexity}{reasoning} prompt {item.EstimatedPromptCharacterCount!.Value} chars{paid}{priorFit}";
     }
 
-    private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummaryDto item)
+    private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummary item)
     {
         if (item.PreviousModelFitNoteCount == 0)
         {
@@ -693,7 +693,7 @@ public static partial class DashboardRenderer
     }
 
     private sealed record SubscriptionCostPreview(
-        SubscriptionPlanDto Plan,
+        SubscriptionPlan Plan,
         PaidSubscriptionPromptRisk? ReadyRisk,
         PaidSubscriptionPromptRisk? PreparedRisk);
 

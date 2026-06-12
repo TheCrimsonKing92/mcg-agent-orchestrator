@@ -113,11 +113,12 @@ internal static partial class DashboardEndpoints
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
         var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
-        return Json(DashboardResponseMapper.BuildSubscriptionPlan(
+        var plan = SubscriptionPlanBuilder.Build(
             goal,
             agents,
             profiles,
-            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(current, goal, task, agents)));
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(current, goal, task, agents));
+        return Json(DashboardResponseMapper.ToSubscriptionPlanDto(plan));
     }
 
     private static async Task<IResult> AddTaskAsync(HttpContext context, string goalId, DashboardEndpointServices services)

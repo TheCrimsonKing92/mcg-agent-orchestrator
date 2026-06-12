@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -1100,7 +1101,7 @@ public sealed class CliCommandTests
             Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "medium"),
             ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
         kernel.ActivateGoal(goal.Id, [agent]);
-        var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        var plan = SubscriptionPlanBuilder.Build(
             goal,
             [agent],
             WorkerProfileCatalog.Default(),
@@ -1148,7 +1149,7 @@ public sealed class CliCommandTests
             "Evidence checked.\nModel fit: OpenAI/gpt-5-mini - overkill - copy-only change.",
             string.Empty,
             DateTimeOffset.UtcNow));
-        var plan = DashboardResponseMapper.BuildSubscriptionPlan(
+        var plan = SubscriptionPlanBuilder.Build(
             goal,
             [agent],
             WorkerProfileCatalog.Default(),

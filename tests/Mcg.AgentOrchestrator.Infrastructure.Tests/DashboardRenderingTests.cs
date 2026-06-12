@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -376,7 +377,8 @@ public sealed class DashboardRenderingTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
 
-    var plan = DashboardResponseMapper.BuildSubscriptionPlan(goal, [agent], WorkerProfileCatalog.Default());
+    var plan = DashboardResponseMapper.ToSubscriptionPlanDto(
+        SubscriptionPlanBuilder.Build(goal, [agent], WorkerProfileCatalog.Default()));
     var item = plan.Items.Single();
 
     Assert.False(item.CanPrepare);

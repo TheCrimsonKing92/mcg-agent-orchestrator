@@ -167,7 +167,7 @@ internal static partial class ConsoleViews
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
-    public static void PrintSubscriptionPlan(SubscriptionPlanDto plan)
+    public static void PrintSubscriptionPlan(SubscriptionPlan plan)
     {
         Console.WriteLine();
         Console.WriteLine($"Goal {plan.GoalId[..8]} subscription plan: ready={plan.ReadyToPrepareCount} resolvable={plan.ResolvableProfileCount}/{plan.Items.Count}");
@@ -213,7 +213,7 @@ internal static partial class ConsoleViews
         Console.WriteLine();
     }
 
-    private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSummaryDto summary)
+    private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSummary summary)
     {
         var complexity = summary.TaskComplexity is null ? string.Empty : $" ({summary.TaskComplexity})";
         var reasoning = string.IsNullOrWhiteSpace(summary.ReasoningEffort) ? string.Empty : $" reasoning {summary.ReasoningEffort}";
@@ -224,7 +224,7 @@ internal static partial class ConsoleViews
         return $"{summary.ProviderName}/{summary.ModelName}{complexity}{reasoning}{paid}: {summary.ReadyCount} ready {noun}{estimatedPrompt}{priorFit}";
     }
 
-    private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummaryDto summary)
+    private static string FormatSubscriptionPlanModelFit(SubscriptionPlanModelSummary summary)
     {
         if (summary.PreviousModelFitNoteCount == 0)
         {
