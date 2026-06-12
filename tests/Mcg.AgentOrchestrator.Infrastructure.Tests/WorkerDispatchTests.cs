@@ -1652,6 +1652,96 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_completes_when_Developer_worktree_evidence_passes")]
+    public void BackgroundDispatchRunnerHungWrapperCompletesWhenDeveloperWorktreeEvidencePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Hung wrapper with evidence", [taskSpec]);
+    var agent = new AgentDefinition(
+        new AgentId("codex-developer"),
+        "Codex Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+    RunGit(worktree, ["add", "-A"], now.AddMinutes(-4));
+    RunGit(worktree, ["commit", "-m", "Feature"], now.AddMinutes(-4));
+
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, "dev.out.log");
+    var stderr = Path.Combine(logs, "dev.err.log");
+    var exit = Path.Combine(logs, "dev.exit.txt");
+    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stderr, "Tokens used: input=123 output=45");
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+
+    var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+
+    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(0, completed.ExitCode);
+    Assert.Equal(clock.UtcNow, completed.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.True(File.Exists(exit));
+    Assert.Equal("0", File.ReadAllText(exit));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("Wrapper process reaped", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_Developer_worktree_evidence_missing")]
+    public void BackgroundDispatchRunnerHungWrapperFailsWhenDeveloperWorktreeEvidenceMissing()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Hung wrapper without evidence", [taskSpec]);
+    var agent = new AgentDefinition(
+        new AgentId("codex-developer"),
+        "Codex Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, "dev.out.log");
+    var stderr = Path.Combine(logs, "dev.err.log");
+    var exit = Path.Combine(logs, "dev.exit.txt");
+    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stderr, "Tokens used: input=123 output=45");
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+
+    var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+
+    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, completed.ExitCode);
+    Assert.Equal(clock.UtcNow, completed.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.True(File.Exists(exit));
+    Assert.Equal("1", File.ReadAllText(exit));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_commit_or_no_change_evidence_fails")]
     public void BackgroundDispatchRunnerFileRoleWithoutCommitOrNoChangeEvidenceFails()
 {
