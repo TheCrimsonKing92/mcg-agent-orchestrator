@@ -65,7 +65,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (!string.IsNullOrWhiteSpace(contextDirectory))
         {
-            lines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first, then use manifest.md for artifact descriptions and repo-local guidance references.");
+            lines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first, then {Path.Combine(contextDirectory, "prior-task-summaries.md")} for prior summaries before prior-task-evidence.md; use manifest.md for role-specific artifact priorities and repo-local guidance references.");
         }
 
         lines.Add(string.Empty);

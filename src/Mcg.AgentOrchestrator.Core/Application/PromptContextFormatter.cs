@@ -191,12 +191,12 @@ internal static class PromptContextFormatter
         var lines = new List<string>
         {
             "## Prior Task Evidence",
-            "Read digest.md first for prior outcomes and open risks; open prior-task-evidence.md only when fuller verification output is needed."
+            "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit; open prior-task-evidence.md second only when fuller verification output is needed."
         };
         foreach (var priorTask in priorCompletedTasks)
         {
             var verification = priorTask.LastVerification!;
-            lines.Add($"- {priorTask.RequiredRole}: {TrimPromptTitle(priorTask.Description)}; verification exit {verification.ExitCode}; evidence pointer: prior-task-evidence.md.");
+            lines.Add($"- {priorTask.RequiredRole}: {TrimPromptTitle(priorTask.Description)}; verification exit {verification.ExitCode}; summary pointer: prior-task-summaries.md; full evidence pointer: prior-task-evidence.md.");
         }
 
         lines.Add(string.Empty);

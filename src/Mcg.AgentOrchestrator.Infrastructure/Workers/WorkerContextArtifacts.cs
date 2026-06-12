@@ -8,6 +8,7 @@ public static class WorkerContextArtifacts
     private const int GuidanceFileMaxChars = 30000;
     private const int DigestTextMaxChars = 700;
     private const int DigestEvidenceMaxChars = 500;
+    private const int SummaryFieldMaxChars = 350;
 
     public static string Write(
         Goal goal,
@@ -19,6 +20,7 @@ public static class WorkerContextArtifacts
 
         WriteText(Path.Combine(contextDirectory, "objective.md"), BuildObjective(goal));
         WriteText(Path.Combine(contextDirectory, "current-task.md"), BuildCurrentTask(task, workingDirectory));
+        WriteText(Path.Combine(contextDirectory, "prior-task-summaries.md"), BuildPriorTaskSummaries(goal.Tasks, task.Id));
         WriteText(Path.Combine(contextDirectory, "prior-task-evidence.md"), BuildPriorTaskEvidence(goal.Tasks, task.Id));
         WriteText(Path.Combine(contextDirectory, "digest.md"), BuildDigest(goal, task, workingDirectory));
 
@@ -68,6 +70,10 @@ public static class WorkerContextArtifacts
             BuildRoleFocus(task.RequiredRole)
         };
 
+        lines.Add(string.Empty);
+        lines.Add("## Role Artifact Priorities");
+        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole));
+
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
             lines.Add(string.Empty);
@@ -112,7 +118,8 @@ public static class WorkerContextArtifacts
         lines.Add("## Evidence Pointers");
         lines.Add("- current-task.md: current task brief and verification plan.");
         lines.Add("- objective.md: full goal objective.");
-        lines.Add("- prior-task-evidence.md: fuller prior verification output.");
+        lines.Add("- prior-task-summaries.md: compact prior task summaries; read before full evidence.");
+        lines.Add("- prior-task-evidence.md: fuller prior verification output; read after summaries when needed.");
         if (File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")))
         {
             lines.Add("- .orchestrator-handoff.md: prior task handoff in the working directory.");
@@ -152,6 +159,36 @@ public static class WorkerContextArtifacts
             lines.Add(string.Empty);
             lines.Add("## Verification Plan");
             lines.Add(task.VerificationPlan);
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string BuildPriorTaskSummaries(IReadOnlyList<TaskSpec> goalTasks, TaskId taskId)
+    {
+        var priorCompletedTasks = goalTasks
+            .TakeWhile(t => t.Id != taskId)
+            .Where(t => t.Status == WorkTaskStatus.Completed && t.LastVerification is not null)
+            .ToList();
+
+        if (priorCompletedTasks.Count == 0)
+        {
+            return "# Prior Task Summaries" + Environment.NewLine + Environment.NewLine + "No prior completed task summaries.";
+        }
+
+        var lines = new List<string> { "# Prior Task Summaries" };
+        foreach (var priorTask in priorCompletedTasks)
+        {
+            var verification = priorTask.LastVerification!;
+            lines.Add(string.Empty);
+            lines.Add($"## {priorTask.RequiredRole}: {TrimDigestTitle(priorTask.Description)}");
+            lines.Add($"Task id: {priorTask.Id.Value}");
+            lines.Add($"Changed files: {SummarizeEvidenceField(verification, "changed files", "changed file", "files changed")}");
+            lines.Add($"Behavior changes: {SummarizeEvidenceField(verification, "behavior changes", "behavior change", "behavior", "changes")}");
+            lines.Add($"Verification: `{verification.Command}` in `{verification.WorkingDirectory}` exited {verification.ExitCode}.");
+            lines.Add($"Verification result: {SummarizeVerificationResult(verification)}");
+            lines.Add($"Risks: {SummarizeRisks(verification)}");
+            lines.Add($"Model fit: {SummarizeModelFit(verification)}");
         }
 
         return string.Join(Environment.NewLine, lines);
@@ -236,6 +273,7 @@ public static class WorkerContextArtifacts
             "- digest.md: compact role-aware summary of objective, current task, prior outcomes, verification status, evidence pointers, and open risks/blockers.",
             "- objective.md: full goal objective and goal status.",
             "- current-task.md: current task description, role, working directory, and verification plan.",
+            "- prior-task-summaries.md: compact prior task summaries with changed files, behavior changes, verification commands/results, risks, and model fit.",
             "- prior-task-evidence.md: prior completed task verification evidence with a larger file budget than inline prompts."
         };
 
@@ -243,6 +281,10 @@ public static class WorkerContextArtifacts
         {
             lines.Add($"- {guidanceFile}: repository-local guidance copied from the working directory.");
         }
+
+        lines.Add(string.Empty);
+        lines.Add("## Role Artifact Priorities");
+        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole));
 
         return string.Join(Environment.NewLine, lines);
     }
@@ -294,6 +336,49 @@ public static class WorkerContextArtifacts
         };
     }
 
+    private static IReadOnlyList<string> BuildRoleArtifactPriorities(AgentRole role)
+    {
+        return role switch
+        {
+            AgentRole.Planner =>
+            [
+                "- 1. objective.md: preserve the goal, scope, and acceptance path.",
+                "- 2. digest.md: identify current role focus, blockers, and prior outcomes.",
+                "- 3. prior-task-summaries.md: use prior decisions before opening full evidence."
+            ],
+            AgentRole.Researcher =>
+            [
+                "- 1. digest.md: start with role focus, prior outcomes, and open risks.",
+                "- 2. prior-task-summaries.md: inspect compact prior findings before full logs.",
+                "- 3. AGENTS.md and repo guidance files: apply local survey and evidence rules."
+            ],
+            AgentRole.Developer =>
+            [
+                "- 1. current-task.md: anchor implementation scope and verification plan.",
+                "- 2. prior-task-summaries.md: read compact prior behavior, file, risk, and model-fit evidence first.",
+                "- 3. prior-task-evidence.md: open only when summaries do not explain a prior result."
+            ],
+            AgentRole.Tester =>
+            [
+                "- 1. prior-task-summaries.md: identify changed files, behavior claims, risks, and verification gaps.",
+                "- 2. current-task.md: map the required checks to the task verification plan.",
+                "- 3. prior-task-evidence.md: confirm exact command output when a summary is insufficient."
+            ],
+            AgentRole.Reviewer =>
+            [
+                "- 1. prior-task-summaries.md: review changed files, behavior changes, verification, risks, and model fit before full logs.",
+                "- 2. digest.md: check open blockers and role focus before findings.",
+                "- 3. prior-task-evidence.md: inspect full evidence only for disputed or high-risk findings."
+            ],
+            _ =>
+            [
+                "- 1. digest.md: start with compact context.",
+                "- 2. current-task.md: confirm the assigned work.",
+                "- 3. prior-task-summaries.md: inspect prior completed work before full evidence."
+            ]
+        };
+    }
+
     private static List<string> BuildOpenRiskLines(Goal goal, TaskSpec task)
     {
         var risks = new List<string>();
@@ -320,6 +405,110 @@ public static class WorkerContextArtifacts
         }
 
         return risks;
+    }
+
+    private static string SummarizeEvidenceField(TaskVerificationRecord verification, params string[] labels)
+    {
+        foreach (var line in SplitEvidenceLines(verification))
+        {
+            foreach (var label in labels)
+            {
+                if (!TryExtractLabelValue(line, label, out var value))
+                {
+                    continue;
+                }
+
+                return TrimSummaryField(value);
+            }
+        }
+
+        return "Not reported.";
+    }
+
+    private static string SummarizeVerificationResult(TaskVerificationRecord verification)
+    {
+        var labeledResult = SummarizeEvidenceField(verification, "verification result", "result");
+        if (labeledResult != "Not reported.")
+        {
+            return labeledResult;
+        }
+
+        var evidence = SplitEvidenceLines(verification)
+            .FirstOrDefault(line => line.Contains("passed", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("warning", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(evidence))
+        {
+            return TrimSummaryField(evidence);
+        }
+
+        return verification.Succeeded
+            ? "Verification command succeeded."
+            : "Verification command failed; inspect prior-task-evidence.md for output.";
+    }
+
+    private static string SummarizeRisks(TaskVerificationRecord verification)
+    {
+        var labelValue = SummarizeEvidenceField(verification, "risks", "risk", "blockers", "blocker");
+        if (labelValue != "Not reported.")
+        {
+            return labelValue;
+        }
+
+        if (!verification.Succeeded)
+        {
+            return "Verification failed.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(verification.StandardError))
+        {
+            return TrimSummaryField(verification.StandardError.ReplaceLineEndings(" "));
+        }
+
+        return "None reported.";
+    }
+
+    private static string SummarizeModelFit(TaskVerificationRecord verification)
+    {
+        return verification.ModelFitNote ??
+            ModelFitEvidence.TryExtractNote(verification.StandardOutput, verification.StandardError) ??
+            "Not reported.";
+    }
+
+    private static bool TryExtractLabelValue(string line, string label, out string value)
+    {
+        var normalizedLine = line.Trim().TrimStart('-', '*', ' ');
+        var prefix = label + ":";
+        if (normalizedLine.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            value = normalizedLine[prefix.Length..].Trim();
+            return !string.IsNullOrWhiteSpace(value);
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static string TrimSummaryField(string value)
+    {
+        var trimmed = value.Trim().ReplaceLineEndings(" ");
+        while (trimmed.Contains("  ", StringComparison.Ordinal))
+        {
+            trimmed = trimmed.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return trimmed.Length <= SummaryFieldMaxChars ? trimmed : trimmed[..(SummaryFieldMaxChars - 3)] + "...";
+    }
+
+    private static IEnumerable<string> SplitEvidenceLines(TaskVerificationRecord verification)
+    {
+        return verification.StandardOutput
+            .ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Concat(verification.StandardError
+                .ReplaceLineEndings("\n")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 
     private static void AddEvidencePointers(List<string> lines, TaskVerificationRecord verification)

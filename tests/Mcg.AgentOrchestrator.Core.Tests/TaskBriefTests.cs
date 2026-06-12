@@ -658,8 +658,10 @@ public sealed class TaskBriefTests
         contextDirectory: "C:\\repo\\.orchestrator-context\\goal").Content;
 
     Assert.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.True(brief.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < brief.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("verification exit 0", StringComparison.Ordinal));
     Assert.True(!brief.Contains("prior-evidence-head", StringComparison.Ordinal));
     Assert.True(!brief.Contains("prior-evidence-tail", StringComparison.Ordinal));

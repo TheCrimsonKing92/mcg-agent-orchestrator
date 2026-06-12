@@ -2478,7 +2478,8 @@ public sealed class WorkerDispatchTests
     Assert.Contains(brief, text => text.Contains(".orchestrator-context", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("manifest.md", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
+    Assert.True(brief.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < brief.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("Full evidence available in the context files", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
 }
@@ -2517,27 +2518,87 @@ public sealed class WorkerDispatchTests
     Assert.True(File.Exists(Path.Combine(contextDirectory, "digest.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "objective.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "current-task.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-summaries.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-evidence.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "AGENTS.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
     var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
+    var summaries = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-summaries.md"));
     Assert.Contains(manifest, text => text.Contains("digest.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("Role Artifact Priorities", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("AGENTS.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("## Current Task", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("## Prior Completed Outcomes", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Changed files: Not reported.", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Behavior changes: Not reported.", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Verification: `dotnet test`", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Model fit: Not reported.", StringComparison.Ordinal));
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("Run worker dispatch tests.", StringComparison.Ordinal));
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), text => text.Contains(artifactOnlyTail, StringComparison.Ordinal));
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains(prompt, text => text.Contains(contextDirectory, StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
+    Assert.True(prompt.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < prompt.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.True(!prompt.Contains(inlineHead, StringComparison.Ordinal));
     Assert.True(!prompt.Contains(artifactOnlyTail, StringComparison.Ordinal));
+}
+
+    [Xunit.Theory(DisplayName = "WorkerContextArtifacts_writes_role_specific_priorities_and_prior_summaries")]
+    [Xunit.InlineData(AgentRole.Developer, "current-task.md: anchor implementation scope", "prior behavior")]
+    [Xunit.InlineData(AgentRole.Tester, "identify changed files, behavior claims, risks, and verification gaps", "required checks")]
+    [Xunit.InlineData(AgentRole.Reviewer, "review changed files, behavior changes, verification, risks, and model fit", "check open blockers")]
+    public void WorkerContextArtifactsWritesRoleSpecificPrioritiesAndPriorSummaries(
+        AgentRole role,
+        string expectedPrimaryPriority,
+        string expectedSecondaryPriority)
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Implement summary source.", AgentRole.Developer);
+    var currentTask = new TaskSpec(TaskId.New(), "Use role bundle.", role, "Run focused checks.");
+    var goal = kernel.CreateGoal("Bundle role context", [priorTask, currentTask]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "dotnet test --filter WorkerContextArtifacts",
+        workingDirectory,
+        0,
+        """
+        Changed files: src/Context.cs, tests/ContextTests.cs
+        Behavior changes: context bundles summarize prior work before full evidence
+        Verification result: passed focused tests
+        Risks: none reported
+        """,
+        string.Empty,
+        DateTimeOffset.UtcNow,
+        "Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation."));
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, currentTask, workingDirectory);
+
+    var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
+    var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
+    var summaries = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-summaries.md"));
+    Assert.Contains(manifest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains(expectedPrimaryPriority, StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains(expectedSecondaryPriority, StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains(expectedPrimaryPriority, StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Changed files: src/Context.cs, tests/ContextTests.cs", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Behavior changes: context bundles summarize prior work before full evidence", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Verification: `dotnet test --filter WorkerContextArtifacts`", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Verification result: passed focused tests", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Risks: none reported", StringComparison.Ordinal));
+    Assert.Contains(summaries, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]
@@ -2591,7 +2652,8 @@ public sealed class WorkerDispatchTests
     Assert.True(currentTask.LastDispatch!.PromptCharacterCount <= PaidPromptThresholds.PromptThreshold(
         currentTask.LastDispatch.TaskComplexity,
         currentTask.LastDispatch.UsesComplexModel));
-    Assert.Contains(prompt, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
+    Assert.True(prompt.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < prompt.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("prior-output-head", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("prior-output-tail", StringComparison.Ordinal));
 }
