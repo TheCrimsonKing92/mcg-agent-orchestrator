@@ -77,6 +77,14 @@ public sealed class GoalAcceptanceVerifier
             WorkingDirectory = workingDirectory
         };
 
+        // Match the dispatch wrapper: without these, MSBuild worker nodes and
+        // VBCSCompiler outlive the root test process holding the redirected
+        // pipes and worktree obj files, so the output reads below hang until
+        // the command timeout cancels them.
+        startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
+        startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
+
         for (var i = 1; i < arguments.Length; i++)
         {
             startInfo.ArgumentList.Add(arguments[i]);

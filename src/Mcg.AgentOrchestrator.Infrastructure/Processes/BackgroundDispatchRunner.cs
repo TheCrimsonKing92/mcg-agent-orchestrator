@@ -5,20 +5,31 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class BackgroundDispatchRunner
 {
+    public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
+
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly Func<int, bool> _isStillRunning;
+    private readonly bool _processStartDisabled;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
         TimeSpan? postOutputIdleTimeout = null,
-        Func<int, bool>? isStillRunning = null)
+        Func<int, bool>? isStillRunning = null,
+        bool? disableProcessStart = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
         _isStillRunning = isStillRunning ?? IsStillRunning;
+        _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
+    }
+
+    private static bool IsDispatchStartDisabledByEnvironment()
+    {
+        var value = Environment.GetEnvironmentVariable(DisableDispatchStartVariable);
+        return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     public TaskProcessRecord StartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
@@ -40,6 +51,12 @@ public sealed class BackgroundDispatchRunner
         if (task.LastProcess is not null)
         {
             throw new InvalidOperationException($"Task '{taskId}' already has a dispatch process record; refresh, cancel, or retry before starting it again.");
+        }
+
+        if (_processStartDisabled)
+        {
+            throw new InvalidOperationException(
+                $"Background dispatch process start is disabled in this environment ({DisableDispatchStartVariable}); refusing to launch the worker command. Test-spawned orchestrators must never start real subscription CLIs.");
         }
 
         Directory.CreateDirectory(logRoot);

@@ -1437,6 +1437,23 @@ public sealed class WorkerDispatchTests
     Assert.Contains(ex.Message, text => text.Contains("already has a dispatch process record", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refuses_process_start_when_disabled_for_environment")]
+    public void BackgroundDispatchRunnerRefusesProcessStartWhenDisabledForEnvironment()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refuse disabled dispatch start");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output should-not-run", root, DateTimeOffset.UtcNow));
+    var runner = new BackgroundDispatchRunner(disableProcessStart: true);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => runner.StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
+
+    Assert.Contains(ex.Message, text => text.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, StringComparison.Ordinal));
+    Xunit.Assert.Null(task.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_defers_future_subscription_retry_after_before_start")]
     public void BackgroundDispatchRunnerDefersFutureSubscriptionRetryAfterBeforeStart()
 {

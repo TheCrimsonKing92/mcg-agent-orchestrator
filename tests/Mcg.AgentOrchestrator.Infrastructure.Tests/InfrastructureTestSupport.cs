@@ -51,6 +51,12 @@ public static Process StartDashboardProcess(string appProject, string workingDir
     startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
     startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = FindRepositoryRoot();
 
+    // Spawned-app dispatch starts must never launch real subscription CLIs:
+    // codex/claude authenticate from account state, not the API keys pinned
+    // below, so without this flag auto-handoff tests burn real usage and edit
+    // real worktrees under the repository root.
+    startInfo.EnvironmentVariables[BackgroundDispatchRunner.DisableDispatchStartVariable] = "1";
+
     // Pin provider credentials and model names so spawned-app assertions are
     // machine-independent regardless of what keys or models the host has set.
     startInfo.EnvironmentVariables["OPENAI_API_KEY"] = "test-openai-key";
