@@ -444,3 +444,11 @@ Goal `d85cc946`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~5.5 
 - Operator gate: reviewed lifecycle/CLI/parser/rendering diffs; focused GoalLifecycleTests 21/21; focused CLI cancel-goal regression 1/1 after build-server shutdown; full worktree suite Core 172/172 + Infrastructure 306/306; acceptance verification passed.
 - Friction closed: generated worker context artifacts no longer make file-role dispatches appear dirty.
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped lifecycle command with tests; operator follow-up handled discovered generated-file hygiene.
+
+## 2026-06-12 - Workspace commands can target non-current goals (goal efad9a91)
+
+Goal `efad9a91`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~4 min). `workspace create|merge|remove [goal-id-prefix]` now resolves the optional goal id through the existing resolver and updates the command context to that goal, preserving current-goal behavior when no id is supplied. This closes the cleanup gap exposed immediately after `cancel-goal`/`supersede-goal`: `workspace remove 8b64de95` had targeted latest goal `d85cc946` instead of the stale goal's workspace. Commit `22e841f` fast-forwarded to main and workspace removal succeeded.
+
+- Operator gate: reviewed CLI workspace diff and regression; focused GoalWorktreeTests 13/13 after one CS2012 build-server shutdown retry; full worktree suite Core 172/172 + Infrastructure 307/307; acceptance verification passed.
+- Residual: superseded goal `8b64de95` has preserved uncommitted heartbeat-visibility edits in its worktree; do not remove that workspace until salvaged or explicitly discarded.
+- Model fit: OpenAI/gpt-5.5 - adequate - small CLI targeting fix with focused regression.
