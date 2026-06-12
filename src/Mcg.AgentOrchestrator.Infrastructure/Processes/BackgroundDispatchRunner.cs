@@ -123,6 +123,7 @@ public sealed class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
+        var exitFileExists = File.Exists(processRecord.ExitCodePath);
         if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
             if (_isStillRunning(processRecord.ProcessId))
@@ -154,6 +155,12 @@ public sealed class BackgroundDispatchRunner
                 return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, diagnostic);
             }
 
+            kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
+            return processRecord;
+        }
+
+        if (exitFileExists)
+        {
             kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
             return processRecord;
         }
@@ -514,9 +521,24 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        if (int.TryParse(File.ReadAllText(path).Trim(), out exitCode))
+        try
         {
-            return true;
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            if (int.TryParse(reader.ReadToEnd().Trim(), out exitCode))
+            {
+                return true;
+            }
+        }
+        catch (IOException)
+        {
+            exitCode = 1;
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            exitCode = 1;
+            return false;
         }
 
         exitCode = 1;

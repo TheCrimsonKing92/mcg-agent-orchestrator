@@ -824,6 +824,49 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_run_goal_requires_confirm_batch_start_flag")]
+    public void CliRunGoalRequiresConfirmBatchStartFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Avoid accidental sequential subscription start", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Planner)]);
+        var agent = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt-4o-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["run-goal"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains("--confirm-batch-start", ex!.Message);
+        Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
+        Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_start_dispatch_blocks_large_paid_subscription_prompt_without_confirm_flag")]
     public void CliStartDispatchBlocksLargePaidSubscriptionPromptWithoutConfirmFlag()
     {

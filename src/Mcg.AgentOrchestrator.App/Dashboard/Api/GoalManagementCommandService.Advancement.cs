@@ -442,7 +442,8 @@ private static string GetSubscriptionAutomationMessage(NextActionAutomationPlan 
 
 private static string? GetAutomaticHandoffPauseReason(TaskSpec task, NextActionAutomationKind kind)
 {
-    if (kind == NextActionAutomationKind.RefreshRunningProcess && task.LastProcess is { IsRunning: true })
+    if ((kind is NextActionAutomationKind.StartRecordedDispatch or NextActionAutomationKind.RefreshRunningProcess) &&
+        task.LastProcess is { IsRunning: true })
     {
         return $"Background work is still running for task {task.Id.Value[..8]}; continue after it exits.";
     }

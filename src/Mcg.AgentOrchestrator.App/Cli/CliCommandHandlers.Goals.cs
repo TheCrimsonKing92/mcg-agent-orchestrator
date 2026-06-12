@@ -143,6 +143,26 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintAdvanceResult(subscriptionAdvance);
             return subscriptionAdvance.Executed;
 
+        case "run-goal":
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-batch-start",
+                "run-goal requires --confirm-batch-start because it starts worker processes.");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(
+                context.Kernel,
+                context.CurrentGoal,
+                GetOptionalArgument(parts, "--confirm-batch-start", SubscriptionPromptCostGuard.CliConfirmationFlag));
+            var runGoalResult = RunGoalService.RunAsync(
+                context.Kernel,
+                context.Agents,
+                context.WorkerProfiles,
+                context.Workspace,
+                context.CurrentGoal,
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag))
+                .GetAwaiter().GetResult();
+            ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult);
+            return runGoalResult.Executed;
+
         case "delegate":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var delegation = context.Kernel.ActivateGoal(context.CurrentGoal.Id, context.Agents);
