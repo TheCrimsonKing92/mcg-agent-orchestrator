@@ -28,6 +28,7 @@ publish/
 # Local orchestrator/prototype state
 .orchestrator/
 **/.orchestrator/
+**/.orchestrator-context/
 **/.orchestrator-demo/
 **/.orchestrator-prototype/
 **/.scratch/
