@@ -484,3 +484,10 @@ Configured same-role alternates with `agent-add` for all five roles, then ran a 
 - Operator gate: reviewed health inspector, CLI, dashboard, and tests; patched alternate detection to use role ordering instead of reference identity; focused health/dashboard tests 82/82 after one CS2012 retry; full worktree suite Core 172/172 + Infrastructure 326/326; `git diff --check` and acceptance verification passed.
 - Friction found: Tester produced valid verification evidence but was false-failed by the no-file-change guard because it was a verification-only task; operator added manual verification and recorded a backlog item to distinguish Tester verification-only success from file-touching expectations.
 - Model fit: OpenAI/gpt-5.5 - adequate for Planner/Researcher/Developer/Tester on this narrow feature; Anthropic/claude-haiku-4-5 - adequate for Reviewer.
+
+## 2026-06-12 - Verification-only Tester dispatches no longer need file changes (goal d6479545)
+
+Goal `d6479545`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `BackgroundDispatchRunner` now keeps Developer unchanged dispatches strict, keeps Tester tasks that explicitly request file/test/source changes strict, and allows clean verification-only Tester dispatches when their output includes concrete passing verification evidence. Commit `90b52b9` fast-forwarded to main and workspace removal succeeded; the backlog item from goal `889baf96` is closed.
+
+- Operator gate: reviewed dispatch guard and tests; tightened worker logic so merely mentioning `dotnet test` is not enough without passing/zero-exit evidence; focused BackgroundDispatchRunner tests 26/26 after one CS2012 retry; full worktree suite Core 172/172 + Infrastructure 329/329; `git diff --check` and acceptance verification passed.
+- Model fit: OpenAI/gpt-5.5 - adequate - policy fix with hermetic dispatch evidence tests; operator follow-up tightened the verification-evidence predicate.
