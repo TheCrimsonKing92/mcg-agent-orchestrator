@@ -217,6 +217,9 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Avoid surprise API spend", AgentRole.Developer, "Record explicit verification.");
     var goal = kernel.CreateGoal("Prefer subscription should not fall back automatically", [task]);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var agent = new AgentDefinition(
         new AgentId("prefer-subscription-developer"),
         "Prefer Subscription developer",
@@ -256,6 +259,9 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
     var goal = kernel.CreateGoal("Any available may fall back", [task]);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var agent = new AgentDefinition(
         new AgentId("any-available-developer"),
         "Any Available developer",
@@ -305,6 +311,9 @@ public sealed class AdvanceLoopTests
         ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var provider = new FakeSmokeProvider();
 
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
@@ -375,6 +384,9 @@ public sealed class AdvanceLoopTests
         ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var provider = new FakeSmokeProvider();
 
     GoalManagementCommandService.SubscriptionDispatchTask(
@@ -413,7 +425,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
         "Dispatch into execution root",
-        [new TaskSpec(TaskId.New(), "Inspect command", AgentRole.Developer)]);
+        [new TaskSpec(TaskId.New(), "Inspect command", AgentRole.Planner)]);
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
@@ -541,6 +553,9 @@ public sealed class AdvanceLoopTests
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
     kernel.ActivateGoal(goal.Id, [agent]);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var promptCharacters = kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length;
 
     var blocked = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(

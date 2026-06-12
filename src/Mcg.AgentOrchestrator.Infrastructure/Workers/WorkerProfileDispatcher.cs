@@ -87,6 +87,7 @@ public static class WorkerProfileDispatcher
         EnsureSubscriptionProfilePinsSelectedReasoning(profile, selection.Model.ProviderName, reasoningEffort);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
         EnsureRepeatedSubscriptionLimitReviewed(task);
+        EnsureWorktreeForFileRole(task.RequiredRole, workingDirectory);
         return PrepareTask(
             kernel,
             goal,
@@ -157,6 +158,7 @@ public static class WorkerProfileDispatcher
             EnsureSubscriptionProfilePinsSelectedModel(profile);
             var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel);
             EnsureSubscriptionProfilePinsSelectedReasoning(profile, subscriptionModel.Model.ProviderName, reasoningEffort);
+            EnsureWorktreeForFileRole(selection.Task.RequiredRole, workingDirectory);
             results.Add(PrepareTask(
                 kernel,
                 goal,
@@ -174,6 +176,22 @@ public static class WorkerProfileDispatcher
         }
 
         return results;
+    }
+
+    private static void EnsureWorktreeForFileRole(AgentRole role, string workingDirectory)
+    {
+        if (role != AgentRole.Developer && role != AgentRole.Tester)
+        {
+            return;
+        }
+
+        if (File.Exists(Path.Combine(workingDirectory, ".git")))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"A goal workspace is required to dispatch a {role} task; run 'workspace create' before subscription-dispatch.");
     }
 
     private static void EnsureTaskNeedsExecution(TaskSpec task)

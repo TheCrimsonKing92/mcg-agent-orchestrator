@@ -6,17 +6,6 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
-## Require a goal worktree before subscription-dispatch records a working directory
-
-Status: open | Size: small | Suggested route: simple-goal
-
-Why: running `subscription-dispatch` before `workspace create` records a dispatch with the repository root as working directory; the operator must `progress failed` + `retry` to re-prepare. Observed live on goal 42808fff (2026-06-12).
-
-Where: `WorkerProfileDispatcher.PrepareTask` / dispatch preparation working-directory resolution.
-
-Done when: preparing a Developer/Tester subscription dispatch for a goal without a worktree either creates the worktree first or fails with a message naming `workspace create`; repo-root dispatch recording for file-touching roles is impossible.
-
-Verify: focused tests for prepare-without-worktree behavior; full `dotnet test`.
 
 ## Add sequential pipeline auto-advance
 

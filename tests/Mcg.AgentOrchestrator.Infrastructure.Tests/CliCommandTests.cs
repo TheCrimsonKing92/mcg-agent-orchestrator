@@ -354,6 +354,9 @@ public sealed class CliCommandTests
         Goal? currentGoal = latestGoal;
         kernel.ActivateGoal(olderGoal.Id, agents);
         kernel.ActivateGoal(latestGoal.Id, agents);
+        var olderWorktreePath = GoalWorktrees.WorktreePath(root, olderGoal.Id);
+        Directory.CreateDirectory(olderWorktreePath);
+        File.WriteAllText(Path.Combine(olderWorktreePath, ".git"), "gitdir: ..");
         var olderGoalPrefix = olderGoal.Id.Value[..8];
 
         var changed = CliCommandDispatcher.ExecuteCommand(
@@ -1442,6 +1445,9 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
         var noteChanged = CliCommandDispatcher.ExecuteCommand(
@@ -1513,6 +1519,9 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow));

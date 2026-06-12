@@ -102,6 +102,7 @@ public sealed class WorkerDispatchTests
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(promptRoot);
     Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Dispatch configured subscription worker");
@@ -193,6 +194,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Avoid duplicate subscription handoff");
@@ -259,6 +262,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var agent = new AgentDefinition(
@@ -329,6 +334,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -406,6 +413,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -495,6 +504,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Dispatch subscription-backed workers");
@@ -534,6 +545,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1063,6 +1076,7 @@ public sealed class WorkerDispatchTests
         WorkerProfileCatalog.Default(),
         _ => 5000);
     var dispatchRoot = CreateTempDirectory();
+    File.WriteAllText(Path.Combine(dispatchRoot, ".git"), "gitdir: ..");
 
     var item = plan.Items.Single(candidate => candidate.TaskId == nextTask.Id.Value);
     var summary = plan.ReadyModelUsage.Single();
@@ -1300,6 +1314,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var failureAt = DateTimeOffset.Parse("2026-06-01T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Skip retry-later subscription dispatch");
@@ -1346,6 +1362,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var firstFailureAt = DateTimeOffset.Parse("2026-06-01T12:00:00Z");
     var secondFailureAt = DateTimeOffset.Parse("2026-06-01T13:00:00Z");
     var retryWindowPassed = DateTimeOffset.Parse("2026-06-01T18:00:00Z");
@@ -1420,6 +1438,104 @@ public sealed class WorkerDispatchTests
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal("Reviewed profile and provider timing.", developer.SubscriptionLimitReviewNote);
     Assert.Equal(2, developer.SubscriptionLimitReviewedFailureCount);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_dispatch_for_developer_without_worktree")]
+    public void WorkerProfileDispatcherRejectsSubscriptionDispatchForDeveloperWithoutWorktree()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement the feature without workspace");
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt));
+
+    Assert.Contains(ex.Message, text => text.Contains("workspace create", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Developer", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastDispatch is null);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_allows_subscription_dispatch_for_researcher_without_worktree")]
+    public void WorkerProfileDispatcherAllowsSubscriptionDispatchForResearcherWithoutWorktree()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Survey the codebase without workspace");
+    var agent = new AgentDefinition(
+        new AgentId("openai-researcher"),
+        "OpenAI Researcher",
+        AgentRole.Researcher,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.True(task.LastDispatch is not null);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_allows_subscription_dispatch_for_developer_with_worktree")]
+    public void WorkerProfileDispatcherAllowsSubscriptionDispatchForDeveloperWithWorktree()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement the feature with workspace");
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.True(task.LastDispatch is not null);
+    Assert.Equal(workingDirectory, task.LastDispatch!.WorkingDirectory);
 }
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_rejects_duplicate_process_start")]
     public void BackgroundDispatchRunnerRejectsDuplicateProcessStart()
@@ -1944,6 +2060,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Implement the feature");
@@ -1970,6 +2088,8 @@ public sealed class WorkerDispatchTests
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var developerGoal = kernel.CreateGoal("Implement the change", [new TaskSpec(TaskId.New(), "Add the feature.", AgentRole.Developer)]);
