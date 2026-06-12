@@ -65,7 +65,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (!string.IsNullOrWhiteSpace(contextDirectory))
         {
-            lines.Add($"Context files: read {contextDirectory} before editing; start with manifest.md for artifact descriptions and repo-local guidance references.");
+            lines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first, then use manifest.md for artifact descriptions and repo-local guidance references.");
         }
 
         lines.Add(string.Empty);
@@ -126,7 +126,10 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add(string.Empty);
         }
 
-        var priorEvidence = PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
+        var usesFileAccessContext = !string.IsNullOrWhiteSpace(workingDirectory) && !string.IsNullOrWhiteSpace(contextDirectory);
+        var priorEvidence = usesFileAccessContext
+            ? PromptContextFormatter.BuildPriorTaskEvidencePointerLines(goal.Tasks, taskId)
+            : PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
         lines.AddRange(priorEvidence);
         if (priorEvidence.Count > 0 && !string.IsNullOrWhiteSpace(workingDirectory))
         {

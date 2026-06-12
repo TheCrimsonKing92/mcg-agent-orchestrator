@@ -27,6 +27,7 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task);
 
+        WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
@@ -40,7 +41,6 @@ public static class WorkerProfileDispatcher
             profile.CommandTemplate,
             promptRoot,
             BuildDispatchVariables(task.RequiredRole, workingDirectory, variables));
-        WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,

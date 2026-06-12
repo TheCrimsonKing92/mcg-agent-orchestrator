@@ -31,6 +31,26 @@ public static class TaskComplexityEstimator
         "worker", "persistence", "state", "tests", "docs"
     ];
 
+    private static readonly string[] ComplexActionVerbSignals =
+    [
+        "implement", "build", "create", "refactor", "redesign",
+        "rewrite", "migrate", "integrate", "orchestrate", "persist"
+    ];
+
+    private static readonly string[] CodeChangeSignals =
+    [
+        "code", "source", "files", "classes", "interfaces",
+        "service", "services", "schema", "database", "endpoint",
+        "endpoints", "middleware", "workflow", "workflows"
+    ];
+
+    private static readonly string[] VerificationBreadthSignals =
+    [
+        "focused tests", "regression tests", "integration tests",
+        "end-to-end tests", "full dotnet test", "build and test",
+        "manual verification", "verification plan"
+    ];
+
     public static TaskComplexity Estimate(string taskDescription, string goalObjective, AgentRole role)
     {
         if (IsLowImpactDocumentationOrCopyTask(taskDescription) ||
@@ -123,6 +143,19 @@ public static class TaskComplexityEstimator
         else if (requirementCount >= 7) score += 1;
 
         var tokens = BuildTokenSet(lower);
+        var complexActionCount = ComplexActionVerbSignals.Count(tokens.Contains);
+        if (complexActionCount >= 2) score += 2;
+        else if (complexActionCount == 1) score += 1;
+
+        var codeChangeCount = CodeChangeSignals.Count(tokens.Contains);
+        if (codeChangeCount >= 3) score += 2;
+        else if (codeChangeCount >= 1 && complexActionCount >= 1) score += 1;
+
+        var verificationBreadthCount = VerificationBreadthSignals.Count(signal =>
+            lower.Contains(signal, StringComparison.OrdinalIgnoreCase));
+        if (verificationBreadthCount >= 2) score += 2;
+        else if (verificationBreadthCount == 1 && (complexActionCount >= 1 || codeChangeCount >= 2)) score += 1;
+
         foreach (var signal in RiskTokenSignals)
         {
             if (tokens.Contains(signal))
@@ -135,6 +168,16 @@ public static class TaskComplexityEstimator
         if (surfaceCount >= 4) score += 4;
         else if (surfaceCount >= 3) score += 1;
 
+        if (surfaceCount >= 2 && complexActionCount >= 1)
+        {
+            score += 2;
+        }
+
+        if (surfaceCount >= 2 && verificationBreadthCount >= 1)
+        {
+            score += 1;
+        }
+
         return score;
     }
 
@@ -142,11 +185,6 @@ public static class TaskComplexityEstimator
     {
         var lower = text.ToLowerInvariant();
         var tokens = BuildTokenSet(lower);
-        if (HasRiskSignal(lower, tokens) || HasStrongComplexitySignal(lower))
-        {
-            return false;
-        }
-
         var documentationTask =
             ContainsAny(tokens, "doc", "docs", "documentation", "readme", "changelog") &&
             StartsWithAny(
@@ -165,7 +203,19 @@ public static class TaskComplexityEstimator
             ContainsAny(tokens, "copy", "label", "labels", "text", "tooltip", "tooltips", "wording") &&
             StartsWithAny(lower, "change ", "clarify ", "edit ", "fix ", "rename ", "update ");
 
-        return documentationTask || copyTask;
+        if (copyTask &&
+            !RiskPhraseSignals.Any(signal => lower.Contains(signal, StringComparison.OrdinalIgnoreCase)) &&
+            !HasStrongComplexitySignal(lower))
+        {
+            return true;
+        }
+
+        if (HasRiskSignal(lower, tokens) || HasStrongComplexitySignal(lower))
+        {
+            return false;
+        }
+
+        return documentationTask;
     }
 
     private static bool IsLowImpactInspectionOrReportTask(string text)

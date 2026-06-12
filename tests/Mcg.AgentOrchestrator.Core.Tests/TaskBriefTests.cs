@@ -640,6 +640,47 @@ public sealed class TaskBriefTests
     Assert.Contains(prompt, text => text.Contains("prior-task-verification-stdout", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_collapses_prior_evidence_to_digest_pointer_for_file_context")]
+    public void BuildTaskBriefCollapsesPriorEvidenceToDigestPointerForFileContext()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var priorTask = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+    var currentTask = new TaskSpec(TaskId.New(), "Implement the plan", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Build a feature", [priorTask, currentTask]);
+    var noisyEvidence = $"prior-evidence-head {new string('x', 1800)} prior-evidence-tail";
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, noisyEvidence, "", clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(
+        goal.Id,
+        currentTask.Id,
+        workingDirectory: "C:\\repo",
+        contextDirectory: "C:\\repo\\.orchestrator-context\\goal").Content;
+
+    Assert.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("verification exit 0", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("prior-evidence-head", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("prior-evidence-tail", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_prior_evidence_inline_for_api_no_file_briefs")]
+    public void BuildTaskBriefKeepsPriorEvidenceInlineForApiNoFileBriefs()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var priorTask = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+    var currentTask = new TaskSpec(TaskId.New(), "Implement the plan", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Build a feature", [priorTask, currentTask]);
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "api-inline-prior-evidence", "", clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, currentTask.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("api-inline-prior-evidence", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("Read digest.md first", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "SdlcRoleRequirements_researcher_brief_includes_no_modify_repository_line")]
     public void SdlcRoleRequirementsResearcherBriefIncludesNoModifyRepositoryLine()
 {

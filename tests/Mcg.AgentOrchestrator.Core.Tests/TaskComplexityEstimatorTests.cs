@@ -242,6 +242,30 @@ public sealed class TaskComplexityEstimatorTests
         Assert.Equal(TaskComplexity.Complex, TaskComplexityEstimator.Estimate(denseRiskTask, ComplexGoalObjective, AgentRole.Tester));
     }
 
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_escalates_short_cross_surface_implementation_tasks")]
+    public void TaskComplexityEstimatorEscalatesShortCrossSurfaceImplementationTasks()
+    {
+        var complexity = TaskComplexityEstimator.Estimate(
+            "Implement API and worker persistence migration.",
+            "Keep orchestrator state consistent.",
+            AgentRole.Developer);
+
+        Assert.Equal(TaskComplexity.Complex, complexity);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskComplexityEstimator_keeps_long_simple_report_tasks_simple")]
+    public void TaskComplexityEstimatorKeepsLongSimpleReportTasksSimple()
+    {
+        var task =
+            "Summarize current dashboard, CLI, provider, subscription, worker, test, and docs behavior for operator awareness only; " +
+            "report existing file names, commands, and observed gaps without editing source, changing configuration, adding tests, or implementing fixes. " +
+            "Keep the output as a concise inventory with evidence pointers and no repository modifications.";
+
+        var complexity = TaskComplexityEstimator.Estimate(task, ComplexGoalObjective, AgentRole.Researcher);
+
+        Assert.Equal(TaskComplexity.Simple, complexity);
+    }
+
     private const string ComplexGoalObjective =
         "Design and implement a production multi-tenant architecture with end-to-end distributed integration, " +
         "horizontal scaling, real-time processing, system design, security, observability, concurrent workflows, " +

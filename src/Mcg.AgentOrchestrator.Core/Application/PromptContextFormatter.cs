@@ -175,6 +175,34 @@ internal static class PromptContextFormatter
         return lines;
     }
 
+    public static IReadOnlyList<string> BuildPriorTaskEvidencePointerLines(IReadOnlyList<TaskSpec> goalTasks, TaskId taskId)
+    {
+        var priorCompletedTasks = goalTasks
+            .TakeWhile(t => t.Id != taskId)
+            .Where(t => t.Status == WorkTaskStatus.Completed && t.LastVerification is not null)
+            .TakeLast(3)
+            .ToList();
+
+        if (priorCompletedTasks.Count == 0)
+        {
+            return [];
+        }
+
+        var lines = new List<string>
+        {
+            "## Prior Task Evidence",
+            "Read digest.md first for prior outcomes and open risks; open prior-task-evidence.md only when fuller verification output is needed."
+        };
+        foreach (var priorTask in priorCompletedTasks)
+        {
+            var verification = priorTask.LastVerification!;
+            lines.Add($"- {priorTask.RequiredRole}: {TrimPromptTitle(priorTask.Description)}; verification exit {verification.ExitCode}; evidence pointer: prior-task-evidence.md.");
+        }
+
+        lines.Add(string.Empty);
+        return lines;
+    }
+
     public static string BuildWorkspaceDiffSection(string diff)
     {
         var trimmed = TrimBlock(diff.Trim(), WorkspaceDiffMaxChars, WorkspaceDiffHeadChars, WorkspaceDiffTailChars);

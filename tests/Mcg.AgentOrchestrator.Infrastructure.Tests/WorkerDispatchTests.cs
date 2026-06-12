@@ -2477,6 +2477,8 @@ public sealed class WorkerDispatchTests
     var brief = File.ReadAllText(result.PromptPath);
     Assert.Contains(brief, text => text.Contains(".orchestrator-context", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("manifest.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("Full evidence available in the context files", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
 }
@@ -2512,6 +2514,7 @@ public sealed class WorkerDispatchTests
     var contextDirectory = Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value);
     Assert.True(Directory.Exists(contextDirectory));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "manifest.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "digest.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "objective.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "current-task.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-evidence.md")));
@@ -2519,14 +2522,78 @@ public sealed class WorkerDispatchTests
     Assert.True(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
+    var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
+    Assert.Contains(manifest, text => text.Contains("digest.md", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("AGENTS.md", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("## Current Task", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("## Prior Completed Outcomes", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("Run worker dispatch tests.", StringComparison.Ordinal));
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), text => text.Contains(artifactOnlyTail, StringComparison.Ordinal));
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains(prompt, text => text.Contains(contextDirectory, StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains(inlineHead, StringComparison.Ordinal));
     Assert.True(!prompt.Contains(artifactOnlyTail, StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]
+    public void WorkerProfileDispatcherLateFileAccessSubscriptionPromptStaysBelowLargePaidThreshold()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var priorTasks = Enumerable.Range(1, 4)
+        .Select(index => new TaskSpec(TaskId.New(), $"Implement prior pipeline slice {index}.", AgentRole.Developer))
+        .ToList();
+    var currentTask = new TaskSpec(
+        TaskId.New(),
+        "Implement context digest support across API, CLI, dashboard, worker, tests, and docs with regression tests.",
+        AgentRole.Developer);
+    var goal = kernel.CreateGoal("Reduce late pipeline subscription prompt size.", [.. priorTasks, currentTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var largePriorEvidence = $"prior-output-head {new string('p', 8000)} prior-output-tail";
+    foreach (var priorTask in priorTasks)
+    {
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "dotnet test",
+            workingDirectory,
+            0,
+            largePriorEvidence,
+            string.Empty,
+            DateTimeOffset.UtcNow));
+    }
+
+    var result = WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        currentTask,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.UtcNow);
+
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.True(currentTask.LastDispatch!.PromptCharacterCount <= PaidPromptThresholds.PromptThreshold(
+        currentTask.LastDispatch.TaskComplexity,
+        currentTask.LastDispatch.UsesComplexModel));
+    Assert.Contains(prompt, text => text.Contains("Read digest.md first", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("prior-output-head", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains("prior-output-tail", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_no_handoff_file_when_no_prior_completed_tasks")]
