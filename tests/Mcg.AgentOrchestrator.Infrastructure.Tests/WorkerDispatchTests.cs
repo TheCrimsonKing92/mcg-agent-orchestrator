@@ -1501,6 +1501,109 @@ public sealed class WorkerDispatchTests
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_commit_or_no_change_evidence_fails")]
+    public void BackgroundDispatchRunnerFileRoleWithoutCommitOrNoChangeEvidenceFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the change.",
+        string.Empty,
+        clock);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("branch=goal/", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
+    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_without_commit_fails")]
+    public void BackgroundDispatchRunnerFileRoleDirtyWorktreeWithoutCommitFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Verified and updated a test.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=dirty", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
+    public void BackgroundDispatchRunnerFileRoleWithCommittedChangePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Committed implementation.",
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_no_change_rationale_and_clean_worktree_passes")]
+    public void BackgroundDispatchRunnerFileRoleWithNoChangeRationaleAndCleanWorktreePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "NO_CHANGE: Existing focused test already covers this behavior.",
+        string.Empty,
+        clock);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_file_role_completion_is_unchanged")]
+    public void BackgroundDispatchRunnerNonFileRoleCompletionIsUnchanged()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Reviewer,
+        "Reviewed implementation evidence.",
+        string.Empty,
+        clock);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
     [Xunit.Fact(DisplayName = "LocalDispatchRunner_rejects_inactive_dispatch_execution")]
     public async Task LocalDispatchRunnerRejectsInactiveDispatchExecution()
 {
@@ -1749,6 +1852,85 @@ public sealed class WorkerDispatchTests
     WorkerProfileDispatcher.PrepareTask(kernel, goal, onlyTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
 
     Assert.False(File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")));
+}
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateCompletedGoalWorktreeDispatch(
+        string root,
+        AgentRole role,
+        string standardOutput,
+        string standardError,
+        IClock clock,
+        Action<string>? mutateWorktree = null)
+{
+    var kernel = new AgentOrchestratorKernel();
+    var taskSpec = new TaskSpec(TaskId.New(), $"{role} task.", role);
+    var goal = kernel.CreateGoal("Dispatch evidence goal", [taskSpec]);
+    var agent = new AgentDefinition(
+        new AgentId(role.ToString().ToLowerInvariant()),
+        role.ToString(),
+        role,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    mutateWorktree?.Invoke(worktree);
+
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, $"{role}.out.log");
+    var stderr = Path.Combine(logs, $"{role}.err.log");
+    var exit = Path.Combine(logs, $"{role}.exit.txt");
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, standardError);
+    File.WriteAllText(exit, "0");
+
+    var task = goal.Tasks.Single(candidate => candidate.RequiredRole == role);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, clock.UtcNow));
+    var process = new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, clock.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    return (kernel, goal, task, process);
+}
+
+    private static string CreateSeededDispatchRepository()
+{
+    var root = CreateTempDirectory();
+    RunGit(root, ["init"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+    RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    RunGit(root, ["commit", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    return root;
+}
+
+    private static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WorkingDirectory = workingDirectory
+    };
+    startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
+    startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
+
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start git.");
+    process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit(60000);
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+    }
 }
 
     private static void WaitForExitFile(string path)

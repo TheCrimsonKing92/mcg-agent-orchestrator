@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class BackgroundDispatchRunner
 {
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly Func<int, bool> _isStillRunning;
@@ -133,9 +134,41 @@ public sealed class BackgroundDispatchRunner
         int exitCode,
         string? standardErrorDiagnostic = null)
     {
-        TryWriteExitCode(processRecord.ExitCodePath, exitCode);
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
-        var standardError = AppendDiagnostic(ReadBestEffort(processRecord.StandardErrorPath), standardErrorDiagnostic);
+        var standardError = ReadBestEffort(processRecord.StandardErrorPath);
+        var task = kernel.GetTask(goalId, taskId);
+        if (RequiresFileChangeEvidence(task) &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence) &&
+            exitCode == 0 &&
+            !HasExplicitNoChangeRationale(standardOutput, standardError))
+        {
+            if (!worktreeEvidence.HasCommitAfterDispatch)
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Developer/Tester dispatch exited 0 but did not produce required file-change evidence. " +
+                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+            }
+        }
+
+        if (RequiresFileChangeEvidence(task) &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+            exitCode == 0 &&
+            HasExplicitNoChangeRationale(standardOutput, standardError) &&
+            !worktreeEvidence.IsClean)
+        {
+            exitCode = 1;
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                "Developer/Tester dispatch provided explicit no-change rationale but left the worktree dirty. " +
+                $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+        }
+
+        standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
+        TryWriteExitCode(processRecord.ExitCodePath, exitCode);
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,
@@ -154,6 +187,60 @@ public sealed class BackgroundDispatchRunner
 
         kernel.RecordTaskProcessRefreshed(goalId, taskId, completed, verification);
         return completed;
+    }
+
+    private static bool RequiresFileChangeEvidence(TaskSpec task)
+    {
+        return task.LastDispatch is { } dispatch &&
+            !IsLocalDispatch(dispatch) &&
+            task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+    }
+
+    private static bool HasExplicitNoChangeRationale(string standardOutput, string standardError)
+    {
+        var output = $"{standardOutput}\n{standardError}";
+        return output.Contains("NO_CHANGE:", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("No-change rationale:", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("No changes needed:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryInspectGoalWorktree(
+        string workingDirectory,
+        GoalId goalId,
+        DateTimeOffset dispatchedAt,
+        out GoalWorktreeDispatchEvidence evidence)
+    {
+        evidence = GoalWorktreeDispatchEvidence.Unknown;
+        if (!Directory.Exists(workingDirectory) || !File.Exists(Path.Combine(workingDirectory, ".git")))
+        {
+            return false;
+        }
+
+        var branch = RunGit(workingDirectory, "branch", "--show-current");
+        var expectedBranch = GoalWorktrees.BranchName(goalId);
+        if (branch.ExitCode != 0 || !string.Equals(branch.Output.Trim(), expectedBranch, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var head = RunGit(workingDirectory, "rev-parse", "--short", "HEAD");
+        var status = RunGit(workingDirectory, "status", "--porcelain");
+        var dispatch = RunGit(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
+        var commitsAfterDispatch = 0;
+        if (dispatch.ExitCode == 0)
+        {
+            commitsAfterDispatch = dispatch.Output
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Length;
+        }
+
+        evidence = new GoalWorktreeDispatchEvidence(
+            branch.Output.Trim(),
+            head.ExitCode == 0 ? head.Output.Trim() : "unknown",
+            status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output),
+            string.IsNullOrWhiteSpace(status.Output) ? "clean" : "dirty",
+            commitsAfterDispatch);
+        return true;
     }
 
     public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
@@ -355,6 +442,39 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
+    private static GitResult RunGit(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return new GitResult(1, string.Empty);
+        }
+
+        var output = process.StandardOutput.ReadToEnd();
+        if (!process.WaitForExit((int)GitTimeout.TotalMilliseconds))
+        {
+            process.Kill(entireProcessTree: true);
+            return new GitResult(1, string.Empty);
+        }
+
+        return new GitResult(process.ExitCode, output);
+    }
+
     internal static string BuildWrapper(
         string command,
         string stdoutPath,
@@ -389,4 +509,18 @@ public sealed class BackgroundDispatchRunner
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+
+    private sealed record GitResult(int ExitCode, string Output);
+
+    private sealed record GoalWorktreeDispatchEvidence(
+        string Branch,
+        string Head,
+        bool IsClean,
+        string WorktreeStatus,
+        int CommitsAfterDispatch)
+    {
+        public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
+
+        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", 0);
+    }
 }
