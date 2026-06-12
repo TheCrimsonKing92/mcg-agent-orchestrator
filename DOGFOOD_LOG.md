@@ -80,3 +80,10 @@ Goal `a2bec209`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `Work
 - Operator gate: reviewed context artifact, prompt, complexity, and tests; focused TaskBrief/TaskComplexity tests 54/54, focused WorkerProfileDispatcher tests 34/34, full worktree suite Core 176/176 + Infrastructure 331/331; `git diff --check` and acceptance verification passed.
 - Friction found: worker final output line `Human input: none.` was parsed as a human-input request; operator answered it and recorded a backlog item to ignore explicit no-input lines.
 - Model fit: OpenAI/gpt-5.5 - adequate - broad but cohesive context-economics slice with focused prompt-size and classifier tests.
+
+## 2026-06-12 - Explicit no-input worker summaries are ignored (goal 8d9409f6)
+
+Goal `8d9409f6`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `AgentOutputDirectives` now ignores exact no-input directive payloads such as `none`, `no`, `not needed`, and `no input needed` for both `HUMAN_INPUT:` and `Human input:` spellings, while preserving real question directives. Commit `74431c5` fast-forwarded to main and workspace removal succeeded; the no-human-input backlog item is closed.
+
+- Operator gate: worker produced the correct edits and tests but failed the dirty-worktree guard because it did not commit; operator committed `74431c5`, recorded manual verification, and acceptance passed. Focused core directive/dispatch/API tests 60/60; full worktree suite Core 187/187 + Infrastructure 331/331; `git diff --check` passed.
+- Model fit: OpenAI/gpt-5.5 - adequate - narrow parser fix with focused regressions; worker was capable but missed the required commit step.
