@@ -16,6 +16,8 @@ public sealed record AgentConfigurationValidation(
     string? SubscriptionProfileName,
     string? SubscriptionModelAlias,
     string? SubscriptionReasoningEffort,
+    bool HasSubscriptionCapableAlternate,
+    string SubscriptionCapableAlternatesDetail,
     bool IsValid,
     string Detail,
     string? ComplexProviderName = null,
@@ -141,7 +143,8 @@ public static class OrchestratorHealthInspector
 
         foreach (var role in roles)
         {
-            var agent = agents.Agents.FirstOrDefault(candidate => candidate.Role == role);
+            var roleAgents = agents.Agents.Where(candidate => candidate.Role == role).ToList();
+            var agent = roleAgents.FirstOrDefault();
             if (agent is null)
             {
                 yield return new AgentConfigurationValidation(
@@ -156,6 +159,8 @@ public static class OrchestratorHealthInspector
                     null,
                     null,
                     false,
+                    "none",
+                    false,
                     "No agent is configured for this role.");
                 continue;
             }
@@ -164,6 +169,10 @@ public static class OrchestratorHealthInspector
             var profileName = ResolveSubscriptionProfileName(agent);
             WorkerProfileValidation? profile = null;
             var profileKnown = profileName is not null && profilesByName.TryGetValue(profileName, out profile);
+            var subscriptionCapableAlternates = roleAgents
+                .Skip(1)
+                .Where(candidate => IsSubscriptionCapableAlternate(candidate, profilesByName))
+                .ToList();
             var apiAllowed = AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy);
             var subscriptionAllowed = AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy);
             var apiUsable = apiAllowed && IsApiRouteUsable(provider);
@@ -187,6 +196,8 @@ public static class OrchestratorHealthInspector
                 profileName,
                 agent.Subscription?.ModelAlias,
                 agent.Subscription?.ReasoningEffort,
+                subscriptionCapableAlternates.Count > 0,
+                BuildSubscriptionCapableAlternatesDetail(subscriptionCapableAlternates),
                 isValid,
                 BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName, localOllamaAvailable),
                 agent.ComplexModel?.ProviderName,
@@ -231,6 +242,31 @@ public static class OrchestratorHealthInspector
         }
 
         return agent.Role != AgentRole.Developer || profile.IsPatchCapable;
+    }
+
+    private static bool IsSubscriptionCapableAlternate(
+        AgentDefinition agent,
+        Dictionary<string, WorkerProfileValidation> profilesByName)
+    {
+        if (!AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+        {
+            return false;
+        }
+
+        var profileName = ResolveSubscriptionProfileName(agent);
+        return profileName is not null &&
+            profilesByName.TryGetValue(profileName, out var profile) &&
+            IsSubscriptionRouteUsable(agent, profile);
+    }
+
+    private static string BuildSubscriptionCapableAlternatesDetail(List<AgentDefinition> alternates)
+    {
+        if (alternates.Count == 0)
+        {
+            return "none";
+        }
+
+        return string.Join(", ", alternates.Select(agent => $"{agent.Id.Value} ({agent.Name})"));
     }
 
     private static string BuildAgentValidationDetail(

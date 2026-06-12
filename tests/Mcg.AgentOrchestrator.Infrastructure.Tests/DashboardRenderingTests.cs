@@ -1978,11 +1978,13 @@ public sealed class DashboardRenderingTests
                 null,
                 null,
                 AgentExecutionPolicy.ApiOnly,
-                null,
-                null,
-                null,
-                true,
-                "API provider 'Ollama' is registered; subscription execution disabled.",
+                  null,
+                  null,
+                  null,
+                  false,
+                  "none",
+                  true,
+                  "API provider 'Ollama' is registered; subscription execution disabled.",
                 "Ollama",
                 "qwen3:8b",
                 8192,
@@ -2032,11 +2034,13 @@ public sealed class DashboardRenderingTests
                 null,
                 null,
                 AgentExecutionPolicy.ApiOnly,
-                null,
-                null,
-                null,
-                false,
-                "No agent is configured for this role.")
+                  null,
+                  null,
+                  null,
+                  false,
+                  "none",
+                  false,
+                  "No agent is configured for this role.")
         ],
         WorkerProfileCatalog.Default().Profiles.Select(profile => new WorkerProfileValidation(
             profile.Name,
@@ -2196,11 +2200,13 @@ static AgentConfigurationValidation Validation(AgentRole role, AgentExecutionPol
         "medium",
         AgentCatalog.RoutineApiMaxOutputTokens,
         policy,
-        null,
-        null,
-        null,
-        true,
-        "valid");
+          null,
+          null,
+          null,
+          false,
+          "none",
+          true,
+          "valid");
 }
 
 static string ExtractTaskControls(string html, int taskNumber)

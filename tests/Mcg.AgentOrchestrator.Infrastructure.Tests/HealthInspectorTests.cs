@@ -74,6 +74,79 @@ public sealed class HealthInspectorTests
     Assert.Equal(AgentExecutionPolicy.SubscriptionOnly, developer.ExecutionPolicy);
     Assert.Equal("local-subscription", developer.SubscriptionProfileName);
 }
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_no_subscription_capable_alternates")]
+    public void OrchestratorHealthInspectorReportsNoSubscriptionCapableAlternates()
+{
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
+        AgentCatalog.Default(),
+        WorkerProfileCatalog.Default(),
+        command => command == "codex");
+
+    foreach (var agent in report.Agents)
+    {
+        Assert.False(agent.HasSubscriptionCapableAlternate);
+        Assert.Equal("none", agent.SubscriptionCapableAlternatesDetail);
+    }
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_partial_subscription_capable_alternates")]
+    public void OrchestratorHealthInspectorReportsPartialSubscriptionCapableAlternates()
+{
+    var primary = AgentCatalog.Default().GetRequired(AgentRole.Developer);
+    var alternate = CreateSubscriptionAlternate(AgentRole.Developer, "anthropic-developer", "Anthropic Developer", "claude-cli", "Anthropic");
+    var catalog = AgentCatalog.Default().AddOrReplaceById(alternate);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile(
+        "claude-cli",
+        "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})"));
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
+        catalog,
+        profiles,
+        command => command is "codex" or "claude");
+
+    var developer = report.Agents.Single(agent => agent.Role == AgentRole.Developer);
+    Assert.Equal(primary.Name, developer.AgentName);
+    Assert.True(developer.HasSubscriptionCapableAlternate);
+    Assert.Equal("anthropic-developer (Anthropic Developer)", developer.SubscriptionCapableAlternatesDetail);
+    foreach (var agent in report.Agents.Where(agent => agent.Role != AgentRole.Developer))
+    {
+        Assert.False(agent.HasSubscriptionCapableAlternate);
+        Assert.Equal("none", agent.SubscriptionCapableAlternatesDetail);
+    }
+}
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_configured_subscription_capable_alternates")]
+    public void OrchestratorHealthInspectorReportsConfiguredSubscriptionCapableAlternates()
+{
+    var catalog = AgentCatalog.Default();
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        catalog = catalog.AddOrReplaceById(CreateSubscriptionAlternate(
+            role,
+            $"anthropic-{role.ToString().ToLowerInvariant()}",
+            $"Anthropic {role}",
+            "claude-cli",
+            "Anthropic"));
+    }
+
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile(
+        "claude-cli",
+        "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})"));
+
+    var report = OrchestratorHealthInspector.Inspect(
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
+        catalog,
+        profiles,
+        command => command is "codex" or "claude");
+
+    foreach (var agent in report.Agents)
+    {
+        var roleName = agent.Role.ToString();
+        Assert.Equal(AgentCatalog.Default().GetRequired(agent.Role).Name, agent.AgentName);
+        Assert.True(agent.HasSubscriptionCapableAlternate);
+        Assert.Equal($"anthropic-{roleName.ToLowerInvariant()} (Anthropic {roleName})", agent.SubscriptionCapableAlternatesDetail);
+    }
+}
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_subscription_profiles_without_model_pinning")]
     public void OrchestratorHealthInspectorRejectsSubscriptionProfilesWithoutModelPinning()
 {
@@ -284,5 +357,21 @@ public sealed class HealthInspectorTests
     Assert.Contains(ok.Detail, text => text.Contains("workspace-write", StringComparison.Ordinal));
     Assert.False(readOnly.IsPatchCapable);
     Assert.Contains(readOnly.Detail, text => text.Contains("missing --sandbox workspace-write", StringComparison.Ordinal));
+}
+
+private static AgentDefinition CreateSubscriptionAlternate(
+    AgentRole role,
+    string id,
+    string name,
+    string profileName,
+    string providerName)
+{
+    return new AgentDefinition(
+        new AgentId(id),
+        name,
+        role,
+        new ModelProfile(providerName, "subscription-model", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile(profileName, "subscription-model"));
 }
 }

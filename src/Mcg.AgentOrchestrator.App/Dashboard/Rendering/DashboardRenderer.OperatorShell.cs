@@ -398,8 +398,8 @@ public static partial class DashboardRenderer
 
         html.AppendLine("<h3>Agents</h3>");
         html.AppendLine(enableOperatorControls
-            ? "<table><thead><tr><th>Role</th><th>Agent</th><th>Execution</th><th>API model</th><th>Subscription launcher</th><th>Status</th><th>Configure</th></tr></thead><tbody>"
-            : "<table><thead><tr><th>Role</th><th>Agent</th><th>Execution</th><th>API model</th><th>Subscription launcher</th><th>Status</th></tr></thead><tbody>");
+            ? "<table><thead><tr><th>Role</th><th>Agent</th><th>Execution</th><th>API model</th><th>Subscription launcher</th><th>Failover</th><th>Status</th><th>Configure</th></tr></thead><tbody>"
+            : "<table><thead><tr><th>Role</th><th>Agent</th><th>Execution</th><th>API model</th><th>Subscription launcher</th><th>Failover</th><th>Status</th></tr></thead><tbody>");
         var defaultAgentProvider = ResolveDefaultAgentProvider(report.Providers);
         foreach (var agent in report.Agents)
         {
@@ -413,7 +413,9 @@ public static partial class DashboardRenderer
             var complexLabel = agent.ComplexModelName is not null
                 ? $"<br><span class=\"meta\">complex: {Encode(agent.ComplexModelName)} reasoning {Encode(agent.ComplexReasoningEffort ?? "default")} @ {DisplayMaxTokens(agent.ComplexProviderName ?? providerForDefaults, agent.ComplexMaxOutputTokens, complex: true)}</span>"
                 : "";
-            html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span><br><span class=\"meta\">max tokens: {DisplayMaxTokens(providerForDefaults, agent.MaxOutputTokens, complex: false)}</span>{complexLabel}</td><td>{subscription}</td>");
+            var failoverClass = agent.HasSubscriptionCapableAlternate ? "ok" : "bad";
+            var failoverLabel = agent.HasSubscriptionCapableAlternate ? "ready" : "none";
+            html.AppendLine($"<td>{agent.Role}</td><td>{Encode(agent.AgentName)}</td><td>{Encode(Display(agent.ExecutionPolicy))}</td><td>{Encode(agent.ProviderName)}<br><span class=\"meta\">{Encode(agent.ModelName)}</span><br><span class=\"meta\">reasoning: {Encode(agent.ReasoningEffort ?? "default")}</span><br><span class=\"meta\">max tokens: {DisplayMaxTokens(providerForDefaults, agent.MaxOutputTokens, complex: false)}</span>{complexLabel}</td><td>{subscription}</td><td class=\"{failoverClass}\">{failoverLabel}<br><span class=\"meta\">{Encode(agent.SubscriptionCapableAlternatesDetail)}</span></td>");
             html.AppendLine($"<td class=\"{(agent.IsValid ? "ok" : "bad")}\">{Encode(agent.Detail)}</td>");
             if (enableOperatorControls)
             {
