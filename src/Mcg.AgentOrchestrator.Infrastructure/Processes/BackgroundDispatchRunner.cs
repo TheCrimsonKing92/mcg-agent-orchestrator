@@ -382,7 +382,7 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(string workingDirectory)
+    private static List<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(string workingDirectory)
     {
         var normalizedPath = Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var processesByPid = new Dictionary<int, string>();
