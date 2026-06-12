@@ -84,6 +84,30 @@ public sealed class AgentCatalogTests
     Assert.Equal("Anthropic developer", catalog.GetRequired(AgentRole.Developer).Name);
     Assert.Equal("claude-test", catalog.GetRequired(AgentRole.Developer).Model.ModelName);
 }
+    [Xunit.Fact(DisplayName = "AgentCatalog_add_or_replace_by_id_preserves_same_role_primary")]
+    public void AgentCatalogAddOrReplaceByIdPreservesSameRolePrimary()
+{
+    var alternate = new AgentDefinition(
+        new AgentId("anthropic-developer-claude"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-test", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey));
+
+    var catalog = AgentCatalog.Default().AddOrReplaceById(alternate);
+    var replacement = alternate with
+    {
+        Name = "Anthropic fallback developer",
+        Model = alternate.Model with { ModelName = "claude-updated" }
+    };
+    catalog = catalog.AddOrReplaceById(replacement);
+
+    var developers = catalog.Agents.Where(agent => agent.Role == AgentRole.Developer).ToList();
+    Assert.Equal(6, catalog.Agents.Count);
+    Assert.Equal("openai-developer", developers[0].Id.Value);
+    Assert.Equal("anthropic-developer-claude", developers[1].Id.Value);
+    Assert.Equal("Anthropic fallback developer", developers[1].Name);
+    Assert.Equal("claude-updated", developers[1].Model.ModelName);
+}
     [Xunit.Fact(DisplayName = "AgentCatalogStore_roundtrips_agents")]
     public void AgentCatalogStoreRoundtripsAgents()
 {
@@ -100,6 +124,26 @@ public sealed class AgentCatalogTests
 
     Assert.Equal("OpenAI reviewer", restored.GetRequired(AgentRole.Reviewer).Name);
     Assert.Equal("gpt-review", restored.GetRequired(AgentRole.Reviewer).Model.ModelName);
+}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_roundtrips_same_role_alternates")]
+    public void AgentCatalogStoreRoundtripsSameRoleAlternates()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var alternate = new AgentDefinition(
+        new AgentId("anthropic-developer-claude"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-test", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey));
+    var catalog = AgentCatalog.Default().AddOrReplaceById(alternate);
+
+    AgentCatalogStore.Save(path, catalog);
+    var restored = AgentCatalogStore.Load(path);
+
+    var developers = restored.Agents.Where(agent => agent.Role == AgentRole.Developer).ToList();
+    Assert.Equal(2, developers.Count);
+    Assert.Equal("openai-developer", developers[0].Id.Value);
+    Assert.Equal("anthropic-developer-claude", developers[1].Id.Value);
 }
     [Xunit.Fact(DisplayName = "AgentCatalogStore_load_adds_missing_paid_provider_cost_defaults_without_overriding_explicit_values")]
     public void AgentCatalogStoreLoadAddsMissingPaidProviderCostDefaultsWithoutOverridingExplicitValues()

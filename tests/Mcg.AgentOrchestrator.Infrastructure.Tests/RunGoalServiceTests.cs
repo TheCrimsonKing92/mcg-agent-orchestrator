@@ -298,6 +298,53 @@ public sealed class RunGoalServiceTests
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("alternate-planner", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_uses_added_same_role_catalog_alternate")]
+    public async Task RunGoalServiceAutoFailoverUsesAddedSameRoleCatalogAlternate()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var alternate = new AgentDefinition(
+            new AgentId("anthropic-planner-claude-fallback"),
+            "Claude fallback",
+            AgentRole.Planner,
+            new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("claude-cli"));
+        var agents = AgentCatalog.Default().AddOrReplaceById(alternate).Agents;
+        var task = new TaskSpec(TaskId.New(), "Task with catalog failover alternate", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Goal should fail over to a catalog alternate", [task]);
+        kernel.ActivateGoal(goal.Id, agents);
+        Assert.Equal("openai-planner", task.AssignedAgentId!.Value);
+        RecordRecoverableUsageLimit(
+            kernel,
+            goal,
+            task,
+            workspace,
+            "primary command",
+            DateTimeOffset.UtcNow,
+            "ERROR: You've hit your usage limit. Visit settings to purchase more credits.");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            agents,
+            Profiles(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output catalog-alternate-ok")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            pollInterval: TimeSpan.FromMilliseconds(50),
+            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            cancellationToken: cts.Token);
+
+        Assert.True(result.Executed);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.True(result.StopEvidence is null, result.StopEvidence?.Reason ?? result.StopReason);
+        Assert.Equal(alternate.Id, task.AssignedAgentId);
+        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("catalog-alternate-ok", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_heartbeat_stall_redelegates")]
     public async Task RunGoalServiceAutoFailoverHeartbeatStallRedelegates()
     {

@@ -31,6 +31,22 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(agents);
     }
 
+    public AgentCatalog AddOrReplaceById(AgentDefinition agent)
+    {
+        var agents = Agents.ToList();
+        var index = agents.FindIndex(existing => existing.Id == agent.Id);
+        if (index >= 0)
+        {
+            agents[index] = agent;
+        }
+        else
+        {
+            agents.Add(agent);
+        }
+
+        return new AgentCatalog(agents);
+    }
+
     public static AgentCatalog Default()
     {
         static ModelProfile OpenAiBase() =>

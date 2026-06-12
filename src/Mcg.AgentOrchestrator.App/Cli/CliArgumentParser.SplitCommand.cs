@@ -124,9 +124,10 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
     }
 
-    if (command.Equals("agent", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("agent", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("agent-add", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+        return NormalizeAgentArgs([command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)]);
     }
 
     if (command.Equals("tasks", StringComparison.OrdinalIgnoreCase))

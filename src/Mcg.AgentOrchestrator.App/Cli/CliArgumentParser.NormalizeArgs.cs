@@ -114,11 +114,10 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             : args;
     }
 
-    if (command.Equals("agent", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("agent", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("agent-add", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 5
-            ? [command, args[1], args[2], args[3], string.Join(' ', args.Skip(4))]
-            : args;
+        return NormalizeAgentArgs(args);
     }
 
     if (IsSimpleCommand(command))
@@ -127,5 +126,29 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     }
 
     return [command, string.Join(' ', args.Skip(1))];
+}
+
+private static IReadOnlyList<string> NormalizeAgentArgs(string[] args)
+{
+    if (args.Length < 5)
+    {
+        return args;
+    }
+
+    var parts = new List<string> { args[0], args[1], args[2], args[3] };
+    var flagIndex = Array.FindIndex(args, 4, arg => arg.StartsWith("--", StringComparison.Ordinal));
+    if (flagIndex < 0)
+    {
+        parts.Add(string.Join(' ', args.Skip(4)));
+        return parts;
+    }
+
+    if (flagIndex > 4)
+    {
+        parts.Add(string.Join(' ', args.Skip(4).Take(flagIndex - 4)));
+    }
+
+    parts.AddRange(args.Skip(flagIndex));
+    return parts;
 }
 }

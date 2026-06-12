@@ -256,12 +256,19 @@ internal static partial class ConsoleViews
     public static void PrintAgents(IReadOnlyList<AgentDefinition> agents)
     {
         Console.WriteLine("Agents:");
+        var primaryAgentIds = agents
+            .Where(agent => agent.Status == AgentStatus.Available)
+            .GroupBy(agent => agent.Role)
+            .ToDictionary(group => group.Key, group => group.First().Id);
         foreach (var agent in agents.OrderBy(agent => agent.Role))
         {
             var subscription = agent.Subscription is null
                 ? "none"
                 : $"{agent.Subscription.WorkerProfileName} model={agent.Subscription.ModelAlias ?? "default"} reasoning={agent.Subscription.ReasoningEffort ?? "default"}";
-            Console.WriteLine($"  {agent.Role}: {agent.Name} id={agent.Id.Value} execution={agent.ExecutionPolicy} api={agent.Model.ProviderName}/{agent.Model.ModelName} reasoning={agent.Model.ReasoningEffort ?? "default"} subscription={subscription} status={agent.Status}");
+            var route = primaryAgentIds.TryGetValue(agent.Role, out var primaryId) && primaryId == agent.Id
+                ? "primary"
+                : "alternate";
+            Console.WriteLine($"  {agent.Role}: {agent.Name} id={agent.Id.Value} route={route} execution={agent.ExecutionPolicy} api={agent.Model.ProviderName}/{agent.Model.ModelName} reasoning={agent.Model.ReasoningEffort ?? "default"} subscription={subscription} status={agent.Status}");
         }
     }
 }

@@ -50,13 +50,21 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>]");
             }
-            var agentName = parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal) ? parts[4] : null;
-            var complexModelName = GetFlagValue(parts, "--complex-model");
-            var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
-                parts[1], parts[2], parts[3], agentName,
-                ComplexProviderName: complexModelName is null ? null : parts[2],
-                ComplexModelName: complexModelName));
+            var agent = CreateCliAgentDefinition(parts);
             context.Agents = new AgentCatalog(context.Agents).UpsertRole(agent).Agents;
+            AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
+            ConsoleViews.PrintAgents(context.Agents);
+            return false;
+
+        case "agent-add":
+            CliArgumentParser.RequirePartCount(parts, 4, "agent-add <role> <provider> <model> [name] [--complex-model <model>]");
+            if (HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null)
+            {
+                throw new ArgumentException("Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>]");
+            }
+            var addedAgent = CreateCliAgentDefinition(parts);
+            addedAgent = addedAgent with { Id = BuildAlternateAgentId(addedAgent, GetCliAgentIdSuffix(parts, addedAgent)) };
+            context.Agents = new AgentCatalog(context.Agents).AddOrReplaceById(addedAgent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
             ConsoleViews.PrintAgents(context.Agents);
             return false;
@@ -178,6 +186,46 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         default:
             return null;
     }
+}
+
+private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> parts)
+{
+    var agentName = parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal) ? parts[4] : null;
+    var complexModelName = GetFlagValue(parts, "--complex-model");
+    return DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        parts[1], parts[2], parts[3], agentName,
+        ComplexProviderName: complexModelName is null ? null : parts[2],
+        ComplexModelName: complexModelName));
+}
+
+private static string GetCliAgentIdSuffix(IReadOnlyList<string> parts, AgentDefinition agent)
+{
+    return parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal)
+        ? parts[4]
+        : agent.Model.ModelName;
+}
+
+private static AgentId BuildAlternateAgentId(AgentDefinition agent, string suffix)
+{
+    var baseId = $"{Slug(agent.Model.ProviderName)}-{Slug(agent.Role.ToString())}";
+    var suffixSlug = Slug(suffix);
+    return new AgentId(string.IsNullOrWhiteSpace(suffixSlug) ? baseId : $"{baseId}-{suffixSlug}");
+}
+
+private static string Slug(string value)
+{
+    var chars = value
+        .Trim()
+        .ToLowerInvariant()
+        .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+        .ToArray();
+    var slug = new string(chars);
+    while (slug.Contains("--", StringComparison.Ordinal))
+    {
+        slug = slug.Replace("--", "-", StringComparison.Ordinal);
+    }
+
+    return slug.Trim('-');
 }
 
 private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)

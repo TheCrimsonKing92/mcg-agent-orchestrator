@@ -1795,6 +1795,127 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_agent_command_replaces_existing_role")]
+    public void CliAgentCommandReplacesExistingRole()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent", "Developer", "Anthropic", "claude-haiku-4-5"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var developer = agents.Single(agent => agent.Role == AgentRole.Developer);
+        Xunit.Assert.Equal(5, agents.Count);
+        Xunit.Assert.Equal("anthropic-developer", developer.Id.Value);
+        Xunit.Assert.Equal("Anthropic", developer.Model.ProviderName);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_add_preserves_primary_and_adds_same_role_alternate")]
+    public void CliAgentAddPreservesPrimaryAndAddsSameRoleAlternate()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--complex-model", "claude-sonnet-4-6"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var developers = agents.Where(agent => agent.Role == AgentRole.Developer).ToList();
+        var restoredDevelopers = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents
+            .Where(agent => agent.Role == AgentRole.Developer)
+            .ToList();
+
+        Xunit.Assert.Equal(6, agents.Count);
+        Xunit.Assert.Equal("openai-developer", developers[0].Id.Value);
+        Xunit.Assert.Equal("anthropic-developer-claude-fallback", developers[1].Id.Value);
+        Xunit.Assert.Equal("Claude fallback", developers[1].Name);
+        Xunit.Assert.Equal("claude-sonnet-4-6", developers[1].ComplexModel!.ModelName);
+        Xunit.Assert.Equal(2, restoredDevelopers.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_add_normalizes_one_shot_args_with_complex_model_flag")]
+    public void CliAgentAddNormalizesOneShotArgsWithComplexModelFlag()
+    {
+        var parts = CliArgumentParser.NormalizeArgs(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude", "fallback", "--complex-model", "claude-sonnet-4-6"]);
+
+        Xunit.Assert.Equal(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--complex-model", "claude-sonnet-4-6"],
+            parts);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_add_splits_interactive_multi_word_name_with_complex_model_flag")]
+    public void CliAgentAddSplitsInteractiveMultiWordNameWithComplexModelFlag()
+    {
+        var parts = CliArgumentParser.SplitCommand(
+            "agent-add Developer Anthropic claude-haiku-4-5 Claude fallback --complex-model claude-sonnet-4-6");
+
+        Xunit.Assert.Equal(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback", "--complex-model", "claude-sonnet-4-6"],
+            parts);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_with_alternate_developer_uses_first_primary")]
+    public void CliSimpleGoalWithAlternateDeveloperUsesFirstPrimary()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fallback"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Do one focused implementation task"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var task = currentGoal!.Tasks.Single();
+        Xunit.Assert.Equal("openai-developer", task.AssignedAgentId!.Value);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_agent_command_uses_default_complex_model_when_flag_omitted")]
     public void CliAgentCommandUsesDefaultComplexModelWhenFlagOmitted()
     {
