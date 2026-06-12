@@ -215,6 +215,62 @@ public sealed class DispatchExecutionTests
     kernel.RetryTask(goal.Id, task.Id, "Retry after provider window.");
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
 }
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_powershell_wrapped_subscription_usage_limit")]
+    public void RecordDispatchExecutionResultReopensTaskOnPowerShellWrappedSubscriptionUsageLimit()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry dispatch after PowerShell-wrapped subscription limit");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "node.exe : ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastVerification is null);
+    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
+    Assert.Equal(new DateTimeOffset(2026, 06, 01, 16, 58, 00, TimeSpan.Zero), retryAfter);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_reopen_task_on_quoted_usage_limit_fixture")]
+    public void RecordDispatchExecutionResultDoesNotReopenTaskOnQuotedUsageLimitFixture()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Do not retry because transcript quoted a fixture");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
+
+    var transcript = string.Join(
+        Environment.NewLine,
+        "tests/Mcg.AgentOrchestrator.Core.Tests/WorkerDispatchTests.cs:2509:        \"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.\",",
+        "tests/Mcg.AgentOrchestrator.Core.Tests/WorkerDispatchTests.cs:2510:        Assert.Equal(expected, actual);");
+    var verification = new TaskVerificationRecord(
+        "codex exec",
+        "C:\\repo",
+        1,
+        transcript,
+        string.Empty,
+        clock.UtcNow);
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out _));
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_keeps_repeated_subscription_usage_limits_retryable")]
     public void RecordDispatchExecutionResultKeepsRepeatedSubscriptionUsageLimitsRetryable()
 {

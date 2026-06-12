@@ -1,15 +1,18 @@
+using System.Text.RegularExpressions;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public static class DispatchFailureClassifier
 {
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
 
+    private static readonly Regex PowerShellNativeErrorPrefix = new(
+        "^[^:\\r\\n]{1,120}\\s+:\\s+(?<error>ERROR:|Error:|error:)",
+        RegexOptions.CultureInvariant);
+
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
-        var output = $"{verification.StandardOutput}\n{verification.StandardError}";
-        return output.Contains("usage limit", StringComparison.OrdinalIgnoreCase) &&
-            (output.Contains("try again", StringComparison.OrdinalIgnoreCase) ||
-             output.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase));
+        return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
     public static bool HasRecoverableSubscriptionLimitHistory(TaskSpec task)
@@ -67,12 +70,11 @@ public static class DispatchFailureClassifier
     public static bool TryGetSubscriptionLimitRetryAfter(TaskVerificationRecord verification, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
-        if (!IsRecoverableSubscriptionLimitFailure(verification))
+        if (!TryGetRecoverableSubscriptionLimitLine(verification, out var output))
         {
             return false;
         }
 
-        var output = $"{verification.StandardOutput}\n{verification.StandardError}";
         var marker = "try again at ";
         var markerIndex = output.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
         if (markerIndex < 0)
@@ -109,5 +111,67 @@ public static class DispatchFailureClassifier
         }
 
         return true;
+    }
+
+    private static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line)
+    {
+        foreach (var candidate in GetProviderErrorLines(verification.StandardOutput))
+        {
+            if (IsRecoverableSubscriptionLimitText(candidate))
+            {
+                line = candidate;
+                return true;
+            }
+        }
+
+        foreach (var candidate in GetProviderErrorLines(verification.StandardError))
+        {
+            if (IsRecoverableSubscriptionLimitText(candidate))
+            {
+                line = candidate;
+                return true;
+            }
+        }
+
+        line = string.Empty;
+        return false;
+    }
+
+    private static bool IsRecoverableSubscriptionLimitText(string text)
+    {
+        return text.Contains("usage limit", StringComparison.OrdinalIgnoreCase) &&
+            (text.Contains("try again", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<string> GetProviderErrorLines(string output)
+    {
+        foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            if (IsProviderErrorLine(line))
+            {
+                yield return line;
+                continue;
+            }
+
+            var powerShellError = PowerShellNativeErrorPrefix.Match(line);
+            if (powerShellError.Success)
+            {
+                yield return line[powerShellError.Groups["error"].Index..];
+            }
+        }
+    }
+
+    private static bool IsProviderErrorLine(string line)
+    {
+        return line.StartsWith("ERROR:", StringComparison.Ordinal) ||
+            line.StartsWith("Error:", StringComparison.Ordinal) ||
+            line.StartsWith("error:", StringComparison.Ordinal);
     }
 }
