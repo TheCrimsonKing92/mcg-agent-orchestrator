@@ -375,3 +375,11 @@ Goal `0dec5ac1`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via cla
 
 - Operator gate: reviewed the one-line env change plus backlog removal; acceptance verification ran the worktree suite independently (442/442) after one transient first-attempt CS2012 (third occurrence of that flake - GoalAcceptanceVerifier should retry CS2012 once before failing; candidate small follow-up).
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - one-line isolation change with full-suite validation - fastest goal turnaround yet.
+
+## 2026-06-12 - Acceptance verification now retries transient CS2012 once (goal 3992c679)
+
+Goal `3992c679`, simple-goal Developer task, Anthropic/claude-sonnet-4-6 via claude-cli (~3 min). When the acceptance `dotnet test` fails with CS2012 in the output, `GoalAcceptanceVerifier` runs a second `dotnet build-server shutdown` and retries exactly once, surfacing `Retried` on the result; non-CS2012 failures and clean passes are unchanged. Closes the three-occurrence flake where the first verification attempt always needed a manual retry. Commit `eaefaf4` fast-forwarded to main; new `GoalAcceptanceVerifierTests` cover CS2012-then-pass, CS2012-then-CS2012, non-CS2012 no-retry, and pass-first-time.
+
+- Operator gate: reviewed diff (16-line verifier change plus dedicated test file); acceptance verification passed 446/446 first attempt and fast-forwarded.
+- Residual: the CLI acceptance output does not yet print the `Retried` flag; cosmetic only.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - small guarded-retry change with hermetic tests - first-attempt pass.
