@@ -189,5 +189,121 @@ public sealed class VerificationAndProcessLogTests
     Assert.False(preview.IsTruncated);
     Assert.Equal(shortText, preview.Text);
 }
+
+    [Xunit.Fact(DisplayName = "RecordCompletedProcess_reaps_build_daemons_referencing_working_directory")]
+    public void RecordCompletedProcessReapsBuildDaemonsReferencingWorkingDirectory()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "worktree");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Reap build daemons on completion");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "codex exec", workingDirectory, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    var killedPids = new List<int>();
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        findBuildDaemons: _ => [(42716, "VBCSCompiler", Path.Combine(workingDirectory, "obj", "debug", "Assembly.dll"))],
+        tryKillBuildDaemon: pid => { killedPids.Add(pid); return true; });
+
+    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(killedPids.Count == 1 && killedPids[0] == 42716);
+    Assert.True(task.LastVerification!.StandardError.Contains("42716", StringComparison.Ordinal));
+    Assert.True(task.LastVerification.StandardError.Contains("VBCSCompiler", StringComparison.Ordinal));
+    Assert.True(task.LastVerification.StandardError.Contains("Reaped", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "RecordCompletedProcess_leaves_non_matching_processes_alone")]
+    public void RecordCompletedProcessLeavesNonMatchingProcessesAlone()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "worktree");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("No-match build daemons");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "codex exec", workingDirectory, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    var killedPids = new List<int>();
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        findBuildDaemons: _ => [],
+        tryKillBuildDaemon: pid => { killedPids.Add(pid); return true; });
+
+    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(killedPids.Count == 0);
+    Assert.True(task.LastVerification is not null);
+    Assert.False(task.LastVerification!.StandardError.Contains("Reaped", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "RecordCompletedProcess_kill_failure_degrades_to_note_not_dispatch_failure")]
+    public void RecordCompletedProcessKillFailureDegradestoNoteNotDispatchFailure()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "worktree");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Kill failure does not fail dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Planner);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "codex exec", workingDirectory, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        findBuildDaemons: _ => [(56656, "MSBuild", null)],
+        tryKillBuildDaemon: _ => false);
+
+    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.StandardError.Contains("56656", StringComparison.Ordinal));
+    Assert.True(task.LastVerification.StandardError.Contains("failed", StringComparison.OrdinalIgnoreCase));
+}
+
+    [Xunit.Fact(DisplayName = "RecordCompletedProcess_skips_daemon_reaping_for_local_dispatches")]
+    public void RecordCompletedProcessSkipsDaemonReapingForLocalDispatches()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Local dispatch skips daemon reaping");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "local-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "local-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    var findCalled = false;
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        findBuildDaemons: _ => { findCalled = true; return []; },
+        tryKillBuildDaemon: _ => true);
+
+    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.False(findCalled);
+}
 }
 

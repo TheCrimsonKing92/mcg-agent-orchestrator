@@ -9,21 +9,28 @@ public sealed class BackgroundDispatchRunner
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
+    private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly Func<int, bool> _isStillRunning;
     private readonly bool _processStartDisabled;
+    private readonly Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>> _findBuildDaemons;
+    private readonly Func<int, bool> _tryKillBuildDaemon;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
         TimeSpan? postOutputIdleTimeout = null,
         Func<int, bool>? isStillRunning = null,
-        bool? disableProcessStart = null)
+        bool? disableProcessStart = null,
+        Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>>? findBuildDaemons = null,
+        Func<int, bool>? tryKillBuildDaemon = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
         _isStillRunning = isStillRunning ?? IsStillRunning;
         _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
+        _findBuildDaemons = findBuildDaemons ?? FindBuildDaemons;
+        _tryKillBuildDaemon = tryKillBuildDaemon ?? TryKillBuildDaemonProcess;
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -189,6 +196,15 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
+        {
+            var reapNote = ReapWorktreeBuildDaemons(processRecord.WorkingDirectory);
+            if (reapNote is not null)
+            {
+                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, reapNote);
+            }
+        }
+
         standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
         TryWriteExitCode(processRecord.ExitCodePath, exitCode);
         var completed = processRecord with
@@ -310,6 +326,171 @@ public sealed class BackgroundDispatchRunner
 
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
         return cancelled;
+    }
+
+    private string? ReapWorktreeBuildDaemons(string workingDirectory)
+    {
+        try
+        {
+            var daemons = _findBuildDaemons(workingDirectory);
+            if (daemons.Count == 0)
+            {
+                return null;
+            }
+
+            var reaped = new List<string>();
+            var failed = new List<string>();
+
+            foreach (var (pid, name, _) in daemons)
+            {
+                bool killed;
+                try
+                {
+                    killed = _tryKillBuildDaemon(pid);
+                }
+                catch
+                {
+                    killed = false;
+                }
+
+                if (killed)
+                {
+                    reaped.Add($"{name} PID {pid}");
+                }
+                else
+                {
+                    failed.Add($"PID {pid}");
+                }
+            }
+
+            var parts = new List<string>();
+            if (reaped.Count > 0)
+            {
+                parts.Add($"Reaped worktree build daemon(s): {string.Join(", ", reaped)}.");
+            }
+
+            if (failed.Count > 0)
+            {
+                parts.Add($"Note: failed to stop {string.Join(", ", failed)}.");
+            }
+
+            return parts.Count > 0 ? string.Join(" ", parts) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(string workingDirectory)
+    {
+        var normalizedPath = Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var processesByPid = new Dictionary<int, string>();
+
+        foreach (var name in BuildServerCandidates)
+        {
+            try
+            {
+                foreach (var proc in Process.GetProcessesByName(name))
+                {
+                    using (proc)
+                    {
+                        processesByPid[proc.Id] = proc.ProcessName;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        if (processesByPid.Count == 0)
+        {
+            return [];
+        }
+
+        var commandLines = TryGetBuildDaemonCommandLines(processesByPid.Keys);
+        var result = new List<(int, string, string?)>();
+
+        foreach (var (pid, name) in processesByPid)
+        {
+            commandLines.TryGetValue(pid, out var cmdLine);
+            var referencesPath = cmdLine is not null &&
+                (cmdLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
+                 cmdLine.Contains(workingDirectory, StringComparison.OrdinalIgnoreCase));
+
+            if (referencesPath || cmdLine is null)
+            {
+                result.Add((pid, name, cmdLine));
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryKillBuildDaemonProcess(int processId)
+    {
+        try
+        {
+            var proc = Process.GetProcessById(processId);
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: false);
+                proc.WaitForExit(3000);
+            }
+
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static Dictionary<int, string> TryGetBuildDaemonCommandLines(IEnumerable<int> pids)
+    {
+        try
+        {
+            var pidList = pids.ToList();
+            if (pidList.Count == 0)
+            {
+                return [];
+            }
+
+            var filter = string.Join(" OR ", pidList.Select(pid => $"ProcessId={pid}"));
+            var psi = new ProcessStartInfo
+            {
+                FileName = "wmic",
+                Arguments = $"process where \"({filter})\" get ProcessId,CommandLine /format:list",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                return [];
+            }
+
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(3000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return [];
+            }
+
+            return GoalWorktrees.ParseWmicListOutput(output);
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private static bool IsStillRunning(int processId)
