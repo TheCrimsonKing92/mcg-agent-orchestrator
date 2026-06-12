@@ -262,6 +262,38 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_can_target_non_current_goal")]
+    public void CliWorkspaceRemoveCanTargetNonCurrentGoal()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var olderGoal = kernel.CreateGoal("Older workspace goal", [new TaskSpec(TaskId.New(), "Do older work", AgentRole.Developer)]);
+            var latestGoal = kernel.CreateGoal("Latest workspace goal", [new TaskSpec(TaskId.New(), "Do latest work", AgentRole.Developer)]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = latestGoal;
+            var olderPath = GoalWorktrees.Ensure(repo, olderGoal.Id);
+            var latestPath = GoalWorktrees.Ensure(repo, latestGoal.Id);
+            var olderGoalPrefix = olderGoal.Id.Value[..8];
+
+            CliCommandDispatcher.ExecuteCommand(["workspace", "remove", olderGoalPrefix], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+            Assert.True(GoalWorktrees.TryResolve(repo, olderGoal.Id) is null);
+            Assert.False(Directory.Exists(olderPath));
+            Assert.Equal(latestPath, GoalWorktrees.TryResolve(repo, latestGoal.Id));
+            Assert.True(Directory.Exists(latestPath));
+            Assert.Equal(olderGoal.Id, currentGoal!.Id);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_blocks_merge_when_verification_fails")]
     public void CliAcceptanceBlocksMergeWhenVerificationFails()
     {

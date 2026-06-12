@@ -80,8 +80,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "workspace":
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            HandleWorkspaceCommand(context, parts.Count > 1 ? parts[1] : null);
+            HandleWorkspaceCommand(context, parts.Count > 1 ? parts[1] : null, parts.Count > 2 ? parts[2] : null);
             return false;
 
         case "evidence":
@@ -241,12 +240,19 @@ private static bool HasGoalStopConfirmation(IReadOnlyList<string> parts) =>
 private static string RemoveFlag(string value, string flag) =>
     value.Replace(flag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
 
-private static void HandleWorkspaceCommand(CliExecutionContext context, string? action)
+private static void HandleWorkspaceCommand(CliExecutionContext context, string? action, string? goalPrefix)
 {
-    var goal = context.CurrentGoal!;
+    var normalizedAction = (action ?? "status").ToLowerInvariant();
+    if (normalizedAction is not ("status" or "create" or "merge" or "remove"))
+    {
+        throw new ArgumentException("Usage: workspace [create|merge|remove] [goal-id-prefix]");
+    }
+
+    var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
+    context.CurrentGoal = goal;
     var executionDirectory = context.Workspace.ExecutionDirectory;
     var branch = GoalWorktrees.BranchName(goal.Id);
-    switch ((action ?? "status").ToLowerInvariant())
+    switch (normalizedAction)
     {
         case "status":
             var existing = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
@@ -271,7 +277,7 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, string? 
             return;
 
         default:
-            throw new ArgumentException("Usage: workspace [create|merge|remove]");
+            throw new ArgumentException("Usage: workspace [create|merge|remove] [goal-id-prefix]");
     }
 }
 
