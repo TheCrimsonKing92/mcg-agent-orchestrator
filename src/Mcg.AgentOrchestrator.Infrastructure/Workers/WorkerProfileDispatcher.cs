@@ -27,7 +27,13 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task);
 
-        var brief = kernel.BuildTaskBrief(goal.Id, task.Id, BuildModelFitTarget(providerName, modelName), workingDirectory);
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+        var brief = kernel.BuildTaskBrief(
+            goal.Id,
+            task.Id,
+            BuildModelFitTarget(providerName, modelName),
+            workingDirectory,
+            contextDirectory);
         var preparation = WorkerCommandTemplate.Prepare(
             brief,
             profile.Name,

@@ -33,6 +33,7 @@ public sealed class TaskBriefTests
     Assert.Contains(brief.Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
     Assert.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
+    Assert.True(!brief.Content.Contains("Context files:", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_bounded_source_survey_for_complex_tasks")]

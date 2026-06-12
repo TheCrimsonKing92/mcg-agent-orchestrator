@@ -26,7 +26,12 @@ public sealed partial class AgentOrchestratorKernel
             : string.Join(Environment.NewLine, lines).Length;
     }
 
-    public TaskBrief BuildTaskBrief(GoalId goalId, TaskId taskId, string? modelFitTarget = null, string? workingDirectory = null)
+    public TaskBrief BuildTaskBrief(
+        GoalId goalId,
+        TaskId taskId,
+        string? modelFitTarget = null,
+        string? workingDirectory = null,
+        string? contextDirectory = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -56,6 +61,11 @@ public sealed partial class AgentOrchestratorKernel
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             lines.Add($"Working directory, use absolute paths: {workingDirectory}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(contextDirectory))
+        {
+            lines.Add($"Context files: read {contextDirectory} before editing; start with manifest.md for artifact descriptions and repo-local guidance references.");
         }
 
         lines.Add(string.Empty);
@@ -120,7 +130,9 @@ public sealed partial class AgentOrchestratorKernel
         lines.AddRange(priorEvidence);
         if (priorEvidence.Count > 0 && !string.IsNullOrWhiteSpace(workingDirectory))
         {
-            lines.Add("Full evidence available at .orchestrator-handoff.md relative to the working directory.");
+            lines.Add(string.IsNullOrWhiteSpace(contextDirectory)
+                ? "Full evidence available at .orchestrator-handoff.md relative to the working directory."
+                : "Full evidence available in the context files; keep inline prior evidence as orientation only.");
             lines.Add(string.Empty);
         }
 

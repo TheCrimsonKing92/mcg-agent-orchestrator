@@ -120,7 +120,13 @@ public sealed class WorkerDispatchTests
     [
         new WorkerProfile("custom-codex", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-reasoning {apiReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
     ]);
-    var expectedPromptCharacters = kernel.BuildTaskBrief(goal.Id, task.Id, "OpenAI/gpt-5.3-codex", workingDirectory).Content.Length;
+    var contextDirectory = Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value);
+    var expectedPromptCharacters = kernel.BuildTaskBrief(
+        goal.Id,
+        task.Id,
+        "OpenAI/gpt-5.3-codex",
+        workingDirectory,
+        contextDirectory).Content.Length;
     var estimatedPromptCharacters = WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]);
 
     var dispatchResult = WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -2402,8 +2408,58 @@ public sealed class WorkerDispatchTests
     var result = WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
 
     var brief = File.ReadAllText(result.PromptPath);
-    Assert.Contains(brief, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains(".orchestrator-context", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("manifest.md", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Full evidence available in the context files", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_writes_context_artifacts_with_repo_guidance_and_fuller_prior_evidence")]
+    public void WorkerProfileDispatcherWritesContextArtifactsWithRepoGuidanceAndFullerPriorEvidence()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, "AGENTS.md"), "Repo-local agent guidance.");
+    File.WriteAllText(Path.Combine(workingDirectory, "BACKLOG.md"), "Open backlog item.");
+    File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Recent dogfood note.");
+    var kernel = new AgentOrchestratorKernel();
+    var priorTask = new TaskSpec(TaskId.New(), "Plan implementation.", AgentRole.Planner);
+    var currentTask = new TaskSpec(TaskId.New(), "Implement context artifacts.", AgentRole.Developer, "Run worker dispatch tests.");
+    var goal = kernel.CreateGoal("Ship context artifact handoff", [priorTask, currentTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+    var inlineHead = new string('a', 800);
+    var artifactOnlyTail = new string('z', 2000);
+    kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+        "dotnet test", workingDirectory, 0, inlineHead + artifactOnlyTail, string.Empty, DateTimeOffset.UtcNow));
+    var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    var result = WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+
+    var contextDirectory = Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value);
+    Assert.True(Directory.Exists(contextDirectory));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "manifest.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "objective.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "current-task.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-evidence.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "AGENTS.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
+    var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
+    Assert.Contains(manifest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("AGENTS.md", StringComparison.Ordinal));
+    Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("Run worker dispatch tests.", StringComparison.Ordinal));
+    Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), text => text.Contains(artifactOnlyTail, StringComparison.Ordinal));
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains(prompt, text => text.Contains(contextDirectory, StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+    Assert.True(!prompt.Contains(artifactOnlyTail, StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_no_handoff_file_when_no_prior_completed_tasks")]
@@ -2426,6 +2482,7 @@ public sealed class WorkerDispatchTests
     WorkerProfileDispatcher.PrepareTask(kernel, goal, onlyTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
 
     Assert.False(File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")));
+    Assert.True(File.Exists(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "manifest.md")));
 }
 
     private static TaskDispatchRecord ReopenTaskWithRecoverableDispatchLimit(
