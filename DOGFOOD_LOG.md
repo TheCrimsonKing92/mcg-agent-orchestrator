@@ -413,3 +413,10 @@ Goal `b3ee4428`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~2.5 
 
 - Operator gate: reviewed diff stats and worker grep evidence; acceptance verification passed first attempt.
 - Model fit: OpenAI/gpt-5.5 - adequate - mechanical solution-wide move refactor - fastest large-item turnaround of the session.
+
+## 2026-06-12 - Orphaned Assigned tasks can be re-delegated to the current role agent (goal a68a758b)
+
+Goal `a68a758b`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli (~5 min). New `re-delegate <task-number>` command and kernel `RedelegateTask`: reassigns an Assigned or Failed task to the catalog's current agent for its role, records a `TaskRedelegated` timeline event naming old and new agent ids, refuses Running tasks with cancel/refresh guidance, and leaves tasks alone when the assigned agent still exists. Closes the orphaned-assignment gap hit live on goal eecf98f8 during the claude-to-codex reroute. Commit `777d88a` fast-forwarded to main via acceptance verification (466/466). Codex exit file prompt again.
+
+- Operator gate: reviewed diff (kernel, CLI, enums, 197 test lines); acceptance verification passed first attempt.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped kernel/CLI recovery-path feature - clean first attempt.
