@@ -63,7 +63,9 @@ internal sealed record SubscriptionPlanItem(
     int? EstimatedPromptCharacterCount = null,
     int RecoverableSubscriptionLimitFailureCount = 0,
     bool UsesComplexModel = false,
-    int? CostGuardPromptCharacterCount = null);
+    int? CostGuardPromptCharacterCount = null,
+    int? TaskBriefCharacterBudget = null,
+    int? TaskBriefHeadroom = null);
 
 internal static class SubscriptionPlanBuilder
 {
@@ -203,6 +205,12 @@ internal static class SubscriptionPlanBuilder
             var estimatedPromptCharacterCount = canPrepare
                 ? estimatePromptCharacterCount?.Invoke(task)
                 : null;
+            var taskBriefCharacterBudget = canPrepare && estimatedPromptCharacterCount is not null
+                ? AgentOrchestratorKernel.TaskBriefCharacterBudget(task.RequiredRole, usesFileAccessContext: true)
+                : (int?)null;
+            var taskBriefHeadroom = taskBriefCharacterBudget is null || estimatedPromptCharacterCount is null
+                ? null
+                : (int?)(taskBriefCharacterBudget.Value - estimatedPromptCharacterCount.Value);
             int? costGuardPromptCharacterCount = estimatedPromptCharacterCount is null
                 ? null
                 : PaidPromptThresholds.EffectivePromptCharacterCount(
@@ -260,7 +268,9 @@ internal static class SubscriptionPlanBuilder
                 estimatedPromptCharacterCount,
                 recoverableLimitFailures,
                 usesComplexModel,
-                costGuardPromptCharacterCount);
+                costGuardPromptCharacterCount,
+                taskBriefCharacterBudget,
+                taskBriefHeadroom);
         }
         catch (InvalidOperationException ex)
         {

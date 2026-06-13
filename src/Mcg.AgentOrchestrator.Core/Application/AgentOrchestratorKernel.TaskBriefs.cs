@@ -234,7 +234,7 @@ public sealed partial class AgentOrchestratorKernel
         AgentRole role,
         bool usesFileAccessContext)
     {
-        var budget = PromptContextFormatter.TaskBriefCharacterBudget(role, usesFileAccessContext);
+        var budget = TaskBriefCharacterBudget(role, usesFileAccessContext);
         var rendered = RenderTaskBriefSegments(segments);
         if (!usesFileAccessContext || CountTaskBriefCharacters(rendered) <= budget)
         {
@@ -264,6 +264,9 @@ public sealed partial class AgentOrchestratorKernel
 
         return rendered;
     }
+
+    public static int TaskBriefCharacterBudget(AgentRole role, bool usesFileAccessContext) =>
+        PromptContextFormatter.TaskBriefCharacterBudget(role, usesFileAccessContext);
 
     private static List<string> RenderTaskBriefSegments(IEnumerable<TaskBriefSegment> segments)
     {

@@ -201,9 +201,10 @@ internal static partial class ConsoleViews
             var subscriptionModel = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? "default";
             var subscriptionReasoning = item.SubscriptionReasoningEffort is null ? string.Empty : $" reasoning={item.SubscriptionReasoningEffort}";
             var estimatedPrompt = item.EstimatedPromptCharacterCount is null ? string.Empty : $" estPrompt={item.EstimatedPromptCharacterCount.Value}chars";
+            var taskBriefBudget = FormatTaskBriefBudget(item);
             var profile = item.ProfileName is null
                 ? "none"
-                : $"{item.ProfileName} model={subscriptionModel}{subscriptionReasoning}{estimatedPrompt} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
+                : $"{item.ProfileName} model={subscriptionModel}{subscriptionReasoning}{estimatedPrompt}{taskBriefBudget} profile={item.ProfileExists} executable={item.ProfileIsResolvable} patchCapable={item.ProfileIsPatchCapable}";
             Console.WriteLine($"  {item.TaskNumber}. [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
             Console.WriteLine($"     agent: {agent}");
             Console.WriteLine($"     subscription: {profile}");
@@ -211,6 +212,19 @@ internal static partial class ConsoleViews
         }
 
         Console.WriteLine();
+    }
+
+    private static string FormatTaskBriefBudget(SubscriptionPlanItem item)
+    {
+        if (item.TaskBriefCharacterBudget is null || item.TaskBriefHeadroom is null)
+        {
+            return string.Empty;
+        }
+
+        var headroom = item.TaskBriefHeadroom.Value >= 0
+            ? $" headroom={item.TaskBriefHeadroom.Value}chars"
+            : $" over={Math.Abs(item.TaskBriefHeadroom.Value)}chars";
+        return $" budget={item.TaskBriefCharacterBudget.Value}chars{headroom}";
     }
 
     private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSummary summary)

@@ -1173,6 +1173,80 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Complex", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_developer_prompt_budget_headroom")]
+    public void CliSubscriptionPlanPrintsDeveloperPromptBudgetHeadroom()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement a focused change.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Show developer prompt budget headroom", [task]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var plan = SubscriptionPlanBuilder.Build(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            _ => 8500);
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+        try
+        {
+            Console.SetOut(writer);
+
+            ConsoleViews.PrintSubscriptionPlan(plan);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+        Xunit.Assert.Contains("estPrompt=8500chars", output);
+        Xunit.Assert.Contains("budget=9000chars headroom=500chars", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_reviewer_prompt_budget_overage")]
+    public void CliSubscriptionPlanPrintsReviewerPromptBudgetOverage()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review the implementation.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Show reviewer prompt budget overage", [task]);
+        var agent = new AgentDefinition(
+            new AgentId("reviewer"),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var plan = SubscriptionPlanBuilder.Build(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            _ => 9100);
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+        try
+        {
+            Console.SetOut(writer);
+
+            ConsoleViews.PrintSubscriptionPlan(plan);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString();
+        Xunit.Assert.Contains("estPrompt=9100chars", output);
+        Xunit.Assert.Contains("budget=8000chars over=1100chars", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_subscription_plan_prints_model_fit_recommendation")]
     public void CliSubscriptionPlanPrintsModelFitRecommendation()
     {
