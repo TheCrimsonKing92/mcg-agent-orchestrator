@@ -67,7 +67,13 @@
       "Bash(head *)",
       "Bash(grep *)",
       "Bash(cat *)",
-      "Bash(ls *)"
+      "Bash(ls *)",
+      "PowerShell(Select-Object *)",
+      "PowerShell(Measure-Object *)",
+      "PowerShell(Sort-Object *)",
+      "PowerShell(Format-Table *)",
+      "PowerShell(Format-List *)",
+      "PowerShell(Start-Sleep *)"
     ]
   }
 }
