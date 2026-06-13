@@ -29,6 +29,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
+        case "lifecycle-simple-goal":
+            HandleLifecycleSimpleGoal(context, parts);
+            return true;
+
         case "cancel-goal":
         case "supersede-goal":
             CliArgumentParser.RequirePartCount(parts, 3, $"{command} <goal-id-prefix> <reason> [--confirm-goal-stop]");
@@ -84,7 +88,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
             ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
-            PrintAcceptanceWorkspaceMerge(context, skipVerify);
+            RunAcceptanceWorkspaceMerge(context, skipVerify);
             return false;
 
         case "workspace":
@@ -196,6 +200,99 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
         parts[1], parts[2], parts[3], agentName,
         ComplexProviderName: complexModelName is null ? null : parts[2],
         ComplexModelName: complexModelName));
+}
+
+private static void HandleLifecycleSimpleGoal(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    CliArgumentParser.RequirePartCount(
+        parts,
+        2,
+        $"lifecycle-simple-goal <objective> --confirm-batch-start [{SubscriptionPromptCostGuard.CliConfirmationFlag}]");
+    EnsureCliConfirmation(
+        parts,
+        "--confirm-batch-start",
+        "lifecycle-simple-goal requires --confirm-batch-start because it starts worker processes.");
+    EnsureCliConfirmation(
+        parts,
+        SubscriptionPromptCostGuard.CliConfirmationFlag,
+        $"lifecycle-simple-goal requires {SubscriptionPromptCostGuard.CliConfirmationFlag} because it can start large paid subscription prompts.");
+
+    var objective = parts[1].Trim();
+    if (string.IsNullOrWhiteSpace(objective))
+    {
+        throw new ArgumentException(
+            $"Usage: lifecycle-simple-goal <objective> --confirm-batch-start [{SubscriptionPromptCostGuard.CliConfirmationFlag}]");
+    }
+
+    context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, objective);
+    var goal = context.CurrentGoal;
+    var goalPrefix = goal.Id.Value[..8];
+    Console.WriteLine($"Lifecycle goal: {goal.Id.Value}");
+    Console.WriteLine("Stage simple-goal: created and activated.");
+
+    var branch = GoalWorktrees.BranchName(goal.Id);
+    var workspacePath = GoalWorktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
+    Console.WriteLine($"Stage workspace create: {workspacePath} (branch {branch})");
+
+    var runGoalResult = RunGoalService.RunAsync(
+        context.Kernel,
+        context.Agents,
+        context.WorkerProfiles,
+        context.Workspace,
+        goal,
+        allowLargePaidSubscriptionStart: true)
+        .GetAwaiter().GetResult();
+    Console.WriteLine("Stage run-goal:");
+    ConsoleViews.PrintRunGoalResult(goal, runGoalResult);
+    if (goal.Status != GoalStatus.Completed)
+    {
+        var next = BuildLifecycleRunGoalNextCommand(goalPrefix, runGoalResult);
+        Console.WriteLine($"Stage run-goal: stopped. Next: {next}");
+        throw new InvalidOperationException($"lifecycle-simple-goal stopped after run-goal. Next: {next}");
+    }
+
+    Console.WriteLine("Stage acceptance:");
+    ConsoleViews.PrintAcceptanceSummary(goal, context.Kernel.BuildGoalAcceptanceSummary(goal.Id));
+    if (!RunAcceptanceWorkspaceMerge(context))
+    {
+        var next = $"acceptance {goalPrefix}";
+        Console.WriteLine($"Stage acceptance: stopped. Next: {next}");
+        throw new InvalidOperationException($"lifecycle-simple-goal stopped after acceptance. Next: {next}");
+    }
+
+    Console.WriteLine("Stage workspace remove:");
+    GoalWorktreeRemoveResult removeResult;
+    try
+    {
+        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id);
+    }
+    catch (InvalidOperationException ex)
+    {
+        var next = $"workspace remove {goalPrefix}";
+        Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
+        throw new InvalidOperationException($"lifecycle-simple-goal stopped during workspace cleanup. Next: {next}", ex);
+    }
+
+    PrintWorkspaceRemoveResult(removeResult);
+    if (!removeResult.IsComplete)
+    {
+        var next = removeResult.ResumeCommand ?? $"workspace remove {goalPrefix}";
+        Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
+        throw new InvalidOperationException($"lifecycle-simple-goal stopped during workspace cleanup. Next: {next}");
+    }
+}
+
+private static string BuildLifecycleRunGoalNextCommand(string goalPrefix, RunGoalService.RunGoalResult result)
+{
+    if (result.BlockingAction?.SuggestedCommand is { Length: > 0 } command)
+    {
+        return command;
+    }
+
+    var next = $"run-goal {goalPrefix} --confirm-batch-start";
+    return result.StopReason.Contains(SubscriptionPromptCostGuard.CliConfirmationFlag, StringComparison.OrdinalIgnoreCase)
+        ? $"{next} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
+        : next;
 }
 
 private static string GetCliAgentIdSuffix(IReadOnlyList<string> parts, AgentDefinition agent)
@@ -329,12 +426,12 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, string? 
     }
 }
 
-private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
+private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
     if (goal.Status != GoalStatus.Completed)
     {
-        return;
+        return false;
     }
 
     var worktreePath = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
@@ -354,7 +451,7 @@ private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context, b
                 {
                     Console.WriteLine(verification.OutputTail);
                 }
-                return;
+                return false;
             }
             Console.WriteLine($"Verification: passed (exit {verification.ExitCode})");
         }
@@ -364,7 +461,10 @@ private static void PrintAcceptanceWorkspaceMerge(CliExecutionContext context, b
     if (merge is not null)
     {
         Console.WriteLine($"Workspace merge: {FormatWorkspaceMerge(merge)}");
+        return merge.FastForwarded;
     }
+
+    return true;
 }
 
 private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)

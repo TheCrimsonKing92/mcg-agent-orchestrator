@@ -1958,6 +1958,17 @@ public sealed class CliCommandTests
             parts);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_splits_objective_before_confirmation_flags")]
+    public void CliLifecycleSimpleGoalSplitsObjectiveBeforeConfirmationFlags()
+    {
+        var parts = CliArgumentParser.SplitCommand(
+            "lifecycle-simple-goal Do one focused implementation task --confirm-batch-start --confirm-large-paid-subscription-start");
+
+        Xunit.Assert.Equal(
+            ["lifecycle-simple-goal", "Do one focused implementation task", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+            parts);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_simple_goal_with_alternate_developer_uses_first_primary")]
     public void CliSimpleGoalWithAlternateDeveloperUsesFirstPrimary()
     {

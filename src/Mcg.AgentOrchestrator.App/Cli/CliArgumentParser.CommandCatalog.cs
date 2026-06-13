@@ -26,6 +26,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("advance", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("advance-subscription", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("run-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("delegate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||

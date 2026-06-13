@@ -107,6 +107,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return [command, string.Join(' ', args.Skip(1))];
     }
 
+    if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeObjectiveCommandWithFlags(args);
+    }
+
     if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
@@ -150,5 +155,17 @@ private static IReadOnlyList<string> NormalizeAgentArgs(string[] args)
 
     parts.AddRange(args.Skip(flagIndex));
     return parts;
+}
+
+private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[] args)
+{
+    var flagIndex = Array.FindIndex(args, 1, arg => arg.StartsWith("--", StringComparison.Ordinal));
+    if (flagIndex < 0)
+    {
+        return [args[0], string.Join(' ', args.Skip(1))];
+    }
+
+    var objective = string.Join(' ', args.Skip(1).Take(flagIndex - 1));
+    return [args[0], objective, .. args.Skip(flagIndex)];
 }
 }

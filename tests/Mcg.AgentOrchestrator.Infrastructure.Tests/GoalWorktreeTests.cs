@@ -6,6 +6,19 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalWorktreeTests
 {
+    private static AgentDefinition EchoDeveloper() => new(
+        new AgentId("echo-developer"),
+        "Echo Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-4o-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("local"));
+
+    private static WorkerProfileCatalog EchoProfiles() => new(
+    [
+        new WorkerProfile("local", "git add -A; if ((git status --short).Length -gt 0) { git commit -m Lifecycle-work }; Write-Output {subscriptionModelName}")
+    ]);
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_creates_and_resolves_worktree_per_goal")]
     public void GoalWorktreesCreatesAndResolvesWorktreePerGoal()
     {
@@ -462,6 +475,118 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_runs_accepts_and_removes_workspace")]
+    public void CliLifecycleSimpleGoalRunsAcceptsAndRemovesWorkspace()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["lifecycle-simple-goal", "Ship a small echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                context));
+
+            var goal = context.CurrentGoal!;
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.True(output.Contains($"Lifecycle goal: {goal.Id.Value}", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage run-goal:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage acceptance:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage workspace remove:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_requires_confirm_batch_start")]
+    public void CliLifecycleSimpleGoalRequiresConfirmBatchStart()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = EchoProfiles();
+        var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null);
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+            ["lifecycle-simple-goal", "Do work"],
+            context));
+
+        Xunit.Assert.Contains("--confirm-batch-start", ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_requires_large_paid_prompt_confirm")]
+    public void CliLifecycleSimpleGoalRequiresLargePaidPromptConfirm()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = EchoProfiles();
+        var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null);
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+            ["lifecycle-simple-goal", "Do work", "--confirm-batch-start"],
+            context));
+
+        Xunit.Assert.Contains("--confirm-large-paid-subscription-start", ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_keeps_workspace_when_acceptance_fails")]
+    public void CliLifecycleSimpleGoalKeepsWorkspaceWhenAcceptanceFails()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Focused tests failed")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() =>
+            {
+                var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                    ["lifecycle-simple-goal", "Run but fail acceptance", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                    context));
+                Xunit.Assert.Contains("acceptance", ex.Message);
+            });
+
+            var goal = context.CurrentGoal!;
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
+            Assert.True(output.Contains("Next: acceptance", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));
@@ -487,6 +612,23 @@ public sealed class GoalWorktreeTests
         {
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
         }
+    }
+
+    private static string CaptureConsole(Action action)
+    {
+        var originalOut = Console.Out;
+        using var writer = new StringWriter();
+        Console.SetOut(writer);
+        try
+        {
+            action();
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        return writer.ToString();
     }
 
     private static int RunGitExitCode(string workingDirectory, params string[] arguments)

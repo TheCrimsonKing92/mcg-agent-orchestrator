@@ -118,6 +118,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [command, remainder];
     }
 
+    if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitObjectiveCommandWithFlags(command, remainder);
+    }
+
     if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
     {
         var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
@@ -139,5 +144,23 @@ public static IReadOnlyList<string> SplitCommand(string line)
     return IsSimpleCommand(command)
         ? [command, .. simple]
         : [command, remainder];
+}
+
+private static IReadOnlyList<string> SplitObjectiveCommandWithFlags(string command, string remainder)
+{
+    var flagIndex = remainder.IndexOf(" --", StringComparison.Ordinal);
+    if (flagIndex < 0 && remainder.StartsWith("--", StringComparison.Ordinal))
+    {
+        flagIndex = 0;
+    }
+
+    if (flagIndex < 0)
+    {
+        return [command, remainder];
+    }
+
+    var objective = remainder[..flagIndex].Trim();
+    var flags = remainder[flagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    return [command, objective, .. flags];
 }
 }
