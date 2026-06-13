@@ -6,6 +6,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
 {
     var command = parts[0].ToLowerInvariant();
     var handled =
+        TryExecuteFundamentalsAlias(command, parts, context) ??
         TryExecuteSystemCommand(command, parts, context) ??
         TryExecuteGoalCommand(command, parts, context) ??
         TryExecuteTaskCommand(command, parts, context) ??

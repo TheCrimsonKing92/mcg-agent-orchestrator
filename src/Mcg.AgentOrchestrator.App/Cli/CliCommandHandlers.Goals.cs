@@ -19,7 +19,39 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
-            CliArgumentParser.RequirePartCount(parts, 2, "goal <objective>");
+            // --simple: delegate to simple-goal (1 Developer task)
+            if (HasCliConfirmation(parts, "--simple"))
+            {
+                CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --simple");
+                var simpleAliasParts = new List<string> { "simple-goal", parts[1] };
+                return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
+            }
+            // --from-backlog: delegate to backlog-intake (objective used as heading filter)
+            if (HasCliConfirmation(parts, "--from-backlog"))
+            {
+                var backlogFilter = GetOptionalArgument(parts, "--from-backlog");
+                var backlogAliasParts = new List<string> { "backlog-intake" };
+                if (backlogFilter is not null)
+                    backlogAliasParts.Add(backlogFilter);
+                foreach (var flag in parts.Skip(1).Where(p => p.StartsWith("--", StringComparison.Ordinal) && !p.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase)))
+                    backlogAliasParts.Add(flag);
+                return TryExecuteGoalCommand("backlog-intake", backlogAliasParts, context);
+            }
+            // --run: create 5-role goal then delegate to run-goal
+            if (HasCliConfirmation(parts, "--run"))
+            {
+                CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --run --confirm-batch-start");
+                var runObjective = parts[1];
+                var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
+                GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
+                ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
+                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, runObjective);
+                ConsoleViews.PrintGoal(context.CurrentGoal);
+                var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
+                runParts.AddRange(parts.Skip(2).Where(p => !p.Equals("--run", StringComparison.OrdinalIgnoreCase)));
+                return TryExecuteGoalCommand("run-goal", runParts, context);
+            }
+            CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> [--simple] [--from-backlog] [--run]");
             var goalObjectivePlan = GoalObjectivePlanner.Build(parts[1], simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
@@ -943,6 +975,23 @@ private static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
     }
 
     return null;
+}
+
+private static List<string> RemoveFlagWithValue(IReadOnlyList<string> parts, string flag)
+{
+    var result = new List<string>(parts.Count);
+    for (var i = 0; i < parts.Count; i++)
+    {
+        if (parts[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+        {
+            i++; // skip the flag value too
+            continue;
+        }
+
+        result.Add(parts[i]);
+    }
+
+    return result;
 }
 
 private static AutonomyPolicy ResolveCliAutonomyPolicy(IReadOnlyList<string> parts)

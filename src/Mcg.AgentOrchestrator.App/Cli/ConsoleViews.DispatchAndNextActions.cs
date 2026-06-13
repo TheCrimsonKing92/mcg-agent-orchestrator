@@ -91,6 +91,14 @@ public static void PrintNextActions(
         }
     }
 
+    var runCommand = health?.SuggestedCommand is { Length: > 0 } hCmd
+        ? hCmd
+        : actions.Items.Count > 0 ? BuildSuggestedCommand(goal, actions.Items[0], agents) : null;
+    if (runCommand is not null)
+    {
+        Console.WriteLine($"Run: {runCommand}");
+    }
+
     Console.WriteLine();
 }
 }

@@ -93,6 +93,39 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "dashboard":
+            {
+                var dashboardMode = GetFlagValue(parts, "--mode");
+                if (dashboardMode is not null)
+                {
+                    var baseArgs = RemoveFlagWithValue(parts, "--mode");
+                    switch (dashboardMode.ToLowerInvariant())
+                    {
+                        case "local":
+                        {
+                            var modeArgList = new List<string>(baseArgs) { [0] = "serve-dashboard" };
+                            var localArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "serve-dashboard", defaultOpenBrowser: false);
+                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, localArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
+                            return false;
+                        }
+                        case "hosted":
+                        {
+                            var modeArgList = new List<string>(baseArgs) { [0] = "hosted-dashboard" };
+                            var hostedModeArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "hosted-dashboard", defaultOpenBrowser: false);
+                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedModeArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
+                            return false;
+                        }
+                        case "read-only":
+                        {
+                            var modeArgList = new List<string>(baseArgs) { [0] = "simple-hosted-dashboard" };
+                            var readOnlyArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "simple-hosted-dashboard", defaultOpenBrowser: false);
+                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, readOnlyArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
+                            return false;
+                        }
+                        default:
+                            throw new ArgumentException($"Unknown dashboard mode '{dashboardMode}'. Use: local|hosted|read-only");
+                    }
+                }
+
                 var dashboardArgs = DashboardHost.ParseDashboardArgs(parts);
                 var dashboardPath = dashboardArgs.Path;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dashboardPath))!);
@@ -103,6 +136,7 @@ internal static partial class CliCommandHandlers
                     Console.WriteLine($"Auto-refresh: {dashboardArgs.Options.AutoRefreshSeconds.Value}s");
                 }
                 return false;
+            }
 
             case "serve-dashboard":
                 var serveArgs = DashboardHost.ParseDashboardHostArgs(parts, "serve-dashboard", defaultOpenBrowser: false);
