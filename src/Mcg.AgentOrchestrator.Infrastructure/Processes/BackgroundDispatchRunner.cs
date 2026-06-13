@@ -150,11 +150,11 @@ public sealed class BackgroundDispatchRunner
                 TryKillProcess(processRecord.ProcessId);
                 if (RequiresFileChangeEvidence(task) &&
                     TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
-                    wt.IsClean && wt.HasCommitAfterDispatch)
+                    wt.IsClean && wt.HasRelevantCommitAfterDispatch)
                 {
                     var reapNote =
                         "Background dispatch wrapper appears hung after codex final output; no exit file was written. " +
-                        $"Wrapper process reaped; task completed based on file-change evidence " +
+                        $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
                     return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 0, reapNote);
@@ -209,15 +209,15 @@ public sealed class BackgroundDispatchRunner
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
             }
             else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
-                !HasExplicitNoChangeRationale(standardOutput, standardError) &&
-                !worktreeEvidence.HasCommitAfterDispatch)
+                !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
+                !worktreeEvidence.HasRelevantCommitAfterDispatch)
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
                     standardErrorDiagnostic ?? string.Empty,
-                    "Developer/Tester dispatch exited 0 but did not produce required file-change evidence. " +
+                    "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence. " +
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
             }
         }
 
@@ -294,6 +294,12 @@ public sealed class BackgroundDispatchRunner
             output.Contains("No changes needed:", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool AllowsNoChangeCompletion(TaskSpec task, string standardOutput, string standardError)
+    {
+        return task.RequiredRole != AgentRole.Developer &&
+            HasExplicitNoChangeRationale(standardOutput, standardError);
+    }
+
     private static bool TryInspectGoalWorktree(
         string workingDirectory,
         GoalId goalId,
@@ -316,6 +322,7 @@ public sealed class BackgroundDispatchRunner
         var head = RunGit(workingDirectory, "rev-parse", "--short", "HEAD");
         var status = RunGit(workingDirectory, "status", "--short");
         var dispatch = RunGit(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
+        var changedPaths = RunGit(workingDirectory, "log", "--name-only", "--format=", $"--since={dispatchedAt:O}");
         var commitsAfterDispatch = 0;
         if (dispatch.ExitCode == 0)
         {
@@ -324,14 +331,56 @@ public sealed class BackgroundDispatchRunner
                 .Length;
         }
 
+        var pathsChangedAfterDispatch = changedPaths.ExitCode == 0
+            ? changedPaths.Output
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : [];
+
         evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output),
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output) ? "clean" : "dirty",
             FormatStatusShort(status),
-            commitsAfterDispatch);
+            commitsAfterDispatch,
+            pathsChangedAfterDispatch);
         return true;
+    }
+
+    private static bool IsRelevantSourcePath(string path)
+    {
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return !normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith(".scratch/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith(".orchestrator-prototype/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("TestResults/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("/TestResults/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
+    {
+        if (changedPaths.Count == 0)
+        {
+            return "none";
+        }
+
+        var entries = changedPaths.Take(8).ToArray();
+        return string.Join(" | ", entries);
     }
 
     private static string FormatStatusShort(GitResult status)
@@ -981,10 +1030,13 @@ public sealed class BackgroundDispatchRunner
         bool IsClean,
         string WorktreeStatus,
         string StatusShort,
-        int CommitsAfterDispatch)
+        int CommitsAfterDispatch,
+        IReadOnlyList<string> ChangedPaths)
     {
         public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
+        public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(IsRelevantSourcePath);
+        public string ChangedPathsSummary => FormatChangedPaths(ChangedPaths);
 
-        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0);
+        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, []);
     }
 }

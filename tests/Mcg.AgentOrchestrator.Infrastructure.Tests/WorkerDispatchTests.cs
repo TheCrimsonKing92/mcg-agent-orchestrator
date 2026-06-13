@@ -2042,9 +2042,60 @@ public sealed class WorkerDispatchTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("branch=goal/", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
+    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_no_change_rationale_without_source_change_fails")]
+    public void BackgroundDispatchRunnerDeveloperNoChangeRationaleWithoutSourceChangeFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "NO_CHANGE: Existing code already satisfies the request.",
+        string.Empty,
+        clock);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("changed_paths=none", StringComparison.Ordinal));
+    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_generated_noise_only_dispatch_fails")]
+    public void BackgroundDispatchRunnerDeveloperGeneratedNoiseOnlyDispatchFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the change.",
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            var qwenDirectory = Path.Combine(worktree, ".qwen");
+            Directory.CreateDirectory(qwenDirectory);
+            File.WriteAllText(Path.Combine(qwenDirectory, "settings.json"), "{}");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Qwen settings noise"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("changed_paths=.qwen/settings.json", StringComparison.Ordinal));
     Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -2066,7 +2117,7 @@ public sealed class WorkerDispatchTests
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.False(task.LastVerification.StandardError.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -2088,7 +2139,7 @@ public sealed class WorkerDispatchTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -2110,7 +2161,7 @@ public sealed class WorkerDispatchTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required file-change evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
     Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
 }
