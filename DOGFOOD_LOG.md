@@ -4,6 +4,18 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-13 - ModelOutcomeScorecard shipped by dogfooding the orchestrator
+
+Built the first increment of evidence-based outcome routing by dispatching it through the orchestrator itself (Claude Sonnet developer via claude-cli, goal c7db267c), not by hand. The worker produced `ModelOutcomeScorecard` (Core/Reports) + a read-only `model-outcomes` CLI command + 4 tests + a clean WORKER_RESULT, committed `266b0ea`. Reviewed the diff, merged via `acceptance --skip-verify` (see manifest gap below), and independently confirmed 690 green on merged main (Core 212 + Infrastructure 478). Run on this session's real data, `model-outcomes` correctly recommends **Avoid gpt-5.3-codex-spark** (0 completed / 2 failed, both self-rated "adequate" - divergence=2) while Prefer-ing claude-sonnet-4-6, gpt-5.5, claude-haiku; qwen3:8b Neutral (1 sample). This validates the core mechanic: actual dispatch outcomes outweigh self-rated fit.
+
+Findings surfaced while operating (candidates to fix through the orchestrator next):
+- WORKER_RESULT contract is specified only in a context ARTIFACT; the inline brief just says "Final: WORKER_RESULT." Strong models traverse artifacts and comply; spark (low reasoning) doesn't. Inline the ~10-line block + an explicit commit line in the brief (`AgentOrchestratorKernel.TaskBriefs.cs`).
+- Verbose objective wording inflates complexity classification, which escalates off the subscription model onto the agent's COMPLEX model (here gpt-5.5, the capped main model). Bound complexity by deterministic file-scope/task-type signals; surface the escalation reason.
+- `src/Mcg.AgentOrchestrator.App/.orchestrator/state.json` has bloated to ~55MB (inline dispatch logs), degrading CLI rendering (`goals` returns nothing). Needs a state-trimming/retention pass.
+- Acceptance manifest lacked a `core tests` check though the verification policy requires it when Core changes - merge blocked on missing coverage. Added the core-tests check to `config/acceptance-manifest.json` (commit 0e0f9ad).
+- `Invoke-TestSummary.ps1` reported false ALL GREEN when one project failed to BUILD (CS2012 lock) and produced no TRX; fixed to trust `dotnet test`'s exit code (commit 0e0f9ad).
+- Model fit: claude-sonnet-4-6 - adequate - multi-file feature via orchestrator dispatch - clean contract compliance, full suite green.
+
 ## 2026-06-13 - gpt-5.3-codex-spark smoke: runs on separate budget, self-rated "adequate", but skipped the commit
 
 Ran a real codex subscription dispatch on `gpt-5.3-codex-spark` (separate weekly limit; main codex capped until 6/18) using a new `--subscription-model` agent flag. Task: create a one-line docs file in a goal worktree.
