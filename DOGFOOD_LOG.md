@@ -4,6 +4,15 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-13 - Echo-chamber probe: orchestrator pointed at an external repo (net-health)
+
+First time the dogfood loop targeted a non-self repo. Pointed the orchestrator at `C:\Users\miles\vcs\net-health` (a .NET/WPF app) via `MCG_ORCHESTRATOR_REPOSITORY_ROOT` and ran read-only: `doctor` (initialized clean, Ready=True), a survey `simple-goal` (objective plan), `readiness`, then `workspace create` + `subscription-dispatch` PREP (no worker started, no cost) to generate context artifacts against net-health's worktree.
+- Mechanism (`OrchestratorWorkspace.ForDirectory(rootDirectory=CWD, executionDirectory=MCG_ORCHESTRATOR_REPOSITORY_ROOT)`): STATE/agents are CWD-relative (the survey goal landed in the orchestrator's own `.orchestrator`), while WORKTREES + git ops correctly target the external execution root. State and execution roots are decoupled - worth knowing for any multi-repo operation.
+- Result (mostly reassuring): the source-survey broker generalized cleanly - indexed 134 source files, correctly EXCLUDED ~455 dlls / cache / the 1.1MB `warnings.log`, mapped a foreign WPF structure it had never seen (`NetHealth.Core` + `NetHealth.App` Converters/Windows/Controls/TrayIcon), and pulled net-health's own `AGENTS.md` into the worker context. diff-summary correctly reported clean.
+- Echo-chamber leak found: `GoalObjectivePlanner` emits `requiredTools` including the orchestrator's OWN `scripts/Invoke-IsolatedDotnet.ps1`, which does not exist in net-health - a hardcoded self-hosting reference leaking into a foreign repo's plan.
+- Unproven frontier: net-health is same-toolchain (.NET/Windows), so the dotnet test-selection / build-lease / acceptance brokers were not stressed. A non-.NET repo (node/python) is the real next test.
+- Cleanup: net-health worktree + branch removed, repo left pristine. The survey goal record remains as harmless clutter in the orchestrator state.
+
 ## 2026-06-13 - Inline WORKER_RESULT contract in the brief (worker-support fix) + monitoring lesson
 
 Dispatched the hybrid fix through the orchestrator (Claude Sonnet, goal ba557973): single-sourced the WORKER_RESULT block as `AgentOutputDirectives.WorkerResultTemplateLines`, inlined it into the worker brief (`TaskBriefs.cs`) with an explicit "git commit before reporting" line, dedup'd the artifact to render from the same source, bumped `ComplexPaidPrompt` 9000->9500 for the slightly longer brief, +2 brief tests. Acceptance merged cleanly (core 214 + infra 478) with NO --skip-verify - the manifest core-tests gate added earlier now works end-to-end. This directly fixes the spark/cheap-model under-support: the mandatory contract is now in the always-read brief, not just an on-demand artifact.
