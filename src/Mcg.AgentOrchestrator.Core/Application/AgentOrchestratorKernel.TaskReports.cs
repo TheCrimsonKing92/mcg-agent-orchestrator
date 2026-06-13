@@ -212,6 +212,12 @@ public sealed partial class AgentOrchestratorKernel
         return OutputTokenLimit.IsHit(task.LastExecution);
     }
 
+    public IReadOnlyList<ModelOutcomeRecord> BuildModelOutcomeScorecard(int windowSize = ModelOutcomeScorecard.DefaultWindowSize)
+    {
+        var allTasks = Goals.SelectMany(goal => goal.Tasks);
+        return ModelOutcomeScorecard.Build(allTasks, windowSize);
+    }
+
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)
     {
         var goal = GetGoal(goalId);

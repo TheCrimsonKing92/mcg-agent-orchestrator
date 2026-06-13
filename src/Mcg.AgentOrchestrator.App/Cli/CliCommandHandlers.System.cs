@@ -84,6 +84,10 @@ internal static partial class CliCommandHandlers
 
                 return false;
 
+            case "model-outcomes":
+                ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
+                return false;
+
             case "monitor-goal":
                 GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
                 return false;

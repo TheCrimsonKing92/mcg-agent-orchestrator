@@ -81,6 +81,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("verifications", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("tasks", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("task", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("workspace", StringComparison.OrdinalIgnoreCase);
+        command.Equals("workspace", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("model-outcomes", StringComparison.OrdinalIgnoreCase);
 }
 }
