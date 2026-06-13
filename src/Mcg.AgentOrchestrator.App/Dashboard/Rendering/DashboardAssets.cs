@@ -146,6 +146,9 @@ function syncAgentConfig(form, preserve){
 }
 function syncAgentConfigs(){ document.querySelectorAll('form[data-agent-config]').forEach(form => syncAgentConfig(form, true)); }
 async function refreshContent(force){ if(!force && isEditing()) return; const current = document.getElementById('dashboard-content'); if(!current) return; const response = await fetch(location.href, { cache: 'no-store' }); if(!response.ok) return; const text = await response.text(); const doc = new DOMParser().parseFromString(text, 'text/html'); const next = doc.getElementById('dashboard-content'); if(next) current.replaceWith(next); }
+let streamRefreshPending = false;
+function refreshFromStream(){ if(isEditing() || streamRefreshPending) return; streamRefreshPending = true; setTimeout(async () => { try { await refreshContent(false); } finally { streamRefreshPending = false; } }, 250); }
+function startMonitoringStream(){ const content = document.getElementById('dashboard-content'); const url = content?.dataset.monitorStream; if(!url || typeof EventSource === 'undefined') return; try { const source = new EventSource(url); source.addEventListener('timeline', refreshFromStream); source.addEventListener('goal.snapshot', refreshFromStream); source.addEventListener('open', () => setStatus('Live monitor connected.')); source.addEventListener('error', () => setStatus('Live monitor reconnecting; timed refresh remains active.')); } catch { setStatus('Live monitor unavailable; timed refresh remains active.'); } }
 async function post(url, body){ setStatus('Working...'); const options = { method: 'POST' }; if(body){ options.headers = {'Content-Type':'application/json'}; options.body = JSON.stringify(body); } const response = await fetch(url, options); const text = await response.text(); if(!response.ok){ throw new Error(text || response.statusText); } setStatus(summarizeResponse(text)); setTimeout(() => refreshContent(true), 350); }
 window.__dashboardSubmitForm = async function(form, submitter){ return post(form.dataset.action, payload(form, submitter)); };
 document.addEventListener('submit', async event => { const form = event.target.closest('form[data-action]'); if(!form) return; event.preventDefault(); try { await window.__dashboardSubmitForm(form, event.submitter); } catch(error) { setStatus(error.message); } });
@@ -155,6 +158,7 @@ document.addEventListener('click', async event => { const toggle = event.target.
 document.addEventListener('click', async event => { const button = event.target.closest('button[data-action-button]'); if(!button) return; event.preventDefault(); try { await post(button.dataset.actionButton); } catch(error) { setStatus(error.message); } });
 syncAgentConfigs();
 const content = document.getElementById('dashboard-content'); const seconds = Number(content?.dataset.refreshSeconds || 0); if(seconds > 0) setInterval(() => refreshContent(false), seconds * 1000);
+startMonitoringStream();
 window.__dashboardReady = true;
 """;
 }

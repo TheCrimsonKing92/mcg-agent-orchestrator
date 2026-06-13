@@ -140,7 +140,12 @@ public static partial class DashboardRenderer
         var refreshAttribute = options.AutoRefreshSeconds is > 0
             ? $" data-refresh-seconds=\"{options.AutoRefreshSeconds.Value}\""
             : string.Empty;
-        html.AppendLine($"<main id=\"dashboard-content\"{refreshAttribute}>");
+        var monitorStreamAttribute = options.EnableOperatorControls &&
+            options.View == DashboardView.Goal &&
+            !string.IsNullOrWhiteSpace(options.FocusGoalPrefix)
+                ? $" data-monitor-stream=\"/api/goals/{Encode(options.FocusGoalPrefix)}/events/stream\""
+                : string.Empty;
+        html.AppendLine($"<main id=\"dashboard-content\"{refreshAttribute}{monitorStreamAttribute}>");
 
         switch (options.View)
         {

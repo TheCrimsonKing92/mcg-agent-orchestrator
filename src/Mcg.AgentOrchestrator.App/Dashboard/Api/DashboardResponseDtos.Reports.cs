@@ -147,7 +147,45 @@ internal sealed record GoalWorkSummaryDto(
     bool VerificationSatisfied,
     NextActionDto? NextAction,
     DashboardHostInfoDto? Host,
-    IReadOnlyList<TaskWorkSummaryDto> Tasks);
+    IReadOnlyList<TaskWorkSummaryDto> Tasks,
+    string? MonitoringStreamPath = null);
+
+internal sealed record GoalMonitoringBatchDto(
+    string GoalId,
+    long SinceEventId,
+    long LastEventId,
+    GoalMonitoringSnapshotDto Snapshot,
+    IReadOnlyList<GoalMonitoringEventDto> Events,
+    string StreamPath);
+
+internal sealed record GoalMonitoringSnapshotDto(
+    string GoalId,
+    DateTimeOffset ObservedAt,
+    long LastEventId,
+    MonitorDto Monitor,
+    IReadOnlyList<TaskMonitoringSnapshotDto> Tasks);
+
+internal sealed record TaskMonitoringSnapshotDto(
+    int TaskNumber,
+    string TaskId,
+    AgentRole Role,
+    WorkTaskStatus Status,
+    ProcessDto? LastProcess,
+    DateTimeOffset? SubscriptionRetryAfter);
+
+internal sealed record GoalMonitoringEventDto(
+    long Id,
+    string Event,
+    string GoalId,
+    string? TaskId,
+    int? TaskNumber,
+    AgentRole? Role,
+    WorkTaskStatus? TaskStatus,
+    ProgressKind Kind,
+    string Message,
+    bool MessageTruncated,
+    int MessageLength,
+    DateTimeOffset OccurredAt);
 
 internal sealed record TaskWorkContextDto(
     string GoalId,

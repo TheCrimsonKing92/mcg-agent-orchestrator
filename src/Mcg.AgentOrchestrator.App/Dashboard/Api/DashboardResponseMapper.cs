@@ -21,7 +21,8 @@ public static GoalDetailDto ToGoalDetailDto(AgentOrchestratorKernel kernel, Goal
     return new GoalDetailDto(
         ToGoalSummary(goal),
         goal.Tasks.Select(task => ToTaskSummaryDto(goal, task)).ToList(),
-        kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+        kernel.BuildVerificationGate(goal.Id).IsSatisfied,
+        MonitoringStreamPath: DashboardMonitoringEvents.StreamPath(goal.Id.Value));
 }
 
 public static DelegationPlanDto ToDelegationPlanDto(DelegationPlan plan)

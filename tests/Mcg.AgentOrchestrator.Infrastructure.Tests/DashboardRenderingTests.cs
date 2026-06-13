@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
 public sealed class DashboardRenderingTests
 {
@@ -423,6 +424,55 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("timeline-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardMonitoringEvents_builds_resumable_batches_and_sse_events")]
+    public async Task DashboardMonitoringEventsBuildsResumableBatchesAndSseEvents()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Monitor goal state");
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var initialCursor = DashboardMonitoringEvents.BuildBatch(kernel, goal, 0).LastEventId;
+
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started monitoring work.");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Finished monitoring work.");
+
+    var batch = DashboardMonitoringEvents.BuildBatch(kernel, goal, initialCursor);
+    var replay = DashboardMonitoringEvents.BuildBatch(kernel, goal, initialCursor + 1);
+    var noNewEvents = DashboardMonitoringEvents.BuildBatch(kernel, goal, batch.LastEventId);
+
+    Assert.Equal(goal.Id.Value, batch.GoalId);
+    Assert.Equal(DashboardMonitoringEvents.StreamPath(goal.Id.Value), batch.StreamPath);
+    Assert.Equal(batch.LastEventId, batch.Snapshot.LastEventId);
+    Assert.Equal(2, batch.Events.Count);
+    Assert.Equal("timeline", batch.Events[0].Event);
+    Assert.Equal("Started monitoring work.", batch.Events[0].Message);
+    Assert.Equal(task.Id.Value, batch.Events[0].TaskId);
+    Assert.Equal(AgentRole.Developer, batch.Events[0].Role);
+    Assert.Equal(WorkTaskStatus.Completed, batch.Snapshot.Tasks.Single(item => item.TaskId == task.Id.Value).Status);
+    Xunit.Assert.Single(replay.Events);
+    Assert.Equal("Finished monitoring work.", replay.Events.Single().Message);
+    Xunit.Assert.Empty(noNewEvents.Events);
+
+    using var stream = new MemoryStream();
+    await DashboardMonitoringEvents.WriteServerSentEventAsync(
+        stream,
+        batch.Events[0].Event,
+        batch.Events[0],
+        DashboardMonitoringEvents.FormatEventId(batch.Events[0].Id),
+        CancellationToken.None);
+    var text = Encoding.UTF8.GetString(stream.ToArray());
+
+    Xunit.Assert.Contains($"id: {batch.Events[0].Id}", text);
+    Xunit.Assert.Contains("event: timeline", text);
+    Xunit.Assert.Contains("data:", text);
+    Xunit.Assert.Contains("Started monitoring work.", text);
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_task_summary_fields_without_mutating_task")]
     public void DashboardResponseMapperTrimsVerboseTaskSummaryFieldsWithoutMutatingTask()
 {
@@ -480,11 +530,13 @@ public sealed class DashboardRenderingTests
     public void DashboardRendererCanEmitAutoRefreshMetadata()
 {
     var kernel = new AgentOrchestratorKernel();
-    kernel.CreateGoal("Watch dashboard");
+    var goal = kernel.CreateGoal("Watch dashboard");
+    var goalPrefix = goal.Id.Value[..8];
 
     var staticHtml = DashboardRenderer.Render(kernel);
     var refreshingHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15));
     var operatorRefreshingHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true));
+    var focusedOperatorHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
 
     Assert.False(staticHtml.Contains("http-equiv=\"refresh\"", StringComparison.Ordinal));
     Assert.Contains(refreshingHtml, text => text.Contains("<meta http-equiv=\"refresh\" content=\"15\">", StringComparison.Ordinal));
@@ -492,6 +544,7 @@ public sealed class DashboardRenderingTests
     Assert.False(operatorRefreshingHtml.Contains("http-equiv=\"refresh\"", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("Auto-update every 15 seconds", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("data-refresh-seconds=\"15\"", StringComparison.Ordinal));
+    Assert.Contains(focusedOperatorHtml, text => text.Contains($"data-monitor-stream=\"/api/goals/{goalPrefix}/events/stream\"", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("href=\"/assets/dashboard.css\"", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("src=\"/assets/dashboard.js\"", StringComparison.Ordinal));
 }

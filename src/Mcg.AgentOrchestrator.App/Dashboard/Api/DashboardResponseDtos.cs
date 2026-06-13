@@ -235,6 +235,7 @@ internal sealed record DistributedArchitectureDto(
                 "/api/system/state-rollback restores state.json from state.json.bak in operator dashboard modes only.",
                 "/api/source-survey?max=8 provides bounded repository discovery for distributed workers.",
                 "/api/goals/{goalId}/work-summary and /api/tasks/{taskId}/work-summary provide compact handoff context.",
+                "/api/goals/{goalId}/events/stream provides a browser-native monitoring subscription with resumable timeline events.",
                 "Operator POST endpoints remain disabled on simple-hosted-dashboard for read-only distributed access.",
             ],
             DashboardModes:
@@ -293,7 +294,8 @@ internal sealed record GoalDetailDto(
     GoalSummaryDto Goal,
     IReadOnlyList<TaskSummaryDto> Tasks,
     bool VerificationSatisfied,
-    AdvanceLoopResultDto? AutoHandoff = null);
+    AdvanceLoopResultDto? AutoHandoff = null,
+    string? MonitoringStreamPath = null);
 
 internal sealed record DelegationPlanDto(string GoalId, IReadOnlyList<TaskAssignmentDto> Assignments);
 

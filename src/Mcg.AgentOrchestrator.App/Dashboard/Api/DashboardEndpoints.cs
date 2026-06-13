@@ -72,6 +72,8 @@ internal static partial class DashboardEndpoints
         api.MapGet("/goals/{goalId}", (string goalId) => Safe(() => GetGoalAsync(goalId, services)));
 
         var goals = api.MapGroup("/goals/{goalId}");
+        goals.MapGet("/events", async Task<IResult> (HttpContext context, string goalId) => await Safe(() => GetGoalEventsAsync(context, goalId, services)));
+        goals.MapGet("/events/stream", async Task (HttpContext context, string goalId) => await StreamGoalEventsAsync(context, goalId, services));
         goals.MapGet("/transcript", (string goalId) => Safe(() => GetGoalTranscriptAsync(goalId, services)));
         goals.MapGet("/subscription-plan", (string goalId) => Safe(() => GetSubscriptionPlanAsync(goalId, services)));
         goals.MapGet("/work-summary", (string goalId) => Safe(() => GetGoalWorkSummaryAsync(goalId, services)));

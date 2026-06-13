@@ -273,6 +273,7 @@ public sealed class DashboardHostTests
             var simpleTaskId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Tasks")[0].GetProperty("Id").GetString()!;
             var simpleGoalDetail = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}"));
             var simpleGoalWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/work-summary"));
+            var simpleGoalEvents = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/events"));
             var simpleTaskWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/tasks/{simpleTaskId}/work-summary"));
             using var cssResponse = await client.GetAsync(new Uri(new Uri(url), "assets/dashboard.css"));
             var css = await cssResponse.Content.ReadAsStringAsync();
@@ -323,10 +324,12 @@ public sealed class DashboardHostTests
             Assert.False(largeAutoHandoffGoal.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
             Assert.Contains(simpleGoalDetail, text => text.Contains("\"VerificationSatisfied\"", StringComparison.Ordinal));
             Assert.Contains(simpleGoalDetail, text => text.Contains(simpleGoalId, StringComparison.Ordinal));
+            Assert.Contains(simpleGoalDetail, text => text.Contains("\"MonitoringStreamPath\"", StringComparison.Ordinal));
             using (var workSummaryDocument = JsonDocument.Parse(simpleGoalWorkSummary))
             {
                 var summary = workSummaryDocument.RootElement;
                 Assert.Equal(simpleGoalId, summary.GetProperty("GoalId").GetString());
+                Assert.Equal($"/api/goals/{simpleGoalId}/events/stream", summary.GetProperty("MonitoringStreamPath").GetString());
                 Assert.Equal(JsonValueKind.Array, summary.GetProperty("Tasks").ValueKind);
                 Assert.True(summary.GetProperty("TotalTasks").GetInt32() > 0);
                 Assert.True(summary.GetProperty("PendingHumanInputCount").GetInt32() >= 0);
@@ -334,6 +337,15 @@ public sealed class DashboardHostTests
                 Assert.True(summary.GetProperty("Tasks").EnumerateArray().Any(task =>
                     task.TryGetProperty("Evidence", out var evidence) &&
                     !string.IsNullOrWhiteSpace(evidence.GetString())));
+            }
+            using (var eventsDocument = JsonDocument.Parse(simpleGoalEvents))
+            {
+                var events = eventsDocument.RootElement;
+                Assert.Equal(simpleGoalId, events.GetProperty("GoalId").GetString());
+                Assert.Equal($"/api/goals/{simpleGoalId}/events/stream", events.GetProperty("StreamPath").GetString());
+                Assert.True(events.GetProperty("LastEventId").GetInt64() >= 0);
+                Assert.Equal(simpleGoalId, events.GetProperty("Snapshot").GetProperty("GoalId").GetString());
+                Assert.Equal(JsonValueKind.Array, events.GetProperty("Events").ValueKind);
             }
             using (var taskWorkSummaryDocument = JsonDocument.Parse(simpleTaskWorkSummary))
             {
@@ -423,6 +435,8 @@ public sealed class DashboardHostTests
             Assert.Contains(css, text => text.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", StringComparison.Ordinal));
             Assert.Contains(js, text => text.Contains("refreshContent", StringComparison.Ordinal));
             Assert.Contains(js, text => text.Contains("summarizeResponse", StringComparison.Ordinal));
+            Assert.Contains(js, text => text.Contains("new EventSource(url)", StringComparison.Ordinal));
+            Assert.Contains(js, text => text.Contains("addEventListener('timeline'", StringComparison.Ordinal));
             Assert.Equal(HttpStatusCode.OK, stopResponse.StatusCode);
             Assert.Contains(stopDashboard, text => text.Contains("\"ProcessId\"", StringComparison.Ordinal));
             Assert.Contains(stopDashboard, text => text.Contains("\"ListeningPorts\"", StringComparison.Ordinal));

@@ -137,7 +137,8 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         gate.IsSatisfied,
         nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
         host,
-        goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList());
+        goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
+        DashboardMonitoringEvents.StreamPath(goal.Id.Value));
 }
 
 public static TaskWorkContextDto ToTaskWorkContextDto(
