@@ -4,6 +4,12 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-13 - CLI collapsed to six fundamentals (dogfooded end-to-end) + state-bloat surfaced
+
+Dispatched the #6 backlog item through the orchestrator (Claude Sonnet, goal 8544c918). The worker added six fundamental operator verbs as thin aliases over existing handlers - `next` (now prints a copy-pasteable `Run: <command>`), `goal` (--simple/--from-backlog/--run), `accept` (acceptance+merge+cleanup), `stop` (--as cancel|park|rollback|abandon|supersede), `config` (agents|profiles|policy|doctor), `dashboard` (--mode) - plus a Program.cs help-banner reorg into Fundamentals/Advanced and 18 new tests, every existing verb untouched. Landed via git merge (clean auto-merge, docs unaffected) as `d9c8368`; independently verified 710 green (Core 214 + Infrastructure 496).
+- Operator notes: (1) the ~55MB `state.json` now actively breaks CLI ops - `refresh-dispatch`/`goals` returned "Goal not found" because the bloated state fails to load reliably, so I landed the merge at git level instead of via orchestrator acceptance. New backlog item filed. (2) The worker wrote its result to a `WORKER_RESULT.md` file (untracked) instead of stdout - the same prose-contract fragility the Agent-SDK-harness backlog item targets; the code work itself committed correctly.
+- Model fit: claude-sonnet-4-6 - adequate - multi-file CLI alias feature via orchestrator dispatch - clean idiomatic delegation, full suite green.
+
 ## 2026-06-13 - Echo-chamber probe: orchestrator pointed at an external repo (net-health)
 
 First time the dogfood loop targeted a non-self repo. Pointed the orchestrator at `C:\Users\miles\vcs\net-health` (a .NET/WPF app) via `MCG_ORCHESTRATOR_REPOSITORY_ROOT` and ran read-only: `doctor` (initialized clean, Ready=True), a survey `simple-goal` (objective plan), `readiness`, then `workspace create` + `subscription-dispatch` PREP (no worker started, no cost) to generate context artifacts against net-health's worktree.
