@@ -1,0 +1,251 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+public sealed class SqliteOrchestratorStateRepositoryTests
+{
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_snapshot_through_SQLite")]
+    public async Task SnapshotRoundtripThroughSqlite()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Roundtrip goal");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernel.SetTaskVerificationPlan(goal.Id, task.Id, "Run dotnet test");
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]))
+            .RunAsync(goal.Id, task.Id);
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        Assert.Equal(goal.Id, restored.Goals.Single().Id);
+        Assert.Equal("Roundtrip goal", restored.Goals.Single().Objective);
+        Assert.Equal(GoalStatus.Active, restored.Goals.Single().Status);
+        Assert.Equal("Run dotnet test", restored.GetTask(goal.Id, task.Id).VerificationPlan);
+        Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_per_goal_upsert_preserves_unmodified_goal")]
+    public async Task PerGoalUpsertPreservesUnmodifiedGoal()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal("Goal A");
+        var goalB = kernel.CreateGoal("Goal B - should be unchanged");
+        await repo.SaveAsync(kernel);
+
+        await repo.TransactAsync((k, _) =>
+        {
+            var a = k.Goals.Single(g => g.Objective == "Goal A");
+            k.ActivateGoal(a.Id, AgentCatalog.Default().Agents);
+            return Task.FromResult((true, true));
+        });
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(2, restored.Goals.Count);
+        var restoredA = restored.Goals.Single(g => g.Id == goalA.Id);
+        var restoredB = restored.Goals.Single(g => g.Id == goalB.Id);
+        Assert.Equal(GoalStatus.Active, restoredA.Status);
+        Assert.Equal(GoalStatus.Draft, restoredB.Status);
+        Assert.Equal("Goal B - should be unchanged", restoredB.Objective);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_updated_at_not_bumped_for_unchanged_goal")]
+    public async Task UpdatedAtNotBumpedForUnchangedGoal()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("Stable goal");
+        kernel.CreateGoal("Changing goal");
+        await repo.SaveAsync(kernel);
+
+        var before = await repo.ListGoalMetadataAsync();
+        var stableUpdatedAt1 = DateTimeOffset.Parse(before.Single(m => m.Objective == "Stable goal").UpdatedAt);
+
+        await Task.Delay(10);
+
+        await repo.TransactAsync((k, _) =>
+        {
+            var changing = k.Goals.Single(g => g.Objective == "Changing goal");
+            k.ActivateGoal(changing.Id, AgentCatalog.Default().Agents);
+            return Task.FromResult((true, true));
+        });
+
+        var after = await repo.ListGoalMetadataAsync();
+        var stableUpdatedAt2 = DateTimeOffset.Parse(after.Single(m => m.Objective == "Stable goal").UpdatedAt);
+        var changingUpdatedAt2 = DateTimeOffset.Parse(after.Single(m => m.Objective == "Changing goal").UpdatedAt);
+
+        Assert.Equal(stableUpdatedAt1, stableUpdatedAt2);
+        Assert.True(changingUpdatedAt2 >= stableUpdatedAt1);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_removes_deleted_goal_rows")]
+    public async Task RemovesDeletedGoalRows()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("Goal to keep");
+        kernel.CreateGoal("Goal to remove");
+        await repo.SaveAsync(kernel);
+
+        var kernelWithOne = new AgentOrchestratorKernel();
+        kernelWithOne.CreateGoal("Goal to keep");
+        await repo.SaveAsync(kernelWithOne);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(1, restored.Goals.Count);
+        Assert.Equal("Goal to keep", restored.Goals.Single().Objective);
+
+        var listing = await repo.ListGoalMetadataAsync();
+        Assert.Equal(1, listing.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_transaction_rollback_on_failing_mutation")]
+    public async Task TransactionRollbackOnFailingMutation()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("Pre-failure goal");
+        await repo.SaveAsync(kernel);
+
+        await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repo.TransactAsync<bool>((k, _) =>
+            {
+                k.CreateGoal("Transient goal that should not persist");
+                throw new InvalidOperationException("Simulated mutation failure");
+            }));
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(1, restored.Goals.Count);
+        Assert.Equal("Pre-failure goal", restored.Goals.Single().Objective);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_json_to_sqlite_migration_preserves_goals_tasks_status")]
+    public async Task JsonToSqliteMigrationPreservesGoalsTasksStatus()
+    {
+        var root = CreateTempDirectory();
+        var jsonPath = Path.Combine(root, "state.json");
+        var dbPath = Path.Combine(root, "state.db");
+
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Migrated goal");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]))
+            .RunAsync(goal.Id, task.Id);
+        OrchestratorStateStore.Save(jsonPath, kernel);
+
+        var migrated = await SqliteStateJsonMigrator.MigrateIfNeededAsync(jsonPath, dbPath);
+        Assert.True(migrated);
+        Assert.True(File.Exists(dbPath));
+        Assert.True(File.Exists(jsonPath + ".pre-sqlite-migration.bak"));
+
+        var repo = new SqliteOrchestratorStateRepository(dbPath);
+        var restored = await repo.LoadAsync();
+
+        Assert.Equal(goal.Id, restored.Goals.Single().Id);
+        Assert.Equal("Migrated goal", restored.Goals.Single().Objective);
+        Assert.Equal(GoalStatus.Active, restored.Goals.Single().Status);
+        Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteStateJsonMigrator_skips_migration_when_db_already_exists")]
+    public async Task MigratorSkipsWhenDbExists()
+    {
+        var root = CreateTempDirectory();
+        var jsonPath = Path.Combine(root, "state.json");
+        var dbPath = Path.Combine(root, "state.db");
+
+        File.WriteAllText(jsonPath, "{}");
+        File.WriteAllText(dbPath, "existing");
+
+        var migrated = await SqliteStateJsonMigrator.MigrateIfNeededAsync(jsonPath, dbPath);
+        Assert.False(migrated);
+        Assert.Equal("existing", File.ReadAllText(dbPath));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_concurrent_transactions_serialize_mutations")]
+    public async Task ConcurrentTransactionsSerializeMutations()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        await repo.SaveAsync(new AgentOrchestratorKernel());
+
+        var tasks = Enumerable.Range(0, 8).Select(i => Task.Run(() =>
+            repo.TransactAsync((kernel, _) =>
+            {
+                kernel.CreateGoal($"Concurrent goal {i}");
+                return Task.FromResult((true, true));
+            }))).ToArray();
+
+        await Task.WhenAll(tasks);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(8, restored.Goals.Count);
+        for (var i = 0; i < 8; i++)
+            Assert.True(restored.Goals.Any(g => g.Objective == $"Concurrent goal {i}"));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_list_metadata_returns_indexed_fields_without_snapshot")]
+    public async Task ListMetadataReturnsIndexedFields()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("Listed goal A");
+        kernel.CreateGoal("Listed goal B");
+        await repo.SaveAsync(kernel);
+
+        var listing = await repo.ListGoalMetadataAsync();
+
+        Assert.Equal(2, listing.Count);
+        Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Id)));
+        Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Status)));
+        Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Objective)));
+        Assert.True(listing.All(m => !string.IsNullOrEmpty(m.UpdatedAt)));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_requests_roundtrip")]
+    public async Task HumanInputRequestsRoundtrip()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Goal with human input");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernel.RequestHumanInput(goal.Id, task.Id, "What should I do?");
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        Assert.Equal(1, restored.HumanInputRequests.Count);
+        Assert.Equal("What should I do?", restored.HumanInputRequests.Single().Question);
+        Assert.Equal(goal.Id, restored.HumanInputRequests.Single().GoalId);
+    }
+
+    private static string TempDb()
+    {
+        var dir = CreateTempDirectory();
+        return Path.Combine(dir, "state.db");
+    }
+}

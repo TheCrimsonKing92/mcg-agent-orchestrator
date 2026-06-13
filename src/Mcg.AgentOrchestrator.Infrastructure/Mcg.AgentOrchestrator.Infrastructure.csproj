@@ -6,5 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.6" />
   </ItemGroup>
 </Project>

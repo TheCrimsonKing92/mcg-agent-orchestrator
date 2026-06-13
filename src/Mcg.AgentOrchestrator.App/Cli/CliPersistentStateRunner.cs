@@ -7,7 +7,7 @@ internal static class CliPersistentStateRunner
 {
     public static bool ExecuteCommand(
         IReadOnlyList<string> args,
-        string statePath,
+        ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
@@ -16,7 +16,7 @@ internal static class CliPersistentStateRunner
     {
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
-            return ExecuteCommandWithoutTransaction(args, statePath, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         var nextAgents = agents;
@@ -24,8 +24,7 @@ internal static class CliPersistentStateRunner
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
 
-        var changed = OrchestratorStateStore.TransactAsync(
-                statePath,
+        var changed = stateRepository.TransactAsync(
                 (kernel, _) =>
                 {
                     var commandAgents = nextAgents;
@@ -71,14 +70,14 @@ internal static class CliPersistentStateRunner
 
     private static bool ExecuteCommandWithoutTransaction(
         IReadOnlyList<string> args,
-        string statePath,
+        ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        var kernel = OrchestratorStateStore.Load(statePath);
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
             args,
@@ -91,7 +90,7 @@ internal static class CliPersistentStateRunner
 
         if (shouldSave)
         {
-            OrchestratorStateStore.Save(statePath, kernel);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
         }
 
         return shouldSave;
