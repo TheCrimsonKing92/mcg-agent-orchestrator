@@ -3686,6 +3686,31 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_agent_command_pins_subscription_model_from_flag")]
+    public void CliAgentCommandPinsSubscriptionModelFromFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent", "Developer", "OpenAI", "gpt-5.4-mini", "--subscription-model", "gpt-5.3-codex-spark"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var agent = agents.Single(a => a.Role == AgentRole.Developer);
+        Xunit.Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
+        Xunit.Assert.Equal("gpt-5.3-codex-spark", agent.Subscription.ModelAlias);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_agent_command_replaces_existing_role")]
     public void CliAgentCommandReplacesExistingRole()
     {

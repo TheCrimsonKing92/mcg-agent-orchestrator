@@ -128,10 +128,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "agent":
-            CliArgumentParser.RequirePartCount(parts, 4, "agent <role> <provider> <model> [name] [--complex-model <model>]");
-            if (HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null)
+            CliArgumentParser.RequirePartCount(parts, 4, "agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
+            if ((HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null) ||
+                (HasCliConfirmation(parts, "--subscription-model") && GetFlagValue(parts, "--subscription-model") is null))
             {
-                throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>]");
+                throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
             }
             var agent = CreateCliAgentDefinition(parts);
             context.Agents = new AgentCatalog(context.Agents).UpsertRole(agent).Agents;
@@ -140,10 +141,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "agent-add":
-            CliArgumentParser.RequirePartCount(parts, 4, "agent-add <role> <provider> <model> [name] [--complex-model <model>]");
-            if (HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null)
+            CliArgumentParser.RequirePartCount(parts, 4, "agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
+            if ((HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null) ||
+                (HasCliConfirmation(parts, "--subscription-model") && GetFlagValue(parts, "--subscription-model") is null))
             {
-                throw new ArgumentException("Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>]");
+                throw new ArgumentException("Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
             }
             var addedAgent = CreateCliAgentDefinition(parts);
             addedAgent = addedAgent with { Id = BuildAlternateAgentId(addedAgent, GetCliAgentIdSuffix(parts, addedAgent)) };
@@ -408,8 +410,10 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
 {
     var agentName = parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal) ? parts[4] : null;
     var complexModelName = GetFlagValue(parts, "--complex-model");
+    var subscriptionModel = GetFlagValue(parts, "--subscription-model");
     return DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
         parts[1], parts[2], parts[3], agentName,
+        SubscriptionModelAlias: subscriptionModel,
         ComplexProviderName: complexModelName is null ? null : parts[2],
         ComplexModelName: complexModelName));
 }
