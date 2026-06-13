@@ -83,6 +83,26 @@ public sealed class RunGoalServiceTests
             completedAt));
     }
 
+    private static void RecordProviderConnectivityFailure(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        OrchestratorWorkspace workspace,
+        string workerName,
+        string command,
+        DateTimeOffset completedAt,
+        string output)
+    {
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerName, command, workspace.ExecutionDirectory, completedAt));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            command,
+            workspace.ExecutionDirectory,
+            1,
+            string.Empty,
+            output,
+            completedAt));
+    }
+
     [Xunit.Fact(DisplayName = "RunGoalService_completes_all_tasks_sequentially_and_stops_with_no_actions")]
     public async Task RunGoalServiceCompletesAllTasksSequentiallyAndStopsWithNoActions()
     {
@@ -377,6 +397,163 @@ public sealed class RunGoalServiceTests
         Assert.Equal("alternate", task.LastDispatch!.WorkerName);
         Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("heartbeat-ok", StringComparison.Ordinal));
         Assert.Equal(2, task.VerificationHistory.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_codex_websocket_connectivity_stops_when_no_alternate_exists")]
+    public async Task RunGoalServiceAutoFailoverCodexWebsocketConnectivityStopsWhenNoAlternateExists()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Task with codex websocket failure", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Goal should ask for alternate after codex connectivity failure", [task]);
+        var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
+        kernel.ActivateGoal(goal.Id, [primary]);
+        RecordProviderConnectivityFailure(
+            kernel,
+            goal,
+            task,
+            workspace,
+            "codex-cli",
+            "codex-cli exec",
+            DateTimeOffset.UtcNow,
+            "Prompt reminder: include Model fit: and Changed files: in final output.\n" +
+            "Error: websocket transport failed with OS error 10013 before session start.");
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            [primary],
+            Profiles(new WorkerProfile("codex-cli", "Write-Output should-not-run")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            sleep: NoSleep);
+
+        Assert.False(result.Executed);
+        Assert.Contains(result.StopReason, text => text.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
+        Assert.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("websocket", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(primary.Id, task.AssignedAgentId);
+    }
+
+    [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_connectivity_ignores_prompt_echo_but_not_stdout_summary")]
+    public async Task RunGoalServiceAutoFailoverProviderConnectivityIgnoresPromptEchoButNotStdoutSummary()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Task with useful stdout plus connectivity text", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Goal should not fail over after useful stdout", [task]);
+        var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
+        kernel.ActivateGoal(goal.Id, [primary]);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex-cli exec", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex-cli exec",
+            workspace.ExecutionDirectory,
+            1,
+            "Changed files: src/example.cs\nModel fit: OpenAI/gpt-5.5 - adequate - useful work before provider error.",
+            "Error: websocket transport failed with OS error 10013 after partial work.",
+            DateTimeOffset.UtcNow));
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            [primary],
+            Profiles(new WorkerProfile("codex-cli", "Write-Output should-not-run")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            sleep: NoSleep);
+
+        Assert.False(result.Executed);
+        Assert.False(result.StopReason.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(primary.Id, task.AssignedAgentId);
+    }
+
+    [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_claude_api_connectionrefused_stops_when_no_alternate_exists")]
+    public async Task RunGoalServiceAutoFailoverClaudeApiConnectionRefusedStopsWhenNoAlternateExists()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Task with claude API connectivity failure", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Goal should ask for alternate after claude connectivity failure", [task]);
+        var primary = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
+        kernel.ActivateGoal(goal.Id, [primary]);
+        RecordProviderConnectivityFailure(
+            kernel,
+            goal,
+            task,
+            workspace,
+            "claude-cli",
+            "claude-cli --print",
+            DateTimeOffset.UtcNow,
+            "Error: Unable to connect to API: ConnectionRefused while opening provider transport.");
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            [primary],
+            Profiles(new WorkerProfile("claude-cli", "Write-Output should-not-run")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            sleep: NoSleep);
+
+        Assert.False(result.Executed);
+        Assert.Contains(result.StopReason, text => text.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("ConnectionRefused", StringComparison.Ordinal));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(primary.Id, task.AssignedAgentId);
+    }
+
+    [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_connectivity_redelegates_same_role_alternate_and_continues")]
+    public async Task RunGoalServiceAutoFailoverProviderConnectivityRedelegatesSameRoleAlternateAndContinues()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Task with provider connectivity failover", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Goal should continue with same-role alternate", [task]);
+        var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
+        var alternate = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
+        kernel.ActivateGoal(goal.Id, [primary, alternate]);
+        RecordProviderConnectivityFailure(
+            kernel,
+            goal,
+            task,
+            workspace,
+            "codex-cli",
+            "codex-cli exec",
+            DateTimeOffset.UtcNow,
+            "Error: websocket transport failed with os error 10013 before useful work.");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            [primary, alternate],
+            Profiles(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output connectivity-alternate-ok")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            pollInterval: TimeSpan.FromMilliseconds(50),
+            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            cancellationToken: cts.Token);
+
+        Assert.True(result.Executed);
+        Assert.True(result.StopEvidence is null);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(alternate.Id, task.AssignedAgentId);
+        Assert.Equal(task.RequiredRole, alternate.Role);
+        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("connectivity-alternate-ok", StringComparison.Ordinal));
+        Assert.Equal(2, task.VerificationHistory.Count);
+        Assert.Contains(task.VerificationHistory.First().StandardError, text => text.Contains("10013", StringComparison.Ordinal));
+        Assert.Equal(1, result.CompletedTasks.Count);
+        Assert.True(result.CompletedTasks.Single().Succeeded);
+        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("claude-planner", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_stops_when_no_alternate_exists")]

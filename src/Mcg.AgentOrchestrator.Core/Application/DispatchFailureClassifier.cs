@@ -85,6 +85,37 @@ public static class DispatchFailureClassifier
             output.Contains("heartbeat", StringComparison.OrdinalIgnoreCase);
     }
 
+    public static bool HasRecoverableProviderConnectivityFailure(TaskSpec task)
+    {
+        return task.Status == WorkTaskStatus.Failed &&
+            IsSubscriptionProviderCliDispatch(task) &&
+            task.LastVerification is { Succeeded: false } latest &&
+            IsRecoverableProviderConnectivityFailure(latest);
+    }
+
+    public static int CountRecoverableProviderConnectivityFailures(TaskSpec task)
+    {
+        return task.VerificationHistory.Count(verification =>
+            !verification.Succeeded &&
+            IsRecoverableProviderConnectivityFailure(verification));
+    }
+
+    public static bool IsRecoverableProviderConnectivityFailure(TaskVerificationRecord verification)
+    {
+        if (verification.Succeeded)
+        {
+            return false;
+        }
+
+        var output = string.Join(
+            Environment.NewLine,
+            verification.StandardOutput,
+            verification.StandardError);
+
+        return ContainsRecoverableProviderConnectivityText(output) &&
+            !HasUsefulPreWorkOutput(verification.StandardOutput);
+    }
+
     public static bool HasRecoverableSubscriptionLimitHistory(TaskSpec task)
     {
         return task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Pending &&
@@ -212,6 +243,53 @@ public static class DispatchFailureClassifier
         return text.Contains("usage limit", StringComparison.OrdinalIgnoreCase) &&
             (text.Contains("try again", StringComparison.OrdinalIgnoreCase) ||
              text.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsSubscriptionProviderCliDispatch(TaskSpec task)
+    {
+        var dispatch = task.LastDispatch;
+        return ContainsSubscriptionProviderCliName(dispatch?.WorkerName) ||
+            ContainsSubscriptionProviderCliName(dispatch?.Command) ||
+            ContainsSubscriptionProviderCliName(task.LastVerification?.Command);
+    }
+
+    private static bool ContainsSubscriptionProviderCliName(string? text)
+    {
+        return text?.Contains("codex-cli", StringComparison.OrdinalIgnoreCase) == true ||
+            text?.Contains("claude-cli", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static bool ContainsRecoverableProviderConnectivityText(string text)
+    {
+        return (text.Contains("websocket", StringComparison.OrdinalIgnoreCase) &&
+                (text.Contains("os error", StringComparison.OrdinalIgnoreCase) ||
+                 text.Contains("10013", StringComparison.OrdinalIgnoreCase))) ||
+            text.Contains("Unable to connect to API", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("ConnectionRefused", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("connection refused", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("ECONNREFUSED", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("actively refused", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("DNS", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("host resolution", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("could not resolve host", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("name or service not known", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("temporary failure in name resolution", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("getaddrinfo", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("ENOTFOUND", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("no such host", StringComparison.OrdinalIgnoreCase) ||
+            (text.Contains("transport", StringComparison.OrdinalIgnoreCase) &&
+             (text.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
+              text.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
+              text.Contains("failed", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool HasUsefulPreWorkOutput(string output)
+    {
+        return HasVerificationEvidence(output, string.Empty) ||
+            output.Contains("HUMAN_INPUT:", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Model fit:", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Changed files:", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Files changed:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<string> GetProviderErrorLines(string output)

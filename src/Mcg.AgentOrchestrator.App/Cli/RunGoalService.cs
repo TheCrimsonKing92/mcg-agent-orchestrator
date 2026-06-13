@@ -329,6 +329,15 @@ internal static class RunGoalService
             return true;
         }
 
+        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
+        {
+            var count = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
+            evidence = new AutomaticFailoverEvidence(
+                $"recoverable provider connectivity evidence ({count} failure(s))",
+                count);
+            return true;
+        }
+
         evidence = null!;
         return false;
     }
