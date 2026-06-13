@@ -479,6 +479,87 @@ public sealed class StatePersistenceAndPerformanceTests
         Xunit.Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), $"Persistence/render smoke took {elapsed.Elapsed}.");
     }
 
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_bounds_verification_output_when_path_set_and_text_is_large")]
+    public void OrchestratorStateStoreBoundsVerificationOutputWhenPathSetAndTextIsLarge()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Bound large stdout");
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var logPath = Path.Combine(root, ".orchestrator", "logs", "stdout.log").Replace('\\', '/');
+        var largeStdout = new string('A', 220_000);
+        var largeStderr = new string('E', 220_000);
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test", root, 0,
+            largeStdout, largeStderr,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: logPath,
+            StandardErrorPath: logPath + ".err"));
+
+        OrchestratorStateStore.Save(path, kernel);
+
+        var json = File.ReadAllText(path);
+        var fileSize = new FileInfo(path).Length;
+
+        // File must be much smaller than the raw 440KB of output alone
+        Xunit.Assert.True(fileSize < 60_000, $"state.json should be <60KB but was {fileSize} bytes");
+        // Path references must be present
+        Assert.Contains(json, text => text.Contains(logPath, StringComparison.Ordinal));
+        // The bulk repeated text must NOT appear in the JSON
+        Xunit.Assert.False(json.Contains(new string('A', 10_000), StringComparison.Ordinal), "Full stdout should not be embedded");
+        Xunit.Assert.False(json.Contains(new string('E', 10_000), StringComparison.Ordinal), "Full stderr should not be embedded");
+
+        // Load must succeed; path reference and exit code preserved
+        var restored = OrchestratorStateStore.Load(path);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Xunit.Assert.NotNull(restoredTask.LastVerification);
+        Assert.Equal(logPath, restoredTask.LastVerification!.StandardOutputPath);
+        Assert.Equal(0, restoredTask.LastVerification.ExitCode);
+        // Bounded preview must begin with the head of the original text
+        Assert.Contains(
+            restoredTask.LastVerification.StandardOutput,
+            text => text.StartsWith(new string('A', 4096), StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_preserves_full_inline_output_when_no_path_is_set")]
+    public void OrchestratorStateStorePreservesFullInlineOutputWhenNoPathIsSet()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("No path keeps full text");
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+
+        // Large output but NO path — backward-compatible old-state form
+        var largeOutput = new string('B', 220_000);
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test", root, 0,
+            largeOutput, string.Empty,
+            DateTimeOffset.UtcNow));   // no StandardOutputPath
+
+        OrchestratorStateStore.Save(path, kernel);
+
+        // Full text must be round-tripped when no path reference exists
+        var restored = OrchestratorStateStore.Load(path);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Xunit.Assert.NotNull(restoredTask.LastVerification);
+        Assert.Equal(largeOutput, restoredTask.LastVerification!.StandardOutput);
+        Xunit.Assert.Null(restoredTask.LastVerification.StandardOutputPath);
+    }
+
     private static void AssertPrototypeAgent(AgentDefinition agent, string expectedId)
     {
         Assert.Equal(expectedId, agent.Id.Value);

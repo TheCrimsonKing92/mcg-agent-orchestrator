@@ -22,6 +22,16 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;
 
+            case "state-compact":
+            {
+                var sizeBefore = File.Exists(context.StatePath) ? new FileInfo(context.StatePath).Length : 0L;
+                OrchestratorStateStore.Save(context.StatePath, context.Kernel);
+                var sizeAfter = new FileInfo(context.StatePath).Length;
+                Console.WriteLine($"State compacted: {sizeBefore:N0} → {sizeAfter:N0} bytes");
+                Console.WriteLine($"State: {Path.GetFullPath(context.StatePath)}");
+                return false;
+            }
+
             case "state-rollback":
                 if (!parts.Any(part => part.Equals("--confirm-state-rollback", StringComparison.OrdinalIgnoreCase)))
                 {

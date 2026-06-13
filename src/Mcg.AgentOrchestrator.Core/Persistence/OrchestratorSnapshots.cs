@@ -93,3 +93,19 @@ public sealed record HumanInputRequestSnapshot(
     bool IsCompleted,
     string? Answer,
     DateTimeOffset? AnsweredAt);
+
+public static class VerificationTextBounds
+{
+    private const int PreviewHeadChars = 4096;
+    private const int PreviewTailChars = 4096;
+    private const int BoundThreshold = PreviewHeadChars + PreviewTailChars;
+
+    public static string BoundText(string text, string? path)
+    {
+        if (path is null || text.Length <= BoundThreshold)
+            return text;
+        var head = text[..PreviewHeadChars];
+        var tail = text[^PreviewTailChars..];
+        return $"{head}\n...[{text.Length:N0} chars; full output at: {path}]...\n{tail}";
+    }
+}
