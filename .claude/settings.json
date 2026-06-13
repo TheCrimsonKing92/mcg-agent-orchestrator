@@ -74,7 +74,8 @@
       "PowerShell(Format-Table *)",
       "PowerShell(Format-List *)",
       "PowerShell(Start-Sleep *)",
-      "PowerShell(.\\scripts\\Invoke-TestSummary.ps1*)"
+      "PowerShell(.\\scripts\\Invoke-TestSummary.ps1*)",
+      "PowerShell(.\\mcg-orchestrator.cmd model-outcomes)"
     ]
   }
 }

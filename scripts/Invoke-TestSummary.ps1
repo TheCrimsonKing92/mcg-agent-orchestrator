@@ -39,6 +39,7 @@ if ($NoBuild) { $testArgs += '--no-build' }
 if ($Filter)  { $testArgs += @('--filter', $Filter) }
 
 dotnet test @testArgs *>&1 | Tee-Object -FilePath $rawLog | Out-Null
+$testExit = $LASTEXITCODE
 
 $trxFiles = Get-ChildItem $results -Filter *.trx -ErrorAction SilentlyContinue
 if (-not $trxFiles) {
@@ -63,4 +64,16 @@ foreach ($file in $trxFiles) {
         }
 }
 
-if ($anyFailed) { exit 1 } else { "ALL GREEN"; exit 0 }
+# `dotnet test` returns non-zero if ANY project failed to build or any test
+# failed. A green TRX from one project does not prove the others built/ran, so
+# trust the exit code as the source of truth and never report green when it is
+# non-zero (this avoids false greens when a project fails to build, e.g. a
+# CS2012 VBCSCompiler lock that yields no TRX for that project).
+if ($anyFailed -or $testExit -ne 0) {
+    if (-not $anyFailed) {
+        Write-Output "BUILD/RUN FAILURE - dotnet test exited $testExit but produced no failing TRX (a project likely failed to build / produced no results). Raw tail:"
+        Get-Content $rawLog -Tail 15
+    }
+    exit 1
+}
+"ALL GREEN"; exit 0
