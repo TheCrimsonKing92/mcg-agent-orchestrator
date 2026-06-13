@@ -42,14 +42,16 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     return 0;
 }
 
-var kernel = AppStatePersistence.LoadKernel(workspace.StatePath);
+await SqliteStateJsonMigrator.MigrateIfNeededAsync(workspace.StatePath, workspace.SqliteStatePath);
+ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+var kernel = await stateRepository.LoadAsync();
 var currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
 
 if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, workspace.StatePath, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         return 0;
     }
     catch (Exception ex)
@@ -149,7 +151,7 @@ while (true)
 
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), workspace.StatePath, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
     }
     catch (Exception ex)
     {
