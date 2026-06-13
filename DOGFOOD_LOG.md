@@ -4,6 +4,16 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-13 - gpt-5.3-codex-spark smoke: runs on separate budget, self-rated "adequate", but skipped the commit
+
+Ran a real codex subscription dispatch on `gpt-5.3-codex-spark` (separate weekly limit; main codex capped until 6/18) using a new `--subscription-model` agent flag. Task: create a one-line docs file in a goal worktree.
+- codex 0.139 accepted `--model gpt-5.3-codex-spark -c model_reasoning_effort=low` with no model-rejection failover; finished in ~30s using 28,815 tokens.
+- Produced correct file content and a clean `WORKER_RESULT` ending `Model fit: OpenAI/gpt-5.3-codex-spark - adequate - simple single-file creation task ...`.
+- BUT it created the file without `git commit`, leaving the worktree dirty. The false-positive/dirty-unverified completion guard correctly rejected it and marked the dispatch Failed (the safety net worked; nothing false-accepted, nothing merged to main).
+- Routing signal: a model's self-rated fit ("adequate") can diverge from its actual dispatch outcome (failed: no commit). The outcome-routing scorecard must reconcile self-reported `Model fit:` notes against recorded task completion/failure and weight actual outcomes higher.
+- Cleanup: worktree force-removed, `goal/5038df08` branch deleted, local `agents.json` removed to restore default agents.
+- Model fit: gpt-5.3-codex-spark - adequate(content) / failed(workflow) - tiny single-file dogfood - correct output but skipped the repo commit convention; worth a second smoke on a small real code change.
+
 ## 2026-06-13 - Full-suite test isolation restored; earlier "operator gate" claims were slice-only
 
 Dogfood session (Claude/Opus; Codex at weekly limit until 6/18). Codex's morning session (10.3K+ lines) was left entirely uncommitted, and running the full suite normally revealed it was red: Core 212/212 but Infrastructure 20 failed / 473. Root cause: CLI tests swap process-global `Console.Out` to a disposable `StringWriter` while xUnit ran collections in parallel, so one test's handler wrote into another's disposed writer (`ObjectDisposedException: Cannot write to a closed TextWriter`); 19 of 20 failures were this race. The many "operator gate passed N/N" entries below were verified with method-filtered slices that dodged the race, NOT the full suite. Fix: `[assembly: CollectionBehavior(DisableTestParallelization = true)]` in Infrastructure.Tests. Also hardened `WorkerContextArtifacts` to drop `.orchestrator-context/.gitignore` (`*`) so worker scratch never dirties a worktree or gets committed by `git add -A` workers in repos lacking the root ignore, and fixed `Cli_lifecycle_simple_goal_keeps_workspace_when_acceptance_fails` to drive failure via a real source change instead of relying on committed scratch (which my hardening correctly stopped).
