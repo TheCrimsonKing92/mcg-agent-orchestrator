@@ -1,8 +1,16 @@
 # Dogfood Log
 
-Entry convention: keep entries short and record only durable product signal. For subscription/API-authored work, add `Model fit: <model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>`.
+Entry convention: keep entries short and record only durable product signal. For subscription/API-authored work, add `Model fit: <model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>`. "Operator gate" evidence must come from a full project/solution `dotnet test` run, not method-filtered slices - the slice habit hid a red suite (see 2026-06-13 test-isolation entry).
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
+
+## 2026-06-13 - Full-suite test isolation restored; earlier "operator gate" claims were slice-only
+
+Dogfood session (Claude/Opus; Codex at weekly limit until 6/18). Codex's morning session (10.3K+ lines) was left entirely uncommitted, and running the full suite normally revealed it was red: Core 212/212 but Infrastructure 20 failed / 473. Root cause: CLI tests swap process-global `Console.Out` to a disposable `StringWriter` while xUnit ran collections in parallel, so one test's handler wrote into another's disposed writer (`ObjectDisposedException: Cannot write to a closed TextWriter`); 19 of 20 failures were this race. The many "operator gate passed N/N" entries below were verified with method-filtered slices that dodged the race, NOT the full suite. Fix: `[assembly: CollectionBehavior(DisableTestParallelization = true)]` in Infrastructure.Tests. Also hardened `WorkerContextArtifacts` to drop `.orchestrator-context/.gitignore` (`*`) so worker scratch never dirties a worktree or gets committed by `git add -A` workers in repos lacking the root ignore, and fixed `Cli_lifecycle_simple_goal_keeps_workspace_when_acceptance_fails` to drive failure via a real source change instead of relying on committed scratch (which my hardening correctly stopped).
+
+- Operator gate: full solution `dotnet test` 685/685 (Core 212, Infrastructure 473), serialized, ~2m.
+- Committed the in-flight session + these fixes as one green baseline (was at risk of loss, uncommitted).
+- Model fit: Claude Opus dogfood session - adequate - root-cause test-isolation diagnosis plus minimal product/test fixes.
 
 ## 2026-06-13 - Scheduled drain windows shipped
 
