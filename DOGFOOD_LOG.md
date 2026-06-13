@@ -157,3 +157,11 @@ Goal `fab431b5`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `Back
 - Operator gate: reviewed `BackgroundDispatchRunner` and `WorkerDispatchTests` diff; focused `BackgroundDispatchRunner` tests passed 28/28; acceptance verification passed.
 - Friction found: one-shot CLI normalization still mishandles goal-targeted task commands with trailing notes; legacy current-goal form worked for recovery.
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped dispatch validation policy change with focused tests; worker missed the commit requirement.
+
+## 2026-06-13 - Provider connectivity failures can fail over (goal 2e387b6f)
+
+Goal `2e387b6f`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `DispatchFailureClassifier` now recognizes pre-work codex/claude provider connectivity failures including websocket OS error 10013, API connection failure, `ConnectionRefused`, DNS/host resolution, and transport refusal signals. `RunGoalService` routes that evidence through the existing same-role alternate failover path with preserved failure history and no-alternate guidance. Worker produced useful edits and focused passing tests but exited dirty-useful without committing, so operator hardened prompt-echo handling, committed `1a5ea9c`, recorded manual verification, accepted the goal, and removed the workspace.
+
+- Operator gate: reviewed classifier/run-loop/tests; fixed useful-output detection so prompt text echoed on stderr does not suppress failover; focused `RunGoalService` tests passed 15/15 after one CS2012 build-server shutdown retry; acceptance verification passed.
+- Friction found: same one-shot goal-targeted task command normalization gap as `fab431b5`; backlog now tracks it.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped failover/classifier change with focused run-loop tests; worker missed commit and needed operator hardening for stderr prompt echo.
