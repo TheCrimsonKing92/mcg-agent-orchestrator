@@ -762,6 +762,40 @@ public sealed class TaskBriefTests
 
     Assert.True(!developerBrief.Contains("Do not modify repository files", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_worker_result_block_fields_and_commit_instruction")]
+    public void BuildTaskBriefIncludesWorkerResultBlockFieldsAndCommitInstruction()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Ship a feature", [new TaskSpec(TaskId.New(), "Implement the feature and write tests.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    Assert.Contains(brief, text => text.Contains("WORKER_RESULT:", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("files:", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("commit:", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("model_fit:", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("END_WORKER_RESULT", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Git commit all changes in the working directory before reporting results.", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("Final: WORKER_RESULT.", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_worker_result_block_matches_shared_template")]
+    public void BuildTaskBriefWorkerResultBlockMatchesSharedTemplate()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Verify shared template", [new TaskSpec(TaskId.New(), "Apply the shared output contract.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    foreach (var templateLine in AgentOutputDirectives.WorkerResultTemplateLines)
+    {
+        Assert.Contains(brief, text => text.Contains(templateLine, StringComparison.Ordinal));
+    }
+}
+
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)

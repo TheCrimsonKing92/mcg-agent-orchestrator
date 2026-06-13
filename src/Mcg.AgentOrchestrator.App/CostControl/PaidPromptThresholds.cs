@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.CostControl;
 internal static class PaidPromptThresholds
 {
     public const int SimplePaidPrompt = 6000;
-    public const int ComplexPaidPrompt = 9000;
+    public const int ComplexPaidPrompt = 9500;
     public const int BatchPaidPrompt = 18000;
     public const int BatchPaidTasks = 3;
     public const int PriorTaskEvidenceAllowance = 2000;

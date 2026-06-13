@@ -288,27 +288,31 @@ public sealed partial class AgentOrchestratorKernel
         var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
         {
-            return
-            [
+            var simpleLines = new List<string>
+            {
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
                 "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.",
-                "Final: WORKER_RESULT.",
-                modelFitInstruction
-            ];
+                "Git commit all changes in the working directory before reporting results."
+            };
+            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
+            simpleLines.Add(modelFitInstruction);
+            return simpleLines;
         }
 
-        return
-        [
+        var complexLines = new List<string>
+        {
             "Complete this task as the assigned SDLC role. Report concrete changes, verification evidence, blockers, and any human input required.",
             "If you cannot proceed without operator input, write a line that starts with HUMAN_INPUT: followed by the exact question.",
             "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
             "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
             "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads.",
-            "Final: WORKER_RESULT.",
-            modelFitInstruction
-        ];
+            "Git commit all changes in the working directory before reporting results."
+        };
+        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
+        complexLines.Add(modelFitInstruction);
+        return complexLines;
     }
 
     private static string BuildModelFitInstruction(string? modelFitTarget)

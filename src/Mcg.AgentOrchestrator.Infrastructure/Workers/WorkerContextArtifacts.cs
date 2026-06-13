@@ -315,16 +315,7 @@ public static class WorkerContextArtifacts
         lines.Add(string.Empty);
         lines.Add("## Worker Result Contract");
         lines.Add("End final output with:");
-        lines.Add("WORKER_RESULT:");
-        lines.Add("files: <comma-separated changed files or none>");
-        lines.Add("commands: <commands run or none>");
-        lines.Add("tests: <pass/fail/not-run evidence>");
-        lines.Add("commit: <commit sha or none>");
-        lines.Add("blockers: <none or exact blocker>");
-        lines.Add("model_fit: <provider/model - adequate|overkill|underpowered - task shape - reason>");
-        lines.Add("skills: <selected skills used or none>");
-        lines.Add("confidence: <high|medium|low>");
-        lines.Add("END_WORKER_RESULT");
+        lines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
 
         return string.Join(Environment.NewLine, lines);
     }
