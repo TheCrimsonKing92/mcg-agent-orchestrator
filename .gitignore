@@ -32,6 +32,8 @@ publish/
 **/.orchestrator-demo/
 **/.orchestrator-prototype/
 **/.scratch/
+.test-results/
+.build.out
 
 # Local agent/tool settings
 .claude/settings.local.json
