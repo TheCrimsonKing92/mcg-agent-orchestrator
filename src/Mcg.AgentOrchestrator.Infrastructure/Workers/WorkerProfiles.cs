@@ -199,7 +199,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
             new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL='{subscriptionModelName}'; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
+            new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
             new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})")
         ]);
     }

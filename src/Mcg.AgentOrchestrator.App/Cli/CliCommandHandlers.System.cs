@@ -84,6 +84,10 @@ internal static partial class CliCommandHandlers
 
                 return false;
 
+            case "monitor-goal":
+                GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
+                return false;
+
             case "dashboard":
                 var dashboardArgs = DashboardHost.ParseDashboardArgs(parts);
                 var dashboardPath = dashboardArgs.Path;

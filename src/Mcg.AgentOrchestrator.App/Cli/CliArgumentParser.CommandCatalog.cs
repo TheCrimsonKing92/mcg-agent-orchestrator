@@ -15,6 +15,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("transcript", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("monitor", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("monitor-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("evidence", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("stages", StringComparison.OrdinalIgnoreCase) ||

@@ -70,7 +70,7 @@ public sealed class WorkerProfileTests
 {
     var qwenCode = WorkerProfileCatalog.Default().GetRequired("qwen-code-cli");
 
-    Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("OPENAI_MODEL='{subscriptionModelName}'", StringComparison.Ordinal));
+    Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("OPENAI_MODEL={subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("Set-Location {workingDirectory}", StringComparison.Ordinal));
     Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
     Assert.Contains(qwenCode.CommandTemplate, text => text.Contains("127.0.0.1:11434", StringComparison.Ordinal));
