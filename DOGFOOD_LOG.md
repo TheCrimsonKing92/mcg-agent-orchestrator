@@ -133,3 +133,11 @@ Goal `76fbdfb0`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. Conte
 - Operator gate: reviewed prompt/context/test diffs; focused TaskBrief tests 34/34, focused WorkerContextArtifacts/WorkerProfileDispatcher tests 37/37, full worktree suite Core 187/187 + Infrastructure 334/334; `git diff --check` and acceptance verification passed.
 - Proof of context-economics improvement: later file-access prompts now carry artifact pointers and ordering instead of full prior stdout, while `prior-task-summaries.md` preserves the decision-changing prior evidence in files the worker can read on demand.
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped context artifact and prompt-contract update with focused regression coverage.
+
+## 2026-06-13 - CLI monitoring subscription consumer dogfooded (goal 9c21c03b)
+
+Goal `9c21c03b`, simple-goal Developer task, was monitored through `/api/goals/9c21c03b/events/stream`; `.scratch/dogfood-monitor-stream.log` captured `goal.snapshot`, `timeline`, redelegation, completion, and keepalive events. Commit `eb42fc2` adds `monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]`, consuming snapshot and SSE monitoring endpoints with compact operator output, plus tests for parsing, formatting, and SSE framing. It also fixes the default `qwen-code-cli` template so `{subscriptionModelName}` is not double-quoted after substitution. Acceptance fast-forwarded main and workspace removal succeeded.
+
+- Operator gate: worker providers failed before useful work or produced false completion, so operator recovered the goal in the worktree; focused monitor/profile tests 3/3, full Infrastructure 350/350, Core 198/198, and acceptance verification passed.
+- Friction found: OpenAI codex-cli failed with websocket `os error 10013`, Claude failed with `ConnectionRefused`, and qwen3:8b claimed nonexistent Go files/endpoints while making no requested source change. Backlog now tracks connectivity failover and stronger worker-result validation.
+- Model fit: OpenAI/Claude subscription workers - unavailable - connectivity failures before product work; qwen3:8b via qwen-code-cli - underpowered - false-positive/no-op for this repo feature; local Codex/operator - adequate - recovered implementation and verification.
