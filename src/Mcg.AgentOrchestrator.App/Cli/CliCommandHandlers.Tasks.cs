@@ -11,9 +11,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
     switch (command)
     {
         case "task":
-            CliArgumentParser.RequirePartCount(parts, 2, "task <task-number|task-id-prefix>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            ConsoleViews.PrintTask(context.CurrentGoal, OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]));
+            var taskTarget = ResolveCommandTaskTarget(parts, context, "task <task-number|task-id-prefix>|<goal-prefix> <task-number|task-id-prefix>|--goal <goal-prefix> <task-number|task-id-prefix>");
+            ConsoleViews.PrintTask(context.CurrentGoal!, taskTarget.Task);
             return false;
 
         case "tasks":
@@ -29,24 +28,22 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "verification-plan":
-            CliArgumentParser.RequirePartCount(parts, 2, "verification-plan <task-number> [plan]");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var planTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            if (parts.Count == 2)
+            var planTarget = ResolveCommandTaskTarget(parts, context, "verification-plan <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [plan]");
+            var planTask = planTarget.Task;
+            if (parts.Count == planTarget.NextIndex)
             {
                 Console.WriteLine(planTask.VerificationPlan ?? "none");
                 return false;
             }
 
-            context.Kernel.SetTaskVerificationPlan(context.CurrentGoal.Id, planTask.Id, parts[2]);
-            ConsoleViews.PrintTask(context.CurrentGoal, planTask);
+            context.Kernel.SetTaskVerificationPlan(context.CurrentGoal!.Id, planTask.Id, parts[planTarget.NextIndex]);
+            ConsoleViews.PrintTask(context.CurrentGoal!, planTask);
             return true;
 
         case "brief":
-            CliArgumentParser.RequirePartCount(parts, 2, "brief <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var briefTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            Console.WriteLine(context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, briefTask.Id).Content);
+            var briefTarget = ResolveCommandTaskTarget(parts, context, "brief <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            var briefTask = briefTarget.Task;
+            Console.WriteLine(context.Kernel.BuildTaskBrief(context.CurrentGoal!.Id, briefTask.Id).Content);
             return false;
 
         case "timeline":
@@ -55,9 +52,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "task-timeline":
-            CliArgumentParser.RequirePartCount(parts, 2, "task-timeline <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            ConsoleViews.PrintTaskTimeline(context.CurrentGoal, OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]));
+            var timelineTarget = ResolveCommandTaskTarget(parts, context, "task-timeline <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            ConsoleViews.PrintTaskTimeline(context.CurrentGoal!, timelineTarget.Task);
             return false;
 
         case "pending":
@@ -65,110 +61,108 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "run":
-            CliArgumentParser.RequirePartCount(parts, 2, "run <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var runTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            var runTarget = ResolveCommandTaskTarget(parts, context, "run <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
+            var runTask = runTarget.Task;
+            var runTaskLabel = parts[runTarget.NextIndex - 1];
             var runAgent = ResolveAssignedAgent(runTask, context.Agents);
             if (AgentExecutionPolicies.AllowsSubscription(runAgent.ExecutionPolicy))
             {
                 throw new InvalidOperationException(
-                    $"Task '{runTask.Id}' is assigned to '{runAgent.Name}' with execution policy {runAgent.ExecutionPolicy}; use subscription-dispatch {parts[1]} first, or api-run {parts[1]} for explicit API execution.");
+                    $"Task '{runTask.Id}' is assigned to '{runAgent.Name}' with execution policy {runAgent.ExecutionPolicy}; use subscription-dispatch {runTaskLabel} first, or api-run {runTaskLabel} for explicit API execution.");
             }
 
-            EnsurePaidApiRunConfirmed(context.CurrentGoal, runTask, runAgent, parts);
+            EnsurePaidApiRunConfirmed(context.CurrentGoal!, runTask, runAgent, parts);
             RunApiTask(context, runTask);
             return true;
 
         case "api-run":
-            CliArgumentParser.RequirePartCount(parts, 2, "api-run <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var apiRunTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            var apiRunTarget = ResolveCommandTaskTarget(parts, context, "api-run <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
+            var apiRunTask = apiRunTarget.Task;
             var apiRunAgent = ResolveAssignedAgent(apiRunTask, context.Agents);
             EnsureExplicitApiRunAllowed(apiRunTask, apiRunAgent);
-            EnsurePaidApiRunConfirmed(context.CurrentGoal, apiRunTask, apiRunAgent, parts);
+            EnsurePaidApiRunConfirmed(context.CurrentGoal!, apiRunTask, apiRunAgent, parts);
             RunApiTask(context, apiRunTask);
             return true;
 
         case "retry":
-            CliArgumentParser.RequirePartCount(parts, 3, "retry <task-number> <message>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var retryTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            context.Kernel.RetryTask(context.CurrentGoal.Id, retryTask.Id, parts[2]);
-            ConsoleViews.PrintTask(context.CurrentGoal, retryTask);
+            var retryUsage = "retry <task-number> <message>|retry <goal-prefix> <task-number> <message>|retry --goal <goal-prefix> <task-number> <message>";
+            var retryTarget = ResolveCommandTaskTarget(parts, context, retryUsage);
+            RequireRemainingArgument(parts, retryTarget.NextIndex, retryUsage);
+            var retryTask = retryTarget.Task;
+            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, parts[retryTarget.NextIndex]);
+            ConsoleViews.PrintTask(context.CurrentGoal!, retryTask);
             return true;
 
         case "re-delegate":
         case "redelegate":
-            CliArgumentParser.RequirePartCount(parts, 2, "re-delegate <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var redelegateTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            context.Kernel.RedelegateTask(context.CurrentGoal.Id, redelegateTask.Id, context.Agents);
-            ConsoleViews.PrintTask(context.CurrentGoal, redelegateTask);
+            var redelegateTarget = ResolveCommandTaskTarget(parts, context, "re-delegate <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            var redelegateTask = redelegateTarget.Task;
+            context.Kernel.RedelegateTask(context.CurrentGoal!.Id, redelegateTask.Id, context.Agents);
+            ConsoleViews.PrintTask(context.CurrentGoal!, redelegateTask);
             return true;
 
         case "note":
-            CliArgumentParser.RequirePartCount(parts, 3, "note <task-number> <message>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var noteTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            context.Kernel.RecordTaskNote(context.CurrentGoal.Id, noteTask.Id, parts[2]);
-            ConsoleViews.PrintTask(context.CurrentGoal, noteTask);
+            var noteTarget = ResolveCommandTaskTarget(parts, context, "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>");
+            RequireRemainingArgument(parts, noteTarget.NextIndex, "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>");
+            var noteTask = noteTarget.Task;
+            context.Kernel.RecordTaskNote(context.CurrentGoal!.Id, noteTask.Id, parts[noteTarget.NextIndex]);
+            ConsoleViews.PrintTask(context.CurrentGoal!, noteTask);
             return true;
 
         case "dispatch":
-            CliArgumentParser.RequirePartCount(parts, 4, "dispatch <task-number> <worker-name> <command>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var dispatchTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var dispatch = new TaskDispatchRecord(parts[2], parts[3], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id), DateTimeOffset.UtcNow);
-            context.Kernel.RecordTaskDispatch(context.CurrentGoal.Id, dispatchTask.Id, dispatch);
-            ConsoleViews.PrintTask(context.CurrentGoal, dispatchTask);
+            var dispatchTarget = ResolveCommandTaskTarget(parts, context, "dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <worker-name> <command>");
+            RequireRemainingArgument(parts, dispatchTarget.NextIndex + 1, "dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <worker-name> <command>");
+            var dispatchTask = dispatchTarget.Task;
+            var dispatch = new TaskDispatchRecord(parts[dispatchTarget.NextIndex], parts[dispatchTarget.NextIndex + 1], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal!.Id), DateTimeOffset.UtcNow);
+            context.Kernel.RecordTaskDispatch(context.CurrentGoal!.Id, dispatchTask.Id, dispatch);
+            ConsoleViews.PrintTask(context.CurrentGoal!, dispatchTask);
             return true;
 
         case "verify":
-            CliArgumentParser.RequirePartCount(parts, 3, "verify <task-number> <command>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var verifyTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            var verifyTarget = ResolveCommandTaskTarget(parts, context, "verify <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <command>");
+            RequireRemainingArgument(parts, verifyTarget.NextIndex, "verify <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <command>");
+            var verifyTask = verifyTarget.Task;
             var verification = new LocalProcessVerifier()
-                .RunAsync(parts[2], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id))
+                .RunAsync(parts[verifyTarget.NextIndex], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal!.Id))
                 .GetAwaiter()
                 .GetResult();
-            context.Kernel.RecordTaskVerification(context.CurrentGoal.Id, verifyTask.Id, verification);
-            ConsoleViews.PrintTask(context.CurrentGoal, verifyTask);
+            context.Kernel.RecordTaskVerification(context.CurrentGoal!.Id, verifyTask.Id, verification);
+            ConsoleViews.PrintTask(context.CurrentGoal!, verifyTask);
             return true;
 
         case "verify-manual":
-            CliArgumentParser.RequirePartCount(parts, 4, "verify-manual <task-number> <passed|failed> <note>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var manualTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
+            var manualTarget = ResolveCommandTaskTarget(parts, context, "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>");
+            RequireRemainingArgument(parts, manualTarget.NextIndex + 1, "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>");
+            var manualTask = manualTarget.Task;
             var manualVerification = ManualVerificationRecorder.Create(
-                CliArgumentParser.ParseManualVerificationPassed(parts[2]),
-                parts[3],
+                CliArgumentParser.ParseManualVerificationPassed(parts[manualTarget.NextIndex]),
+                parts[manualTarget.NextIndex + 1],
                 context.Workspace.RootDirectory,
                 DateTimeOffset.UtcNow);
-            context.Kernel.RecordTaskVerification(context.CurrentGoal.Id, manualTask.Id, manualVerification);
-            ConsoleViews.PrintTask(context.CurrentGoal, manualTask);
+            context.Kernel.RecordTaskVerification(context.CurrentGoal!.Id, manualTask.Id, manualVerification);
+            ConsoleViews.PrintTask(context.CurrentGoal!, manualTask);
             return true;
 
         case "verifications":
-            CliArgumentParser.RequirePartCount(parts, 2, "verifications <task-number>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            ConsoleViews.PrintVerificationHistory(OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]));
+            var verificationsTarget = ResolveCommandTaskTarget(parts, context, "verifications <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            ConsoleViews.PrintVerificationHistory(verificationsTarget.Task);
             return false;
 
         case "progress":
-            CliArgumentParser.RequirePartCount(parts, 4, "progress <task-number> <running|completed|failed|cancelled> <message>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var progressTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            context.Kernel.ReportTaskProgress(context.CurrentGoal.Id, progressTask.Id, CliArgumentParser.ParseReportableStatus(parts[2]), parts[3]);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            var progressTarget = ResolveCommandTaskTarget(parts, context, "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>");
+            RequireRemainingArgument(parts, progressTarget.NextIndex + 1, "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>");
+            var progressTask = progressTarget.Task;
+            context.Kernel.ReportTaskProgress(context.CurrentGoal!.Id, progressTask.Id, CliArgumentParser.ParseReportableStatus(parts[progressTarget.NextIndex]), parts[progressTarget.NextIndex + 1]);
+            ConsoleViews.PrintGoal(context.CurrentGoal!);
             return true;
 
         case "ask":
-            CliArgumentParser.RequirePartCount(parts, 3, "ask <task-number> <question>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var askTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var request = context.Kernel.RequestHumanInput(context.CurrentGoal.Id, askTask.Id, parts[2]);
+            var askTarget = ResolveCommandTaskTarget(parts, context, "ask <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <question>");
+            RequireRemainingArgument(parts, askTarget.NextIndex, "ask <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <question>");
+            var askTask = askTarget.Task;
+            var request = context.Kernel.RequestHumanInput(context.CurrentGoal!.Id, askTask.Id, parts[askTarget.NextIndex]);
             Console.WriteLine($"Human input requested: {request.Id}");
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            ConsoleViews.PrintGoal(context.CurrentGoal!);
             return true;
 
         case "ask-goal":
@@ -189,6 +183,68 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         default:
             return null;
+    }
+}
+
+private static (TaskSpec Task, int NextIndex) ResolveCommandTaskTarget(IReadOnlyList<string> parts, CliExecutionContext context, string usage)
+{
+    if (parts.Count < 2)
+    {
+        throw new ArgumentException($"Usage: {usage}");
+    }
+
+    string? goalPrefix = null;
+    string taskValue;
+    int nextIndex;
+
+    if (parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        if (parts.Count < 4)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        goalPrefix = parts[2];
+        taskValue = parts[3];
+        nextIndex = 4;
+    }
+    else if (parts.Count > 2 &&
+        !parts[2].StartsWith("--", StringComparison.Ordinal) &&
+        !int.TryParse(parts[1], out _) &&
+        TryResolveGoalPrefix(context.Kernel, parts[1], out _))
+    {
+        goalPrefix = parts[1];
+        taskValue = parts[2];
+        nextIndex = 3;
+    }
+    else
+    {
+        taskValue = parts[1];
+        nextIndex = 2;
+    }
+
+    context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
+    return (OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, taskValue), nextIndex);
+}
+
+private static bool TryResolveGoalPrefix(AgentOrchestratorKernel kernel, string idOrPrefix, out Goal? goal)
+{
+    var matches = kernel.Goals.Where(candidate => candidate.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase)).ToList();
+    if (matches.Count == 1)
+    {
+        goal = matches[0];
+        return true;
+    }
+
+    goal = null;
+    return false;
+}
+
+private static void RequireRemainingArgument(IReadOnlyList<string> parts, int index, string usage)
+{
+    if (parts.Count <= index)
+    {
+        throw new ArgumentException($"Usage: {usage}");
     }
 }
 

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
@@ -9,6 +11,8 @@ public static class OrchestratorStateStore
 {
     private const int AtomicWriteAttempts = 10;
     private const string BackupExtension = ".bak";
+    private static readonly TimeSpan InterprocessLockTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan InterprocessLockRetryDelay = TimeSpan.FromMilliseconds(50);
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public static AgentOrchestratorKernel Load(string path)
@@ -42,13 +46,89 @@ public static class OrchestratorStateStore
 
     public static async Task SaveAsync(string path, AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
+        await WithExclusiveStateFileAccessAsync(
+            path,
+            async (fullPath, token) =>
+            {
+                await SaveWithoutExclusiveAccessAsync(fullPath, kernel, token);
+                return true;
+            },
+            cancellationToken);
+    }
+
+    public static Task<T> TransactAsync<T>(
+        string path,
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return TransactAsync(
+            path,
+            async (kernel, _, token) => await transaction(kernel, token),
+            cancellationToken);
+    }
+
+    public static async Task<T> TransactAsync<T>(
+        string path,
+        Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return await WithExclusiveStateFileAccessAsync(
+            path,
+            async (fullPath, token) =>
+            {
+                var kernel = File.Exists(fullPath)
+                    ? await LoadFromFileAsync(fullPath, token)
+                    : new AgentOrchestratorKernel();
+                var checkpointSaved = false;
+
+                async Task SaveCheckpointAsync()
+                {
+                    await SaveWithoutExclusiveAccessAsync(fullPath, kernel, token);
+                    checkpointSaved = true;
+                }
+
+                var (shouldSave, result) = await transaction(kernel, SaveCheckpointAsync, token);
+                if (shouldSave)
+                {
+                    try
+                    {
+                        await SaveWithoutExclusiveAccessAsync(fullPath, kernel, token);
+                    }
+                    catch when (checkpointSaved)
+                    {
+                        return result;
+                    }
+                }
+
+                return result;
+            },
+            cancellationToken);
+    }
+
+    private static async Task SaveWithoutExclusiveAccessAsync(string path, AgentOrchestratorKernel kernel, CancellationToken cancellationToken)
+    {
+        EnsureParentDirectory(path);
+        var json = JsonSerializer.Serialize(kernel.ExportSnapshot(), JsonOptions());
+        await AtomicWriteAsync(path, json, cancellationToken);
+    }
+
+    private static async Task<T> WithExclusiveStateFileAccessAsync<T>(
+        string path,
+        Func<string, CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(path);
         var gate = GetFileLock(path);
         await gate.WaitAsync(cancellationToken);
         try
         {
-            EnsureParentDirectory(path);
-            var json = JsonSerializer.Serialize(kernel.ExportSnapshot(), JsonOptions());
-            await AtomicWriteAsync(path, json, cancellationToken);
+            EnsureParentDirectory(fullPath);
+            await using var _ = await InterprocessFileLock.AcquireAsync(
+                fullPath + ".lock",
+                InterprocessLockTimeout,
+                InterprocessLockRetryDelay,
+                cancellationToken);
+            return await action(fullPath, cancellationToken);
         }
         finally
         {
@@ -63,34 +143,29 @@ public static class OrchestratorStateStore
 
     public static async Task<OrchestratorStateRollbackResult> RestoreBackupAsync(string path, CancellationToken cancellationToken = default)
     {
-        var gate = GetFileLock(path);
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            var backupPath = fullPath + BackupExtension;
-            if (!File.Exists(backupPath))
+        return await WithExclusiveStateFileAccessAsync(
+            path,
+            async (fullPath, token) =>
             {
-                throw new InvalidOperationException($"State backup was not found: {backupPath}");
-            }
+                var backupPath = fullPath + BackupExtension;
+                if (!File.Exists(backupPath))
+                {
+                    throw new InvalidOperationException($"State backup was not found: {backupPath}");
+                }
 
-            var restored = await LoadSnapshotFileAsync(backupPath, cancellationToken);
-            EnsureParentDirectory(fullPath);
-            var backupContent = await File.ReadAllTextAsync(backupPath, cancellationToken);
-            var archivedStatePath = ArchiveCurrentState(fullPath);
-            await ReplacePrimaryFromBackupAsync(fullPath, backupContent, cancellationToken);
+                var restored = await LoadSnapshotFileAsync(backupPath, token);
+                var backupContent = await File.ReadAllTextAsync(backupPath, token);
+                var archivedStatePath = ArchiveCurrentState(fullPath);
+                await ReplacePrimaryFromBackupAsync(fullPath, backupContent, token);
 
-            return new OrchestratorStateRollbackResult(
-                fullPath,
-                backupPath,
-                archivedStatePath,
-                restored.Goals.Count,
-                restored.HumanInputRequests.Count);
-        }
-        finally
-        {
-            gate.Release();
-        }
+                return new OrchestratorStateRollbackResult(
+                    fullPath,
+                    backupPath,
+                    archivedStatePath,
+                    restored.Goals.Count,
+                    restored.HumanInputRequests.Count);
+            },
+            cancellationToken);
     }
 
     private static SemaphoreSlim GetFileLock(string path)
@@ -259,7 +334,18 @@ public interface IOrchestratorStateRepository
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
 }
 
-public sealed class FileOrchestratorStateRepository : IOrchestratorStateRepository
+public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
+{
+    Task<T> TransactAsync<T>(
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default);
+
+    Task<T> TransactAsync<T>(
+        Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class FileOrchestratorStateRepository : ITransactionalOrchestratorStateRepository
 {
     private readonly string _path;
 
@@ -276,5 +362,89 @@ public sealed class FileOrchestratorStateRepository : IOrchestratorStateReposito
     public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
         return OrchestratorStateStore.SaveAsync(_path, kernel, cancellationToken);
+    }
+
+    public Task<T> TransactAsync<T>(
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return OrchestratorStateStore.TransactAsync(_path, transaction, cancellationToken);
+    }
+
+    public Task<T> TransactAsync<T>(
+        Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return OrchestratorStateStore.TransactAsync(_path, transaction, cancellationToken);
+    }
+}
+
+public sealed class InterprocessFileLock : IDisposable, IAsyncDisposable
+{
+    private readonly FileStream _stream;
+
+    private InterprocessFileLock(FileStream stream)
+    {
+        _stream = stream;
+    }
+
+    public static async Task<InterprocessFileLock> AcquireAsync(
+        string lockPath,
+        TimeSpan timeout,
+        TimeSpan retryDelay,
+        CancellationToken cancellationToken = default)
+    {
+        var fullPath = Path.GetFullPath(lockPath);
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var stream = new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                var owner = Encoding.UTF8.GetBytes(
+                    $"pid={Environment.ProcessId}; machine={Environment.MachineName}; acquired={DateTimeOffset.UtcNow:O}{Environment.NewLine}");
+                stream.SetLength(0);
+                await stream.WriteAsync(owner, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Position = 0;
+                return new InterprocessFileLock(stream);
+            }
+            catch (Exception ex) when (IsLockContention(ex) && elapsed.Elapsed < timeout)
+            {
+                var delay = retryDelay < timeout - elapsed.Elapsed
+                    ? retryDelay
+                    : timeout - elapsed.Elapsed;
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, cancellationToken);
+                }
+            }
+            catch (Exception ex) when (IsLockContention(ex))
+            {
+                throw new TimeoutException($"Timed out waiting for exclusive file lock: {fullPath}", ex);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _stream.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _stream.DisposeAsync();
+    }
+
+    private static bool IsLockContention(Exception ex)
+    {
+        return ex is IOException or UnauthorizedAccessException;
     }
 }

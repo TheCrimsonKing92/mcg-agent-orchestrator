@@ -1662,6 +1662,53 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(task.LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_task_commands_accept_goal_prefix_for_non_current_goal")]
+    public void CliTaskCommandsAcceptGoalPrefixForNonCurrentGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var targetGoal = kernel.CreateGoal("Target older goal", [new TaskSpec(TaskId.New(), "Do target work", AgentRole.Developer)]);
+        var current = kernel.CreateGoal("Current newer goal", [new TaskSpec(TaskId.New(), "Do current work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = current;
+        var targetPrefix = targetGoal.Id.Value[..8];
+        var targetTask = targetGoal.Tasks.Single();
+
+        var retryChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"retry {targetPrefix} 1 Retry older goal."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        var manualChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"verify-manual --goal {targetPrefix} 1 passed Operator verified older goal."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(retryChanged);
+        Xunit.Assert.True(manualChanged);
+        Xunit.Assert.Equal(targetGoal.Id, currentGoal!.Id);
+        Xunit.Assert.Contains(targetGoal.Timeline, evt => evt.TaskId == targetTask.Id && evt.Kind == ProgressKind.TaskRetried);
+        Xunit.Assert.NotNull(targetTask.LastVerification);
+        Xunit.Assert.Empty(current.Tasks.Single().VerificationHistory);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_re_delegate_reassigns_orphaned_task_and_subscription_dispatch_uses_new_agent")]
     public void CliReDelegateReassignsOrphanedTaskAndSubscriptionDispatchUsesNewAgent()
     {

@@ -46,6 +46,17 @@ internal sealed class DashboardStateService(IOrchestratorStateRepository reposit
         await _mutationGate.WaitAsync(cancellationToken);
         try
         {
+            if (repository is ITransactionalOrchestratorStateRepository transactional)
+            {
+                return await transactional.TransactAsync(
+                    async (kernel, saveCheckpoint, _) =>
+                    {
+                        var result = await mutation(kernel, saveCheckpoint);
+                        return (true, result);
+                    },
+                    cancellationToken);
+            }
+
             var kernel = await LoadWithRetryAsync(cancellationToken);
             var checkpointSaved = false;
             async Task SaveCheckpointAsync()
@@ -79,6 +90,17 @@ internal sealed class DashboardStateService(IOrchestratorStateRepository reposit
         await _mutationGate.WaitAsync(cancellationToken);
         try
         {
+            if (repository is ITransactionalOrchestratorStateRepository transactional)
+            {
+                return await transactional.TransactAsync(
+                    async (kernel, _) =>
+                    {
+                        var (changed, result) = await mutation(kernel);
+                        return (changed, result);
+                    },
+                    cancellationToken);
+            }
+
             var kernel = await LoadWithRetryAsync(cancellationToken);
             var (changed, result) = await mutation(kernel);
             if (changed)
@@ -101,6 +123,17 @@ internal sealed class DashboardStateService(IOrchestratorStateRepository reposit
         await _mutationGate.WaitAsync(cancellationToken);
         try
         {
+            if (repository is ITransactionalOrchestratorStateRepository transactional)
+            {
+                return await transactional.TransactAsync(
+                    async (kernel, _) =>
+                    {
+                        var (changed, value) = await mutation(kernel);
+                        return (changed, value);
+                    },
+                    cancellationToken);
+            }
+
             var kernel = await LoadWithRetryAsync(cancellationToken);
             var (changed, value) = await mutation(kernel);
             if (changed)

@@ -376,6 +376,35 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(1, restored.Goals.Count);
         Assert.True(restored.Goals.Single().Objective.StartsWith("Concurrent save ", StringComparison.Ordinal));
     }
+
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_transaction_preserves_concurrent_mutations")]
+    public async Task OrchestratorStateStoreTransactionPreservesConcurrentMutations()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var repository = new FileOrchestratorStateRepository(path);
+        await repository.SaveAsync(new AgentOrchestratorKernel());
+
+        var writes = Enumerable.Range(0, 12)
+            .Select(index => Task.Run(() => repository.TransactAsync(
+                (kernel, _) =>
+                {
+                    kernel.CreateGoal($"Serialized mutation {index}");
+                    return Task.FromResult((true, true));
+                })))
+            .ToArray();
+
+        await Task.WhenAll(writes);
+
+        var restored = await repository.LoadAsync();
+        Assert.Equal(12, restored.Goals.Count);
+        var objectives = restored.Goals.Select(goal => goal.Objective).ToList();
+        for (var index = 0; index < 12; index++)
+        {
+            Assert.True(objectives.Contains($"Serialized mutation {index}"));
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_retries_transient_atomic_replace_access_denial")]
     public async Task OrchestratorStateStoreRetriesTransientAtomicReplaceAccessDenial()
     {

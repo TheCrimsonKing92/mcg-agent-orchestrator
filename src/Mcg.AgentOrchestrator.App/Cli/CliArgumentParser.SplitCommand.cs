@@ -15,15 +15,13 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 3 ? [command, rest[0], rest[1], rest[2]] : [command, .. rest];
+        return SplitTaskTargetCommand(command, remainder, 2);
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+        return SplitTaskTargetCommand(command, remainder, 1);
     }
 
     if (command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -52,8 +50,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+        return SplitTaskTargetCommand(command, remainder, 1);
     }
 
     if (command.Equals("ask-goal", StringComparison.OrdinalIgnoreCase))
@@ -63,27 +60,29 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("ask", StringComparison.OrdinalIgnoreCase) || command.Equals("answer", StringComparison.OrdinalIgnoreCase))
     {
+        if (command.Equals("ask", StringComparison.OrdinalIgnoreCase))
+        {
+            return SplitTaskTargetCommand(command, remainder, 1);
+        }
+
         var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
     }
 
     if (command.Equals("verify", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+        return SplitTaskTargetCommand(command, remainder, 1);
     }
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 3 ? [command, rest[0], rest[1], rest[2]] : [command, .. rest];
+        return SplitTaskTargetCommand(command, remainder, 2);
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("worker-dispatch", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 3 ? [command, rest[0], rest[1], rest[2]] : [command, .. rest];
+        return SplitTaskTargetCommand(command, remainder, 2);
     }
 
     if (command.Equals("worker-profile", StringComparison.OrdinalIgnoreCase))
@@ -144,6 +143,33 @@ public static IReadOnlyList<string> SplitCommand(string line)
     return IsSimpleCommand(command)
         ? [command, .. simple]
         : [command, remainder];
+}
+
+private static IReadOnlyList<string> SplitTaskTargetCommand(string command, string remainder, int trailingArgumentCount)
+{
+    var maxParts = 2 + trailingArgumentCount;
+    var rest = remainder.Split(' ', maxParts, StringSplitOptions.RemoveEmptyEntries);
+    if (rest.Length == maxParts && LooksLikePositionalGoalTask(rest[0], rest[1]))
+    {
+        return [command, .. rest];
+    }
+
+    var goalFlagMaxParts = 3 + trailingArgumentCount;
+    var goalFlagRest = remainder.Split(' ', goalFlagMaxParts, StringSplitOptions.RemoveEmptyEntries);
+    if (goalFlagRest.Length == goalFlagMaxParts && goalFlagRest[0].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return [command, .. goalFlagRest];
+    }
+
+    var legacyRest = remainder.Split(' ', 1 + trailingArgumentCount, StringSplitOptions.RemoveEmptyEntries);
+    return [command, .. legacyRest];
+}
+
+private static bool LooksLikePositionalGoalTask(string first, string second)
+{
+    return !first.StartsWith("--", StringComparison.Ordinal) &&
+        !int.TryParse(first, out _) &&
+        int.TryParse(second, out _);
 }
 
 private static IReadOnlyList<string> SplitObjectiveCommandWithFlags(string command, string remainder)
