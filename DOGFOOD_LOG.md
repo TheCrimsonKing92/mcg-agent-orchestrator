@@ -4,6 +4,14 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-12 - Dirty dispatch recovery guidance shipped (goal fa85fd15)
+
+Goal `fa85fd15`, simple-goal Developer task. Codex/gpt-5.5 stalled and `run-goal` automatically re-delegated to the Claude Developer fallback, which completed commit `0403ad0`. Task details and next actions now classify dirty dispatch guard failures as `dirty-useful` or `dirty-unverified`, show changed files plus verification evidence when present, and point operators to `task N` for a safe numbered recovery workflow. The workflow still requires explicit operator inspection, test rerun, commit, and `verify-manual`; it does not auto-commit.
+
+- Operator gate: reviewed and tightened worker output so suggested next action is a single safe `task N` command, fixed compile issues, ran focused recovery tests Core 10/10 and Infrastructure 4/4, full suite Core 198/198 + Infrastructure 341/341, `git diff --check`, and acceptance verification.
+- Friction found: long Codex run timed out/stalled but automatic failover to Claude worked; model-fit note in manual verification overstated the Codex role, while the durable timeline correctly shows Claude completed the implementation.
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - broad recovery UX implementation after Codex stall; OpenAI/gpt-5.5 - underpowered/stalled for this run.
+
 ## 2026-06-12 - Five-role validation after context economizing (goal 482e8d1f)
 
 Goal `482e8d1f`, live five-role `goal` under `run-goal`, produced commit `4da8f34` adding subscription-plan prompt budget headroom display. Planner/Researcher ran read-only through OpenAI/gpt-5.5, Developer/Tester ran workspace-write through OpenAI/gpt-5.5, and Reviewer ran plan-mode through Anthropic/claude-haiku-4-5. Post-Developer prompt estimates stayed modest despite accumulated evidence: Tester `4294` chars and Reviewer `4333` chars, with no large-prompt confirmation required for the resumed run.
