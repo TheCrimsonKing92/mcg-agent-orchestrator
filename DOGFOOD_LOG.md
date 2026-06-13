@@ -4,6 +4,13 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-12 - Guarded lifecycle simple-goal command shipped (goal c1ce01cf)
+
+Goal `c1ce01cf`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. Added `lifecycle-simple-goal <objective>` to compose simple-goal creation, workspace creation, guarded `run-goal`, acceptance verification/merge, and workspace removal. The command requires `--confirm-batch-start` and `--confirm-large-paid-subscription-start`, preserves existing cost/acceptance/workspace/dirty guards, stops with a next command on failure, and does not add scheduling or overnight draining.
+
+- Operator gate: reviewed CLI parser/lifecycle tests; focused lifecycle/parser tests 18/18 after one CS2012 build-server retry; full suite Core 198/198 + Infrastructure 346/346; `git diff --check`, acceptance verification, and workspace removal passed.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped CLI orchestration and tests with clean commit.
+
 ## 2026-06-12 - Dirty dispatch recovery guidance shipped (goal fa85fd15)
 
 Goal `fa85fd15`, simple-goal Developer task. Codex/gpt-5.5 stalled and `run-goal` automatically re-delegated to the Claude Developer fallback, which completed commit `0403ad0`. Task details and next actions now classify dirty dispatch guard failures as `dirty-useful` or `dirty-unverified`, show changed files plus verification evidence when present, and point operators to `task N` for a safe numbered recovery workflow. The workflow still requires explicit operator inspection, test rerun, commit, and `verify-manual`; it does not auto-commit.
