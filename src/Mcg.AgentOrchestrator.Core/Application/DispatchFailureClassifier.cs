@@ -9,10 +9,61 @@ public static class DispatchFailureClassifier
     private static readonly Regex PowerShellNativeErrorPrefix = new(
         "^[^:\\r\\n]{1,120}\\s+:\\s+(?<error>ERROR:|Error:|error:)",
         RegexOptions.CultureInvariant);
+    private static readonly Regex PassedCountPattern = new(
+        @"\bPassed:\s*[1-9]\d*\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex FractionPattern = new(
+        @"\b\d+\s*/\s*\d+\b",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex ExitCodeZeroPattern = new(
+        @"\bexit code\s*0\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
+    }
+
+    public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)
+    {
+        recovery = DirtyDispatchRecovery.None;
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester) ||
+            task.LastVerification is not { Succeeded: false } verification ||
+            !IsDirtyDispatchGuardFailure(verification))
+        {
+            return false;
+        }
+
+        var changedFiles = ExtractChangedFiles(verification.StandardError);
+        var verificationEvidence = ExtractVerificationEvidence(verification.StandardOutput, verification.StandardError);
+        var label = verificationEvidence.Length > 0 ? "dirty-useful" : "dirty-unverified";
+        recovery = new DirtyDispatchRecovery(
+            label,
+            changedFiles,
+            verificationEvidence,
+            verification.WorkingDirectory);
+        return true;
+    }
+
+    public static bool HasVerificationEvidence(string standardOutput, string standardError)
+    {
+        var output = $"{standardOutput}\n{standardError}";
+        if (output.Contains("test run successful", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var hasVerificationTerm =
+            output.Contains("test", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("suite", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("verification", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("smoke", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("check", StringComparison.OrdinalIgnoreCase);
+
+        return hasVerificationTerm &&
+            (PassedCountPattern.IsMatch(output) ||
+             FractionPattern.IsMatch(output) ||
+             ExitCodeZeroPattern.IsMatch(output));
     }
 
     public static bool HasProviderNeutralProgressStallFailure(TaskSpec task)
@@ -193,4 +244,67 @@ public static class DispatchFailureClassifier
             line.StartsWith("Error:", StringComparison.Ordinal) ||
             line.StartsWith("error:", StringComparison.Ordinal);
     }
+
+    private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
+    {
+        return verification.StandardError.Contains(
+            "Developer/Tester dispatch exited 0 but left the worktree dirty",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string[] ExtractChangedFiles(string standardError)
+    {
+        foreach (var rawLine in standardError.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var marker = "status_short=";
+            var markerIndex = rawLine.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0)
+            {
+                continue;
+            }
+
+            var value = rawLine[(markerIndex + marker.Length)..].Trim();
+            if (value.EndsWith(".", StringComparison.Ordinal))
+            {
+                value = value[..^1];
+            }
+
+            var entries = value
+                .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(entry => !string.Equals(entry, "clean", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(entry, "unavailable", StringComparison.OrdinalIgnoreCase))
+                .Take(8)
+                .ToArray();
+            return entries.Length == 0 ? ["unavailable"] : entries;
+        }
+
+        return ["unavailable"];
+    }
+
+    private static string[] ExtractVerificationEvidence(string standardOutput, string standardError)
+    {
+        var lines = $"{standardOutput}\n{standardError}"
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => !line.Contains("Developer/Tester dispatch exited 0 but left the worktree dirty", StringComparison.OrdinalIgnoreCase))
+            .Where(line => HasVerificationEvidence(line, string.Empty))
+            .Take(3)
+            .ToArray();
+
+        return lines;
+    }
+}
+
+public sealed record DirtyDispatchRecovery(
+    string Label,
+    IReadOnlyList<string> ChangedFiles,
+    IReadOnlyList<string> VerificationEvidence,
+    string WorkingDirectory)
+{
+    public bool HasUsefulVerification => VerificationEvidence.Count > 0;
+
+    public static DirtyDispatchRecovery None { get; } = new(
+        string.Empty,
+        [],
+        [],
+        string.Empty);
 }

@@ -273,7 +273,7 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            HasVerificationEvidence(standardOutput, standardError);
+            DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError);
     }
 
     private static bool TesterTaskRequestsFileChanges(TaskSpec task)
@@ -284,27 +284,6 @@ public sealed class BackgroundDispatchRunner
             @"\b(add|create|write|implement|update|modify|edit|fix)\b.{0,80}\b(test|tests|coverage|fixture|fixtures|source|file|files)\b|" +
             @"\b(test|tests|coverage|fixture|fixtures|source|file|files)\b.{0,80}\b(add|create|write|implement|update|modify|edit|fix)\b",
             RegexOptions.CultureInvariant);
-    }
-
-    private static bool HasVerificationEvidence(string standardOutput, string standardError)
-    {
-        var output = $"{standardOutput}\n{standardError}";
-        if (output.Contains("test run successful", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var hasVerificationTerm =
-            output.Contains("test", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("suite", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("verification", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("smoke", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("check", StringComparison.OrdinalIgnoreCase);
-
-        return hasVerificationTerm &&
-            (Regex.IsMatch(output, @"\bPassed:\s*[1-9]\d*\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
-             Regex.IsMatch(output, @"\b\d+\s*/\s*\d+\b", RegexOptions.CultureInvariant) ||
-             Regex.IsMatch(output, @"\bexit code\s*0\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
     }
 
     private static bool HasExplicitNoChangeRationale(string standardOutput, string standardError)

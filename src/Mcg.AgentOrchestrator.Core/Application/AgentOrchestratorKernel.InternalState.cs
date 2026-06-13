@@ -31,13 +31,16 @@ public sealed partial class AgentOrchestratorKernel
     {
         if (task.LastVerification is { Succeeded: false })
         {
+            var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
+                ? BuildDirtyDispatchRecoveryMessage(recovery)
+                : $"Latest verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}";
             return new TaskVerificationGate(
                 task.Id,
                 task.RequiredRole,
                 task.Description,
                 task.Status,
                 VerificationGateStatus.FailedVerification,
-                $"Latest verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}");
+                message);
         }
 
         if (HasOutputTokenLimitHit(task.LastExecution))
@@ -92,6 +95,16 @@ public sealed partial class AgentOrchestratorKernel
         if (IsOutputTokenLimitGate(gate))
         {
             return "Retry with narrower scope or a stronger model, rerun verification, and record model fit if this was subscription/API work.";
+        }
+
+        if (gate.Message.Contains("dirty-useful dispatch recovery needed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Inspect the dirty diff, rerun verification, commit the worker changes explicitly, then record manual verification.";
+        }
+
+        if (gate.Message.Contains("dirty-unverified dispatch recovery needed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Inspect the dirty diff, run focused verification before committing, then record manual verification.";
         }
 
         return BuildVerificationSuggestedAction(gate.GateStatus);

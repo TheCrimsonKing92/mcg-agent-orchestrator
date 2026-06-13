@@ -72,6 +72,8 @@ public static string BuildSuggestedCommand(
             SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
                 ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
                 : command,
+        NextActionKind.FixFailedVerification when DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery) =>
+            BuildDirtyDispatchRecoverySuggestedCommand(taskNumber.Value, recovery),
         NextActionKind.RunAssignedTask => BuildRunAssignedTaskCommand(goal, task, taskNumber.Value, agents),
         _ => command
     };

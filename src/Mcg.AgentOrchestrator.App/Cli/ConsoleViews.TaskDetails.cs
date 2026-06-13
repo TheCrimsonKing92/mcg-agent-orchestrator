@@ -102,6 +102,11 @@ public static void PrintTask(Goal goal, TaskSpec task)
             Console.WriteLine("stderr:");
             Console.WriteLine(OutputTextPreview.CreateVerificationLog(task.LastVerification.StandardError, task.LastVerification.StandardErrorPath).Text.TrimEnd());
         }
+
+        if (DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery))
+        {
+            PrintDirtyDispatchRecovery(GetTaskDisplayNumber(goal, task.Id), recovery);
+        }
     }
 
     Console.WriteLine("Task timeline:");

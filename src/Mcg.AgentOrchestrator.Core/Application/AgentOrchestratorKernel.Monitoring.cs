@@ -104,20 +104,26 @@ public sealed partial class AgentOrchestratorKernel
         {
             if (task.Status == WorkTaskStatus.Failed)
             {
+                var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
+                    ? BuildDirtyDispatchRecoveryMessage(recovery)
+                    : $"{task.RequiredRole}: {task.Description}";
                 items.Add(new NextActionItem(
                     NextActionKind.InspectFailedTask,
                     task.Id,
                     null,
-                    $"{task.RequiredRole}: {task.Description}"));
+                    message));
             }
 
             if (task.LastVerification is { Succeeded: false })
             {
+                var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
+                    ? BuildDirtyDispatchRecoveryMessage(recovery)
+                    : $"Last verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}";
                 items.Add(new NextActionItem(
                     NextActionKind.FixFailedVerification,
                     task.Id,
                     null,
-                    $"Last verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}"));
+                    message));
             }
         }
 
@@ -178,5 +184,14 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return new GoalNextActions(goal.Id, goal.Objective, goal.Status, items);
+    }
+
+    private static string BuildDirtyDispatchRecoveryMessage(DirtyDispatchRecovery recovery)
+    {
+        var changed = string.Join(", ", recovery.ChangedFiles);
+        var evidence = recovery.HasUsefulVerification
+            ? string.Join("; ", recovery.VerificationEvidence)
+            : "no verification evidence found; rerun focused tests before committing";
+        return $"{recovery.Label} dispatch recovery needed: changed files [{changed}]; verification evidence: {evidence}.";
     }
 }
