@@ -149,3 +149,11 @@ Goals `9bd8e7bf`, `cd69d3ae`, and `318ddd1e` created three repo-scoped Codex ski
 - Operator gate: root checks confirmed each `SKILL.md` has valid frontmatter and required trigger terms; Python `quick_validate.py` could not run because `python.exe` failed to start in this sandbox session. Root status clean after merges and workspace cleanup.
 - Friction found: state-mutating orchestrator commands are unsafe to run in parallel; parallel `subscription-dispatch` lost prepared state for two goals, and parallel `workspace remove` hit CS2012/VBCSCompiler locks. Backlog now tracks serialization/locking, `.agents` worker writability, and goal-prefixed task command gaps.
 - Model fit: OpenAI/gpt-5.5 - adequate - skill drafting was straightforward but blocked by filesystem/git permissions; local operator - adequate - manual recovery and verification.
+
+## 2026-06-13 - False-positive worker completions rejected (goal fab431b5)
+
+Goal `fab431b5`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `BackgroundDispatchRunner` now requires relevant post-dispatch file-change evidence for Developer completion and ignores generated/noise-only paths such as `.qwen/settings.json`; verification-only Tester behavior remains allowed. Worker produced useful edits and focused passing tests but exited dirty-useful without committing, so operator committed `75820a7`, recorded manual verification, accepted the goal, and removed the workspace.
+
+- Operator gate: reviewed `BackgroundDispatchRunner` and `WorkerDispatchTests` diff; focused `BackgroundDispatchRunner` tests passed 28/28; acceptance verification passed.
+- Friction found: one-shot CLI normalization still mishandles goal-targeted task commands with trailing notes; legacy current-goal form worked for recovery.
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped dispatch validation policy change with focused tests; worker missed the commit requirement.
