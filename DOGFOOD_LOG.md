@@ -4,6 +4,15 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-12 - Five-role validation after context economizing (goal 482e8d1f)
+
+Goal `482e8d1f`, live five-role `goal` under `run-goal`, produced commit `4da8f34` adding subscription-plan prompt budget headroom display. Planner/Researcher ran read-only through OpenAI/gpt-5.5, Developer/Tester ran workspace-write through OpenAI/gpt-5.5, and Reviewer ran plan-mode through Anthropic/claude-haiku-4-5. Post-Developer prompt estimates stayed modest despite accumulated evidence: Tester `4294` chars and Reviewer `4333` chars, with no large-prompt confirmation required for the resumed run.
+
+- Product result: `subscription-plan` ready-task lines keep `estPrompt=...chars` and now append `budget=...chars headroom=...chars` or `budget=...chars over=...chars`.
+- Operator gate: Developer forgot to commit and hit the dirty-worktree guard; operator reviewed, ran focused CliSubscriptionPlan tests 4/4, full worktree suite Core 188/188 + Infrastructure 337/337, committed `4da8f34`, and recorded manual verification. Final acceptance passed and workspace removal succeeded.
+- Friction found: dirty-but-useful worker recovery is still too manual; backlog item added for first-class recovery UX.
+- Model fit: OpenAI/gpt-5.5 and Anthropic/claude-haiku-4-5 were adequate for this focused planning/implementation/test/review pipeline.
+
 ## 2026-06-12 - Local evidence retrieval design recorded
 
 Added `docs/local-evidence-retrieval-design.md` as a design-only plan for cautious local retrieval over existing context artifacts, backlog, dogfood logs, and goal diffs. The design requires pointer-first output, provenance labels, role-aware ranking, skip conditions, and tests for ranking, staleness, injection safety, and prompt-budget behavior before any runtime implementation. No MCP, resource server, embeddings, background indexer, or worker dispatch behavior was added. The local-evidence-retrieval backlog item is closed.
