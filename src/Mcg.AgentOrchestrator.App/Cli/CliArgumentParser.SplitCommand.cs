@@ -101,6 +101,39 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
     }
 
+    if (command.Equals("goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitObjectiveCommandWithFlags(command, remainder);
+    }
+
+    if (command.Equals("stop", StringComparison.OrdinalIgnoreCase))
+    {
+        // stop <goal-prefix> <reason text> [--as <mode>] [--confirm-*]
+        // First word = goal prefix; reason = text up to first ' --'; rest = flags
+        var stopPrefixEnd = remainder.IndexOf(' ');
+        if (stopPrefixEnd < 0)
+        {
+            return [command, remainder];
+        }
+
+        var stopGoalPrefix = remainder[..stopPrefixEnd];
+        var stopRest = remainder[(stopPrefixEnd + 1)..].Trim();
+        var stopFlagIndex = stopRest.IndexOf(" --", StringComparison.Ordinal);
+        if (stopFlagIndex < 0 && stopRest.StartsWith("--", StringComparison.Ordinal))
+        {
+            stopFlagIndex = 0;
+        }
+
+        if (stopFlagIndex < 0)
+        {
+            return [command, stopGoalPrefix, stopRest];
+        }
+
+        var stopReason = stopRest[..stopFlagIndex].Trim();
+        var stopFlags = stopRest[stopFlagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return [command, stopGoalPrefix, stopReason, .. stopFlags];
+    }
+
     if (command.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
     {
         return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
