@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
 
 public sealed class WorkerDispatchTests
 {
@@ -149,9 +150,214 @@ public sealed class WorkerDispatchTests
     Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
     Assert.True(estimatedPromptCharacters < expectedPromptCharacters);
-    Assert.Equal(File.ReadAllText(dispatchResult.PromptPath).Length, task.LastDispatch.PromptCharacterCount);
+    var prompt = File.ReadAllText(dispatchResult.PromptPath);
+    Assert.Equal(prompt.Length, task.LastDispatch.PromptCharacterCount);
     Assert.Equal(expectedPromptCharacters, task.LastDispatch.PromptCharacterCount);
-    Assert.Contains(File.ReadAllText(dispatchResult.PromptPath), text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("WORKER_RESULT", StringComparison.Ordinal));
+    var preflightPath = Path.Combine(contextDirectory, "subscription-preflight.md");
+    Assert.True(File.Exists(preflightPath));
+    Assert.Contains(File.ReadAllText(preflightPath), text => text.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", StringComparison.Ordinal));
+    Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "digest.md")), text => text.Contains("subscription-preflight.md", StringComparison.Ordinal));
+    Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), text => text.Contains("deterministic profile, sandbox, worktree", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_repo_scoped_skill_targets")]
+    public void WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Create .agents/skills/example/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/example/SKILL.md", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z")));
+
+    Assert.False(preflight.Allowed);
+    Assert.Equal("blocked", preflight.CapabilityStatus);
+    Assert.Contains(string.Join("\n", preflight.Findings), text => text.Contains(".agents/skills", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.True(task.LastDispatch is null);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_repo_scoped_skill_targets_for_full_permission_profile")]
+    public void WorkerProfileDispatcherPreflightAllowsRepoScopedSkillTargetsForFullPermissionProfile()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Create .agents/skills/example/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/example/SKILL.md", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+
+    Assert.True(preflight.Allowed);
+    Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
+    Assert.Contains(string.Join("\n", preflight.Findings), text => text.Contains("repo-scoped .agents/skills", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_repo_scoped_skill_full_permission_smoke_creates_and_commits_from_goal_worktree")]
+    public void WorkerProfileDispatcherRepoScopedSkillFullPermissionSmokeCreatesAndCommitsFromGoalWorktree()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Create .agents/skills/smoke/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/smoke/SKILL.md and commit it.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("repo-skill-smoke", "claude-sonnet-4-6", "medium"));
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile(
+            "repo-skill-smoke",
+            "Write-Output 'subscription model {subscriptionModelName}'; Write-Output 'permission --permission-mode bypassPermissions'; New-Item -ItemType Directory -Force '.agents/skills/smoke' | Out-Null; Set-Content -Path '.agents/skills/smoke/SKILL.md' -Value \"---`nname: smoke`ndescription: Smoke test skill.`n---`n`n# Smoke`n\"; git add .agents/skills/smoke/SKILL.md; git commit -m 'Add smoke skill'; Write-Output 'WORKER_RESULT:'; Write-Output 'files: .agents/skills/smoke/SKILL.md'; Write-Output 'commands: git add .agents/skills/smoke/SKILL.md; git commit -m Add smoke skill'; Write-Output 'tests: repo-skill smoke committed'; Write-Output 'blockers: none'; Write-Output 'model_fit: deterministic full-permission profile - adequate - repo skill write smoke'; Write-Output 'skills: skill-creator'; Write-Output 'confidence: high'; Write-Output 'END_WORKER_RESULT'")
+    ]);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-13T12:00:00Z");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, [agent], profiles, worktree, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, goal, task, [agent], profiles, promptRoot, worktree, dispatchedAt);
+    var result = RunPowerShellCommand(worktree, task.LastDispatch!.Command);
+
+    Assert.True(preflight.Allowed);
+    Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
+    Assert.Equal(0, result.ExitCode);
+    Assert.True(result.StandardOutput.Contains("WORKER_RESULT:", StringComparison.Ordinal));
+    Assert.True(File.Exists(Path.Combine(worktree, ".agents", "skills", "smoke", "SKILL.md")));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal("Add smoke skill", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
+    var committedFiles = ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]);
+    Assert.True(committedFiles.Contains(".agents/skills/smoke/SKILL.md", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_missing_required_local_skills")]
+    public void WorkerProfileDispatcherPreflightBlocksMissingRequiredLocalSkills()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(Path.Combine(workingDirectory, ".agents", "skills"));
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement .NET build verification.", [new TaskSpec(TaskId.New(), "Run dotnet test for the implementation.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z")));
+
+    Assert.False(preflight.Allowed);
+    Assert.Contains(string.Join("\n", preflight.Findings), text => text.Contains("missing required local skill", StringComparison.Ordinal));
+    Assert.Contains(string.Join("\n", preflight.Findings), text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("missing required local skill", StringComparison.Ordinal));
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.True(task.LastDispatch is null);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_skips_preflight_blocked_tasks")]
+    public void WorkerProfileDispatcherReadyBatchSkipsPreflightBlockedTasks()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var blockedTask = new TaskSpec(TaskId.New(), "Author .agents/skills/example/SKILL.md", AgentRole.Developer);
+    var allowedTask = new TaskSpec(TaskId.New(), "Update src/example.txt", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Batch preflight", [blockedTask, allowedTask]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+
+    Assert.Equal(1, results.Count);
+    Assert.Equal(allowedTask.Id, results.Single().Task.Id);
+    Assert.True(goal.Tasks.Single(task => task.Id == blockedTask.Id).LastDispatch is null);
+    Assert.True(goal.Tasks.Single(task => task.Id == allowedTask.Id).LastDispatch is not null);
 }
 
     [Xunit.Fact(DisplayName = "ProfileDispatchTask_enriches_matching_subscription_profile_metadata")]
@@ -240,7 +446,7 @@ public sealed class WorkerDispatchTests
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_task_dispatch")]
-    public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
+public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
@@ -385,7 +591,7 @@ public sealed class WorkerDispatchTests
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_verified_subscription_dispatch")]
-    public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
+public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
@@ -740,7 +946,8 @@ public sealed class WorkerDispatchTests
         root,
         DateTimeOffset.UtcNow));
 
-    Assert.Contains(ex.Message, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("only echoes prompt path", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_model_pinning")]
@@ -774,9 +981,10 @@ public sealed class WorkerDispatchTests
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_developer_subscription_profiles_that_cannot_patch")]
-    public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCannotPatch()
+public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCannotPatch()
 {
     var root = CreateTempDirectory();
+    File.WriteAllText(Path.Combine(root, ".git"), "gitdir: ..");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Reject non-patching subscription profile");
     var agent = new AgentDefinition(
@@ -799,8 +1007,9 @@ public sealed class WorkerDispatchTests
         root,
         DateTimeOffset.UtcNow));
 
+    Assert.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
     Assert.Contains(ex.Message, text => text.Contains("not patch-capable", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("--sandbox workspace-write", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("missing", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_echo_only_profiles_not_preparable")]
@@ -890,6 +1099,99 @@ public sealed class WorkerDispatchTests
     Assert.Contains(developer.Detail, text => text.Contains("not patch-capable", StringComparison.Ordinal));
     Assert.True(planner.CanPrepare);
 }
+
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_includes_selected_worker_route_for_ready_paid_task")]
+    public void SubscriptionPlanIncludesSelectedWorkerRouteForReadyPaidTask()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Update a dashboard label.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Route ready paid task", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var plan = SubscriptionPlanBuilder.Build(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        _ => 1200);
+
+    var item = plan.Items.Single();
+    Assert.True(item.CanPrepare);
+    Xunit.Assert.NotNull(item.Route);
+    Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+    Xunit.Assert.Contains("ready for subscription dispatch", item.Route.Recommendation, StringComparison.Ordinal);
+    Xunit.Assert.Contains(item.Route.Reasons, text => text.Contains("provider=OpenAI", StringComparison.Ordinal));
+    Xunit.Assert.Contains(item.Route.Reasons, text => text.Contains("profile=codex-cli", StringComparison.Ordinal));
+    Xunit.Assert.Contains(item.Route.Reasons, text => text.Contains("estimated cost-guard prompt chars=1200", StringComparison.Ordinal));
+    Xunit.Assert.Contains(item.Route.Reasons, text => text.Contains("patch-capable profile", StringComparison.Ordinal));
+    Xunit.Assert.Contains(item.Route.Alternatives, text => text.Contains("local Ollama/qwen", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_blocks_developer_route_without_patch_capable_profile")]
+    public void SubscriptionPlanBlocksDeveloperRouteWithoutPatchCapableProfile()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Route blocked developer profile");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+
+    var developer = plan.Items.First(item => item.Role == AgentRole.Developer);
+    Assert.False(developer.CanPrepare);
+    Xunit.Assert.NotNull(developer.Route);
+    Assert.Equal(WorkerRouteDisposition.Blocked, developer.Route!.Disposition);
+    Xunit.Assert.Contains(developer.Route.Reasons, text => text.Contains("provider=OpenAI", StringComparison.Ordinal));
+    Xunit.Assert.Contains(developer.Route.Reasons, text => text.Contains("patch capability missing", StringComparison.Ordinal));
+    Xunit.Assert.Contains("not patch-capable", developer.Route.Recommendation, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_routes_equivalent_tasks_differently_for_patch_capability")]
+    public void SubscriptionPlanRoutesEquivalentTasksDifferentlyForPatchCapability()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var developerTask = new TaskSpec(TaskId.New(), "Inspect the same source file.", AgentRole.Developer);
+    var reviewerTask = new TaskSpec(TaskId.New(), "Inspect the same source file.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Route by required capability", [developerTask, reviewerTask]);
+    IReadOnlyList<AgentDefinition> agents =
+    [
+        new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.5", "low")),
+        new AgentDefinition(
+            new AgentId("reviewer"),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.5", "low"))
+    ];
+    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("custom-agent", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
+    kernel.ActivateGoal(goal.Id, agents);
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+
+    var developer = plan.Items.Single(item => item.Role == AgentRole.Developer);
+    var reviewer = plan.Items.Single(item => item.Role == AgentRole.Reviewer);
+    Assert.False(developer.CanPrepare);
+    Assert.True(reviewer.CanPrepare);
+    Assert.Equal(WorkerRouteDisposition.Blocked, developer.Route!.Disposition);
+    Assert.Equal(WorkerRouteDisposition.Selected, reviewer.Route!.Disposition);
+    Xunit.Assert.Contains(developer.Route.Reasons, text => text.Contains("patch capability missing", StringComparison.Ordinal));
+    Xunit.Assert.DoesNotContain(reviewer.Route.Reasons, text => text.Contains("patch capability missing", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionPlan_reports_effective_models_before_subscription_dispatch")]
     public void SubscriptionPlanReportsEffectiveModelsBeforeSubscriptionDispatch()
 {
@@ -1190,8 +1492,13 @@ public sealed class WorkerDispatchTests
     var item = plan.Items.First(item => item.Role == AgentRole.Developer);
     Assert.Equal(1, plan.RetryDeferredCount);
     Assert.Equal(developer.SubscriptionRetryAfter, plan.NextSubscriptionRetryAfter);
+    Assert.Equal(developer.SubscriptionRetryAfter, plan.CapacitySchedule.NextRetryAfter);
+    Assert.Equal(1, plan.CapacitySchedule.DeferredCount);
     Assert.False(item.CanPrepare);
     Assert.Equal(developer.SubscriptionRetryAfter, item.RetryAfter);
+    var capacityAction = plan.CapacitySchedule.Actions.Single(action => action.TaskId == developer.Id.Value);
+    Assert.Equal(ProviderCapacityDisposition.Deferred, capacityAction.Disposition);
+    Assert.True(capacityAction.Alternatives.Any(alternative => alternative.Contains("different provider", StringComparison.OrdinalIgnoreCase)));
     Assert.True(item.RetryDelaySeconds is > 0);
     Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
     Assert.Contains(item.Detail, text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
@@ -1401,7 +1708,167 @@ public sealed class WorkerDispatchTests
         promptRoot,
         workingDirectory,
         failureAt.AddMinutes(30)));
-    Assert.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("subscription retry deferred until", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_blocks_same_provider_tasks_during_provider_cooldown")]
+    public void WorkerProfileDispatcherBlocksSameProviderTasksDuringProviderCooldown()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var failureAt = DateTimeOffset.UtcNow;
+    var retryTime = failureAt.AddHours(2);
+    var kernel = new AgentOrchestratorKernel();
+    var limitedTask = new TaskSpec(TaskId.New(), "Hit a subscription usage limit", AgentRole.Developer);
+    var sameProviderTask = new TaskSpec(TaskId.New(), "Continue work on the same provider", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Block same provider while cooling down", [limitedTask, sameProviderTask]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        limitedTask.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            workingDirectory,
+            failureAt,
+            "OpenAI",
+            "gpt-5.5"));
+    kernel.RecordDispatchExecutionResult(goal.Id, limitedTask.Id, new TaskVerificationRecord(
+        "codex exec",
+        workingDirectory,
+        1,
+        string.Empty,
+        $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
+        failureAt));
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
+    var sameProviderItem = plan.Items.Single(item => item.TaskId == sameProviderTask.Id.Value);
+    var providerBudget = plan.ProviderBudgets.Single(item => item.ProviderName == "OpenAI");
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        sameProviderTask,
+        agents,
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        failureAt.AddMinutes(10));
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        failureAt.AddMinutes(10));
+
+    Assert.False(sameProviderItem.CanPrepare);
+    Assert.Equal(limitedTask.SubscriptionRetryAfter, sameProviderItem.RetryAfter);
+    Assert.Equal(limitedTask.SubscriptionRetryAfter, plan.CapacitySchedule.NextRetryAfter);
+    Assert.True(plan.CapacitySchedule.Actions.Any(action =>
+        action.TaskId == sameProviderTask.Id.Value &&
+        action.Disposition == ProviderCapacityDisposition.Deferred &&
+        action.Alternatives.Any(alternative => alternative.Contains("different provider", StringComparison.OrdinalIgnoreCase))));
+    Assert.True(providerBudget.IsCoolingDown);
+    Assert.Equal(limitedTask.SubscriptionRetryAfter, providerBudget.RetryAfter);
+    Assert.Equal(TaskDisplayNumber.Resolve(goal, limitedTask.Id), providerBudget.SourceTaskNumber);
+    Assert.Equal(1, providerBudget.RecoverableLimitFailureCount);
+    Assert.Contains(sameProviderItem.Detail, text => text.Contains("Provider OpenAI is cooling down", StringComparison.Ordinal));
+    Assert.Contains(sameProviderItem.Detail, text => text.Contains(TaskDisplayNumber.Resolve(goal, limitedTask.Id).ToString(), StringComparison.Ordinal));
+    Assert.False(preflight.Allowed);
+    Assert.True(preflight.Findings.Any(finding => finding.Contains("provider OpenAI is cooling down", StringComparison.Ordinal)));
+    Assert.False(results.Any(result => result.Task.Id == sameProviderTask.Id));
+    Assert.True(sameProviderTask.LastDispatch is null);
+}
+
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_keeps_unrelated_provider_out_of_cooldown")]
+    public void SubscriptionPlanKeepsUnrelatedProviderOutOfCooldown()
+{
+    var workingDirectory = CreateTempDirectory();
+    var failureAt = DateTimeOffset.UtcNow;
+    var retryTime = failureAt.AddHours(2);
+    var kernel = new AgentOrchestratorKernel();
+    var openAiTask = new TaskSpec(TaskId.New(), "Hit OpenAI usage limit", AgentRole.Developer);
+    var anthropicTask = new TaskSpec(TaskId.New(), "Continue on Anthropic", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Keep unrelated provider usable", [openAiTask, anthropicTask]);
+    IReadOnlyList<AgentDefinition> agents =
+    [
+        new AgentDefinition(
+            new AgentId("openai-developer"),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5")),
+        new AgentDefinition(
+            new AgentId("anthropic-reviewer"),
+            "Anthropic reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-haiku-4-5"))
+    ];
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        openAiTask.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            workingDirectory,
+            failureAt,
+            "OpenAI",
+            "gpt-5.5"));
+    kernel.RecordDispatchExecutionResult(goal.Id, openAiTask.Id, new TaskVerificationRecord(
+        "codex exec",
+        workingDirectory,
+        1,
+        string.Empty,
+        $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
+        failureAt));
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
+    var openAiBudget = plan.ProviderBudgets.Single(item => item.ProviderName == "OpenAI");
+    var anthropicBudget = plan.ProviderBudgets.Single(item => item.ProviderName == "Anthropic");
+    var anthropicItem = plan.Items.Single(item => item.TaskId == anthropicTask.Id.Value);
+
+    Assert.True(openAiBudget.IsCoolingDown);
+    Assert.False(anthropicBudget.IsCoolingDown);
+    Xunit.Assert.Null(anthropicBudget.RetryAfter);
+    Assert.Equal(0, anthropicBudget.DeferredCount);
+    Xunit.Assert.Null(anthropicItem.RetryAfter);
+    Assert.False(anthropicItem.Detail.Contains("cooling down", StringComparison.OrdinalIgnoreCase));
+}
+
+    [Xunit.Fact(DisplayName = "Dashboard_task_summary_exposes_worker_result_skill_usage")]
+    public void DashboardTaskSummaryExposesWorkerResultSkillUsage()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Implement with selected skills", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Expose skill evidence", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        root,
+        0,
+        "Done." + Environment.NewLine + WorkerResultBlock(
+            "src/Feature.cs",
+            "dotnet test --filter Feature",
+            "Passed: 1",
+            "abc123",
+            skills: "dotnet-windows-build-hygiene, orchestrator-dogfood"),
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var summary = DashboardResponseMapper.ToTaskSummaryDto(goal, task);
+
+    Assert.True(summary.HasWorkerResultSkillEvidence);
+    Assert.True(summary.WorkerResultSkills!.Any(skill => skill == "dotnet-windows-build-hygiene"));
+    Assert.True(summary.WorkerResultSkills!.Any(skill => skill == "orchestrator-dogfood"));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_requires_review_after_repeated_usage_limits")]
@@ -1465,8 +1932,8 @@ public sealed class WorkerDispatchTests
         promptRoot,
         workingDirectory,
         retryWindowPassed));
-    Assert.Contains(ex.Message, text => text.Contains("recoverable subscription usage limit 2 time", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("repeated recoverable subscription limits require operator review", StringComparison.Ordinal));
 
     kernel.AcknowledgeSubscriptionLimitReview(goal.Id, developer.Id, "Reviewed profile and provider timing.");
     var reviewedPlan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
@@ -1515,7 +1982,8 @@ public sealed class WorkerDispatchTests
         workingDirectory,
         dispatchedAt));
 
-    Assert.Contains(ex.Message, text => text.Contains("workspace create", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
+    Assert.Contains(ex.Message, text => text.Contains("goal workspace", StringComparison.Ordinal));
     Assert.Contains(ex.Message, text => text.Contains("Developer", StringComparison.Ordinal));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is null);
@@ -1585,6 +2053,47 @@ public sealed class WorkerDispatchTests
     Assert.True(task.LastDispatch is not null);
     Assert.Equal(workingDirectory, task.LastDispatch!.WorkingDirectory);
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_dirty_file_role_worktree")]
+    public void WorkerProfileDispatcherPreflightBlocksDirtyFileRoleWorktree()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement the feature with a clean workspace");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        worktree,
+        dispatchedAt);
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        dispatchedAt));
+
+    Assert.False(preflight.Allowed);
+    Assert.True(preflight.Findings.Any(finding => finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal)));
+    Assert.True(preflight.Findings.Any(finding => finding.Contains("build environment: goal lease not yet created", StringComparison.Ordinal)));
+    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("goals", goal.Id.Value[..8], "lease", "artifacts"), StringComparison.OrdinalIgnoreCase)));
+    Assert.Contains(ex.Message, text => text.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.True(task.LastDispatch is null);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_rejects_duplicate_process_start")]
     public void BackgroundDispatchRunnerRejectsDuplicateProcessStart()
 {
@@ -1956,13 +2465,14 @@ public sealed class WorkerDispatchTests
     File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
     RunGit(worktree, ["add", "-A"], now.AddMinutes(-4));
     RunGit(worktree, ["commit", "-m", "Feature"], now.AddMinutes(-4));
+    var head = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
 
     var logs = Path.Combine(root, "logs");
     Directory.CreateDirectory(logs);
     var stdout = Path.Combine(logs, "dev.out.log");
     var stderr = Path.Combine(logs, "dev.err.log");
     var exit = Path.Combine(logs, "dev.exit.txt");
-    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stdout, "Implemented the change." + Environment.NewLine + WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1", head));
     File.WriteAllText(stderr, "Tokens used: input=123 output=45");
     File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
     File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
@@ -2107,7 +2617,8 @@ public sealed class WorkerDispatchTests
     var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "dotnet test --filter OrchestratorHealthInspector\r\nPassed! - Failed: 0, Passed: 16, Skipped: 0, Total: 16.\r\nFull suite Core 172/172 + Infrastructure 326/326.",
+        "dotnet test --filter OrchestratorHealthInspector\r\nPassed! - Failed: 0, Passed: 16, Skipped: 0, Total: 16.\r\nFull suite Core 172/172 + Infrastructure 326/326.\r\n" +
+            WorkerResultBlock("none", "dotnet test --filter OrchestratorHealthInspector", "Passed: 16", "none"),
         string.Empty,
         clock,
         taskDescription: "Verify behavior with automated and manual checks",
@@ -2196,7 +2707,7 @@ public sealed class WorkerDispatchTests
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Developer,
-        "Committed implementation.",
+        "Committed implementation." + Environment.NewLine + WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1"),
         string.Empty,
         clock,
         worktree =>
@@ -2210,6 +2721,161 @@ public sealed class WorkerDispatchTests
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_missing_required_policy_test_evidence_fails")]
+    public void BackgroundDispatchRunnerFileRoleMissingRequiredPolicyTestEvidenceFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Committed implementation." + Environment.NewLine + WorkerResultBlock("src/Feature.cs", "implemented feature", "not run"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            Directory.CreateDirectory(Path.Combine(worktree, "src"));
+            File.WriteAllText(Path.Combine(worktree, "src", "Feature.cs"), "public sealed class Feature {}");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing required verification policy test evidence", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("full dotnet tests", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_fails")]
+    public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Committed implementation.",
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_partial_worker_result_contract_fails")]
+    public void BackgroundDispatchRunnerFileRoleWithPartialWorkerResultContractFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var output = """
+        Committed implementation.
+        WORKER_RESULT:
+        files: feature.txt
+        commands: git add -A; git commit -m Feature
+        tests: Passed: 1
+        commit: abc123
+        blockers: none
+        model_fit: deterministic fixture - adequate - contract validation
+        confidence: high
+        END_WORKER_RESULT
+        """;
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        output,
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing field(s): skills", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_malformed_worker_result_contract_fails")]
+    public void BackgroundDispatchRunnerFileRoleWithMalformedWorkerResultContractFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var output = """
+        Committed implementation.
+        WORKER_RESULT:
+        files: feature.txt
+        commands: git add -A; git commit -m Feature
+        tests: Passed: 1
+        commit: abc123
+        blockers: none
+        model_fit: deterministic fixture - adequate - contract validation
+        skills: dotnet-windows-build-hygiene
+        confidence: high
+        """;
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        output,
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing END_WORKER_RESULT marker", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_worker_result_file_mismatch_fails")]
+    public void BackgroundDispatchRunnerFileRoleWithWorkerResultFileMismatchFails()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Committed implementation." + Environment.NewLine + WorkerResultBlock("other.txt", "implemented feature", "Passed: 1"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract missing changed file", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_commit_and_dirty_worktree_fails")]
@@ -2248,7 +2914,8 @@ public sealed class WorkerDispatchTests
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "NO_CHANGE: Existing focused test already covers this behavior.",
+        "NO_CHANGE: Existing focused test already covers this behavior." + Environment.NewLine +
+            WorkerResultBlock("none", "inspected existing tests", "existing focused test covers behavior", "none"),
         string.Empty,
         clock);
 
@@ -2569,33 +3236,105 @@ public sealed class WorkerDispatchTests
     Assert.True(File.Exists(Path.Combine(contextDirectory, "digest.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "objective.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "current-task.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "artifact-registry.json")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "deterministic-verification.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "workflow-brokers.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "context-budget.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "selected-skills.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "source-survey.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "diff-summary.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-summaries.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-evidence.md")));
+    Assert.True(File.Exists(Path.Combine(contextDirectory, "context-package.json")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "AGENTS.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
     var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
+    var deterministic = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
+    var workflowBrokers = File.ReadAllText(Path.Combine(contextDirectory, "workflow-brokers.md"));
+    var contextBudget = File.ReadAllText(Path.Combine(contextDirectory, "context-budget.md"));
+    var selectedSkills = File.ReadAllText(Path.Combine(contextDirectory, "selected-skills.md"));
+    var sourceSurvey = File.ReadAllText(Path.Combine(contextDirectory, "source-survey.md"));
+    var diffSummary = File.ReadAllText(Path.Combine(contextDirectory, "diff-summary.md"));
     var summaries = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-summaries.md"));
+    using var registryDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")));
+    var registryRoot = registryDocument.RootElement;
+    Assert.True(registryRoot.GetProperty("verified").GetBoolean());
+    var artifacts = registryRoot.GetProperty("artifacts").EnumerateArray().ToArray();
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "digest.md"));
+    var deterministicArtifact = artifacts.Single(artifact => artifact.GetProperty("path").GetString() == "deterministic-verification.md");
+    Assert.True(deterministicArtifact.GetProperty("exists").GetBoolean());
+    Assert.True(deterministicArtifact.GetProperty("byteCount").GetInt64() > 0);
+    Assert.Equal(64, deterministicArtifact.GetProperty("sha256").GetString()!.Length);
+    Assert.Contains(deterministicArtifact.GetProperty("freshness").GetString()!, text => text.Contains("dispatch preparation", StringComparison.Ordinal));
+    Assert.True(deterministicArtifact.GetProperty("roleVisibility").EnumerateArray().Any(item => item.GetString() == "Reviewer"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "AGENTS.md"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "selected-skills.md"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "workflow-brokers.md"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "context-budget.md"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "context-package.json"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "source-survey.md"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "diff-summary.md"));
+    Assert.Contains(manifest, text => text.Contains("artifact-registry.json", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("digest.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("workflow-brokers.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("context-budget.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("selected-skills.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("source-survey.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("diff-summary.md", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("context-package.json", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("Missing Artifact Fallback", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("Role Artifact Priorities", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("AGENTS.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("## Current Task", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("workflow-brokers.md", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("context-budget.md", StringComparison.Ordinal));
+    Assert.Contains(digest, text => text.Contains("selected-skills.md", StringComparison.Ordinal));
+    Assert.Contains(contextBudget, text => text.Contains("artifact-registry.json: authoritative list", StringComparison.Ordinal));
+    Assert.Contains(contextBudget, text => text.Contains("embed: digest.md", StringComparison.Ordinal));
+    Assert.Contains(contextBudget, text => text.Contains("retrieve by handle: prior-task-evidence.md", StringComparison.Ordinal));
+    Assert.Contains(contextBudget, text => text.Contains("omit from prompt prose", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("## Prior Completed Outcomes", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("## Isolated .NET Verification", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains(".\\scripts\\Invoke-IsolatedDotnet.ps1", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("-GoalPrefix", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("instead of raw `dotnet test`", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("## Required Verification Policy", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("Requires tests:", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("build-test-selection", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("source-survey", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("diff-summary", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("acceptance-evidence", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("Broker Output Contract", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("WORKER_RESULT blockers", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Changed files: Not reported.", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Behavior changes: Not reported.", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Verification: `dotnet test`", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Model fit: Not reported.", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("Status: missing", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("Source files indexed:", StringComparison.Ordinal));
+    Assert.Contains(diffSummary, text => text.Contains("Git Status", StringComparison.Ordinal));
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("Run worker dispatch tests.", StringComparison.Ordinal));
+    Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("skills: <selected skills used or none>", StringComparison.Ordinal));
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), text => text.Contains(artifactOnlyTail, StringComparison.Ordinal));
+    var packageDirectory = Path.Combine(contextDirectory, "packages", currentTask.Id.Value);
+    Assert.True(File.Exists(Path.Combine(packageDirectory, "manifest.md")));
+    Assert.True(File.Exists(Path.Combine(packageDirectory, "artifact-registry.json")));
+    Assert.True(File.Exists(Path.Combine(packageDirectory, "prior-task-evidence.md")));
+    using var packageDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(contextDirectory, "context-package.json")));
+    Assert.Equal(currentTask.Id.Value, packageDocument.RootElement.GetProperty("taskId").GetString());
+    Assert.Contains(packageDocument.RootElement.GetProperty("missingArtifactFallback").GetString()!, text => text.Contains("missing artifact", StringComparison.OrdinalIgnoreCase));
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains(prompt, text => text.Contains(contextDirectory, StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("artifact-registry.json", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
     Assert.True(prompt.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < prompt.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
@@ -2645,9 +3384,9 @@ public sealed class WorkerDispatchTests
 }
 
     [Xunit.Theory(DisplayName = "WorkerContextArtifacts_writes_role_specific_priorities_and_prior_summaries")]
-    [Xunit.InlineData(AgentRole.Developer, "current-task.md: anchor implementation scope", "prior behavior")]
-    [Xunit.InlineData(AgentRole.Tester, "identify changed files, behavior claims, risks, and verification gaps", "required checks")]
-    [Xunit.InlineData(AgentRole.Reviewer, "review changed files, behavior changes, verification, risks, and model fit", "check open blockers")]
+    [Xunit.InlineData(AgentRole.Developer, "artifact-registry.json: verify current context artifacts", "workflow-brokers.md: use deterministic broker actions")]
+    [Xunit.InlineData(AgentRole.Tester, "artifact-registry.json: verify artifact freshness", "workflow-brokers.md: use deterministic broker actions")]
+    [Xunit.InlineData(AgentRole.Reviewer, "artifact-registry.json: verify hashes", "workflow-brokers.md: check deterministic broker failures")]
     public void WorkerContextArtifactsWritesRoleSpecificPrioritiesAndPriorSummaries(
         AgentRole role,
         string expectedPrimaryPriority,
@@ -2691,6 +3430,174 @@ public sealed class WorkerDispatchTests
     Assert.Contains(summaries, text => text.Contains("Verification result: passed focused tests", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Risks: none reported", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_relevant_skills_and_registers_skill_artifact")]
+    public void WorkerContextArtifactsSelectsRelevantSkillsAndRegistersSkillArtifact()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
+    WriteSkill(workingDirectory, "aspnet-core");
+    WriteSkill(workingDirectory, "playwright");
+    WriteSkill(workingDirectory, "skill-authoring");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(
+        TaskId.New(),
+        "Implement an ASP.NET Core dashboard UI improvement for orchestrator subscription dispatch with Playwright browser automation coverage and update .agents/skills/skill-authoring/SKILL.md.",
+        AgentRole.Developer,
+        "Run dotnet test for the focused worker dispatch tests, inspect selected-skills.md, and run a Playwright dashboard UI smoke check.");
+    var goal = kernel.CreateGoal("Improve orchestrator dogfood backlog automation", [task]);
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+
+    var selectedSkills = File.ReadAllText(Path.Combine(contextDirectory, "selected-skills.md"));
+    using var registryDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")));
+    var artifacts = registryDocument.RootElement.GetProperty("artifacts").EnumerateArray().ToArray();
+    var skillArtifact = artifacts.Single(artifact => artifact.GetProperty("path").GetString() == "selected-skills.md");
+    Assert.True(skillArtifact.GetProperty("exists").GetBoolean());
+    Assert.Contains(selectedSkills, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("orchestrator-dogfood", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("aspnet-core", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("playwright", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("skill-authoring", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("Status: available", StringComparison.Ordinal));
+    Assert.Contains(selectedSkills, text => text.Contains("WORKER_RESULT skills field", StringComparison.Ordinal));
+    Assert.Contains(skillArtifact.GetProperty("summary").GetString()!, text => text.Contains("skill selection", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_different_skill_manifests_for_tasks_in_same_goal")]
+    public void WorkerContextArtifactsSelectsDifferentSkillManifestsForTasksInSameGoal()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
+    WriteSkill(workingDirectory, "orchestrator-worker-verification");
+    WriteSkill(workingDirectory, "aspnet-core");
+    WriteSkill(workingDirectory, "playwright");
+    var kernel = new AgentOrchestratorKernel();
+    var implementation = new TaskSpec(
+        TaskId.New(),
+        "Implement an ASP.NET Core dashboard UI workflow with Playwright coverage.",
+        AgentRole.Developer,
+        "Run dotnet test and a dashboard UI smoke.");
+    var review = new TaskSpec(
+        TaskId.New(),
+        "Review worker result contract evidence.",
+        AgentRole.Reviewer,
+        "Inspect verification records and dispatch logs.");
+    var goal = kernel.CreateGoal("Improve dashboard worker routing", [implementation, review]);
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, implementation, workingDirectory);
+    var implementationSkills = File.ReadAllText(Path.Combine(contextDirectory, "selected-skills.md"));
+    WorkerContextArtifacts.Write(goal, review, workingDirectory);
+    var reviewSkills = File.ReadAllText(Path.Combine(contextDirectory, "selected-skills.md"));
+    var implementationPackageSkills = File.ReadAllText(Path.Combine(contextDirectory, "packages", implementation.Id.Value, "selected-skills.md"));
+    var reviewPackageSkills = File.ReadAllText(Path.Combine(contextDirectory, "packages", review.Id.Value, "selected-skills.md"));
+
+    Assert.Contains(implementationSkills, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
+    Assert.Contains(implementationSkills, text => text.Contains("aspnet-core", StringComparison.Ordinal));
+    Assert.Contains(implementationSkills, text => text.Contains("playwright", StringComparison.Ordinal));
+    Assert.Contains(reviewSkills, text => text.Contains("orchestrator-worker-verification", StringComparison.Ordinal));
+    Assert.False(reviewSkills.Contains("aspnet-core", StringComparison.Ordinal));
+    Assert.False(reviewSkills.Contains("playwright", StringComparison.Ordinal));
+    Assert.False(string.Equals(implementationSkills, reviewSkills, StringComparison.Ordinal));
+    Assert.Equal(implementationSkills, implementationPackageSkills);
+    Assert.Equal(reviewSkills, reviewPackageSkills);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_source_survey_and_diff_summary_artifacts")]
+    public void WorkerContextArtifactsWritesSourceSurveyAndDiffSummaryArtifacts()
+{
+    var workingDirectory = CreateSeededDispatchRepository();
+    Directory.CreateDirectory(Path.Combine(workingDirectory, "src", "Feature"));
+    Directory.CreateDirectory(Path.Combine(workingDirectory, "tests", "Feature.Tests"));
+    Directory.CreateDirectory(Path.Combine(workingDirectory, "src", "Feature", "bin"));
+    File.WriteAllText(Path.Combine(workingDirectory, "src", "Feature", "FeatureService.cs"), "public sealed class FeatureService {}");
+    File.WriteAllText(Path.Combine(workingDirectory, "tests", "Feature.Tests", "FeatureServiceTests.cs"), "public sealed class FeatureServiceTests {}");
+    File.WriteAllText(Path.Combine(workingDirectory, "src", "Feature", "bin", "Generated.cs"), "generated");
+    RunGit(workingDirectory, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+    RunGit(workingDirectory, ["commit", "-m", "Add feature source"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+    File.WriteAllText(Path.Combine(workingDirectory, "src", "Feature", "FeatureService.cs"), "public sealed class FeatureService { public int Version => 2; }");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(
+        TaskId.New(),
+        "Update FeatureService behavior and tests.",
+        AgentRole.Developer,
+        "Run focused FeatureService tests.");
+    var goal = kernel.CreateGoal("Improve FeatureService source survey context", [task]);
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+
+    var sourceSurvey = File.ReadAllText(Path.Combine(contextDirectory, "source-survey.md"));
+    var diffSummary = File.ReadAllText(Path.Combine(contextDirectory, "diff-summary.md"));
+    using var registryDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")));
+    var artifacts = registryDocument.RootElement.GetProperty("artifacts").EnumerateArray().ToArray();
+    Assert.Contains(sourceSurvey, text => text.Contains("src/Feature/FeatureService.cs", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("tests/Feature.Tests/FeatureServiceTests.cs", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("## Likely Tests", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("## Public API Symbols", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("public class FeatureService", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("## Call-Site Hints", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("FeatureService.cs: featureservice", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(sourceSurvey, text => text.Contains("## Ownership Hints", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("src/Feature: production source", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("tests/Feature.Tests: test source", StringComparison.Ordinal));
+    Assert.Contains(sourceSurvey, text => text.Contains("Regeneration: generated at dispatch preparation", StringComparison.Ordinal));
+    Assert.False(sourceSurvey.Contains("bin/Generated.cs", StringComparison.Ordinal));
+    Assert.Contains(diffSummary, text => text.Contains("src/Feature/FeatureService.cs", StringComparison.Ordinal));
+    Assert.Contains(diffSummary, text => text.Contains("Regeneration: generated at dispatch preparation", StringComparison.Ordinal));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "source-survey.md"));
+    Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "diff-summary.md"));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_deterministic_verification_checklist_for_reviewer")]
+    public void WorkerContextArtifactsWritesDeterministicVerificationChecklistForReviewer()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(Path.Combine(workingDirectory, "config"));
+    File.WriteAllText(Path.Combine(workingDirectory, "config", "acceptance-manifest.json"), "{}");
+    var kernel = new AgentOrchestratorKernel();
+    var developer = new TaskSpec(TaskId.New(), "Implement deterministic review checklist.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Run verification.", AgentRole.Tester);
+    var reviewer = new TaskSpec(TaskId.New(), "Review deterministic evidence.", AgentRole.Reviewer, "Review deterministic-verification.md first.");
+    var goal = kernel.CreateGoal("Review with deterministic evidence", [developer, tester, reviewer]);
+    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "codex exec prompt",
+        workingDirectory,
+        0,
+        "Implemented." + Environment.NewLine + WorkerResultBlock("src/Feature.cs, bin/generated.dll", "dotnet test", "Passed: 1", "abc123"),
+        string.Empty,
+        DateTimeOffset.UtcNow,
+        "Model fit: OpenAI/gpt-5.5 - adequate - implementation fixture."));
+    kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+        "dotnet test",
+        workingDirectory,
+        0,
+        "Passed: 1",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, reviewer, workingDirectory);
+
+    var checklist = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
+    var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
+    Assert.Contains(checklist, text => text.Contains("Acceptance manifest: present: config/acceptance-manifest.json", StringComparison.Ordinal));
+    Assert.Contains(checklist, text => text.Contains("prior Developer verification passed", StringComparison.Ordinal));
+    Assert.Contains(checklist, text => text.Contains("reported WORKER_RESULT contract", StringComparison.Ordinal));
+    Assert.Contains(checklist, text => text.Contains("reported generated path changes: bin/generated.dll", StringComparison.Ordinal));
+    Assert.Contains(checklist, text => text.Contains("prior Tester task", StringComparison.Ordinal));
+    Assert.Contains(checklist, text => text.Contains("no model-fit evidence", StringComparison.Ordinal));
+    Assert.Contains(checklist, text => text.Contains("## Test Impact Plan", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("deterministic-verification.md", StringComparison.Ordinal));
+    Assert.Contains(manifest, text => text.Contains("check deterministic failures", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]
@@ -2821,6 +3728,9 @@ public sealed class WorkerDispatchTests
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     mutateWorktree?.Invoke(worktree);
+    var head = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+    standardOutput = standardOutput.Replace("{commit}", head, StringComparison.Ordinal);
+    standardError = standardError.Replace("{commit}", head, StringComparison.Ordinal);
 
     var logs = Path.Combine(root, "logs");
     Directory.CreateDirectory(logs);
@@ -2901,6 +3811,102 @@ public sealed class WorkerDispatchTests
     {
         throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
     }
+}
+
+private static string ReadGit(string workingDirectory, string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WorkingDirectory = workingDirectory
+    };
+
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start git.");
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit(60000);
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+    }
+
+    return output.Trim();
+}
+
+private static (int ExitCode, string StandardOutput, string StandardError) RunPowerShellCommand(string workingDirectory, string command)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "powershell.exe",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WorkingDirectory = workingDirectory
+    };
+    startInfo.ArgumentList.Add("-NoProfile");
+    startInfo.ArgumentList.Add("-ExecutionPolicy");
+    startInfo.ArgumentList.Add("Bypass");
+    startInfo.ArgumentList.Add("-Command");
+    startInfo.ArgumentList.Add(command);
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start PowerShell.");
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit(60000);
+
+    return (process.ExitCode, output, error);
+}
+
+private static string WorkerResultBlock(
+    string files,
+    string commands,
+    string tests,
+    string commit = "{commit}",
+    string blockers = "none",
+    string modelFit = "OpenAI/gpt-5.5 - adequate - test worker fixture.",
+    string skills = "dotnet-windows-build-hygiene",
+    string confidence = "high")
+{
+    return $"""
+        WORKER_RESULT:
+        files: {files}
+        commands: {commands}
+        tests: {tests}
+        commit: {commit}
+        blockers: {blockers}
+        model_fit: {modelFit}
+        skills: {skills}
+        confidence: {confidence}
+        END_WORKER_RESULT
+        """;
+}
+
+private static void WriteSkill(string workingDirectory, string skillName)
+{
+    var directory = Path.Combine(workingDirectory, ".agents", "skills", skillName);
+    Directory.CreateDirectory(directory);
+    File.WriteAllText(
+        Path.Combine(directory, "SKILL.md"),
+        $"""
+        ---
+        name: {skillName}
+        description: Test skill fixture.
+        ---
+
+        # {skillName}
+        """);
 }
 
     private static void WaitForExitFile(string path)

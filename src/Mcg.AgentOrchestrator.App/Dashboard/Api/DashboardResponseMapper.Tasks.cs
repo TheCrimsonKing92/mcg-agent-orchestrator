@@ -21,6 +21,7 @@ public static TaskSummaryDto ToTaskSummaryDto(Goal goal, TaskSpec task)
     var verificationPlan = task.VerificationPlan is null
         ? null
         : OutputTextPreview.CreateSummary(task.VerificationPlan);
+    var workerResultSkills = ExtractWorkerResultSkills(task.LastVerification);
 
     return new TaskSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
@@ -35,7 +36,9 @@ public static TaskSummaryDto ToTaskSummaryDto(Goal goal, TaskSpec task)
         verificationPlan?.IsTruncated ?? false,
         verificationPlan?.OriginalLength ?? 0,
         task.AssignedAgentId?.Value,
-        task.SubscriptionRetryAfter);
+        task.SubscriptionRetryAfter,
+        workerResultSkills,
+        workerResultSkills.Length > 0);
 }
 
 public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
@@ -129,6 +132,43 @@ public static ProcessLogDto ToProcessLogDto(Goal goal, TaskSpec task)
         logs.ExitCodePath,
         logs.ExitCode,
         ToDispatchHeartbeatDto(logs.Heartbeat));
+}
+
+private static string[] ExtractWorkerResultSkills(TaskVerificationRecord? verification)
+{
+    if (verification is null)
+    {
+        return [];
+    }
+
+    var lines = $"{verification.StandardOutput}\n{verification.StandardError}"
+        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var start = Array.FindIndex(lines, line => line.Equals("WORKER_RESULT:", StringComparison.OrdinalIgnoreCase));
+    if (start < 0)
+    {
+        return [];
+    }
+
+    var end = Array.FindIndex(lines, start + 1, line => line.Equals("END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
+    if (end < 0)
+    {
+        return [];
+    }
+
+    var skills = lines
+        .Skip(start + 1)
+        .Take(end - start - 1)
+        .FirstOrDefault(line => line.StartsWith("skills:", StringComparison.OrdinalIgnoreCase));
+    if (string.IsNullOrWhiteSpace(skills))
+    {
+        return [];
+    }
+
+    return skills["skills:".Length..]
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(skill => !skill.Equals("none", StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 }
 
 private static DispatchHeartbeatDto ToDispatchHeartbeatDto(DispatchHeartbeatStatus heartbeat)

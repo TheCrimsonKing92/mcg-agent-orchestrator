@@ -178,6 +178,23 @@ internal static partial class ConsoleViews
             Console.WriteLine("Ready model usage: " + string.Join("; ", plan.ReadyModelUsage.Select(FormatSubscriptionPlanModelSummary)));
         }
 
+        if (plan.ProviderBudgets.Count > 0)
+        {
+            Console.WriteLine("Provider budgets: " + string.Join("; ", plan.ProviderBudgets.Select(FormatProviderBudgetSummary)));
+        }
+
+        Console.WriteLine(
+            $"Capacity schedule: {plan.CapacitySchedule.Disposition}; ready {plan.CapacitySchedule.ReadyNowCount}, deferred {plan.CapacitySchedule.DeferredCount}. {plan.CapacitySchedule.Recommendation}");
+        foreach (var action in plan.CapacitySchedule.Actions.Take(4))
+        {
+            var retry = action.RetryAfter is null ? string.Empty : $" retryAfter={action.RetryAfter:u}";
+            Console.WriteLine($"  capacity task {action.TaskNumber}: {action.Disposition} provider={action.ProviderName ?? "none"}{retry}; {OutputTextPreview.CreateTimeline(action.Recommendation).Text}");
+            foreach (var alternative in action.Alternatives.Take(2))
+            {
+                Console.WriteLine($"    alternative: {OutputTextPreview.CreateTimeline(alternative).Text}");
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(plan.ReadyStartCostRisk))
         {
             var prompt = plan.ReadyStartPromptCharacterCount is null
@@ -208,6 +225,20 @@ internal static partial class ConsoleViews
             Console.WriteLine($"  {item.TaskNumber}. [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
             Console.WriteLine($"     agent: {agent}");
             Console.WriteLine($"     subscription: {profile}");
+            if (item.Route is not null)
+            {
+                Console.WriteLine($"     route: {item.Route.Disposition}; {OutputTextPreview.CreateTimeline(item.Route.Recommendation).Text}");
+                foreach (var reason in item.Route.Reasons.Take(4))
+                {
+                    Console.WriteLine($"       reason: {OutputTextPreview.CreateTimeline(reason).Text}");
+                }
+
+                foreach (var alternative in item.Route.Alternatives.Take(2))
+                {
+                    Console.WriteLine($"       alternative: {OutputTextPreview.CreateTimeline(alternative).Text}");
+                }
+            }
+
             Console.WriteLine($"     ready: {item.CanPrepare}; {OutputTextPreview.CreateTimeline(item.Detail).Text}");
         }
 
@@ -225,6 +256,17 @@ internal static partial class ConsoleViews
             ? $" headroom={item.TaskBriefHeadroom.Value}chars"
             : $" over={Math.Abs(item.TaskBriefHeadroom.Value)}chars";
         return $" budget={item.TaskBriefCharacterBudget.Value}chars{headroom}";
+    }
+
+    private static string FormatProviderBudgetSummary(SubscriptionProviderBudgetSummary summary)
+    {
+        var cooldown = summary.IsCoolingDown
+            ? $" coolingDown until {summary.RetryAfter:u} from task {summary.SourceTaskNumber}"
+            : " no cooldown";
+        var failures = summary.RecoverableLimitFailureCount == 0
+            ? string.Empty
+            : $", limit failures {summary.RecoverableLimitFailureCount}";
+        return $"{summary.ProviderName}: ready {summary.ReadyCount}/{summary.TaskCount}, deferred {summary.DeferredCount}{failures},{cooldown}";
     }
 
     private static string FormatSubscriptionPlanModelSummary(SubscriptionPlanModelSummary summary)

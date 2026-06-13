@@ -189,8 +189,11 @@ internal static class GoalMonitoringSubscriptionCommand
         var running = snapshot.Tasks.Count(task => task.Status == WorkTaskStatus.Running);
         var failed = snapshot.Tasks.Count(task => task.Status == WorkTaskStatus.Failed);
         var completed = snapshot.Tasks.Count(task => task.Status == WorkTaskStatus.Completed);
+        var capacity = snapshot.ProviderCapacity is null
+            ? string.Empty
+            : $" capacity={snapshot.ProviderCapacity.Disposition} ready={snapshot.ProviderCapacity.ReadyNowCount} deferred={snapshot.ProviderCapacity.DeferredCount}";
         output.WriteLine(
-            $"snapshot goal={snapshot.GoalId[..Math.Min(8, snapshot.GoalId.Length)]} status={snapshot.Monitor.Status} tasks={snapshot.Tasks.Count} completed={completed} running={running} failed={failed} lastEvent={snapshot.LastEventId} attention={snapshot.Monitor.Attention.Count}");
+            $"snapshot goal={snapshot.GoalId[..Math.Min(8, snapshot.GoalId.Length)]} status={snapshot.Monitor.Status} tasks={snapshot.Tasks.Count} completed={completed} running={running} failed={failed} lastEvent={snapshot.LastEventId} attention={snapshot.Monitor.Attention.Count} inbox={snapshot.OperatorInbox?.OpenCount ?? 0}{capacity}");
     }
 
     private static void PrintTimelineEvent(GoalMonitoringEventDto evt, TextWriter output)

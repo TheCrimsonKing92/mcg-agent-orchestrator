@@ -14,6 +14,23 @@ public sealed class GoalWorktreeTests
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("local"));
 
+    private static IReadOnlyList<AgentDefinition> EchoAgents() =>
+    [
+        EchoAgent(AgentRole.Planner),
+        EchoAgent(AgentRole.Researcher),
+        EchoDeveloper(),
+        EchoAgent(AgentRole.Tester),
+        EchoAgent(AgentRole.Reviewer)
+    ];
+
+    private static AgentDefinition EchoAgent(AgentRole role) => new(
+        new AgentId($"echo-{role.ToString().ToLowerInvariant()}"),
+        $"Echo {role}",
+        role,
+        new ModelProfile("OpenAI", "gpt-4o-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("local"));
+
     private static WorkerProfileCatalog EchoProfiles() => new(
     [
         new WorkerProfile("local", "git add -A; if ((git status --short).Length -gt 0) { git commit -m Lifecycle-work }; Write-Output {subscriptionModelName}")
@@ -50,6 +67,8 @@ public sealed class GoalWorktreeTests
         {
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
+            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "cleanup-test");
+            Assert.True(Directory.Exists(buildEnvironment.RootPath));
 
             File.WriteAllText(Path.Combine(path, "feature.txt"), "goal work");
             RunGit(path, "add", "-A");
@@ -64,6 +83,7 @@ public sealed class GoalWorktreeTests
             Assert.Equal("Removed workspace and merged branch " + GoalWorktrees.BranchName(goalId) + ".", removeResult.Message);
             Assert.True(removeResult.IsComplete);
             Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
+            Assert.False(Directory.Exists(buildEnvironment.RootPath));
         }
         finally
         {
@@ -230,6 +250,197 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_rebases_stale_branch_onto_main_when_clean")]
+    public void GoalWorktreesRebasesStaleBranchOntoMainWhenClean()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            File.WriteAllText(Path.Combine(path, "feature.txt"), "goal work");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Goal work");
+
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main work");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main work");
+
+            var rebase = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+            var merge = GoalWorktrees.TryFastForwardMerge(repo, goalId);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, rebase.Status);
+            Assert.True(rebase.ConflictFiles.Count == 0);
+            Assert.True(merge is not null);
+            Assert.True(merge!.FastForwarded);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "main-advanced.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_reports_conflict_files_and_aborts_rebase")]
+    public void GoalWorktreesReportsConflictFilesAndAbortsRebase()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            File.WriteAllText(Path.Combine(path, "seed.txt"), "goal edit");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Goal edit");
+
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "main edit");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main edit");
+
+            var rebase = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.Conflict, rebase.Status);
+            Assert.Equal(1, rebase.ConflictFiles.Count);
+            Assert.Equal("seed.txt", rebase.ConflictFiles[0]);
+            Assert.True(rebase.SuggestedCommand?.Contains("Create an operator task", StringComparison.Ordinal) == true);
+            Assert.Equal("goal edit", File.ReadAllText(Path.Combine(path, "seed.txt")));
+            Assert.Equal("main edit", File.ReadAllText(Path.Combine(repo, "seed.txt")));
+            Assert.Equal(0, RunGitExitCode(path, "rev-parse", "--verify", "--quiet", "HEAD"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_refuses_rebase_when_worktree_dirty")]
+    public void GoalWorktreesRefusesRebaseWhenWorktreeDirty()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            File.WriteAllText(Path.Combine(path, "feature.txt"), "uncommitted goal work");
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main work");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main work");
+
+            var rebase = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.DirtyWorktree, rebase.Status);
+            Assert.True(rebase.Message.Contains("uncommitted changes", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(path, "feature.txt")));
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalHealthEvaluator_prioritizes_dirty_worktree_before_next_action")]
+    public void GoalHealthEvaluatorPrioritizesDirtyWorktreeBeforeNextAction()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Dirty health", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            var agents = AgentCatalog.Default().Agents;
+            kernel.ActivateGoal(goal.Id, agents);
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(path, "dirty.txt"), "uncommitted");
+
+            var health = GoalHealthEvaluator.Build(
+                kernel,
+                goal,
+                agents,
+                WorkerProfileCatalog.Default(),
+                repo,
+                AutonomyPolicy.SupervisedAuto);
+
+            Assert.Equal(GoalHealthDisposition.Blocked, health.Disposition);
+            Assert.Equal(20, health.Score);
+            Assert.True(health.Recommendation.Contains("dirty worktree", StringComparison.OrdinalIgnoreCase));
+            Assert.True(health.SuggestedCommand.Contains("goal-recovery", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalHealthEvaluator_scores_ready_failed_stalled_provider_limited_and_healthy_states")]
+    public void GoalHealthEvaluatorScoresReadyFailedStalledProviderLimitedAndHealthyStates()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+
+            var readyKernel = new AgentOrchestratorKernel();
+            var readyGoal = CreateCompletedGoal(readyKernel, "Ready health", repo);
+            var readyPath = GoalWorktrees.Ensure(repo, readyGoal.Id);
+            File.WriteAllText(Path.Combine(readyPath, "ready.txt"), "ready");
+            RunGit(readyPath, "add", "-A");
+            RunGit(readyPath, "commit", "-m", "Ready health");
+            var ready = GoalHealthEvaluator.Build(readyKernel, readyGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            Assert.Equal(GoalHealthDisposition.ReadyForAcceptance, ready.Disposition);
+            Assert.Equal(85, ready.Score);
+
+            var failedKernel = new AgentOrchestratorKernel();
+            var failedTask = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var failedGoal = failedKernel.CreateGoal("Failed health", [failedTask]);
+            failedKernel.ActivateGoal(failedGoal.Id, agents);
+            failedKernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Verification failed.");
+            var failed = GoalHealthEvaluator.Build(failedKernel, failedGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            Assert.Equal(GoalHealthDisposition.Blocked, failed.Disposition);
+            Assert.Equal(25, failed.Score);
+
+            var stalledKernel = new AgentOrchestratorKernel();
+            var stalledTask = new TaskSpec(TaskId.New(), "Run worker", AgentRole.Developer);
+            var stalledGoal = stalledKernel.CreateGoal("Stalled health", [stalledTask]);
+            stalledKernel.ActivateGoal(stalledGoal.Id, agents);
+            stalledKernel.RecordTaskDispatch(stalledGoal.Id, stalledTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, DateTimeOffset.UtcNow));
+            stalledKernel.RecordTaskProcessStarted(stalledGoal.Id, stalledTask.Id, new TaskProcessRecord(999999, "codex exec prompt.md", repo, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+            var stalled = GoalHealthEvaluator.Build(stalledKernel, stalledGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            Assert.Equal(GoalHealthDisposition.NeedsOperator, stalled.Disposition);
+            Assert.Equal(40, stalled.Score);
+
+            var limitedKernel = new AgentOrchestratorKernel();
+            var limitedTask = new TaskSpec(TaskId.New(), "Run subscription worker", AgentRole.Developer);
+            var limitedGoal = limitedKernel.CreateGoal("Provider-limited health", [limitedTask]);
+            limitedKernel.ActivateGoal(limitedGoal.Id, agents);
+            limitedKernel.RecordTaskDispatch(limitedGoal.Id, limitedTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, DateTimeOffset.UtcNow));
+            limitedKernel.RecordTaskVerification(limitedGoal.Id, limitedTask.Id, new TaskVerificationRecord(
+                "codex-cli",
+                repo,
+                1,
+                "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:59 PM.",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            var limited = GoalHealthEvaluator.Build(limitedKernel, limitedGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            Assert.Equal(GoalHealthDisposition.ProviderLimited, limited.Disposition);
+            Assert.Equal(55, limited.Score);
+
+            var healthyKernel = new AgentOrchestratorKernel();
+            var healthyGoal = CreateCompletedGoal(healthyKernel, "Healthy monitor", repo);
+            var healthy = GoalHealthEvaluator.Build(healthyKernel, healthyGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            Assert.Equal(GoalHealthDisposition.Healthy, healthy.Disposition);
+            Assert.Equal(90, healthy.Score);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_merge_returns_null_without_goal_branch")]
     public void GoalWorktreesMergeReturnsNullWithoutGoalBranch()
     {
@@ -307,6 +518,88 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_safe_auto_blocks_cleanup")]
+    public void CliWorkspaceRemoveSafeAutoBlocksCleanup()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Workspace cleanup policy", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+                ["workspace", "remove", "--autonomy", "safe-auto"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Assert.True(ex.Message.Contains("policy 'safe-auto' blocks workspace remove", StringComparison.Ordinal));
+            Assert.Equal(path, GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.True(goal.Timeline.Any(evt =>
+                evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("blocked workspace remove", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_rebase_updates_clean_stale_goal_branch")]
+    public void CliWorkspaceRebaseUpdatesCleanStaleGoalBranch()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Workspace rebase goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+
+            File.WriteAllText(Path.Combine(path, "feature.txt"), "goal work");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Goal work");
+
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main work");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main work");
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["workspace", "rebase"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            var merge = GoalWorktrees.TryFastForwardMerge(repo, goal.Id);
+
+            Assert.True(output.Contains("Rebased", StringComparison.Ordinal));
+            Assert.True(output.Contains("Next: acceptance", StringComparison.Ordinal));
+            Assert.True(merge is not null);
+            Assert.True(merge!.FastForwarded);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "main-advanced.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_blocks_merge_when_verification_fails")]
     public void CliAcceptanceBlocksMergeWhenVerificationFails()
     {
@@ -324,7 +617,9 @@ public sealed class GoalWorktreeTests
             Assert.Equal(GoalStatus.Completed, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "change.txt"), "goal work");
+            var sourceDirectory = Path.Combine(worktreePath, "src");
+            Directory.CreateDirectory(sourceDirectory);
+            File.WriteAllText(Path.Combine(sourceDirectory, "Change.cs"), "goal work");
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Goal work");
 
@@ -354,7 +649,7 @@ public sealed class GoalWorktreeTests
             Assert.True(output.Contains("failed (exit 1)", StringComparison.Ordinal));
             Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
             Assert.True(output.Contains("Test run failed", StringComparison.Ordinal));
-            Assert.False(File.Exists(Path.Combine(repo, "change.txt")));
+            Assert.False(File.Exists(Path.Combine(repo, "src", "Change.cs")));
         }
         finally
         {
@@ -406,9 +701,304 @@ public sealed class GoalWorktreeTests
             }
 
             var output = writer.ToString();
-            Assert.True(output.Contains("passed (exit 0)", StringComparison.Ordinal));
+            Assert.True(output.Contains("Acceptance evidence bundle: passed", StringComparison.Ordinal));
+            Assert.True(output.Contains($"lease id: goal-{goal.Id.Value[..8].ToLowerInvariant()}", StringComparison.Ordinal));
+            Assert.True(output.Contains("Verification check: passed", StringComparison.Ordinal));
             Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_safe_auto_blocks_merge")]
+    public void CliAcceptanceSafeAutoBlocksMerge()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance policy test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "policy.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var ex = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+                ["acceptance", "--autonomy", "safe-auto"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Assert.True(ex.Message.Contains("policy 'safe-auto' blocks acceptance merge", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "policy.txt")));
+            Assert.True(goal.Timeline.Any(evt =>
+                evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("blocked acceptance merge", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_queue_applies_ready_goals_sequentially")]
+    public void CliAcceptanceQueueAppliesReadyGoalsSequentially()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var first = CreateCompletedGoal(kernel, "First queued acceptance", repo);
+            var second = CreateCompletedGoal(kernel, "Second queued acceptance", repo);
+
+            var firstPath = GoalWorktrees.Ensure(repo, first.Id);
+            File.WriteAllText(Path.Combine(firstPath, "first.txt"), "first");
+            RunGit(firstPath, "add", "-A");
+            RunGit(firstPath, "commit", "-m", "First queued goal");
+
+            RunGit(repo, "branch", GoalWorktrees.BranchName(second.Id), GoalWorktrees.BranchName(first.Id));
+            var secondPath = GoalWorktrees.Ensure(repo, second.Id);
+            File.WriteAllText(Path.Combine(secondPath, "second.txt"), "second");
+            RunGit(secondPath, "add", "-A");
+            RunGit(secondPath, "commit", "-m", "Second queued goal");
+
+            var context = CreateAcceptanceContext(kernel, repo, first);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["acceptance-queue", "--apply", "--confirm-acceptance-queue"],
+                context));
+
+            Assert.True(output.Contains("Acceptance queue: 2 goal(s), ready=2, held=0, blocked=0", StringComparison.Ordinal));
+            Assert.True(output.Contains($"Acceptance queue goal {first.Id.Value[..8]}:", StringComparison.Ordinal));
+            Assert.True(output.Contains($"Acceptance queue goal {second.Id.Value[..8]}:", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(repo, "first.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "second.txt")));
+            Assert.True(GoalWorktrees.TryResolve(repo, first.Id) is null);
+            Assert.True(GoalWorktrees.TryResolve(repo, second.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(first.Id)));
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(second.Id)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_queue_holds_stale_branch_with_manual_merge_command")]
+    public void CliAcceptanceQueueHoldsStaleBranchWithManualMergeCommand()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Stale queued acceptance", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "stale.txt"), "goal");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Stale queued goal");
+
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Advance main");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance-queue"], context));
+
+            Assert.True(output.Contains("ready=0, held=1, blocked=0", StringComparison.Ordinal));
+            Assert.True(output.Contains("cannot fast-forward", StringComparison.Ordinal));
+            Assert.True(output.Contains($"command: workspace rebase {goal.Id.Value[..8]}", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "stale.txt")));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_queue_safe_auto_holds_irreversible_actions")]
+    public void CliAcceptanceQueueSafeAutoHoldsIrreversibleActions()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Policy queued acceptance", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "policy-queue.txt"), "goal");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Policy queued goal");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance-queue", "--autonomy", "safe-auto"], context));
+
+            Assert.True(output.Contains("ready=0, held=1, blocked=0, policy=safe-auto", StringComparison.Ordinal));
+            Assert.True(output.Contains("blocks irreversible acceptance or cleanup", StringComparison.Ordinal));
+            Assert.True(output.Contains("--autonomy supervised-auto --confirm-acceptance-queue", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "policy-queue.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_evidence_blocks_dirty_worktree_before_merge")]
+    public void CliAcceptanceEvidenceBlocksDirtyWorktreeBeforeMerge()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance evidence dirty test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            File.WriteAllText(Path.Combine(worktreePath, "dirty.txt"), "uncommitted");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("Acceptance evidence bundle: blocked", StringComparison.Ordinal));
+            Assert.True(output.Contains("Test impact:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Verification policy:", StringComparison.Ordinal));
+            Assert.True(output.Contains("dirty-worktree", StringComparison.Ordinal));
+            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_evidence_blocks_missing_acceptance_checks")]
+    public void CliAcceptanceEvidenceBlocksMissingAcceptanceChecks()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance evidence missing checks test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            Directory.CreateDirectory(Path.Combine(worktreePath, "config"));
+            File.WriteAllText(Path.Combine(worktreePath, "config", "acceptance-manifest.json"), "{\"checks\":[]}");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("Acceptance evidence bundle: blocked", StringComparison.Ordinal));
+            Assert.True(output.Contains("acceptance-checks-missing", StringComparison.Ordinal));
+            Assert.True(output.Contains("acceptance-policy-check-missing", StringComparison.Ordinal));
+            Assert.True(output.Contains("missing - required", StringComparison.Ordinal));
+            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_evidence_blocks_generated_artifact_changes")]
+    public void CliAcceptanceEvidenceBlocksGeneratedArtifactChanges()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance evidence generated artifact test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            var generatedDirectory = Path.Combine(worktreePath, "src", "Feature", "bin", "Debug");
+            Directory.CreateDirectory(generatedDirectory);
+            var generatedFile = Path.Combine(generatedDirectory, "generated.dll");
+            File.WriteAllText(generatedFile, "generated");
+            RunGit(worktreePath, "add", "-f", generatedFile);
+            RunGit(worktreePath, "commit", "-m", "Generated artifact");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("generated-artifacts", StringComparison.Ordinal));
+            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "src", "Feature", "bin", "Debug", "generated.dll")));
         }
         finally
         {
@@ -504,6 +1094,96 @@ public sealed class GoalWorktreeTests
             Assert.True(output.Contains("Stage run-goal:", StringComparison.Ordinal));
             Assert.True(output.Contains("Stage acceptance:", StringComparison.Ordinal));
             Assert.True(output.Contains("Stage workspace remove:", StringComparison.Ordinal));
+
+            var rerunOutput = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["lifecycle-simple-goal", "Ship a small echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                context));
+
+            Assert.Equal(goal.Id, context.CurrentGoal!.Id);
+            Assert.Equal(1, kernel.Goals.Count);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.True(rerunOutput.Contains("reused existing idempotent goal", StringComparison.Ordinal));
+            Assert.True(rerunOutput.Contains("already completed and workspace cleanup is recorded", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_five_role_goal_accepts_and_removes_workspace")]
+    public void CliLifecycleGoalRunsFiveRoleGoalAcceptsAndRemovesWorkspace()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = EchoAgents();
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["lifecycle-goal", "Ship a five-role echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                context));
+
+            var goal = context.CurrentGoal!;
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(5, goal.Tasks.Count);
+            Assert.True(goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.True(output.Contains($"Lifecycle goal: {goal.Id.Value}", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage goal: created and activated.", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage run-goal:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage acceptance:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage workspace remove:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_safe_auto_stops_before_acceptance")]
+    public void CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() =>
+            {
+                var ex = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                    ["lifecycle-simple-goal", "Ship but pause before merge", "--confirm-batch-start", "--confirm-large-paid-subscription-start", "--autonomy", "safe-auto"],
+                    context));
+                Assert.True(ex.Message.Contains("stopped before acceptance", StringComparison.Ordinal));
+            });
+
+            var goal = context.CurrentGoal!;
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+            Assert.True(output.Contains("Autonomy policy: safe-auto", StringComparison.Ordinal));
+            Assert.True(output.Contains("Stage acceptance: stopped.", StringComparison.Ordinal));
+            Assert.True(goal.Timeline.Any(evt =>
+                evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("blocked lifecycle-simple-goal acceptance", StringComparison.Ordinal)));
         }
         finally
         {
@@ -559,7 +1239,14 @@ public sealed class GoalWorktreeTests
             var kernel = new AgentOrchestratorKernel();
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
             var providers = new InMemoryModelProviderRegistry([]);
-            var profiles = EchoProfiles();
+            // Touch a real source file so acceptance classifies a behavior
+            // change and actually runs verification (the failing fakeVerifier).
+            // Relying on the worker committing scratch like .orchestrator-context
+            // would no longer make the worktree dirty, so the change must be real.
+            var profiles = new WorkerProfileCatalog(
+            [
+                new WorkerProfile("local", "New-Item -ItemType Directory -Force src | Out-Null; Set-Content -Path src/lifecycle-change.cs -Value '// lifecycle work'; git add -A; git commit -m Lifecycle-work; Write-Output {subscriptionModelName}")
+            ]);
             var fakeVerifier = new GoalAcceptanceVerifier(
                 (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Focused tests failed")));
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
@@ -598,6 +1285,39 @@ public sealed class GoalWorktreeTests
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
         return root;
+    }
+
+    private static Goal CreateCompletedGoal(AgentOrchestratorKernel kernel, string objective, string repo)
+    {
+        var goal = kernel.CreateGoal(objective, [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+        Assert.Equal(GoalStatus.Completed, goal.Status);
+        return goal;
+    }
+
+    private static CliExecutionContext CreateAcceptanceContext(
+        AgentOrchestratorKernel kernel,
+        string repo,
+        Goal currentGoal)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(repo);
+        var fakeVerifier = new GoalAcceptanceVerifier(
+            (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+        return new CliExecutionContext(
+            kernel,
+            workspace,
+            new InMemoryModelProviderRegistry([]),
+            AgentCatalog.Default().Agents,
+            WorkerProfileCatalog.Default(),
+            currentGoal)
+        {
+            AcceptanceVerifier = fakeVerifier
+        };
     }
 
     private static bool BranchExists(string workingDirectory, string branch)

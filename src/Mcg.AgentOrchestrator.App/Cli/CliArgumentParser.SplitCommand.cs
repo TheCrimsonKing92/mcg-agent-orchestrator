@@ -24,7 +24,10 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitTaskTargetCommand(command, remainder, 1);
     }
 
-    if (command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+    if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
     {
         var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
@@ -117,7 +120,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [command, remainder];
     }
 
-    if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("lifecycle-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goal-plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("intent-template", StringComparison.OrdinalIgnoreCase))
     {
         return SplitObjectiveCommandWithFlags(command, remainder);
     }

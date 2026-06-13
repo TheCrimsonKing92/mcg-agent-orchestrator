@@ -21,7 +21,9 @@ internal sealed record TaskSummaryDto(
     bool VerificationPlanTruncated,
     int VerificationPlanLength,
     string? AssignedAgentId,
-    DateTimeOffset? SubscriptionRetryAfter = null);
+    DateTimeOffset? SubscriptionRetryAfter = null,
+    IReadOnlyList<string>? WorkerResultSkills = null,
+    bool HasWorkerResultSkillEvidence = false);
 
 internal sealed record TaskDetailDto(
     TaskSummaryDto Task,

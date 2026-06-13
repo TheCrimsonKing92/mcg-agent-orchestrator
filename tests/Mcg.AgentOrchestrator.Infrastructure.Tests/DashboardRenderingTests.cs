@@ -50,6 +50,79 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains("<code>task 3</code>", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardRenderer_renders_operator_inbox_with_ack_control")]
+    public void DashboardRendererRendersOperatorInboxWithAckControl()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render operator inbox", [new TaskSpec(TaskId.New(), "Fix blocked task", AgentRole.Developer)]);
+    var goalPrefix = goal.Id.Value[..8];
+    var report = new OperatorInboxReportDto(
+        goalPrefix,
+        TotalCount: 1,
+        OpenCount: 1,
+        AcknowledgedCount: 0,
+        [
+            new OperatorInboxItemDto(
+                "inbox-test123",
+                OperatorInboxKind.FailedTask,
+                OperatorInboxSeverity.Blocker,
+                goal.Id.Value,
+                goalPrefix,
+                goal.Objective,
+                goal.Tasks.Single().Id.Value,
+                1,
+                "Failed task on task 1",
+                "Worker failed before producing evidence.",
+                "monitor: failed task",
+                "Inspect the failure.",
+                $"next {goalPrefix}",
+                "test",
+                Acknowledged: false,
+                AcknowledgedAt: null,
+                AcknowledgementNote: null)
+        ]);
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        OperatorInbox: report));
+
+    Assert.Contains(html, text => text.Contains("Operator inbox", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("inbox-test123", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains($"next {goalPrefix}", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("/api/operator-inbox/ack?itemId=inbox-test123", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_renders_worker_result_skill_usage")]
+    public void DashboardRendererRendersWorkerResultSkillUsage()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render skill evidence", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        "C:\\repo",
+        0,
+        """
+        WORKER_RESULT:
+        files: src/Feature.cs
+        commands: dotnet test
+        tests: Passed: 1
+        commit: abc123
+        blockers: none
+        model_fit: OpenAI/gpt-5.5 - adequate - test worker fixture.
+        skills: dotnet-windows-build-hygiene, orchestrator-dogfood
+        confidence: high
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+
+    Assert.Contains(html, text => text.Contains("Skills: dotnet-windows-build-hygiene, orchestrator-dogfood", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_renders_api_model_execution_usage")]
     public async Task DashboardRendererRendersApiModelExecutionUsage()
 {
@@ -391,6 +464,33 @@ public sealed class DashboardRenderingTests
     Assert.True(task.LastDispatch is null);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_exposes_subscription_plan_worker_route")]
+    public void DashboardResponseMapperExposesSubscriptionPlanWorkerRoute()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Expose route evidence",
+        [new TaskSpec(TaskId.New(), "Update a dashboard label.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var plan = DashboardResponseMapper.ToSubscriptionPlanDto(
+        SubscriptionPlanBuilder.Build(goal, [agent], WorkerProfileCatalog.Default(), _ => 1200));
+    var item = plan.Items.Single();
+
+    Xunit.Assert.NotNull(item.Route);
+    Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+    Xunit.Assert.Contains(item.Route.Reasons, text => text.Contains("provider=OpenAI", StringComparison.Ordinal));
+    Xunit.Assert.Contains(item.Route.Reasons, text => text.Contains("estimated cost-guard prompt chars=1200", StringComparison.Ordinal));
+    Xunit.Assert.Contains(item.Route.Alternatives, text => text.Contains("local Ollama/qwen", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_timeline_messages_without_mutating_events")]
     public void DashboardResponseMapperTrimsVerboseTimelineMessagesWithoutMutatingEvents()
 {
@@ -436,18 +536,67 @@ public sealed class DashboardRenderingTests
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var goalPrefix = goal.Id.Value[..8];
     var initialCursor = DashboardMonitoringEvents.BuildBatch(kernel, goal, 0).LastEventId;
 
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started monitoring work.");
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Finished monitoring work.");
 
-    var batch = DashboardMonitoringEvents.BuildBatch(kernel, goal, initialCursor);
+    var inbox = new OperatorInboxReportDto(
+        goalPrefix,
+        TotalCount: 1,
+        OpenCount: 1,
+        AcknowledgedCount: 0,
+        [
+            new OperatorInboxItemDto(
+                "inbox-monitor",
+                OperatorInboxKind.MissingVerification,
+                OperatorInboxSeverity.Blocker,
+                goal.Id.Value,
+                goalPrefix,
+                goal.Objective,
+                task.Id.Value,
+                1,
+                "Verify task 1",
+                "Verification is missing.",
+                "monitor snapshot",
+                "Run verification.",
+                "verify-needed " + goalPrefix,
+                "test",
+                Acknowledged: false,
+                AcknowledgedAt: null,
+                AcknowledgementNote: null)
+        ]);
+    var capacity = new ProviderCapacityScheduleDto(
+        ProviderCapacityDisposition.Ready,
+        "Start ready subscription work.",
+        ReadyNowCount: 1,
+        DeferredCount: 0,
+        NextRetryAfter: null,
+        HasCostRisk: false,
+        [
+            new ProviderCapacityActionDto(
+                1,
+                task.Id.Value,
+                "OpenAI",
+                ProviderCapacityDisposition.Ready,
+                RetryAfter: null,
+                "Ready to start.",
+                [])
+        ]);
+    var batch = DashboardMonitoringEvents.BuildBatch(kernel, goal, initialCursor, inbox, capacity);
     var replay = DashboardMonitoringEvents.BuildBatch(kernel, goal, initialCursor + 1);
     var noNewEvents = DashboardMonitoringEvents.BuildBatch(kernel, goal, batch.LastEventId);
 
     Assert.Equal(goal.Id.Value, batch.GoalId);
     Assert.Equal(DashboardMonitoringEvents.StreamPath(goal.Id.Value), batch.StreamPath);
     Assert.Equal(batch.LastEventId, batch.Snapshot.LastEventId);
+    var snapshotInbox = Xunit.Assert.IsType<OperatorInboxReportDto>(batch.Snapshot.OperatorInbox);
+    Assert.Equal(1, snapshotInbox.OpenCount);
+    Assert.Equal("inbox-monitor", snapshotInbox.Items.Single().Id);
+    var snapshotCapacity = Xunit.Assert.IsType<ProviderCapacityScheduleDto>(batch.Snapshot.ProviderCapacity);
+    Assert.Equal(ProviderCapacityDisposition.Ready, snapshotCapacity.Disposition);
+    Assert.Equal(1, snapshotCapacity.ReadyNowCount);
     Assert.Equal(2, batch.Events.Count);
     Assert.Equal("timeline", batch.Events[0].Event);
     Assert.Equal("Started monitoring work.", batch.Events[0].Message);
@@ -471,6 +620,20 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains("event: timeline", text);
     Xunit.Assert.Contains("data:", text);
     Xunit.Assert.Contains("Started monitoring work.", text);
+
+    using var snapshotStream = new MemoryStream();
+    await DashboardMonitoringEvents.WriteServerSentEventAsync(
+        snapshotStream,
+        DashboardMonitoringEvents.SnapshotEventName,
+        batch.Snapshot,
+        id: null,
+        CancellationToken.None);
+    var snapshotText = Encoding.UTF8.GetString(snapshotStream.ToArray());
+    Xunit.Assert.Contains("event: goal.snapshot", snapshotText);
+    Xunit.Assert.Contains("inbox-monitor", snapshotText);
+    Xunit.Assert.Contains("ProviderCapacity", snapshotText);
+    Xunit.Assert.Contains("ReadyNowCount", snapshotText);
+    Xunit.Assert.Contains("Verify task 1", snapshotText);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_task_summary_fields_without_mutating_task")]
@@ -545,6 +708,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("Auto-update every 15 seconds", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("data-refresh-seconds=\"15\"", StringComparison.Ordinal));
     Assert.Contains(focusedOperatorHtml, text => text.Contains($"data-monitor-stream=\"/api/goals/{goalPrefix}/events/stream\"", StringComparison.Ordinal));
+    Assert.Contains(focusedOperatorHtml, text => text.Contains("data-live-monitor", StringComparison.Ordinal));
+    Assert.Contains(focusedOperatorHtml, text => text.Contains("data-live-capacity", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("href=\"/assets/dashboard.css\"", StringComparison.Ordinal));
     Assert.Contains(operatorRefreshingHtml, text => text.Contains("src=\"/assets/dashboard.js\"", StringComparison.Ordinal));
 }
@@ -1057,8 +1222,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains(systemHtml, text => text.Contains("/api/system/build-test-runs/log?path=", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains(@".\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", StringComparison.Ordinal));
-    Assert.Contains(systemHtml, text => text.Contains("dotnet build Mcg.AgentOrchestrator.sln --no-restore", StringComparison.Ordinal));
-    Assert.Contains(systemHtml, text => text.Contains("dotnet test Mcg.AgentOrchestrator.sln --no-build", StringComparison.Ordinal));
+    Assert.Contains(systemHtml, text => text.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("Restart command", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains(@".\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("data-action=\"/api/system/stop-dashboard\"", StringComparison.Ordinal));
@@ -1143,12 +1307,17 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains($"data-toggle-custom-answer=\"answer-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("aria-expanded=\"false\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Work summary", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Action recommendation", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Open recommendation JSON", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open compact JSON", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Open triage JSON", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open monitor JSON", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open next-action JSON", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open evidence JSON", StringComparison.Ordinal));
     Assert.False(goalHtml.Contains("Open raw JSON", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/work-summary", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/action-recommendations", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains($"/api/goals/{goalPrefix}/failure-triage", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/acceptance?goal={goalPrefix}", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"/api/evidence?goal={goalPrefix}", StringComparison.Ordinal));
@@ -1217,6 +1386,11 @@ public sealed class DashboardRenderingTests
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Dashboard stop requested for PID", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Siblings:", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("window.__dashboardSubmitForm", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("applyLiveSnapshot", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("providerCapacity", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("source.addEventListener('goal.snapshot', handleSnapshotEvent)", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("startMonitorStaleTimer", StringComparison.Ordinal));
+    Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Live monitor stale; timed refresh remains active.", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("window.__dashboardReady = true", StringComparison.Ordinal));
 }
 
@@ -1380,6 +1554,45 @@ public sealed class DashboardRenderingTests
     Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify")));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_action_recommendations_aggregate_next_triage_recovery_capacity_and_policy")]
+    public void DashboardActionRecommendationsAggregateNextTriageRecoveryCapacityAndPolicy()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Implement dashboard action recommendation panel.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Recommend action", [task]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var report = DashboardActionRecommendationPlanner.Build(
+        kernel,
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        root,
+        AutonomyPolicy.Observe);
+    var dto = DashboardResponseMapper.ToDashboardActionRecommendationReportDto(report);
+
+    Xunit.Assert.True(dto.Primary is not null);
+    var primary = dto.Primary!;
+    Xunit.Assert.Equal(DashboardActionRecommendationSource.NextAction, primary.Source);
+    Xunit.Assert.Equal("run 1 --confirm-paid-api-run", primary.SuggestedCommand);
+    Xunit.Assert.Equal("POST", primary.ApiMethod);
+    Xunit.Assert.True(primary.ApiPath?.Contains($"/api/goals/{goal.Id.Value[..8]}/tasks/1/run?confirmTaskRun=true&confirmPaidApiRun=true", StringComparison.Ordinal) == true);
+    Xunit.Assert.True(primary.RequiresOperatorGate);
+    Xunit.Assert.Contains(dto.Secondary, item => item.Source == DashboardActionRecommendationSource.GoalHealth);
+    Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("goal health: Active score=70", StringComparison.Ordinal));
+    Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("failure triage:", StringComparison.Ordinal));
+    Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("recovery:", StringComparison.Ordinal));
+    Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("acceptance queue:", StringComparison.Ordinal));
+    Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("capacity:", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_surface_prior_subscription_model_fit_before_handoff")]
     public void DashboardNextActionControlsSurfacePriorSubscriptionModelFitBeforeHandoff()
 {
@@ -1458,6 +1671,10 @@ public sealed class DashboardRenderingTests
     Assert.True(workSummary.NextAction!.SuggestedCommand.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Equal("large paid subscription start", workSummary.NextAction.Control!.CostRisk);
     Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
+    Assert.Equal($"goal-{goalPrefix}", workSummary.BuildEnvironment.LeaseId);
+    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("goals", goalPrefix, "lease", "artifacts"), StringComparison.OrdinalIgnoreCase));
+    Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
+    Assert.False(workSummary.BuildEnvironment.LeaseExists);
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
@@ -2014,6 +2231,36 @@ public sealed class DashboardRenderingTests
     Assert.Equal("OpenAI", summaryDispatch.ProviderName);
     Assert.Equal("gpt-5.3-codex", summaryDispatch.ModelName);
     Assert.Equal(321, summaryDispatch.PromptCharacterCount);
+}
+
+    [Xunit.Fact(DisplayName = "GoalWorkSummary_surfaces_ready_task_parallel_plan")]
+    public void GoalWorkSummarySurfacesReadyTaskParallelPlan()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var first = new TaskSpec(TaskId.New(), "Inspect first ready subscription task.", AgentRole.Planner);
+    var second = new TaskSpec(TaskId.New(), "Inspect second ready subscription task.", AgentRole.Planner);
+    var goal = kernel.CreateGoal("Show ready-task parallel safety", [first, second]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-planner"),
+        "Subscription planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, [agent]);
+
+    Assert.True(workSummary.ParallelPlan is not null);
+    Assert.Equal(2, workSummary.ParallelPlan!.Batches.Count);
+    Assert.True(workSummary.ParallelPlan.Decisions.Any(decision =>
+        decision.IntentId == first.Id.Value &&
+        decision.Disposition == ParallelExecutionDisposition.Concurrent &&
+        decision.BatchNumber == 1));
+    Assert.True(workSummary.ParallelPlan.Decisions.Any(decision =>
+        decision.IntentId == second.Id.Value &&
+        decision.Disposition == ParallelExecutionDisposition.Serialized &&
+        decision.BatchNumber == 2));
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_keeps_ollama_agent_configuration_local")]

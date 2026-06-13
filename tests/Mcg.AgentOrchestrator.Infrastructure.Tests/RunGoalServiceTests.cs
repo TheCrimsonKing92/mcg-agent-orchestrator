@@ -556,6 +556,48 @@ public sealed class RunGoalServiceTests
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("claude-planner", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_model_rejection_redelegates")]
+    public async Task RunGoalServiceAutoFailoverProviderModelRejectionRedelegates()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Task with provider model rejection", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Goal should fail over unsupported model", [task]);
+        var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
+        var alternate = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
+        kernel.ActivateGoal(goal.Id, [primary, alternate]);
+        RecordProviderConnectivityFailure(
+            kernel,
+            goal,
+            task,
+            workspace,
+            "codex-cli",
+            "codex-cli exec",
+            DateTimeOffset.UtcNow,
+            "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            [primary, alternate],
+            Profiles(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output model-rejection-alternate-ok")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            pollInterval: TimeSpan.FromMilliseconds(50),
+            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            cancellationToken: cts.Token);
+
+        Assert.True(result.Executed);
+        Assert.True(result.StopEvidence is null);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(alternate.Id, task.AssignedAgentId);
+        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("model-rejection-alternate-ok", StringComparison.Ordinal));
+        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("claude-planner", StringComparison.Ordinal)));
+    }
+
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_stops_when_no_alternate_exists")]
     public async Task RunGoalServiceAutoFailoverStopsWhenNoAlternateExists()
     {

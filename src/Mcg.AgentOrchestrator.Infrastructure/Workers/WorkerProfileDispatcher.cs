@@ -1,8 +1,15 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record WorkerProfileDispatchResult(TaskSpec Task, string PromptPath);
+
+public sealed record WorkerSubscriptionPreflightResult(
+    bool Allowed,
+    string ProfileName,
+    string CapabilityStatus,
+    IReadOnlyList<string> Findings);
 
 public static class WorkerProfileDispatcher
 {
@@ -23,12 +30,13 @@ public static class WorkerProfileDispatcher
         string? modelName = null,
         string? reasoningEffort = null,
         TaskComplexity? taskComplexity = null,
-        bool usesComplexModel = false)
+        bool usesComplexModel = false,
+        IReadOnlyList<string>? preflightFindings = null)
     {
         EnsureTaskNeedsExecution(task);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
-        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
             task.Id,
@@ -87,13 +95,9 @@ public static class WorkerProfileDispatcher
         var agent = ResolveAssignedAgent(task, agents);
         var selection = ResolveSubscriptionModel(agent, goal, task);
         var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
-        EnsureSubscriptionProfileCanExecuteTask(profile, task);
-        EnsureSubscriptionProfilePinsSelectedModel(profile);
         var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
-        EnsureSubscriptionProfilePinsSelectedReasoning(profile, selection.Model.ProviderName, reasoningEffort);
-        EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
-        EnsureRepeatedSubscriptionLimitReviewed(task);
-        EnsureWorktreeForFileRole(task.RequiredRole, workingDirectory);
+        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt);
+        ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
             goal,
@@ -107,7 +111,217 @@ public static class WorkerProfileDispatcher
             ResolveEffectiveSubscriptionModelName(agent, selection),
             reasoningEffort,
             selection.Complexity,
-            selection.UsesComplexModel);
+            selection.UsesComplexModel,
+            preflight.Findings);
+    }
+
+    public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
+        Goal goal,
+        TaskSpec task,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles,
+        string workingDirectory,
+        DateTimeOffset now)
+    {
+        var findings = new List<string>();
+        string profileName;
+        try
+        {
+            EnsureTaskNeedsExecution(task);
+            var agent = ResolveAssignedAgent(task, agents);
+            var selection = ResolveSubscriptionModel(agent, goal, task);
+            profileName = ResolveSubscriptionProfileName(agent, selection.Model);
+            var profile = profiles.GetRequired(profileName);
+            findings.Add($"profile: {profile.Name}");
+            findings.Add($"model: {selection.Model.ProviderName}/{ResolveEffectiveSubscriptionModelName(agent, selection)}");
+            findings.Add($"complexity: {selection.Complexity}");
+
+            AddProfileFinding(
+                findings,
+                WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate),
+                $"worker profile '{profile.Name}' only echoes prompt path",
+                $"worker profile '{profile.Name}' is a real launcher");
+            AddProfileFinding(
+                findings,
+                !WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate),
+                $"worker profile '{profile.Name}' does not include {{subscriptionModelName}}",
+                $"worker profile '{profile.Name}' pins selected model");
+            var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
+            AddProfileFinding(
+                findings,
+                RequiresSubscriptionReasoningPlaceholder(selection.Model.ProviderName, reasoningEffort) &&
+                    !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate),
+                $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
+                $"worker profile '{profile.Name}' pins selected reasoning when required");
+
+            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory);
+            findings.Add($"capability: {capability.Status} - {capability.Detail}");
+            if (!capability.Allowed)
+            {
+                findings.Add($"blocked: {capability.Detail}");
+            }
+
+            AddSkillAvailabilityFindings(findings, goal, task, workingDirectory);
+            AddBuildEnvironmentFinding(findings, goal, task);
+            AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
+
+            if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+            {
+                findings.Add($"blocked: subscription retry deferred until {retryAfter:u}");
+            }
+
+            if (DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+                goal,
+                task.Id,
+                selection.Model.ProviderName,
+                now,
+                out var providerCooldown))
+            {
+                findings.Add(
+                    $"blocked: provider {providerCooldown.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)} until {providerCooldown.RetryAfter:u}");
+            }
+
+            if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+            {
+                findings.Add("blocked: repeated recoverable subscription limits require operator review");
+            }
+
+            var blocked = findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase));
+            if (!blocked)
+            {
+                findings.Add("ready: profile, sandbox, worktree, and retry state passed deterministic preflight");
+            }
+
+            return new WorkerSubscriptionPreflightResult(!blocked, profileName, capability.Status, findings);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            profileName = "unknown";
+            findings.Add($"blocked: {ex.Message}");
+            return new WorkerSubscriptionPreflightResult(false, profileName, "blocked", findings);
+        }
+    }
+
+    private static void AddProfileFinding(List<string> findings, bool blocked, string blockedMessage, string okMessage)
+    {
+        findings.Add(blocked ? $"blocked: {blockedMessage}" : $"ok: {okMessage}");
+    }
+
+    private static void AddSkillAvailabilityFindings(List<string> findings, Goal goal, TaskSpec task, string workingDirectory)
+    {
+        var selectedSkills = WorkerContextArtifacts.SelectSkillRequirements(goal, task, workingDirectory);
+        if (selectedSkills.Count == 0)
+        {
+            findings.Add("skills: no deterministic skill rule matched this task");
+            return;
+        }
+
+        var skillRoot = Path.Combine(workingDirectory, ".agents", "skills");
+        if (!Directory.Exists(skillRoot))
+        {
+            findings.Add("skills: local skill catalog not present; selected skills will be listed as missing in context artifacts");
+            return;
+        }
+
+        var missing = selectedSkills.Where(skill => !skill.Available).ToArray();
+        if (missing.Length == 0)
+        {
+            findings.Add($"ok: selected skill manifest available ({string.Join(", ", selectedSkills.Select(skill => skill.Name))})");
+            return;
+        }
+
+        findings.Add(
+            "blocked: missing required local skill(s): " +
+            string.Join(", ", missing.Select(skill => $"{skill.Name} at {skill.RelativePath}")) +
+            "; add the SKILL.md file(s) or adjust the task so the router no longer selects them");
+    }
+
+    private static void AddBuildEnvironmentFinding(List<string> findings, Goal goal, TaskSpec task)
+    {
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
+        {
+            findings.Add("build environment: not required for read-only role");
+            return;
+        }
+
+        var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);
+        var artifactsPath = Path.Combine(rootPath, "lease", "artifacts");
+        var leaseMetadataPath = Path.Combine(rootPath, "lease", "lease.json");
+        var leaseExists = Directory.Exists(artifactsPath) || File.Exists(leaseMetadataPath);
+        findings.Add(
+            $"build environment: goal lease {(leaseExists ? "exists" : "not yet created")} artifacts={artifactsPath}");
+    }
+
+    private static void AddWorktreeCleanlinessFinding(List<string> findings, TaskSpec task, string workingDirectory)
+    {
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
+        {
+            findings.Add("worktree: clean check not required for read-only role");
+            return;
+        }
+
+        var status = ReadGitPorcelainStatus(workingDirectory);
+        if (status is null)
+        {
+            findings.Add("worktree: cleanliness unavailable before dispatch; verify git status from the goal workspace if this is unexpected");
+            return;
+        }
+
+        if (status.Length == 0)
+        {
+            findings.Add("ok: worktree clean before dispatch");
+            return;
+        }
+
+        var changedLineCount = status.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
+        findings.Add($"blocked: worktree has {changedLineCount} uncommitted change(s) before dispatch; commit, stash, or clean the goal workspace first");
+    }
+
+    private static string? ReadGitPorcelainStatus(string workingDirectory)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workingDirectory
+            };
+            startInfo.ArgumentList.Add("status");
+            startInfo.ArgumentList.Add("--porcelain");
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return null;
+            }
+
+            var output = process.StandardOutput.ReadToEnd();
+            _ = process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(10000) || process.ExitCode != 0)
+            {
+                return null;
+            }
+
+            return output.Trim();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void ThrowIfPreflightBlocked(WorkerSubscriptionPreflightResult preflight)
+    {
+        if (preflight.Allowed)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException("Subscription preflight failed: " + string.Join("; ", preflight.Findings));
     }
 
     public static int EstimateSubscriptionPromptCharacters(
@@ -134,10 +348,12 @@ public static class WorkerProfileDispatcher
         WorkerProfileCatalog profiles,
         string promptRoot,
         string workingDirectory,
-        DateTimeOffset dispatchedAt)
+        DateTimeOffset dispatchedAt,
+        IReadOnlySet<TaskId>? taskIdsToPrepare = null)
     {
         var selections = goal.Tasks
-            .Where(task => task.Status == WorkTaskStatus.Assigned)
+            .Where(task => task.Status == WorkTaskStatus.Assigned &&
+                (taskIdsToPrepare is null || taskIdsToPrepare.Contains(task.Id)))
             .Select(task => new
             {
                 Task = task,
@@ -148,23 +364,15 @@ public static class WorkerProfileDispatcher
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var selection in selections)
         {
-            if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(selection.Task, dispatchedAt, out _))
-            {
-                continue;
-            }
-
-            if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(selection.Task))
-            {
-                continue;
-            }
-
             var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
             var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
-            EnsureSubscriptionProfileCanExecuteTask(profile, selection.Task);
-            EnsureSubscriptionProfilePinsSelectedModel(profile);
             var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel);
-            EnsureSubscriptionProfilePinsSelectedReasoning(profile, subscriptionModel.Model.ProviderName, reasoningEffort);
-            EnsureWorktreeForFileRole(selection.Task.RequiredRole, workingDirectory);
+            var preflight = PreflightSubscriptionTask(goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt);
+            if (!preflight.Allowed)
+            {
+                continue;
+            }
+
             results.Add(PrepareTask(
                 kernel,
                 goal,
@@ -178,7 +386,8 @@ public static class WorkerProfileDispatcher
                 ResolveEffectiveSubscriptionModelName(selection.Agent, subscriptionModel),
                 reasoningEffort,
                 subscriptionModel.Complexity,
-                subscriptionModel.UsesComplexModel));
+                subscriptionModel.UsesComplexModel,
+                preflight.Findings));
         }
 
         return results;

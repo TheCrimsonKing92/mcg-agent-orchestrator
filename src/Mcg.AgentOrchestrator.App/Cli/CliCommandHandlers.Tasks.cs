@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Providers;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -61,6 +62,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "run":
+            var runPolicy = ResolveCliAutonomyPolicy(parts);
+            runPolicy.ThrowIfDisallowed(AutonomyAction.ModelRun, "run");
             var runTarget = ResolveCommandTaskTarget(parts, context, "run <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
             var runTask = runTarget.Task;
             var runTaskLabel = parts[runTarget.NextIndex - 1];
@@ -72,31 +75,39 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             }
 
             EnsurePaidApiRunConfirmed(context.CurrentGoal!, runTask, runAgent, parts);
+            RecordPolicyAllowed(context, context.CurrentGoal!, runPolicy, AutonomyAction.ModelRun, "run");
             RunApiTask(context, runTask);
             return true;
 
         case "api-run":
+            var apiRunPolicy = ResolveCliAutonomyPolicy(parts);
+            apiRunPolicy.ThrowIfDisallowed(AutonomyAction.ModelRun, "api-run");
             var apiRunTarget = ResolveCommandTaskTarget(parts, context, "api-run <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]");
             var apiRunTask = apiRunTarget.Task;
             var apiRunAgent = ResolveAssignedAgent(apiRunTask, context.Agents);
             EnsureExplicitApiRunAllowed(apiRunTask, apiRunAgent);
             EnsurePaidApiRunConfirmed(context.CurrentGoal!, apiRunTask, apiRunAgent, parts);
+            RecordPolicyAllowed(context, context.CurrentGoal!, apiRunPolicy, AutonomyAction.ModelRun, "api-run");
             RunApiTask(context, apiRunTask);
             return true;
 
         case "retry":
+            var retryPolicy = ResolveCliAutonomyPolicy(parts);
             var retryUsage = "retry <task-number> <message>|retry <goal-prefix> <task-number> <message>|retry --goal <goal-prefix> <task-number> <message>";
             var retryTarget = ResolveCommandTaskTarget(parts, context, retryUsage);
             RequireRemainingArgument(parts, retryTarget.NextIndex, retryUsage);
             var retryTask = retryTarget.Task;
+            EnsurePolicyAllows(context, context.CurrentGoal!, retryPolicy, AutonomyAction.Retry, "retry");
             context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, parts[retryTarget.NextIndex]);
             ConsoleViews.PrintTask(context.CurrentGoal!, retryTask);
             return true;
 
         case "re-delegate":
         case "redelegate":
+            var redelegatePolicy = ResolveCliAutonomyPolicy(parts);
             var redelegateTarget = ResolveCommandTaskTarget(parts, context, "re-delegate <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
             var redelegateTask = redelegateTarget.Task;
+            EnsurePolicyAllows(context, context.CurrentGoal!, redelegatePolicy, AutonomyAction.ProviderFailover, command);
             context.Kernel.RedelegateTask(context.CurrentGoal!.Id, redelegateTask.Id, context.Agents);
             ConsoleViews.PrintTask(context.CurrentGoal!, redelegateTask);
             return true;
@@ -119,11 +130,17 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "verify":
+            var verifyPolicy = ResolveCliAutonomyPolicy(parts);
             var verifyTarget = ResolveCommandTaskTarget(parts, context, "verify <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <command>");
             RequireRemainingArgument(parts, verifyTarget.NextIndex, "verify <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <command>");
             var verifyTask = verifyTarget.Task;
+            EnsurePolicyAllows(context, context.CurrentGoal!, verifyPolicy, AutonomyAction.BuildTest, "verify");
             var verification = new LocalProcessVerifier()
-                .RunAsync(parts[verifyTarget.NextIndex], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal!.Id))
+                .RunAsync(
+                    parts[verifyTarget.NextIndex],
+                    context.Workspace.ResolveExecutionDirectory(context.CurrentGoal!.Id),
+                    context.CurrentGoal!.Id,
+                    verifyTask.Id)
                 .GetAwaiter()
                 .GetResult();
             context.Kernel.RecordTaskVerification(context.CurrentGoal!.Id, verifyTask.Id, verification);

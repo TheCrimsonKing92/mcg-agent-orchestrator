@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalMonitoringSubscriptionCommandTests
@@ -46,7 +47,24 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 [
                     new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null),
                     new TaskMonitoringSnapshotDto(2, "task2", AgentRole.Tester, WorkTaskStatus.Running, null, null)
-                ]),
+                ],
+                ProviderCapacity: new ProviderCapacityScheduleDto(
+                    ProviderCapacityDisposition.Deferred,
+                    "Wait for retry-after or route to another provider.",
+                    0,
+                    1,
+                    observedAt.AddMinutes(30),
+                    false,
+                    [
+                        new ProviderCapacityActionDto(
+                            2,
+                            "task2",
+                            "OpenAI",
+                            ProviderCapacityDisposition.Deferred,
+                            observedAt.AddMinutes(30),
+                            "Retry later.",
+                            ["Route to a different provider profile."])
+                    ])),
             [
                 new GoalMonitoringEventDto(
                     7,
@@ -68,7 +86,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
 
         var text = output.ToString();
-        Xunit.Assert.Contains("snapshot goal=abc12345 status=Active tasks=2 completed=1 running=1 failed=0 lastEvent=7 attention=0", text);
+        Xunit.Assert.Contains("snapshot goal=abc12345 status=Active tasks=2 completed=1 running=1 failed=0 lastEvent=7 attention=0 inbox=0 capacity=Deferred ready=0 deferred=1", text);
         Xunit.Assert.Contains("event 7 2026-06-13 01:00:00Z TaskCompleted task 1: Done", text);
     }
 

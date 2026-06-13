@@ -60,7 +60,8 @@ public enum ProgressKind
     TaskSubscriptionLimitReviewAcknowledged = 17,
     TaskRedelegated = 18,
     GoalCancelled = 19,
-    GoalSuperseded = 20
+    GoalSuperseded = 20,
+    GoalPolicyDecision = 21
 }
 
 public enum TaskAttentionKind

@@ -44,6 +44,8 @@ internal static partial class DashboardEndpoints
         api.MapGet("/doctor", () => Json(BuildHealthReport(services)));
         api.MapGet("/continuations", () => Json(services.Continuations.GetStatuses()));
         api.MapGet("/continuations/summary", () => Json(services.Continuations.GetSummary()));
+        api.MapGet("/backlog/goal-plan", async Task<IResult> (HttpContext context) => await Safe(() => GetBacklogGoalPlan(context, services)));
+        api.MapGet("/goals/cross-start-plan", async Task<IResult> (HttpContext context) => await Safe(() => GetCrossGoalStartPlanAsync(context, services)));
         api.MapGet("/system/dashboard-host", () => Json(BuildHostInfo(services)));
         api.MapGet("/system/architecture", () => Json(BuildArchitectureReport(services)));
         if (args.EnableOperatorControls)
@@ -77,6 +79,8 @@ internal static partial class DashboardEndpoints
         goals.MapGet("/transcript", (string goalId) => Safe(() => GetGoalTranscriptAsync(goalId, services)));
         goals.MapGet("/subscription-plan", (string goalId) => Safe(() => GetSubscriptionPlanAsync(goalId, services)));
         goals.MapGet("/work-summary", (string goalId) => Safe(() => GetGoalWorkSummaryAsync(goalId, services)));
+        goals.MapGet("/failure-triage", (HttpContext context, string goalId) => Safe(() => GetFailureTriageAsync(context, goalId, services)));
+        goals.MapGet("/action-recommendations", (HttpContext context, string goalId) => Safe(() => GetActionRecommendationsAsync(context, goalId, services)));
         if (args.EnableOperatorControls)
         {
             goals.MapPost("/tasks", async Task<IResult> (HttpContext context, string goalId) => await Safe(() => AddTaskAsync(context, goalId, services)));
@@ -88,6 +92,8 @@ internal static partial class DashboardEndpoints
             goals.MapPost("/advance-subscription", (HttpContext context, string goalId) => Safe(() => AdvanceGoalWithSubscriptionsAsync(context, goalId, services)));
             goals.MapPost("/advance-until-blocked", (string goalId) => Safe(() => AdvanceGoalUntilBlockedAsync(goalId, services)));
             goals.MapPost("/advance-subscription-until-blocked", (HttpContext context, string goalId) => Safe(() => AdvanceGoalWithSubscriptionsUntilBlockedAsync(context, goalId, services)));
+            goals.MapMethods("/supervisor", GetAndPost, async Task<IResult> (HttpContext context, string goalId) =>
+                await Safe(() => HandleGoalSupervisorAsync(context, goalId, services)));
             goals.MapPost("/{operation}", async Task<IResult> (HttpContext context, string goalId, string operation) =>
                 await Safe(() => HandleGoalBatchOperationAsync(context, goalId, operation, services)));
         }
@@ -102,6 +108,8 @@ internal static partial class DashboardEndpoints
             goals.MapPost("/advance-subscription", () => ReadOnly());
             goals.MapPost("/advance-until-blocked", () => ReadOnly());
             goals.MapPost("/advance-subscription-until-blocked", () => ReadOnly());
+            goals.MapGet("/supervisor", () => ReadOnly());
+            goals.MapPost("/supervisor", () => ReadOnly());
             goals.MapPost("/{operation}", () => ReadOnly());
         }
 
@@ -113,15 +121,19 @@ internal static partial class DashboardEndpoints
         api.MapGet("/verification-worklist", async Task<IResult> (HttpContext context) => await Safe(() => GetVerificationWorklistAsync(context, services)));
         api.MapGet("/human-input-worklist", async Task<IResult> (HttpContext context) => await Safe(() => GetHumanInputWorklistAsync(context, services)));
         api.MapGet("/next", async Task<IResult> (HttpContext context) => await Safe(() => GetNextActionsAsync(context, services)));
+        api.MapGet("/operator-inbox", async Task<IResult> (HttpContext context) => await Safe(() => GetOperatorInboxAsync(context, services)));
         api.MapGet("/source-survey", async Task<IResult> (HttpContext context) => await Safe(() => GetSourceSurvey(context, services)));
         api.MapGet("/pending-input", async Task<IResult> (HttpContext context) => await Safe(() => GetPendingInputAsync(context, services)));
         if (args.EnableOperatorControls)
         {
+            api.MapPost("/operator-inbox/ack", async Task<IResult> (HttpContext context) =>
+                await Safe(() => AcknowledgeOperatorInboxItemAsync(context, services)));
             api.MapPost("/input/{inputId}/answer", async Task<IResult> (HttpContext context, string inputId) =>
                 await Safe(() => AnswerHumanInputAsync(context, inputId, services)));
         }
         else
         {
+            api.MapPost("/operator-inbox/ack", () => ReadOnly());
             api.MapPost("/input/{inputId}/answer", () => ReadOnly());
         }
 

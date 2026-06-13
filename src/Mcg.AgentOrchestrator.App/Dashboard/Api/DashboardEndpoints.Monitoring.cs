@@ -1,7 +1,9 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -11,7 +13,7 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(current, goalId);
-        return Json(DashboardMonitoringEvents.BuildBatch(current, goal, ParseMonitoringSinceEventId(context.Request)));
+        return Json(BuildMonitoringBatch(services, current, goal, ParseMonitoringSinceEventId(context.Request)));
     }
 
     private static async Task StreamGoalEventsAsync(HttpContext context, string goalId, DashboardEndpointServices services)
@@ -44,7 +46,7 @@ internal static partial class DashboardEndpoints
         var nextSnapshotAt = DateTimeOffset.MinValue;
         while (!context.RequestAborted.IsCancellationRequested)
         {
-            var batch = DashboardMonitoringEvents.BuildBatch(current, goal, sinceEventId);
+            var batch = BuildMonitoringBatch(services, current, goal, sinceEventId);
             var now = DateTimeOffset.UtcNow;
             if (now >= nextSnapshotAt)
             {
@@ -74,6 +76,24 @@ internal static partial class DashboardEndpoints
             current = await LoadAsync(services, context.RequestAborted);
             goal = ResolveGoal(current, goalId);
         }
+    }
+
+    private static GoalMonitoringBatchDto BuildMonitoringBatch(
+        DashboardEndpointServices services,
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        long sinceEventId)
+    {
+        var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        var inbox = OperatorInbox.Build(kernel, agents, workerProfiles, services.Workspace, goal.Id.Value[..8], includeAcknowledged: false);
+        var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles);
+        return DashboardMonitoringEvents.BuildBatch(
+            kernel,
+            goal,
+            sinceEventId,
+            DashboardResponseMapper.ToOperatorInboxReportDto(inbox),
+            DashboardResponseMapper.ToSubscriptionPlanDto(subscriptionPlan).CapacitySchedule);
     }
 
     private static long ParseMonitoringSinceEventId(HttpRequest request)

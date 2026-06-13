@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Mcg.AgentOrchestrator.App.Providers;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -107,6 +108,78 @@ internal static partial class DashboardEndpoints
         return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(current, goal, agents, BuildHostInfo(services)));
     }
 
+    private static async Task<IResult> GetFailureTriageAsync(
+        HttpContext context,
+        string goalId,
+        DashboardEndpointServices services)
+    {
+        var policy = ResolveDashboardAutonomyPolicy(context);
+        var current = await LoadAsync(services, context.RequestAborted);
+        var goal = ResolveGoal(current, goalId);
+        var agents = services.LoadAgentCatalog().Agents;
+        return Json(ToFailureTriageReportDto(FailureTriagePlanner.Build(
+            current,
+            goal,
+            agents,
+            services.Workspace.ExecutionDirectory,
+            policy)));
+    }
+
+    private static async Task<IResult> GetActionRecommendationsAsync(
+        HttpContext context,
+        string goalId,
+        DashboardEndpointServices services)
+    {
+        var policy = ResolveDashboardAutonomyPolicy(context);
+        var current = await LoadAsync(services, context.RequestAborted);
+        var goal = ResolveGoal(current, goalId);
+        var agents = services.LoadAgentCatalog().Agents;
+        var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        return Json(DashboardResponseMapper.ToDashboardActionRecommendationReportDto(
+            DashboardActionRecommendationPlanner.Build(
+                current,
+                goal,
+                agents,
+                profiles,
+                services.Workspace.ExecutionDirectory,
+                policy)));
+    }
+
+    private static async Task<IResult> HandleGoalSupervisorAsync(
+        HttpContext context,
+        string goalId,
+        DashboardEndpointServices services)
+    {
+        var policy = ResolveDashboardAutonomyPolicy(context);
+        var applySafe = HasQueryConfirmation(context, "applySafe");
+        var agents = services.LoadAgentCatalog().Agents;
+        if (context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase) && applySafe)
+        {
+            return await MutateIfChangedAsync(
+                services,
+                current =>
+                {
+                    var goal = ResolveGoal(current, goalId);
+                    var result = GoalSupervisor.ApplySafe(current, goal, agents, services.Workspace, policy);
+                    return Task.FromResult((
+                        result.AppliedActions.Count > 0,
+                        Json(ToGoalSupervisorPlanDto(result.Plan, result.AppliedActions))));
+                },
+                context.RequestAborted);
+        }
+
+        var current = await LoadAsync(services, context.RequestAborted);
+        var goal = ResolveGoal(current, goalId);
+        var plan = GoalSupervisor.Build(
+            current,
+            goal,
+            agents,
+            services.Workspace.ExecutionDirectory,
+            policy,
+            applySafe: false);
+        return Json(ToGoalSupervisorPlanDto(plan, []));
+    }
+
     private static async Task<IResult> GetSubscriptionPlanAsync(string goalId, DashboardEndpointServices services)
     {
         var current = await LoadAsync(services);
@@ -181,6 +254,7 @@ internal static partial class DashboardEndpoints
 
         var body = await ReadRequestBodyAsync(context.Request);
         var agents = services.LoadAgentCatalog().Agents;
+        var policy = ResolveDashboardAutonomyPolicy(context);
         var confirmation = RequireTaskRunConfirmation(context, operation);
         confirmation ??= RequireDispatchStartConfirmation(context, operation);
         if (confirmation is not null)
@@ -194,6 +268,12 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
+                var policyConfirmation = RequirePolicyForTaskOperation(current, goal, operation, policy);
+                if (policyConfirmation is not null)
+                {
+                    return policyConfirmation;
+                }
+
                 var paidConfirmation = RequirePaidApiRunConfirmation(context, goal, task, agents, operation);
                 if (paidConfirmation is not null)
                 {
@@ -248,6 +328,18 @@ internal static partial class DashboardEndpoints
 
     private static async Task<IResult> AdvanceGoalWithSubscriptionsAsync(HttpContext context, string goalId, DashboardEndpointServices services)
     {
+        var policy = ResolveDashboardAutonomyPolicy(context);
+        var policyConfirmation = RequirePolicy(
+            null,
+            null,
+            policy,
+            AutonomyAction.DispatchStart,
+            "advance-subscription");
+        if (policyConfirmation is not null)
+        {
+            return policyConfirmation;
+        }
+
         var confirmation = RequireSubscriptionAdvanceConfirmation(context);
         if (confirmation is not null)
         {
@@ -261,6 +353,7 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
+                AutonomyPolicyEvidence.Record(current, goal, policy, AutonomyAction.DispatchStart, "advance-subscription", allowed: true);
                 var result = GoalManagementCommandService.AdvanceGoalWithSubscriptions(
                     current,
                     agents,
@@ -287,6 +380,18 @@ internal static partial class DashboardEndpoints
 
     private static async Task<IResult> AdvanceGoalWithSubscriptionsUntilBlockedAsync(HttpContext context, string goalId, DashboardEndpointServices services)
     {
+        var policy = ResolveDashboardAutonomyPolicy(context);
+        var policyConfirmation = RequirePolicy(
+            null,
+            null,
+            policy,
+            AutonomyAction.DispatchStart,
+            "advance-subscription-until-blocked");
+        if (policyConfirmation is not null)
+        {
+            return policyConfirmation;
+        }
+
         var confirmation = RequireSubscriptionAdvanceConfirmation(context);
         if (confirmation is not null)
         {
@@ -299,6 +404,7 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
+                AutonomyPolicyEvidence.Record(current, goal, policy, AutonomyAction.DispatchStart, "advance-subscription-until-blocked", allowed: true);
                 var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
                     current,
                     agents,
@@ -340,11 +446,18 @@ internal static partial class DashboardEndpoints
 
         var body = await ReadRequestBodyAsync(context.Request);
         var agents = services.LoadAgentCatalog().Agents;
+        var policy = ResolveDashboardAutonomyPolicy(context);
         return await MutateAsync(
             services,
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
+                var policyConfirmation = RequirePolicyForGoalBatchOperation(current, goal, operation, policy);
+                if (policyConfirmation is not null)
+                {
+                    return Task.FromResult(policyConfirmation);
+                }
+
                 var largePaidSubscriptionStartConfirmation = RequireLargePaidSubscriptionStartConfirmation(
                     context,
                     current,
@@ -355,6 +468,12 @@ internal static partial class DashboardEndpoints
                 if (largePaidSubscriptionStartConfirmation is not null)
                 {
                     return Task.FromResult(largePaidSubscriptionStartConfirmation);
+                }
+
+                var readinessConfirmation = RequireGoalReadinessStartConfirmation(context, goal, agents, operation, services.Workspace);
+                if (readinessConfirmation is not null)
+                {
+                    return Task.FromResult(readinessConfirmation);
                 }
 
                 var result = GoalManagementCommandService.ApplyGoalBatchAction(
@@ -373,6 +492,36 @@ internal static partial class DashboardEndpoints
     {
         return operation.Equals("start-subscription-ready", StringComparison.OrdinalIgnoreCase) ||
             operation.Equals("start-dispatches", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IResult? RequireGoalReadinessStartConfirmation(
+        HttpContext context,
+        Goal goal,
+        IReadOnlyList<AgentDefinition> agents,
+        string operation,
+        OrchestratorWorkspace workspace)
+    {
+        if (!RequiresBatchStartConfirmation(operation))
+        {
+            return null;
+        }
+
+        var report = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory);
+        if (report.AllowsStart(HasQueryConfirmation(context, "confirmReadinessRisk")))
+        {
+            return null;
+        }
+
+        var blockers = string.Join("; ", report.Findings
+            .Where(finding => finding.Severity == GoalReadinessSeverity.Blocker)
+            .Select(finding => $"{finding.Kind}: {finding.Message}"));
+        var confirm = report.RequiresOperatorConfirmation
+            ? " Add confirmReadinessRisk=true after reviewing readiness."
+            : string.Empty;
+        return Text(
+            $"dashboard invalid request: goal readiness preflight blocked {operation}. {blockers}.{confirm}",
+            "text/plain; charset=utf-8",
+            StatusCodes.Status409Conflict);
     }
 
     private static IResult? RequireSubscriptionAdvanceConfirmation(HttpContext context)
@@ -481,6 +630,113 @@ internal static partial class DashboardEndpoints
     {
         return context.Request.Query.TryGetValue(SubscriptionPromptCostGuard.DashboardConfirmationQueryName, out var value) &&
             value.Any(item => string.Equals(item, "true", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static AutonomyPolicy ResolveDashboardAutonomyPolicy(HttpContext context)
+    {
+        return AutonomyPolicy.Parse(
+            context.Request.Query.TryGetValue("autonomyPolicy", out var value)
+                ? value.FirstOrDefault()
+                : null);
+    }
+
+    private static IResult? RequirePolicyForTaskOperation(
+        AgentOrchestratorKernel current,
+        Goal goal,
+        string operation,
+        AutonomyPolicy policy)
+    {
+        var action = operation.ToLowerInvariant() switch
+        {
+            "run" or "api-run" => AutonomyAction.ModelRun,
+            "start" => AutonomyAction.DispatchStart,
+            "verify" => AutonomyAction.BuildTest,
+            _ => (AutonomyAction?)null
+        };
+
+        return action is null
+            ? null
+            : RequirePolicy(current, goal, policy, action.Value, operation);
+    }
+
+    private static IResult? RequirePolicyForGoalBatchOperation(
+        AgentOrchestratorKernel current,
+        Goal goal,
+        string operation,
+        AutonomyPolicy policy)
+    {
+        var action = operation.ToLowerInvariant() switch
+        {
+            "start-subscription-ready" or "start-dispatches" => AutonomyAction.DispatchStart,
+            "refresh-dispatches" => AutonomyAction.Refresh,
+            _ => (AutonomyAction?)null
+        };
+
+        return action is null
+            ? null
+            : RequirePolicy(current, goal, policy, action.Value, operation);
+    }
+
+    private static IResult? RequirePolicy(
+        AgentOrchestratorKernel? current,
+        Goal? goal,
+        AutonomyPolicy policy,
+        AutonomyAction action,
+        string operation)
+    {
+        var allowed = policy.Allows(action);
+        if (current is not null && goal is not null)
+        {
+            AutonomyPolicyEvidence.Record(current, goal, policy, action, operation, allowed);
+        }
+
+        return allowed
+            ? null
+            : Text(
+                $"dashboard invalid request: autonomy policy '{policy.Name}' blocks {operation}.",
+                "text/plain; charset=utf-8",
+                StatusCodes.Status409Conflict);
+    }
+
+    private static GoalSupervisorPlanDto ToGoalSupervisorPlanDto(
+        GoalSupervisorPlan plan,
+        IReadOnlyList<string> appliedActions)
+    {
+        return new GoalSupervisorPlanDto(
+            plan.GoalId.Value,
+            plan.GoalPrefix,
+            plan.PolicyName,
+            plan.ApplySafe,
+            appliedActions,
+            plan.Proposals.Select(proposal => new GoalSupervisorProposalDto(
+                proposal.Kind,
+                proposal.TaskNumber,
+                proposal.TaskId?.Value,
+                proposal.PolicyAction,
+                proposal.PolicyAllows,
+                proposal.CanApply,
+                proposal.RequiresOperatorGate,
+                proposal.Reason,
+                proposal.SuggestedCommand)).ToList());
+    }
+
+    private static FailureTriageReportDto ToFailureTriageReportDto(FailureTriageReport report)
+    {
+        return new FailureTriageReportDto(
+            report.GoalId.Value,
+            report.GoalPrefix,
+            report.PolicyName,
+            report.Items.Select(item => new FailureTriageItemDto(
+                item.TaskNumber,
+                item.TaskId?.Value,
+                item.Cause,
+                item.Action,
+                item.PolicyAction,
+                item.PolicyAllows,
+                item.CanAutoApply,
+                item.RequiresOperatorGate,
+                item.Explanation,
+                item.SuggestedCommand)).ToList());
     }
 
     private static IResult? RequirePaidApiRunConfirmation(

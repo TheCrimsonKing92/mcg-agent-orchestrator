@@ -32,7 +32,7 @@ public sealed class LocalDispatchRunner
         }
 
         var verification = await _processVerifier
-            .RunAsync(dispatch.Command, dispatch.WorkingDirectory, cancellationToken)
+            .RunAsync(dispatch.Command, dispatch.WorkingDirectory, goalId, taskId, cancellationToken)
             .ConfigureAwait(false);
 
         kernel.RecordDispatchExecutionResult(goalId, taskId, verification);

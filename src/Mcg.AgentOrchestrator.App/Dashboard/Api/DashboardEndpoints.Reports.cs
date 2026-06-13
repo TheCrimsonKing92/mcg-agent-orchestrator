@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -61,6 +63,67 @@ internal static partial class DashboardEndpoints
         var goal = ResolveGoal(context.Request, current);
         var agents = services.LoadAgentCatalog().Agents;
         return Json(DashboardResponseMapper.ToNextActionsDto(goal, current.BuildNextActions(goal.Id), agents));
+    }
+
+    private static async Task<IResult> GetOperatorInboxAsync(HttpContext context, DashboardEndpointServices services)
+    {
+        var current = await LoadAsync(services, context.RequestAborted);
+        var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        var goalPrefix = DashboardRequestParser.GetQueryValue(context.Request, "goal");
+        var includeAcknowledged = IsTrue(DashboardRequestParser.GetQueryValue(context.Request, "includeAcknowledged"));
+        var report = OperatorInbox.Build(current, agents, workerProfiles, services.Workspace, goalPrefix, includeAcknowledged);
+        return Json(DashboardResponseMapper.ToOperatorInboxReportDto(report));
+    }
+
+    private static async Task<IResult> AcknowledgeOperatorInboxItemAsync(HttpContext context, DashboardEndpointServices services)
+    {
+        var itemId = DashboardRequestParser.GetQueryValue(context.Request, "itemId");
+        if (string.IsNullOrWhiteSpace(itemId))
+        {
+            throw new ArgumentException("operator inbox acknowledgement requires itemId.");
+        }
+
+        var current = await LoadAsync(services, context.RequestAborted);
+        var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        var goalPrefix = DashboardRequestParser.GetQueryValue(context.Request, "goal");
+        var note = DashboardRequestParser.GetQueryValue(context.Request, "note");
+        var report = OperatorInbox.Acknowledge(current, agents, workerProfiles, services.Workspace, itemId, note, goalPrefix);
+        return Json(DashboardResponseMapper.ToOperatorInboxReportDto(report));
+    }
+
+    private static IResult GetBacklogGoalPlan(HttpContext context, DashboardEndpointServices services)
+    {
+        var heading = DashboardRequestParser.GetQueryValue(context.Request, "heading");
+        var maxValue = DashboardRequestParser.GetQueryValue(context.Request, "max");
+        var maxItems = string.IsNullOrWhiteSpace(maxValue)
+            ? 10
+            : int.TryParse(maxValue, out var parsedMax) && parsedMax > 0
+                ? parsedMax
+                : throw new ArgumentException("Backlog goal-plan max must be a positive integer.");
+        var intake = BacklogIntakePlanner.Build(
+            services.Workspace.ExecutionDirectory,
+            string.IsNullOrWhiteSpace(heading) ? null : heading,
+            maxItems);
+        if (intake.Items.Count == 0)
+        {
+            throw new InvalidOperationException("No backlog items matched the requested filter.");
+        }
+
+        var plan = GoalDependencyPlanner.Build(intake);
+        return Json(DashboardResponseMapper.ToBacklogGoalPlanDto(intake, plan));
+    }
+
+    private static async Task<IResult> GetCrossGoalStartPlanAsync(HttpContext context, DashboardEndpointServices services)
+    {
+        var current = await LoadAsync(services, context.RequestAborted);
+        var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        var confirmed = IsTrue(DashboardRequestParser.GetQueryValue(context.Request, "confirmCostRisk"));
+        var plan = CrossGoalSubscriptionStartPlanner.Build(current, agents, workerProfiles, confirmed);
+        var drainPolicy = GoalDrainPolicyStore.LoadOrDefault(services.Workspace);
+        return Json(DashboardResponseMapper.ToCrossGoalStartPlanDto(plan, drainPolicy));
     }
 
     private static IResult GetSourceSurvey(HttpContext context, DashboardEndpointServices services)
@@ -147,5 +210,13 @@ internal static partial class DashboardEndpoints
         }
 
         return maxFiles;
+    }
+
+    private static bool IsTrue(string? value)
+    {
+        return value is not null &&
+            (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+             value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+             value.Equals("yes", StringComparison.OrdinalIgnoreCase));
     }
 }

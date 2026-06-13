@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
 using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -23,6 +24,13 @@ internal static partial class DashboardEndpoints
             ?? (context.Request.Query.TryGetValue("goal", out var focusGoalValues)
                 ? focusGoalValues.FirstOrDefault()
                 : null);
+        var operatorInbox = OperatorInbox.Build(
+            current,
+            agentCatalog.Agents,
+            workerProfiles,
+            services.Workspace,
+            focusGoalPrefix,
+            includeAcknowledged: false);
         var html = DashboardRenderer.Render(
             current,
             new DashboardRenderOptions(
@@ -55,7 +63,8 @@ internal static partial class DashboardEndpoints
                 focusGoalPrefix,
                 view,
                 agentCatalog.Agents,
-                workerProfiles));
+                workerProfiles,
+                DashboardResponseMapper.ToOperatorInboxReportDto(operatorInbox)));
         return Text(html, "text/html; charset=utf-8");
     }
 }

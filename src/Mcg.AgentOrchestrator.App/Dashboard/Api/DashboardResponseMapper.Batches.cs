@@ -53,7 +53,19 @@ public static BatchActionResultDto ToSubscriptionStartActionResultDto(Goal goal,
         result.Processes.Tasks.Select(task => new ProcessBatchOutcomeDto(
             ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
             task.Id.Value,
-            ToProcessDto(task.LastProcess))).ToList());
+            ToProcessDto(task.LastProcess))).ToList(),
+        ToParallelExecutionPlanDto(result.ParallelPlan));
+}
+
+public static ParallelExecutionPlanDto ToParallelExecutionPlanDto(ParallelExecutionPlan plan)
+{
+    return new ParallelExecutionPlanDto(
+        plan.Batches.Select(batch => new ParallelExecutionBatchDto(batch.Number, batch.IntentIds)).ToList(),
+        plan.Decisions.Select(decision => new ParallelExecutionDecisionDto(
+            decision.IntentId,
+            decision.Disposition,
+            decision.BatchNumber,
+            decision.Reasons)).ToList());
 }
 
 public static ProcessBatchPlanDto ToProcessBatchPlanDto(Goal goal, ProcessBatchPlan plan)

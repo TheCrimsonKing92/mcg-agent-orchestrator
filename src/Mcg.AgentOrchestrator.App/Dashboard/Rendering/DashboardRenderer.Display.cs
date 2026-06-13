@@ -50,6 +50,7 @@ public static partial class DashboardRenderer
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
         ProgressKind.GoalCancelled => "Goal cancelled",
         ProgressKind.GoalSuperseded => "Goal superseded",
+        ProgressKind.GoalPolicyDecision => "Autonomy policy",
         _ => kind.ToString()
     };
 

@@ -405,6 +405,27 @@ public sealed class StatePersistenceAndPerformanceTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "OrchestratorStateStore_transactions_write_durable_journal")]
+    public async Task OrchestratorStateStoreTransactionsWriteDurableJournal()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var repository = new FileOrchestratorStateRepository(path);
+
+        await repository.TransactAsync(
+            (kernel, _) =>
+            {
+                kernel.CreateGoal("Journaled mutation");
+                return Task.FromResult((true, true));
+            });
+
+        var journalPath = path + OrchestratorStateStore.TransactionJournalExtension;
+        Assert.True(File.Exists(journalPath));
+        var journal = await File.ReadAllTextAsync(journalPath);
+        Assert.Contains(journal, text => text.Contains("\"Status\":\"begin\"", StringComparison.Ordinal));
+        Assert.Contains(journal, text => text.Contains("\"Status\":\"commit\"", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "OrchestratorStateStore_retries_transient_atomic_replace_access_denial")]
     public async Task OrchestratorStateStoreRetriesTransientAtomicReplaceAccessDenial()
     {

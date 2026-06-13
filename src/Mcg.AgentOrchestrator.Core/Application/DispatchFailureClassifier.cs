@@ -2,6 +2,11 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
+public sealed record ProviderSubscriptionCooldown(
+    string ProviderName,
+    TaskId SourceTaskId,
+    DateTimeOffset RetryAfter);
+
 public static class DispatchFailureClassifier
 {
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
@@ -93,6 +98,14 @@ public static class DispatchFailureClassifier
             IsRecoverableProviderConnectivityFailure(latest);
     }
 
+    public static bool HasRecoverableProviderModelRejectionFailure(TaskSpec task)
+    {
+        return task.Status == WorkTaskStatus.Failed &&
+            IsSubscriptionProviderCliDispatch(task) &&
+            task.LastVerification is { Succeeded: false } latest &&
+            IsRecoverableProviderModelRejectionFailure(latest);
+    }
+
     public static int CountRecoverableProviderConnectivityFailures(TaskSpec task)
     {
         return task.VerificationHistory.Count(verification =>
@@ -114,6 +127,29 @@ public static class DispatchFailureClassifier
 
         return ContainsRecoverableProviderConnectivityText(output) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
+    }
+
+    public static bool IsRecoverableProviderModelRejectionFailure(TaskVerificationRecord verification)
+    {
+        if (verification.Succeeded)
+        {
+            return false;
+        }
+
+        var output = string.Join(
+            Environment.NewLine,
+            verification.StandardOutput,
+            verification.StandardError);
+
+        return ContainsProviderModelRejectionText(output) &&
+            !HasUsefulPreWorkOutput(verification.StandardOutput);
+    }
+
+    public static int CountRecoverableProviderModelRejectionFailures(TaskSpec task)
+    {
+        return task.VerificationHistory.Count(verification =>
+            !verification.Succeeded &&
+            IsRecoverableProviderModelRejectionFailure(verification));
     }
 
     public static bool HasRecoverableSubscriptionLimitHistory(TaskSpec task)
@@ -148,6 +184,33 @@ public static class DispatchFailureClassifier
         }
 
         return retryAfter > now;
+    }
+
+    public static bool TryGetProviderSubscriptionCooldown(
+        Goal goal,
+        TaskId candidateTaskId,
+        string providerName,
+        DateTimeOffset now,
+        out ProviderSubscriptionCooldown cooldown)
+    {
+        cooldown = default!;
+        foreach (var task in goal.Tasks)
+        {
+            if (task.Id == candidateTaskId ||
+                task.LastDispatch is not { ProviderName: { Length: > 0 } dispatchProviderName } ||
+                !dispatchProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) ||
+                !IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+            {
+                continue;
+            }
+
+            if (cooldown is null || retryAfter > cooldown.RetryAfter)
+            {
+                cooldown = new ProviderSubscriptionCooldown(dispatchProviderName, task.Id, retryAfter);
+            }
+        }
+
+        return cooldown is not null;
     }
 
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
@@ -281,6 +344,19 @@ public static class DispatchFailureClassifier
              (text.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
               text.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
               text.Contains("failed", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool ContainsProviderModelRejectionText(string text)
+    {
+        return (text.Contains("model", StringComparison.OrdinalIgnoreCase) ||
+                text.Contains("profile", StringComparison.OrdinalIgnoreCase)) &&
+            (text.Contains("not supported", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("unsupported", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("unknown model", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("invalid model", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("model_not_found", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("400", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool HasUsefulPreWorkOutput(string output)

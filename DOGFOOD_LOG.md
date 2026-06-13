@@ -4,6 +4,534 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-13 - Scheduled drain windows shipped
+
+Direct implementation in the active Codex session. Persisted `.orchestrator/drain-policy.json` can now include `allowedLocalTimeWindows`, and `drain-goals` evaluates local time windows before selecting subscription-start batches. Outside the configured window, ready work is still reported with a schedule-closed reason and blocked command, while supervisor/operator gates remain visible. CLI output prints the active windows and schedule state; the dashboard cross-goal policy DTO exposes the configured windows for subscription consumers.
+
+- Operator gate: `CliDrainGoalsLoadsPersistedPolicyAndBlocksDisallowedStarts|GoalDrainPolicyScheduledWindowsHoldStartsOutsideAllowedTime|CliDrainGoalsDryRunReportsSubscriptionAndOperatorGates|CliDrainGoalsApplyRunsSafeSupervisorActionsWithoutCrossingGates` passed 4/4.
+- Backlog closed: scheduled unattended drain windows with bounded autonomy.
+- Model fit: local Codex session - adequate - deterministic policy/planner extension with focused CLI regression coverage.
+
+## 2026-06-13 - Duplicate automation backlog closures verified
+
+Current-state audit in the active Codex session found six newly filed roadmap entries already covered by shipped source and tests: provider capacity scheduling, source survey/impact artifacts, change-risk/parallel gates, goal-scoped build lease reuse, operator inbox triage, and historical dogfood evaluation.
+
+- Operator gate: Core `ParallelExecutionPlanner|RepositoryTestImpactPlanner|VerificationPolicyCompiler` passed 10/10. Infrastructure `SubscriptionPlan_marks_usage_limited_tasks_not_preparable_until_retry_time|SubscriptionPlan_keeps_unrelated_provider_out_of_cooldown|CrossGoalSubscriptionStartPlanner_batches_independent_goals_and_serializes_conflicts|WorkerContextArtifacts_writes_source_survey_and_diff_summary_artifacts|DotnetBuildEnvironmentManager|LocalProcessVerifier_reuses_goal_build_lease_across_tasks|CliOperatorInboxReportsAndAcknowledgesItems|DashboardRendererRendersOperatorInboxWithAckControl|DashboardMonitoringEventsBuildsResumableBatchesAndSseEvents|HistoricalDogfoodEvaluation_scores_recorded_goal_state_without_starting_workers` passed 7/7.
+- Backlog closed: provider capacity scheduling; deterministic source survey and impact analysis; change-risk gates; isolated build-environment reuse; operator inbox triage; historical dogfood evaluation regression suite.
+- Model fit: local Codex session - adequate - current-state duplicate audit plus focused regression evidence.
+
+## 2026-06-13 - Context budget policy shipped
+
+Direct implementation in the active Codex session. Added `context-budget.md` to worker context packages with prompt budget constants, artifact retrieval handles, and embed/summarize/retrieve/omit decisions. The artifact is listed in `manifest.md`, `artifact-registry.json`, package snapshots, and role priorities so workers prefer handles over prompt-copying large prior evidence. Existing large-paid-prompt guard tests continue to cover prior-evidence prompt growth.
+
+- Operator gate: `WorkerProfileDispatcherWritesContextArtifactsWithRepoGuidanceAndFullerPriorEvidence|WorkerProfileDispatcherLateFileAccessSubscriptionPromptStaysBelowLargePaidThreshold|WorkerProfileDispatcherNoHandoffFileWhenNoPriorCompletedTasks|WorkerContextArtifactsRolePriorities|WorkerContextArtifactsSelectsRelevantSkillsAndRegistersSkillArtifact` passed 4/4 after one `dotnet build-server shutdown` retry for CS2012/VBCSCompiler lock hygiene.
+- Backlog closed: context budget policy and artifact retrieval planning.
+- Model fit: local Codex session - adequate - deterministic context artifact addition and focused context economics tests.
+
+## 2026-06-13 - Worker result contracts closed
+
+Direct implementation plus current-state audit in the active Codex session. Worker prompts already require a bounded `WORKER_RESULT` contract with files, commands, tests, commit, blockers, model_fit, skills, and confidence. Background dispatch validation parses contracts surrounded by prose and fails missing, partial, malformed, blocker-bearing, model-fit-missing, skill-missing, commit-mismatch, test-missing, and file-mismatch cases; dashboard/API evidence surfaces reported skills and contract presence.
+
+- Operator gate: `WorkerContextArtifacts|BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractFails|BackgroundDispatchRunnerFileRoleWithPartialWorkerResultContractFails|BackgroundDispatchRunnerFileRoleWithMalformedWorkerResultContractFails|BackgroundDispatchRunnerFileRoleWithWorkerResultFileMismatchFails|DashboardTaskSummaryExposesWorkerResultSkillUsage|DashboardRendererRendersWorkerResultSkillUsage` passed 14/14.
+- Backlog closed: machine-readable worker result contracts.
+- Model fit: local Codex session - adequate - contract parser/validator test coverage and evidence surfacing audit.
+
+## 2026-06-13 - Acceptance evidence packet closed
+
+Current-state audit in the active Codex session. `GoalAcceptanceEvidenceBundle` already collects worktree path, changed files, diff stat, change classification, test impact, verification policy checks, build environment lease evidence, acceptance check results, task verification records, worker contract presence, blockers, and next commands. `acceptance` prints the bundle and blocks dirty worktrees, missing checks, generated artifacts, failed acceptance verification, and missing verification; dashboard exposes the same evidence report link.
+
+- Operator gate: `CliAcceptanceEvidenceBlocksDirtyWorktreeBeforeMerge|CliAcceptanceEvidenceBlocksMissingAcceptanceChecks|CliAcceptanceEvidenceBlocksGeneratedArtifactChanges|CliAcceptanceSkipVerifyBypassesVerificationAndMerges|GoalAcceptanceVerifierBrokersDotnetManifestCommandChecks|DashboardTaskSummaryExposesWorkerResultSkillUsage|BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractFails` passed 7/7.
+- Backlog closed: deterministic acceptance evidence packets.
+- Model fit: local Codex session - adequate - current-state audit with focused acceptance/worker-contract verification tests.
+
+## 2026-06-13 - Resumable lifecycle operation closed
+
+Current-state audit plus a small direct fix in the active Codex session. `lifecycle-simple-goal`/`lifecycle-goal` already chain create, workspace create, run-goal, acceptance, and workspace cleanup with operation-journal evidence and safe operator stops. Added a completed-cleanup idempotency guard so rerunning the same lifecycle objective reuses the recorded goal and exits without recreating a workspace.
+
+- Operator gate: `CliLifecycleSimpleGoalRunsAcceptsAndRemovesWorkspace|CliLifecycleGoalRunsFiveRoleGoalAcceptsAndRemovesWorkspace|CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance|CliLifecycleSimpleGoalKeepsWorkspaceWhenAcceptanceFails|RunGoalServiceStopsOnHumanInputRequest|GoalOperationJournalRecordsLatestStatusAndInterruptedOperations` passed 6/6.
+- Backlog closed: resumable lifecycle commands for routine goal operation.
+- Model fit: local Codex session - adequate - source audit plus focused lifecycle/journal tests.
+
+## 2026-06-13 - Goal health scoring shipped
+
+Direct implementation in the active Codex session. Added `GoalHealthEvaluator` as a shared compact score/recommendation layer over next actions, recovery, retry-after provider limits, dirty worktrees, and acceptance readiness. CLI `next` now prints the health line, and dashboard action recommendations include the same health source and secondary recommendation without changing the existing primary next-action control behavior.
+
+- Operator gate: `CliNextPrintsGoalHealthRecommendation|GoalHealthEvaluatorPrioritizesDirtyWorktreeBeforeNextAction|GoalHealthEvaluatorScoresReadyFailedStalledProviderLimitedAndHealthyStates|DashboardActionRecommendationsAggregateNextTriageRecoveryCapacityAndPolicy` passed 4/4.
+- Backlog closed: goal health scoring and next-action recommendations.
+- Model fit: local Codex session - adequate - deterministic aggregation over existing recovery, capacity, acceptance, and next-action planners.
+
+## 2026-06-13 - Worker skill routing and evidence closed
+
+Direct implementation in the active Codex session. Added repo-local `aspnet-core`, `playwright`, and `skill-authoring` worker skills so deterministic selection does not route to missing local manifests. The worker context router now selects `skill-authoring` for `.agents/skills`, `SKILL.md`, selected-skill, and skill-usage work while existing worker result parsing continues to surface reported skills in dashboard/API evidence.
+
+- Operator gate: `WorkerContextArtifactsSelectsRelevantSkillsAndRegistersSkillArtifact|WorkerContextArtifactsSelectsDifferentSkillManifestsForTasksInSameGoal|WorkerProfileDispatcherPreflightBlocksMissingRequiredLocalSkills|DashboardTaskSummaryExposesWorkerResultSkillUsage|DashboardRendererRendersWorkerResultSkillUsage` passed 5/5 after one `dotnet build-server shutdown` retry for CS2012/VBCSCompiler lock hygiene.
+- Backlog closed: worker skill/profile routing and usage evidence.
+- Model fit: local Codex session - adequate - deterministic router, repo-local skill manifests, and focused worker context/dashboard evidence tests.
+
+## 2026-06-13 - Deterministic rebase recovery shipped
+
+Direct implementation in the active Codex session. Added `workspace rebase` recovery for stale goal branches: clean branches rebase onto the current base branch and then fast-forward at acceptance, dirty worktrees are refused, and conflicted rebases are aborted with exact conflict files plus an operator-task suggestion. Acceptance queue dry-runs now point stale branches to `workspace rebase` instead of raw `git merge`.
+
+- Operator gate: `GoalWorktreesRebasesStaleBranchOntoMainWhenClean|GoalWorktreesReportsConflictFilesAndAbortsRebase|GoalWorktreesRefusesRebaseWhenWorktreeDirty|CliAcceptanceQueueHoldsStaleBranchWithManualMergeCommand|CliWorkspaceRebaseUpdatesCleanStaleGoalBranch` passed 5/5.
+- Backlog closed: deterministic rebase and conflict recovery workflows.
+- Model fit: local Codex session - adequate - git worktree recovery behavior with focused fixture tests.
+
+## 2026-06-13 - Dashboard monitoring subscription consumer closed
+
+Direct implementation in the active Codex session. Added browser-side stale monitoring detection around the existing dashboard EventSource consumer so the UI reports stale subscription state while retaining timed refresh fallback. Existing monitoring batches already provide resumable cursors, SSE timeline events, goal snapshots, operator inbox, and provider capacity state.
+
+- Operator gate: `DashboardRendererCanEmitOperatorControls|DashboardMonitoringEventsBuildsResumableBatchesAndSseEvents|GoalMonitoringSubscriptionCommandTests` passed 5/5.
+- Backlog closed: dashboard first-class monitoring subscription consumer.
+- Model fit: local Codex session - adequate - small dashboard JS/test closure over existing monitoring subscription API.
+
+## 2026-06-13 - Repo-scoped skill authoring smoke closed
+
+Direct implementation in the active Codex session. Added a deterministic full-permission subscription-profile smoke proving a task prepared through `WorkerProfileDispatcher` can create `.agents/skills/smoke/SKILL.md` from a linked goal worktree and commit it through the common git object database. The existing codex workspace-write guard remains blocked for repo-scoped skill targets; full-permission Claude-style profiles report `repo-skill-write`.
+
+- Operator gate: `repo_scoped_skill|WorkerProfileDispatcherPreflightAllowsRepoScopedSkillTargetsForFullPermissionProfile|WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets` passed 2/2.
+- Backlog closed: repo-scoped `.agents/skills` writable to subscription workers.
+- Model fit: deterministic full-permission subscription-profile smoke - adequate - no paid provider needed; exercised worktree plus common git object database.
+
+## 2026-06-13 - Goal-scoped build environment backlog duplicate closed
+
+Current-state audit found the reusable isolated build environment done-condition covered by existing source and tests: `DotnetBuildEnvironmentManager` creates per-goal leases and artifacts, `LocalProcessVerifier` reuses the same goal lease across Developer/Tester/Reviewer dotnet commands with `UseSharedCompilation=false`, different goals get distinct artifacts, same-goal execution is serialized, and `GoalWorktrees.Remove` deletes goal build artifacts during cleanup.
+
+- Operator gate: `DotnetBuildEnvironmentManager|LocalProcessVerifier|GoalWorktreesFastForwardsGoalBranchOnMerge` passed 9/9.
+- Backlog closed: reuse isolated build environments within a goal pipeline.
+- Model fit: local Codex session - adequate - source/test audit over already-shipped build isolation and cleanup behavior.
+
+## 2026-06-13 - Goal objective decomposition preflight shipped
+
+Direct implementation in the active Codex session. Added `GoalObjectivePlanner` and CLI objective-plan output for `goal`, `simple-goal`, and lifecycle goal creation. The planner classifies complexity, risk labels, file scopes, required tools, required verification, and task boundaries before task creation; ambiguous objectives are rejected without mutating state.
+
+- Operator gate: `GoalObjectivePlanner|CliGoalPrintsObjectivePlanBeforeTaskCreation|CliGoalRejectsAmbiguousObjectiveWithoutMutatingState|CliGoalPlan|BacklogIntake|GoalDependencyPlanner|GoalReadinessPreflight|CliLifecycleGoalRequiresReadinessConfirmationForHighRiskObjective` passed 14/14.
+- Backlog closed: capability-aware goal decomposition and sizing gates.
+- Model fit: local Codex session - adequate - deterministic planner and CLI gate over objective text, risk signals, and file scopes.
+
+## 2026-06-13 - Policy-driven drain-goals shipped
+
+Direct implementation in the active Codex session. Added persisted `.orchestrator/drain-policy.json` loading with conservative defaults for max starts, allowed roles/providers, large-prompt behavior, readiness-risk confirmation, and acceptance gating. `drain-goals` dry-run/apply now uses the same policy-capped start set, prints the active policy, and the cross-goal start API DTO exposes the active drain policy for dashboard consumers.
+
+- Operator gate: `CliDrainGoals|GoalDrain|CrossGoal` passed 6/6.
+- Backlog closed: make `drain-goals` policy-driven and unattended-safe.
+- Model fit: local Codex session - adequate - deterministic policy/load/apply path over existing drain and cross-goal planners.
+
+## 2026-06-13 - Workflow broker manifest shipped
+
+Direct implementation in the active Codex session. Added `workflow-brokers.md` to worker context packages as the deterministic broker manifest for build/test selection, static policy checks, source survey, diff summary, acceptance evidence, and backlog/log evidence. The artifact is registered in `artifact-registry.json`, referenced from `manifest.md`/digest priorities, and instructs workers to report broker failures in `WORKER_RESULT blockers`.
+
+- Operator gate: `WorkerContextArtifacts|LocalProcessVerifierRecordsStructuredBrokerEvidenceForManagedDotnetChecks|GoalAcceptanceVerifierBrokersDotnetManifestCommandChecks` passed 10/10 after one `dotnet build-server shutdown` retry for CS2012/VBCSCompiler lock hygiene.
+- Backlog closed: deterministic workflow brokers for common agent chores.
+- Model fit: local Codex session - adequate - context artifact wiring over existing deterministic verification/source/diff/acceptance brokers.
+
+## 2026-06-13 - Context artifact registry backlog duplicate closed
+
+Current-state audit found the context economics done-condition covered by `artifact-registry.json`, `context-package.json`, package snapshots, role visibility, hashes, freshness metadata, compact prior-task summaries, source survey, diff summary, deterministic verification, selected skills, and the new workflow broker manifest. Prompt prep keeps large prior evidence out of late subscription prompts while retaining retrieval handles to worktree artifacts.
+
+- Operator gate: `WorkerContextArtifacts|WorkerProfileDispatcherLateFileAccessSubscriptionPromptStaysBelowLargePaidThreshold|WorkerProfileDispatcherNoHandoffFileWhenNoPriorCompletedTasks` passed 10/10.
+- Backlog closed: context artifact registry with retrieval handles.
+- Model fit: local Codex session - adequate - source/test audit over existing context artifact registry and prompt economy guard.
+
+## 2026-06-13 - Subscription diagnosis and failover policy closed
+
+Direct implementation in the active Codex session plus current-state audit. Existing routing already handled retry-after deferral, provider cooldown, heartbeat/progress stalls, repeated usage-limit review gates, provider connectivity failover, operator inbox/dashboard visibility, and no-loop re-delegation. Added distinct provider model-rejection classification and run-goal failover so invalid/unsupported model errors route separately from generic verification failures.
+
+- Operator gate: `RunGoalServiceAutoFailover|CliFailureTriageClassifiesProvider|BackgroundDispatchRunnerRefreshFailsProviderNeutralStall|WorkerProfileDispatcherBlocksSameProviderTasksDuringProviderCooldown|SubscriptionPlanKeepsUnrelatedProviderOutOfCooldown|DashboardRendererSurfacesRecoverableSubscriptionLimitEvidence` passed 16/16.
+- Backlog closed: subscription limit diagnosis and provider failover policy.
+- Model fit: local Codex session - adequate - small classifier/triage addition over existing failover and monitoring surfaces.
+
+## 2026-06-13 - Confirmed goal abandon workflow added
+
+Direct implementation in the active Codex session. Added `abandon-goal` dry-run/apply workflow: confirmed apply cancels running dispatch records through the existing cancellation runner, records a Cancelled goal reason, removes clean worktrees while preserving unmerged committed branch work, cleans orphaned build leases, and prints retention evidence. Remaining rollback work needs accepted-goal base commit provenance.
+
+- Operator gate: `CliAbandonGoal|CliCancelGoal|CliGoalRecovery|CliBuildLeaseCleanup|retention` passed 12/12.
+- Backlog updated: deterministic rollback and abandon workflows now tracks rollback provenance as the remaining gap.
+- Model fit: local Codex session - adequate - CLI workflow composition over existing cancellation/worktree/retention primitives.
+
+## 2026-06-13 - New autonomy backlog duplicates closed
+
+Current-state audit found the newly filed intake decomposition, context package manifests, worker skill routing, provider capacity scheduling, and operator review queue items were already covered by shipped source and tests: `BacklogIntakePlanner`/`GoalDependencyPlanner`, `WorkerContextArtifacts`, selected skill preflight/result evidence, `SubscriptionPlanBuilder` capacity schedules, `OperatorInbox`, `AcceptanceQueuePlanner`, and dashboard action recommendations.
+
+- Operator gate: duplicate-audit slice passed 19/19 covering goal planning, context artifacts, skill preflight, provider cooldowns, operator inbox, acceptance queue, action recommendations, brokered acceptance checks, and dashboard validation harness.
+- Backlog closed: goal intake decomposition, context package store, worker skill routing, provider capacity scheduling, operator review queue.
+- Model fit: local Codex session - adequate - source/test audit plus focused verification over already-shipped automation surfaces.
+
+## 2026-06-13 - Historical dogfood evaluation harness shipped
+
+Direct implementation in the active Codex session. Added `HistoricalDogfoodEvaluationHarness` and CLI `dogfood-eval [goal]` to score durable goal state without starting workers, using monitor attention, operator inbox, subscription capacity, prompt/cost risk, false-completion risk, verification gaps, acceptance blockers, cleanup risk, and recovery findings.
+
+- Operator gate: `HistoricalDogfoodEvaluation|CliDogfoodEval` passed 2/2.
+- Backlog closed: historical dogfood evaluation harness.
+- Model fit: local Codex session - adequate - deterministic report over existing goal/task evidence and scheduling reports.
+
+## 2026-06-13 - Deterministic workflow broker backlog duplicate closed
+
+Current-state audit found the workflow broker done-condition is covered by existing deterministic workflow surfaces: brokered acceptance manifest checks, structured local verifier broker evidence, isolated .NET verification artifacts, and the checked-in dashboard browser/build-test harness.
+
+- Operator gate: method-filter slice passed 3/3 for `GoalAcceptanceVerifierBrokersDotnetManifestCommandChecks`, `LocalProcessVerifierRecordsStructuredBrokerEvidenceForManagedDotnetChecks`, and `DashboardValidationHarnessIsCheckedInAndScopedToRepositoryScripts`.
+- Backlog closed: deterministic workflow and tool execution broker.
+- Model fit: local Codex session - adequate - duplicate audit over existing deterministic workflow tests.
+
+## 2026-06-13 - Goal recovery safe parking shipped
+
+Direct implementation in the active Codex session. Added `park-goal <goal-prefix> <reason>` dry-run plus `--confirm-goal-park` apply. Confirmed parking cancels recorded running dispatches through the existing background runner and creates a goal-level human-input resume gate, leaving the goal WaitingForHuman with artifacts preserved. `goal-recovery` now recommends the safe parking command when interrupted or dirty recovery findings exist.
+
+- Operator gate: `CliGoalRecovery|CliParkGoal` passed 6/6.
+- Backlog closed: resumable goal recovery commands.
+- Model fit: local Codex session - adequate - small CLI recovery command over existing human-input and dispatch cancellation primitives.
+
+## 2026-06-13 - Deterministic rollback and abandon workflow shipped
+
+Direct implementation in the active Codex session. Added accepted-goal rollback provenance and `rollback-goal <goal-prefix> <reason>` dry-run/apply. Acceptance now captures the pre-merge base and accepted head range when fast-forwarding a goal branch; confirmed rollback creates `rollback/<goal-prefix>` from main and commits a revert of that accepted range. This complements the confirmed `abandon-goal` workflow for failed or interrupted goals.
+
+- Operator gate: `CliRollbackGoal|CliAbandonGoal|CliParkGoal` passed 5/5; rollback/acceptance-adjacent slice passed 5/5.
+- Backlog closed: deterministic rollback and abandon workflows.
+- Model fit: local Codex session - adequate - git provenance and rollback command over existing worktree acceptance flow.
+
+## 2026-06-13 - Unattended goal drain mode shipped
+
+Direct implementation in the active Codex session. Added `drain-goals` dry-run/apply. Dry-run reports safe supervisor actions, first parallel-safe subscription-start batch, and acceptance/operator gates. Confirmed apply requires `--confirm-goal-drain` and `--confirm-batch-start`, runs safe supervisor recovery, starts only the first cross-goal subscription-safe batch under policy/cost/readiness guards, and leaves acceptance/human gates for explicit operator action.
+
+- Operator gate: `CliDrainGoals|CliSupervisor` passed 6/6.
+- Backlog closed: unattended goal drain mode.
+- Model fit: local Codex session - adequate - deterministic composition of existing supervisor, capacity, start-ready, and acceptance queue planners.
+
+## 2026-06-13 - Lifecycle runner backlog duplicate closed
+
+Current-state audit found the lifecycle runner done-condition is covered by existing `lifecycle-simple-goal`/`lifecycle-goal`, `monitor-goal`, acceptance evidence, workspace cleanup, and `safe-auto` acceptance-gate behavior. The lifecycle commands can run the full goal loop with confirmation flags, while policy mode can pause before acceptance for operator review.
+
+- Operator gate: `CliLifecycleSimpleGoal|CliLifecycleGoal|GoalMonitoringSubscriptionCommand` passed 13/13.
+- Backlog closed: one-command goal lifecycle runner.
+- Model fit: local Codex session - adequate - source/test audit of existing lifecycle and monitoring subscription behavior.
+
+## 2026-06-13 - Artifact retention dry-run policy shipped
+
+Direct implementation in the active Codex session. Added `GoalArtifactRetentionPlanner` and CLI `retention-plan` to classify active, waiting, ready-for-acceptance, accepted-cleaned, failed, abandoned, and superseded goals into deterministic artifact actions for worktrees, context packages, worker logs, build leases, operation journals, and transcripts. The command is dry-run only and preserves audit evidence while identifying build leases that can be safely cleaned.
+
+- Operator gate: focused triage/retention/dashboard report-link slice passed 5/5.
+- Backlog closed: workspace and artifact retention policy.
+- Model fit: local Codex session - adequate - deterministic retention policy/report over existing artifacts and cleanup primitives.
+
+## 2026-06-13 - Policy-aware failure triage shipped
+
+Direct implementation in the active Codex session. Added `FailureTriagePlanner`, CLI `failure-triage`, and read-only dashboard `/api/goals/{goal}/failure-triage` plus a focused-goal quick-report link. Triage classifies retry-after, limit review, provider connectivity, progress stalls, missing worker permissions, large prompt guards, CS2012 file locks, dirty worktrees, stale branches, failed verification, missing verification, and no-file-change completions into policy-aware next actions with `canAutoApply`, operator-gate, explanation, and command fields.
+
+- Operator gate: focused CLI triage slice passed 2/2; dashboard operator-controls report-link slice passed 1/1.
+- Backlog closed: policy-aware failure triage and auto-remediation.
+- Model fit: local Codex session - adequate - deterministic classifier/report layer over existing failure signals and autonomy policies.
+
+## 2026-06-13 - Test-impact selection duplicate closed
+
+Audit in the active Codex session found the reopened deterministic test-impact backlog item was already satisfied by `RepositoryTestImpactPlanner`, acceptance verifier default manifests, acceptance evidence/recovery output, worker `deterministic-verification.md` artifacts, and verification policy compilation.
+
+- Operator gate: Core `RepositoryTestImpactPlanner` slice passed 3/3; acceptance verifier plus worker deterministic-verification slice passed 10/10.
+- Backlog closed: deterministic test-impact selection.
+- Model fit: local Codex session - adequate - evidence audit over existing planner integrations.
+
+## 2026-06-13 - Goal dependency planner duplicate closed
+
+Audit in the active Codex session found the reopened dependency/batching backlog item was already satisfied by `goal-plan`, `GoalDependencyPlanner`, compiled goal graphs, dashboard goal-plan DTOs, and `ParallelExecutionPlanner` batching. Current output includes file scopes, required capabilities, verification contracts, dependency edges, validation findings, and parallel batch disposition before goals are created.
+
+- Operator gate: focused `GoalPlan` slice passed 4/4.
+- Backlog closed: goal dependency and batching planner.
+- Model fit: local Codex session - adequate - evidence audit over existing deterministic planner and dashboard exposure.
+
+## 2026-06-13 - Build environment reuse duplicate closed
+
+Audit in the active Codex session found the reopened build-environment reuse backlog item was already satisfied by the shipped goal-scoped .NET lease work: `DotnetBuildEnvironmentManager` reuses stable per-goal lease artifacts, brokered/local verification and acceptance use the same lease and execution lock, goal recovery reports orphaned leases, and workspace cleanup removes goal artifacts after merge/removal.
+
+- Operator gate: focused build-lease reuse slice passed 4/4; broader `GoalWorktreeTests` had already passed 27/27 in this turn.
+- Backlog closed: reuse isolated build environments across a goal pipeline.
+- Model fit: local Codex session - adequate - evidence audit plus focused regression tests; no new product code needed.
+
+## 2026-06-13 - Acceptance and merge queue shipped
+
+Direct implementation in the active Codex session. Added `acceptance-queue` as a dry-run report over completed goal worktrees plus `--apply --confirm-acceptance-queue` for supervised sequential acceptance, fast-forward merge, and workspace cleanup. The queue classifies ready, held, and blocked goals by completion state, worktree/branch presence, dirty state, branch freshness against current `HEAD`, and autonomy policy; stale branches are held with `git merge goal/<prefix>`, and safe-auto policies hold irreversible merge/cleanup actions.
+
+- Operator gate: focused queue slice passed 3/3; broader `GoalWorktreeTests` passed 27/27. Also corrected the existing verification-failure fixture to touch source instead of docs-only text so deterministic test-impact selection exercises the failing verifier path.
+- Backlog closed: acceptance and merge queue.
+- Model fit: local Codex session - adequate - deterministic lifecycle queue, CLI apply gate, and real git worktree regression coverage.
+
+## 2026-06-13 - Context package retrieval closed
+
+Direct implementation in the active Codex session. Existing file-access prompts already collapse prior evidence to `digest.md`, `prior-task-summaries.md`, and `prior-task-evidence.md` pointers while API-only briefs retain bounded inline evidence. Added task-scoped package snapshots under `.orchestrator-context/<goal>/packages/<task>`, `context-package.json` metadata, and manifest fallback guidance for missing or hash-failed artifacts so later task context is retained instead of overwritten.
+
+- Operator gate: focused context package/prompt-budget slice 5/5 plus Core prompt-budget slice 3/3 passed; broader worker context artifact slice 9/9 passed.
+- Backlog closed: context package retrieval instead of prompt-only carry-forward.
+- Model fit: local Codex session - adequate - deterministic context package persistence over existing artifact handoff and prompt-budget tests.
+
+## 2026-06-13 - Dashboard subscription consumers shipped
+
+Direct implementation in the active Codex session. Focused goal dashboards now render a live status panel and consume `goal.snapshot` SSE payloads directly to update goal status, task counts, inbox count, and provider capacity without waiting for a manual refresh. The existing EventSource-triggered full-content refresh remains as a detail/fallback path, while monitoring snapshots now carry provider capacity alongside inbox state.
+
+- Operator gate: focused dashboard live-consumer/monitor slice 3/3 passed; broader `DashboardRenderingTests` slice 59/59 passed.
+- Backlog closed: dashboard subscription consumers for live planning and recovery.
+- Model fit: local Codex session - adequate - ASP.NET dashboard rendering, SSE payload consumption, and focused UI contract tests.
+
+## 2026-06-13 - Provider capacity scheduler shipped
+
+Direct implementation in the active Codex session. Subscription planning now includes a deterministic `ProviderCapacitySchedule` with ready/deferred counts, next retry time, cost-risk state, and per-task capacity actions with alternate-provider recommendations. The schedule is printed in `subscription-plan`, exposed through the subscription-plan API DTO, and included in monitoring snapshots so dashboard/subscription consumers can react to capacity changes without a separate poll.
+
+- Operator gate: retry/cooldown/monitor capacity slice 4/4 passed; subscription plan DTO/CLI slice 4/4 passed; broader `SubscriptionPlan` slice 22/22 passed. One parallel test attempt hit CS2012 VBCSCompiler lock and passed after sequential rerun.
+- Backlog closed: provider capacity and retry scheduler.
+- Model fit: local Codex session - adequate - deterministic plan-level capacity summary over existing retry/cooldown/cost/model-fit signals with CLI/API/monitoring exposure.
+
+## 2026-06-13 - Risk-based verification policy compilation shipped
+
+Direct implementation in the active Codex session. Added `VerificationPolicyCompiler` over task role, objective, verification plan, changed-file scope, browser-smoke signals, and policy/security risk terms. Worker context artifacts now include a required verification policy section, file-role worker completion fails when policy-required tests are reported as not run, and acceptance evidence reports each policy check as passed, failed, missing, no-op, or manual while blocking missing required non-manual checks.
+
+- Operator gate: Core policy compiler slice 1/1 passed; focused worker/artifact/acceptance evidence slice 6/6 passed; broader background dispatch slice 31/31 passed.
+- Backlog closed: risk-based verification policy compilation.
+- Model fit: local Codex session - adequate - deterministic policy compiler, worker contract enforcement, and acceptance evidence integration.
+
+## 2026-06-13 - Skill routing preflight enforcement shipped
+
+Direct implementation in the active Codex session. `WorkerContextArtifacts` now exposes the deterministic skill requirements it already uses for `selected-skills.md`, and subscription preflight blocks when a repo-local `.agents/skills` catalog exists but selected required skills are missing. Skill manifests continue to vary by task role and signals, and the failure message names the missing `SKILL.md` paths plus remediation before a worker is started.
+
+- Operator gate: focused worker context/dispatcher routing slice 3/3 passed; broader `WorkerProfileDispatcher` slice 40/40 passed. First test attempt hit CS2012 VBCSCompiler lock and passed after `dotnet build-server shutdown`.
+- Backlog closed: skill and toolchain routing.
+- Model fit: local Codex session - adequate - narrow deterministic router/preflight enforcement and regression tests.
+
+## 2026-06-13 - Worker result contract validation verified
+
+Manual operator audit closed the worker-result contract backlog item without adding duplicate machinery. Current state already requires file-role subscription workers to emit a bounded `WORKER_RESULT` block with files, commands, tests, commit, blockers, model_fit, skills, and confidence; successful process exits are converted to failed verification when the contract is missing, reports blockers, lacks model/skill evidence, mismatches the committed head, or omits changed source files. Contract diagnostics are written into verification stderr and surface through task evidence, dashboard task details, operator inbox failed-task flow, and retry/verification next actions.
+
+- Operator gate: focused worker dispatch contract slice 2/2 passed for missing `WORKER_RESULT` and changed-file mismatch failure cases.
+- Backlog closed: worker-result contract validation and repair.
+- Model fit: local Codex session - adequate - evidence audit of existing deterministic contract enforcement with focused regression tests.
+
+## 2026-06-13 - Parallel safety execution gate shipped
+
+Direct implementation in the active Codex session. Added `CrossGoalSubscriptionStartPlanner`, `cross-goal-start-plan`, and `start-subscription-ready-goals --confirm-batch-start` so active assigned goals are planned together and only the first planner-safe cross-goal batch can start after readiness, cost, and autonomy checks. Lifecycle commands now check the same cross-goal gate before `run-goal`, and `/api/goals/cross-start-plan` exposes the decision for dashboard/API consumers.
+
+- Operator gate: focused cross-goal planner, lifecycle gate, per-goal start batch, and dashboard work-summary parallel-plan slice 4/4 passed. A broader lifecycle filter hit known parallel `Console.Out` capture interference; the failing safe-auto lifecycle test passed when run by method.
+- Backlog closed: promote parallel safety planning into execution.
+- Model fit: local Codex session - adequate - execution-gate integration across CLI, lifecycle, and dashboard evidence with focused safety tests.
+
+## 2026-06-13 - Dashboard operator inbox shipped
+
+Direct implementation in the active Codex session. Added `OperatorInbox` aggregation for human input, monitor attention, readiness preflights, acceptance gates, supervisor proposals, subscription route warnings, and budget/cooldown warnings. The inbox is available through `operator-inbox`, `operator-inbox-ack`, `/api/operator-inbox`, `/api/operator-inbox/ack`, dashboard ops/focused goal rendering, and monitoring subscription snapshots/SSE payloads with persisted acknowledgements.
+
+- Operator gate: focused inbox/render/monitor subscription slice 4/4 passed; earlier build-isolation closure was re-verified 8/8 before removing the duplicate backlog item.
+- Backlog closed: dashboard operator inbox.
+- Model fit: local Codex session - adequate - deterministic report aggregation, API/CLI/dashboard adapters, and focused subscription payload tests.
+
+## 2026-06-13 - Unattended supervisor safe recovery shipped
+
+Direct implementation in the active Codex session. Added a deterministic goal supervisor that builds dry-run proposals for running/stale processes, recoverable provider-neutral failures, retry-after deferrals, repeated limit-review gates, missing verification, dirty worktrees, and acceptance gates. `supervisor [goal]` reports proposals by autonomy policy; `supervisor --apply-safe` executes only reversible policy-allowed actions currently limited to refresh and re-delegate. `/api/goals/{goal}/supervisor` exposes the same plan/apply surface, and dashboard continuation watches now invoke the safe-auto supervisor fallback when ordinary subscription advancement is blocked.
+
+- Operator gate: supervisor/continuation slice 4/4 passed; existing run-goal failover slice 3/3 passed. One earlier supervisor retry hit CS2012 VBCSCompiler lock and passed after `dotnet build-server shutdown`.
+- Backlog closed: unattended goal supervisor.
+- Model fit: local Codex session - adequate - deterministic supervisor planner, policy-gated safe mutations, continuation-loop integration, and focused recovery tests.
+
+## 2026-06-13 - Autonomy policy presets and gates shipped
+
+Direct implementation in the active Codex session. Added named `observe`, `safe-auto`, and `supervised-auto` autonomy policies with deterministic action permissions for starts, model runs, refreshes, retries, failover, build/test, acceptance, cleanup, and backlog/log edits. CLI exposes `autonomy-policies` and accepts `--autonomy`; dashboard API action paths accept `autonomyPolicy`. Policy decisions are recorded as goal timeline evidence, and stricter policies block worker starts, acceptance merge, and workspace cleanup before side effects.
+
+- Operator gate: focused autonomy/lifecycle/workspace slice 7/7 passed after one `dotnet build-server shutdown` retry for CS2012 VBCSCompiler lock.
+- Backlog closed: autonomy policy presets and operator guardrails.
+- Model fit: local Codex session - adequate - shared policy contract, CLI/dashboard gates, and focused lifecycle tests.
+
+## 2026-06-13 - Deterministic goal graph compilation shipped
+
+Direct implementation in the active Codex session. `goal-plan` now compiles backlog slices into a deterministic graph with stable graph id, file scopes, required capabilities, verification contracts, rollback boundaries, validation findings, and parallel batch/disposition metadata. Goal creation refuses validation-error graphs, independent scopes can batch concurrently, conflicting scopes serialize, and `/api/backlog/goal-plan` exposes the same compiled graph for dashboard consumers before any goals are created.
+
+- Operator gate: focused goal-plan/compiler/dashboard DTO slice 6/6 passed.
+- Backlog closed: deterministic task decomposition and dependency compilation.
+- Model fit: local Codex session - adequate - deterministic graph compiler and CLI/dashboard evidence wiring.
+
+## 2026-06-13 - Deterministic build/test broker closed
+
+Direct implementation in the active Codex session. Managed dotnet verification now flows through the goal-scoped broker path for CLI verification, dashboard verification, acceptance `dotnet-test`, and acceptance manifest `command` checks that invoke `dotnet`. Broker evidence records lease id, artifacts path, execution lock path, duration, exit code, result summary, and CS2012 lock-remediation retry status. Same-goal build/test work is serialized on the per-goal execution lock, while recovery can report and clean orphaned build leases.
+
+- Operator gate: focused broker/local-verifier/acceptance/lease/recovery slice 14/14 passed.
+- Backlog closed: deterministic build/test broker.
+- Model fit: local Codex session - adequate - deterministic verification broker and structured evidence wiring.
+
+## 2026-06-13 - Per-goal build lease reuse and recovery shipped
+
+Direct implementation in the active Codex session. Build environments now expose a stable lease id plus execution-lock path, local verification and acceptance dotnet checks hold the per-goal execution lock while running, and `Invoke-IsolatedDotnet.ps1` serializes manual goal-scoped dotnet runs on the same lock. `goal-recovery` reports build lease state, owner pid liveness, and orphan cleanup eligibility, while `build-lease-cleanup --confirm-build-lease-cleanup` deletes only leases whose recorded owner is not alive.
+
+- Operator gate: focused build-lease/recovery/local-verifier/acceptance slice 10/10 passed.
+- Backlog closed: per-goal reusable build-environment leases.
+- Model fit: local Codex session - adequate - deterministic build isolation, recovery reporting, and guarded cleanup.
+
+## 2026-06-13 - Worker capability and cost router shipped
+
+Direct implementation in the active Codex session. Subscription plans now include a `WorkerRouteDecision` per task with selected/deferred/blocked disposition, route recommendation, deterministic reasons, and safe alternatives. The route combines role, provider/model/profile, task complexity, cost-guard prompt size, prompt-budget headroom, patch capability, execution policy, profile/template readiness, provider cooldown, retry-after, and recoverable limit history. CLI `subscription-plan` prints the route evidence, and dashboard subscription-plan DTOs expose the same decision.
+
+- Operator gate: focused route/CLI/dashboard slice 5/5 passed; broader subscription-plan slice 22/22 passed.
+- Backlog closed: worker capability and cost router.
+- Model fit: local Codex session - adequate - subscription planning/router integration with deterministic capability and cost evidence.
+
+## 2026-06-13 - Durable goal operation journal shipped
+
+Direct implementation in the active Codex session. Added goal-scoped operation journals under `.orchestrator/goal-operations/` plus a lifecycle idempotency index keyed by command and objective. Lifecycle commands now record create, workspace create, run-goal, acceptance, and workspace remove operations with begin/completed/failed status. Reissuing the same lifecycle command reuses the indexed goal instead of creating a duplicate, and `goal-recovery` reports latest and interrupted operations with replay recommendations.
+
+- Operator gate: operation journal/recovery/idempotency slice 3/3 passed; lifecycle command slice 8/8 passed.
+- Backlog closed: durable operation journals and idempotent replay.
+- Model fit: local Codex session - adequate - lifecycle persistence and recovery integration with focused replay coverage.
+
+## 2026-06-13 - Deterministic readiness preflight shipped
+
+Direct implementation in the active Codex session. Added `GoalReadinessPreflight` to classify task complexity, file-scope confidence, high-risk terms, external dependency signals, workspace readiness, and assigned-agent coverage before unattended starts. CLI `readiness` reports the decision, `run-goal`, lifecycle commands, CLI batch starts, and dashboard batch starts now block unsafe worker launch before dispatch unless the issue is explicitly operator-confirmed with the readiness-risk confirmation.
+
+- Operator gate: readiness CLI/planner slice 4/4 passed; dashboard batch-start readiness guard 1/1 passed.
+- Backlog closed: deterministic task readiness and risk preflight.
+- Model fit: local Codex session - adequate - deterministic start gate plus focused lifecycle/dashboard coverage.
+
+## 2026-06-13 - Deterministic test-impact selection shipped
+
+Direct implementation in the active Codex session. Added `RepositoryTestImpactPlanner` to map changed files to no-op, focused project tests, or broader dotnet verification with reasons. Default acceptance verification now uses this plan when no manifest overrides it, acceptance and recovery output show the plan, and worker `deterministic-verification.md` artifacts include the same decision.
+
+- Operator gate: Core planner/classifier slice 6/6 passed; acceptance verifier slice 8/8 passed; acceptance evidence CLI slice 4/4 passed; worker context slice 5/5 passed.
+- Backlog closed: deterministic test-impact selection.
+- Model fit: local Codex session - adequate - deterministic verification routing plus focused execution and artifact coverage.
+
+## 2026-06-13 - Worker skill bootstrap and dashboard compliance closed
+
+Audit plus direct implementation in the active Codex session. Existing worker context artifacts already emit `selected-skills.md`, register it in the artifact registry, select skills by role/objective/task text, and require the `WORKER_RESULT skills:` field. This pass added parsed skill evidence to task summary DTOs and visible dashboard task evidence so operators can see reported worker skill usage without opening logs.
+
+- Operator gate: focused skill/context/dashboard slice 7/7 passed.
+- Backlog closed: worker skill bootstrap and compliance checks.
+- Model fit: local Codex session - adequate - audit of existing artifact policy plus small dashboard/API exposure gap closure.
+
+## 2026-06-13 - Provider budget and cooldown accounting shipped
+
+Direct implementation in the active Codex session. Subscription plans now include structured per-provider budget/cooldown summaries with task counts, ready/deferred counts, recoverable subscription limit failures, retry-after time, source task, and detail text. CLI subscription-plan output and dashboard DTOs expose the summaries, while existing preflight/start logic continues to block same-provider work during retry-after windows without cooling down unrelated providers.
+
+- Operator gate: focused subscription plan/cooldown/DTO slice 4/4 passed.
+- Backlog closed: provider budget and cooldown accounting.
+- Model fit: local Codex session - adequate - structured provider-state reporting plus focused routing regression coverage.
+
+## 2026-06-13 - Goal dependency planning shipped
+
+Direct implementation in the active Codex session. Added `goal-plan [heading-filter]` as a dry-run planner over backlog intake slices. It emits deterministic nodes, dependency edges, target file scopes, risk/role summaries, and parallel batches using `ParallelExecutionPlanner`, then can opt in to `--create-goals` or `--create-simple-goals` with explicit dependency notes embedded in the created objectives.
+
+- Operator gate: focused goal-plan/backlog-intake parser and creation slice 6/6 passed.
+- Backlog closed: deterministic goal planning and dependency graph generation.
+- Model fit: local Codex session - adequate - deterministic CLI planner and focused mutation/no-mutation coverage.
+
+## 2026-06-13 - Repository change classifier shipped
+
+Direct implementation in the active Codex session. Added a shared deterministic `RepositoryChangeClassifier` for docs-only, behavior, generated artifact, build-system, security-sensitive, and broad-verification changes. Acceptance evidence now uses it to block generated artifacts and recommend verification from the actual diff; goal recovery reports also print classifier-driven verification breadth.
+
+- Operator gate: Core classifier slice 3/3 passed; acceptance evidence slice 7/7 passed; recovery classifier slice 3/3 passed.
+- Backlog closed: deterministic repository-change classifiers.
+- Model fit: local Codex session - adequate - shared deterministic classifier plus CLI gate/report integration.
+
+## 2026-06-13 - Acceptance evidence bundle shipped
+
+Direct implementation in the active Codex session. `acceptance` now builds and prints a single evidence bundle before merge, including worktree cleanliness, changed files, diff stat, acceptance checks, task verification records, worker-result contract presence, build-environment lease state, generated-artifact checks, and next-action blockers. The gate fails closed on dirty worktrees, missing acceptance-check records, failed verification, generated artifacts, pending input, and open verification blockers.
+
+- Operator gate: focused acceptance/lifecycle slice 6/6 passed.
+- Backlog closed: acceptance evidence bundle.
+- Model fit: local Codex session - adequate - CLI acceptance gate and focused failure-mode coverage.
+
+## 2026-06-13 - Backlog intake command shipped
+
+Direct implementation in the active Codex session. `backlog-intake [heading-filter]` now reads `BACKLOG.md`, proposes deterministic goal slices with target files/scopes, roles, risks, verification, dependencies, workspace plan, acceptance checks, follow-up updates, and ready objective text. It is dry-run by default and supports explicit `--create-goal` / `--create-simple-goal` without dispatching workers.
+
+- Operator gate: focused CLI intake/parser slice 3/3 passed.
+- Backlog closed: backlog-to-goal intake and slicing.
+- Model fit: local Codex session - adequate - deterministic CLI planning and focused parser/creation coverage.
+
+## 2026-06-13 - Worker skills policy completed
+
+Direct implementation in the active Codex session. Deterministic worker context skill selection now covers .NET/Windows build hygiene, orchestrator dogfood, worker verification, ASP.NET Core/.NET web work, and Playwright/browser automation. `selected-skills.md` records paths, availability, reasons, and usage guidance, and the `WORKER_RESULT` contract continues to require reported skill usage.
+
+- Operator gate: focused skill-policy/worker-result slice 6/6 passed after clearing a CS2012 Infrastructure lock with `dotnet build-server shutdown`; broader `WorkerContextArtifacts` slice 7/7 passed.
+- Backlog closed: worker skills policy and usage telemetry.
+- Model fit: local Codex session - adequate - deterministic skill mapping and focused context-artifact regression coverage.
+
+## 2026-06-13 - Context-budget handoff backlog verified closed
+
+Audit-only closure in the active Codex session. Current worker prompts use compact artifact pointers, `artifact-registry.json` with hashes/freshness/role visibility, role-specific `manifest.md` priorities, source survey and diff summary artifacts, compact prior-task summaries before full evidence, and prompt-size accounting/cost guards. Late-pipeline file-access context stays under the relevant paid prompt threshold unless the task itself is oversized.
+
+- Operator gate: focused Core prompt/context guidance slice 35/35 passed; focused Infrastructure artifact registry/source survey/diff summary/late-prompt slice 4/4 passed.
+- Backlog closed: context-budget planning and artifact handoff policy.
+- Model fit: local Codex session - adequate - audit and focused verification of existing context-economics behavior.
+
+## 2026-06-13 - Structured worker-result validation backlog verified closed
+
+Audit-only closure in the active Codex session. Current dispatch refresh validates file-role subscription completions against a `WORKER_RESULT` contract, rejects missing contracts, missing model-fit or skill evidence, blocker claims, changed-file mismatches, no-op success, generated-noise-only commits, and dirty worktrees. Reviewer context also includes deterministic contract findings.
+
+- Operator gate: focused worker-result/dispatch evidence slice 7/7 passed.
+- Backlog closed: structured worker-result validation.
+- Model fit: local Codex session - adequate - audit and focused verification of existing completion validation behavior.
+
+## 2026-06-13 - Model-fit routing backlog verified closed
+
+Audit-only closure in the active Codex session. Current code already persists model-fit notes, builds local fit summaries from verification history, surfaces recommendations in CLI/dashboard subscription plans, gates repeated overkill paid starts, and escalates unresolved underpowered simple tasks to the complex model when available.
+
+- Operator gate: focused Core model-fit persistence/routing slice 10/10 passed; focused Infrastructure subscription plan, CLI, dashboard, and underpowered escalation slice 9/9 passed.
+- Backlog closed: model and profile fit routing from local evidence.
+- Model fit: local Codex session - adequate - audit and focused verification of existing model-fit routing behavior.
+
+## 2026-06-13 - Deterministic subscription preflight now blocks dirty worktrees
+
+Direct implementation in the active Codex session. Subscription preflight already covered profile resolution, model placeholders, role sandbox capability, provider cooldowns, retry deferral, repeated-limit review, and paid prompt confirmations through the subscription plan/cost guard path. The remaining environment gap is now covered: file-role subscription preflight reports goal build-environment lease state and blocks known dirty linked worktrees before preparing a worker dispatch.
+
+- Operator gate: focused dirty/preflight worktree slice 4/4 passed; broader `WorkerProfileDispatcher` infrastructure slice 38/38 passed.
+- Backlog closed: deterministic dispatch readiness preflight.
+- Model fit: local Codex session - adequate - deterministic dispatch-gate hardening with regression coverage.
+
+## 2026-06-13 - Goal build-environment lease evidence surfaced
+
+Direct implementation in the active Codex session. The existing goal-scoped .NET build-environment lease is now exposed in `/api/goals/{goal}/work-summary` as non-mutating build-environment metadata with root, artifacts, lease metadata path, and whether the lease exists. This completes the operator evidence path for stable per-goal build/test isolation across tasks.
+
+- Operator gate: focused `DotnetBuildEnvironmentManager`, `LocalProcessVerifier`, and work-summary mapper slice 4/4 passed.
+- Backlog closed: reuse isolated build environments across a goal pipeline.
+- Model fit: local Codex session - adequate - small DTO/mapper evidence addition over existing build-lease implementation.
+
+## 2026-06-13 - Provider cooldown blocks same-provider subscription starts
+
+Direct implementation in the active Codex session. A recoverable subscription usage-limit retry-after on one task now creates a provider-level cooldown for other tasks in the same goal using that provider. Subscription planning shows the next eligible time and source task, and dispatch preflight refuses same-provider starts until the window clears; existing failover/queued-deferral behavior remains the downstream route.
+
+- Operator gate: focused retry/provider cooldown tests 2/2 passed; broader `WorkerProfileDispatcher` infrastructure slice 37/37 passed. First focused run hit known CS2012 output lock; `dotnet build-server shutdown` cleared it and the same command then exposed/fixed one test assertion compile issue.
+- Backlog closed: limit-aware provider routing and deferral.
+- Model fit: local Codex session - adequate - provider cooldown state interpretation plus planner/preflight regression coverage.
+
+## 2026-06-12 - Context artifact registry shipped
+
+Direct implementation in the active Codex session. Worker context now writes `artifact-registry.json` with artifact paths, SHA-256 hashes, byte counts, summaries, freshness notes, role visibility, and verified existence/hash status. Prompts point workers at the registry for hashes/freshness before opening larger evidence, and role priorities now start from the registry before task-specific artifacts.
+
+- Operator gate: focused context registry tests 7/7, broader WorkerProfile/Dashboard/CLI/acceptance slice 156/156, full Infrastructure 371/371, and `git diff --check` passed.
+- Backlog closed: context artifact registry for goal pipelines.
+- Model fit: local Codex session - adequate - context metadata registry and prompt-reference update with regression coverage.
+
+## 2026-06-12 - Deterministic review checklist shipped
+
+Direct implementation in the active Codex session. Worker context now includes `deterministic-verification.md`, a compact checklist of acceptance-manifest presence, current verification-plan presence, prior task verification status, model-fit evidence, WORKER_RESULT contract presence, blocker claims, test evidence, and generated-path risk. The context manifest lists the artifact, and Reviewer role priorities read it before prior summaries or full logs so LLM review starts from deterministic findings instead of raw output.
+
+- Operator gate: focused WorkerContextArtifacts tests 5/5, broader WorkerContext/Dashboard/CLI slice 115/115, full Infrastructure 371/371, and `git diff --check` passed.
+- Backlog closed: deterministic verification tooling before LLM review.
+- Model fit: local Codex session - adequate - context-artifact verification checklist with focused regression coverage.
+
+## 2026-06-12 - Acceptance manifest shipped
+
+Direct implementation in the active Codex session. Added `config/acceptance-manifest.json` with deterministic acceptance checks (`git diff --check`, isolated infrastructure tests, forbidden generated-path globs). `GoalAcceptanceVerifier` now loads the manifest when present, preserves the no-manifest fallback, runs checks as a structured checklist, applies the CS2012 retry only to dotnet-test checks, blocks forbidden changed paths via `main...HEAD`, and CLI acceptance prints each check before merge.
+
+- Operator gate: focused acceptance tests 6/6, broader CLI/acceptance/dashboard validation slice 61/61, full Infrastructure 370/370, and `git diff --check` passed.
+- Backlog closed: deterministic acceptance harness manifest.
+- Model fit: local Codex session - adequate - acceptance gate manifest and checklist implementation with focused tests.
+
+## 2026-06-12 - Worker result contracts shipped
+
+Direct implementation in the active Codex session. Worker prompts now require a compact `WORKER_RESULT` final block, `current-task.md` carries the exact schema, and successful non-local Developer/Tester process completions validate the block against git evidence. Missing blocks, blocker claims on success, missing model-fit evidence, commit mismatches, and changed-file mismatches now fail dispatch verification instead of allowing prose-only false positives.
+
+- Operator gate: focused contract/process slice 46/46, broader dispatch/context/subscription slice 102/102, full Infrastructure 368/368, full Core 198/198, and `git diff --check` passed. Prompt reminder was trimmed to keep an existing prompt-budget guard below threshold.
+- Backlog closed: machine-readable worker result contracts.
+- Model fit: local Codex session - adequate - process-verification contract enforcement with focused regression tests.
+
+## 2026-06-12 - Subscription preflight and sandbox capability planner shipped
+
+Direct implementation in the active Codex session. Added deterministic subscription preflight before worker prompt preparation, records compact preflight findings in context artifacts, skips blocked tasks in ready batches, and blocks repo-scoped `.agents/skills/**`, `.git` internals, missing worktrees, echo-only profiles, stale model/reasoning placeholders, retry deferrals, repeated subscription limits, and non-patch-capable Developer/Tester profiles before launching workers.
+
+- Operator gate: focused preflight slice 5/5 and broader dispatch/context/subscription slice 72/72 with isolated .NET artifacts; `NU1900` persisted because NuGet vulnerability metadata was unreachable.
+- Backlog closed: provider/workspace preflight before subscription dispatch; worker sandbox capability planner.
+- Model fit: local Codex session - adequate - cross-cutting dispatch guard implementation with focused regression tests.
+
 ## 2026-06-12 - Guarded lifecycle simple-goal command shipped (goal c1ce01cf)
 
 Goal `c1ce01cf`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. Added `lifecycle-simple-goal <objective>` to compose simple-goal creation, workspace creation, guarded `run-goal`, acceptance verification/merge, and workspace removal. The command requires `--confirm-batch-start` and `--confirm-large-paid-subscription-start`, preserves existing cost/acceptance/workspace/dirty guards, stops with a next command on failure, and does not add scheduling or overnight draining.
@@ -165,3 +693,107 @@ Goal `2e387b6f`, simple-goal Developer task, OpenAI/gpt-5.5 via codex-cli. `Disp
 - Operator gate: reviewed classifier/run-loop/tests; fixed useful-output detection so prompt text echoed on stderr does not suppress failover; focused `RunGoalService` tests passed 15/15 after one CS2012 build-server shutdown retry; acceptance verification passed.
 - Friction found: same one-shot goal-targeted task command normalization gap as `fab431b5`; backlog now tracks it.
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped failover/classifier change with focused run-loop tests; worker missed commit and needed operator hardening for stderr prompt echo.
+
+## 2026-06-13 - Isolated .NET verification path added for CS2012 mitigation
+
+Manual operator change after repeated CS2012 locks in normal repo `obj` output. `GoalAcceptanceVerifier`, dashboard build/test cleanup, task verification, and the new `scripts/Invoke-IsolatedDotnet.ps1` now run dotnet build/test with SDK `--artifacts-path` under `%TEMP%\mcg-dotnet-isolated`, disable shared compilation/MSBuild parallel writes, shut down build servers afterward, and set `MCG_ORCHESTRATOR_REPOSITORY_ROOT` so tests remain relocatable. Goal-aware runs use stable roots under `mcg-dotnet-isolated\goals\<goal-prefix>\attempts\...` and workspace removal prunes stale goal artifacts.
+
+- Operator gate: normal focused `dotnet test` reproduced CS2012 against `src/.../obj` with `VBCSCompiler`; isolated focused run passed 9/9, `-GoalPrefix` script smoke passed 1/1 with artifacts under `goals\smoke123\attempts`, and full isolated Infrastructure suite passed 358/358.
+- Friction found: tests that discovered the repo from `AppContext.BaseDirectory` and an `HttpListener` fake were brittle when test assemblies ran from temp artifacts; both were made isolation-compatible.
+- Model fit: local Codex - adequate - scoped build hygiene change with direct failing/passing verification evidence.
+
+## 2026-06-13 - One-shot goal-targeted task command normalization fixed
+
+Manual operator change after recovery commands had to fall back to current-goal forms. `CliArgumentParser.NormalizeArgs` now reuses the interactive task-target splitter for `retry`, `note`, `verification-plan`, `ask`, `verify`, `verify-manual`, `dispatch`, `worker-dispatch`, and `progress`, so one-shot commands preserve goal prefixes and multi-word trailing notes.
+
+- Operator gate: focused CLI normalization tests passed 4/4, including goal-prefixed `verify-manual`, `retry --goal`, `progress`, `dispatch`, plus legacy current-goal `note`, `verify`, and `ask`.
+- Friction removed: scripted recovery and future lifecycle commands can target non-current goals without collapsing note/command text.
+- Model fit: local Codex - adequate - narrow parser unification with direct regression tests.
+
+## 2026-06-13 - State transactions now leave a durable journal
+
+Manual operator change to close the remaining parallel state-mutation safety gap. `OrchestratorStateStore.TransactAsync` already held an in-process and cross-process state-file lock; it now also writes compact transaction journal entries beside `state.json` for begin, checkpoint, commit, no-change, commit-after-checkpoint, and failed outcomes.
+
+- Operator gate: transaction-focused persistence tests passed 3/3, including concurrent mutation preservation and durable journal begin/commit evidence.
+- Friction removed: future lifecycle/parallel orchestration can distinguish serialized committed mutations from failed/no-change transactions instead of relying only on final `state.json`.
+- Model fit: local Codex - adequate - small persistence hardening on top of existing transaction lock coverage.
+
+## 2026-06-13 - Artifact-backed worker skill selection added
+
+Manual operator change to close the skill-selection backlog item. Worker context generation now emits `selected-skills.md`, registers it in `artifact-registry.json`, includes role-specific artifact priority hints, flags missing local skill files, and requires successful Developer/Tester `WORKER_RESULT` blocks to include a `skills:` field.
+
+- Operator gate: focused worker context/dispatch tests passed 37/37; dashboard prompt threshold regression test passed 1/1 after removing a redundant inline reminder; isolated full Infrastructure attempt had 4 failures that all passed when rerun by method, consistent with existing parallel `Console.Out` redirection interference rather than this change.
+- Friction removed: .NET build/test tasks deterministically select `dotnet-windows-build-hygiene`, dogfood/orchestrator tasks select `orchestrator-dogfood`, and worker outputs now make skill usage auditable.
+- Model fit: local Codex - adequate - source-local context artifact and result-contract change with focused regression coverage.
+
+## 2026-06-13 - Deterministic source survey and diff artifacts completed
+
+Manual operator change to close the source-survey/diff-summary backlog item. Worker context now emits `source-survey.md` and `diff-summary.md` with registry hashes/freshness, generated-path pruning, task-term file matches, likely tests, public API symbols, call-site hints, ownership buckets, git status, changed files, diff stat, and explicit regeneration/staleness notes.
+
+- Operator gate: focused worker context/dispatch/prompt-threshold tests passed 39/39 with isolated dotnet artifacts. NuGet vulnerability metadata warning persisted because `https://api.nuget.org/v3/index.json` could not be loaded, but restore/build/test completed.
+- Friction removed: Developer, Tester, and Reviewer context priorities now point to compact local survey/diff artifacts instead of broad source reads, while the large-paid prompt threshold regression stays covered.
+- Model fit: local Codex - adequate - deterministic artifact enrichment with bounded parsing and focused regression tests.
+
+## 2026-06-13 - Goal-scoped .NET build leases added
+
+Manual operator change to close the goal-scoped build lease backlog item. `DotnetBuildEnvironmentManager.CreateAttempt` now reuses a stable per-goal `lease\artifacts` path, writes camelCase lease metadata, records and clears stale lock files when the owner process is gone, keeps non-goal runs on unique attempt paths, and exposes `TryRotateGoalLease` as the corruption/toolchain-drift escape hatch. `Invoke-IsolatedDotnet.ps1 -GoalPrefix` now uses the same stable lease path and metadata.
+
+- Operator gate: lease/verifier/worktree/acceptance tests passed 10/10; manager-only tests passed 2/2; `Invoke-IsolatedDotnet.ps1 -GoalPrefix smokelease ... --filter DotnetBuildEnvironmentManager` passed 2/2 and wrote build outputs under `mcg-dotnet-isolated\goals\smokelease\lease\artifacts`. NuGet vulnerability metadata warning persisted, but restore/build/test completed.
+- Friction removed: tasks in one goal can reuse warm isolated .NET artifacts, different goals get separate lock-prone paths, stale lease locks are detected, workspace removal deletes goal artifacts, and rotation can park a bad lease.
+- Model fit: local Codex - adequate - build-hygiene infrastructure change with focused tests and script smoke coverage.
+
+## 2026-06-13 - Safe parallel execution planner added
+
+Manual operator change to close the safe parallel planner backlog item. `ParallelExecutionPlanner` is a core-level, pipeline-independent planner that accepts execution intents, target paths, required resources, shared state/lifecycle/acceptance flags, provider quota slots, dependencies, and operator-approval gates, then returns concurrent batches, serialized batches, and approval-required decisions.
+
+- Operator gate: focused planner tests passed 4/4; full Core test project passed 202/202. NuGet vulnerability metadata warning persisted, but restore/build/test completed.
+- Friction removed: independent file-touching goals can be batched, while overlapping paths, shared goal worktrees, global goal state writes, workspace lifecycle operations, acceptance, resource conflicts, provider quotas, dependencies, and approval-required tasks are deterministic planner inputs.
+- Model fit: local Codex - adequate - small core policy abstraction with direct tests.
+
+## 2026-06-13 - Operator intervention policy surface verified
+
+Manual operator audit closed the operator intervention policy backlog item without adding duplicate machinery. Current state already has `BuildNextActions` for primary goal/task recommendations, `NextActionAutomationPolicy` for executable-vs-manual classification, CLI next-action output, dashboard next-action controls, paid/large confirmation labels, and advance-until-blocked services that execute low-risk actions while stopping at manual, paid, destructive, or acceptance-sensitive gates.
+
+- Operator gate: core `NextAction` tests passed 5/5; dashboard/CLI/advance-loop next-action tests passed 13/13. NuGet vulnerability metadata warning persisted, but restore/build/test completed.
+- Friction removed: the backlog item is now represented by verified current behavior instead of an unimplemented duplicate policy layer.
+- Model fit: local Codex - adequate - evidence audit and focused verification of existing intervention policy surface.
+
+## 2026-06-13 - Operator intent templates added
+
+Manual operator change closed the intent-template backlog item. `intent-template` now lists reusable templates and can preview or create five-role/simple goals from feature, bugfix, refactor, dashboard, test-hardening, skill-authoring, and release-prep templates with decomposition rules, required evidence, verification policy, and deterministic workflow hints embedded in the objective.
+
+- Operator gate: focused CLI tests passed 3/3; adjacent parser/backlog/goal-plan regression filter passed 9/9.
+- Friction removed: larger operator requests can start from structured goal objectives without hand-writing process details into each prompt.
+- Model fit: local Codex - adequate - narrow CLI/template wiring with direct regression coverage.
+
+## 2026-06-13 - Code ownership and write-set guardrails added
+
+Manual operator change closed the ownership/write-set backlog item. `RepositoryOwnershipMap` now classifies shared infrastructure, dashboard API/UI, tests, docs, build/config/scripts, skills, source, unknown, and generated/noisy paths, and `ParallelExecutionPlanner` consumes the guard to reserve ownership resources and require operator approval for high-risk or generated write sets before worker start.
+
+- Operator gate: focused Core ownership/change/planner tests passed 14/14; cross-goal/start planner integration filter passed 11/11; generated-artifact acceptance evidence test passed 1/1.
+- Friction removed: concurrent starts now serialize shared ownership buckets, high-risk path writes require an explicit review gate, and generated/noisy artifacts remain blocked at acceptance.
+- Model fit: local Codex - adequate - generic core guardrail with planner integration and focused regression coverage.
+
+## 2026-06-13 - Dashboard action recommendations added
+
+Manual operator change closed the dashboard recommendation backlog item. Goal pages now include an action recommendation card backed by `/api/goals/{goal}/action-recommendations`, aggregating current next action, failure triage, recovery, acceptance queue, provider capacity, and autonomy policy into one primary recommendation plus secondary options with CLI and API payloads.
+
+- Operator gate: focused dashboard recommendation/rendering tests passed 2/2.
+- Friction removed: operators can see the next safe action and why automation is gated without separately opening recovery, triage, capacity, queue, and next-action reports.
+- Model fit: local Codex - adequate - dashboard-specific aggregation over existing deterministic reports.
+
+## 2026-06-13 - Build-environment reuse backlog duplicate closed
+
+Manual operator audit closed the isolated build-environment reuse item as already satisfied by the goal-scoped .NET build lease work. The current implementation reuses a stable per-goal lease across local verification tasks, gives concurrent goals separate lease roots, surfaces lease state in work summaries/recovery/retention, and cleans or retains leases according to workspace and retention flows.
+
+- Operator gate: focused lease/reuse/retention/work-summary tests passed 6/6.
+- Friction removed: the remaining backlog entry duplicated shipped goal-build-lease behavior and documented recovery surfaces.
+- Model fit: local Codex - adequate - evidence audit with focused verification, no source changes required for this item.
+
+## 2026-06-13 - Model-fit routing backlog duplicate closed
+
+Manual operator audit closed the model-fit learning backlog item as already satisfied. `Model fit:` notes are parsed, persisted, surfaced in evidence summaries, fed into task complexity and subscription planning, and shown in dashboard/API cost recommendations for prior overkill and underpowered routes.
+
+- Operator gate: Core model-fit/complexity tests passed 31/31; subscription planning and dashboard model-fit tests passed 8/8.
+- Friction removed: provider/model route guidance now comes from structured prior evidence instead of operator memory.
+- Model fit: local Codex - adequate - evidence audit with focused verification, no source changes required for this item.

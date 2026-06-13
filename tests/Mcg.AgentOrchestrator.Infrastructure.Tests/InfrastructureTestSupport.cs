@@ -119,15 +119,30 @@ public static int GetAvailablePort()
 
 public static string FindRepositoryRoot()
 {
-    var directory = new DirectoryInfo(AppContext.BaseDirectory);
-    while (directory is not null)
+    var candidates = new[]
     {
-        if (File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
+        Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT"),
+        Environment.CurrentDirectory,
+        AppContext.BaseDirectory
+    };
+
+    foreach (var candidate in candidates)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
         {
-            return directory.FullName;
+            continue;
         }
 
-        directory = directory.Parent;
+        var directory = new DirectoryInfo(Path.GetFullPath(candidate));
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
     }
 
     throw new DirectoryNotFoundException("Could not locate repository root.");

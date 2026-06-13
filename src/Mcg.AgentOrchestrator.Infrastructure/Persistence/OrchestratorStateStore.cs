@@ -11,6 +11,7 @@ public static class OrchestratorStateStore
 {
     private const int AtomicWriteAttempts = 10;
     private const string BackupExtension = ".bak";
+    public const string TransactionJournalExtension = ".transactions.jsonl";
     private static readonly TimeSpan InterprocessLockTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan InterprocessLockRetryDelay = TimeSpan.FromMilliseconds(50);
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks = new(StringComparer.OrdinalIgnoreCase);
@@ -76,6 +77,8 @@ public static class OrchestratorStateStore
             path,
             async (fullPath, token) =>
             {
+                var transactionId = Guid.NewGuid().ToString("n");
+                await AppendTransactionJournalAsync(fullPath, transactionId, "begin", token).ConfigureAwait(false);
                 var kernel = File.Exists(fullPath)
                     ? await LoadFromFileAsync(fullPath, token)
                     : new AgentOrchestratorKernel();
@@ -84,25 +87,59 @@ public static class OrchestratorStateStore
                 async Task SaveCheckpointAsync()
                 {
                     await SaveWithoutExclusiveAccessAsync(fullPath, kernel, token);
+                    await AppendTransactionJournalAsync(fullPath, transactionId, "checkpoint", token).ConfigureAwait(false);
                     checkpointSaved = true;
                 }
 
-                var (shouldSave, result) = await transaction(kernel, SaveCheckpointAsync, token);
-                if (shouldSave)
+                try
                 {
-                    try
+                    var (shouldSave, result) = await transaction(kernel, SaveCheckpointAsync, token);
+                    if (shouldSave)
                     {
-                        await SaveWithoutExclusiveAccessAsync(fullPath, kernel, token);
-                    }
-                    catch when (checkpointSaved)
-                    {
+                        try
+                        {
+                            await SaveWithoutExclusiveAccessAsync(fullPath, kernel, token);
+                            await AppendTransactionJournalAsync(fullPath, transactionId, "commit", token).ConfigureAwait(false);
+                        }
+                        catch when (checkpointSaved)
+                        {
+                            await AppendTransactionJournalAsync(fullPath, transactionId, "commit-after-checkpoint", token).ConfigureAwait(false);
+                            return result;
+                        }
+
                         return result;
                     }
-                }
 
-                return result;
+                    await AppendTransactionJournalAsync(fullPath, transactionId, "no-change", token).ConfigureAwait(false);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    await AppendTransactionJournalAsync(fullPath, transactionId, "failed", token, ex.GetType().Name).ConfigureAwait(false);
+                    throw;
+                }
             },
             cancellationToken);
+    }
+
+    private static async Task AppendTransactionJournalAsync(
+        string statePath,
+        string transactionId,
+        string status,
+        CancellationToken cancellationToken,
+        string? detail = null)
+    {
+        EnsureParentDirectory(statePath);
+        var entry = JsonSerializer.Serialize(
+            new
+            {
+                TransactionId = transactionId,
+                Status = status,
+                At = DateTimeOffset.UtcNow,
+                Detail = detail
+            },
+            TransactionJournalJsonOptions());
+        await File.AppendAllTextAsync(statePath + TransactionJournalExtension, entry + Environment.NewLine, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task SaveWithoutExclusiveAccessAsync(string path, AgentOrchestratorKernel kernel, CancellationToken cancellationToken)
@@ -315,6 +352,13 @@ public static class OrchestratorStateStore
         {
             WriteIndented = true
         };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
+
+    private static JsonSerializerOptions TransactionJournalJsonOptions()
+    {
+        var options = new JsonSerializerOptions();
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }

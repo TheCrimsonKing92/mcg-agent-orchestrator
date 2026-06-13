@@ -15,8 +15,27 @@ internal static class DashboardMonitoringEvents
 
     public static GoalMonitoringBatchDto BuildBatch(AgentOrchestratorKernel kernel, Goal goal, long sinceEventId)
     {
+        return BuildBatch(kernel, goal, sinceEventId, operatorInbox: null, providerCapacity: null);
+    }
+
+    public static GoalMonitoringBatchDto BuildBatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        long sinceEventId,
+        OperatorInboxReportDto? operatorInbox)
+    {
+        return BuildBatch(kernel, goal, sinceEventId, operatorInbox, providerCapacity: null);
+    }
+
+    public static GoalMonitoringBatchDto BuildBatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        long sinceEventId,
+        OperatorInboxReportDto? operatorInbox,
+        ProviderCapacityScheduleDto? providerCapacity)
+    {
         var allEvents = BuildTimelineEvents(goal);
-        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count);
+        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity);
         return new GoalMonitoringBatchDto(
             goal.Id.Value,
             Math.Max(0, sinceEventId),
@@ -55,7 +74,12 @@ internal static class DashboardMonitoringEvents
         await stream.WriteAsync(Encoding.UTF8.GetBytes($": {KeepAliveEventName} {DateTimeOffset.UtcNow:O}\n\n"), cancellationToken);
     }
 
-    private static GoalMonitoringSnapshotDto BuildSnapshot(AgentOrchestratorKernel kernel, Goal goal, long lastEventId)
+    private static GoalMonitoringSnapshotDto BuildSnapshot(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        long lastEventId,
+        OperatorInboxReportDto? operatorInbox,
+        ProviderCapacityScheduleDto? providerCapacity)
     {
         return new GoalMonitoringSnapshotDto(
             goal.Id.Value,
@@ -68,7 +92,9 @@ internal static class DashboardMonitoringEvents
                 task.RequiredRole,
                 task.Status,
                 DashboardResponseMapper.ToProcessDto(task.LastProcess),
-                task.SubscriptionRetryAfter)).ToList());
+                task.SubscriptionRetryAfter)).ToList(),
+            operatorInbox,
+            providerCapacity);
     }
 
     private static List<GoalMonitoringEventDto> BuildTimelineEvents(Goal goal)

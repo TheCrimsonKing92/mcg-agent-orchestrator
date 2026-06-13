@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -44,8 +45,40 @@ internal sealed record SubscriptionPlanDto(
     int? ReadyStartPromptCharacterCount,
     IReadOnlyList<string> ReadyStartCostRiskDetails,
     string? ReadyStartCostRecommendation,
+    ProviderCapacityScheduleDto CapacitySchedule,
     IReadOnlyList<SubscriptionPlanModelSummaryDto> ReadyModelUsage,
+    IReadOnlyList<SubscriptionProviderBudgetSummaryDto> ProviderBudgets,
     IReadOnlyList<SubscriptionPlanItemDto> Items);
+
+internal sealed record SubscriptionProviderBudgetSummaryDto(
+    string ProviderName,
+    int TaskCount,
+    int ReadyCount,
+    int DeferredCount,
+    int RecoverableLimitFailureCount,
+    bool IsCoolingDown,
+    DateTimeOffset? RetryAfter,
+    int? RetryDelaySeconds,
+    int? SourceTaskNumber,
+    string Detail);
+
+internal sealed record ProviderCapacityScheduleDto(
+    ProviderCapacityDisposition Disposition,
+    string Recommendation,
+    int ReadyNowCount,
+    int DeferredCount,
+    DateTimeOffset? NextRetryAfter,
+    bool HasCostRisk,
+    IReadOnlyList<ProviderCapacityActionDto> Actions);
+
+internal sealed record ProviderCapacityActionDto(
+    int TaskNumber,
+    string TaskId,
+    string? ProviderName,
+    ProviderCapacityDisposition Disposition,
+    DateTimeOffset? RetryAfter,
+    string Recommendation,
+    IReadOnlyList<string> Alternatives);
 
 internal sealed record SubscriptionPlanModelSummaryDto(
     string ProviderName,
@@ -63,6 +96,12 @@ internal sealed record SubscriptionPlanModelSummaryDto(
     IReadOnlyList<string>? PreviousTaskShapes = null,
     string? ModelFitRecommendation = null,
     bool UsesComplexModel = false);
+
+internal sealed record WorkerRouteDecisionDto(
+    WorkerRouteDisposition Disposition,
+    string Recommendation,
+    IReadOnlyList<string> Reasons,
+    IReadOnlyList<string> Alternatives);
 
 internal sealed record SubscriptionPlanItemDto(
     int TaskNumber,
@@ -91,7 +130,8 @@ internal sealed record SubscriptionPlanItemDto(
     int? EstimatedPromptCharacterCount = null,
     int RecoverableSubscriptionLimitFailureCount = 0,
     bool UsesComplexModel = false,
-    int? CostGuardPromptCharacterCount = null);
+    int? CostGuardPromptCharacterCount = null,
+    WorkerRouteDecisionDto? Route = null);
 
 internal sealed record ProviderSmokeReportDto(
     string Target,

@@ -57,7 +57,7 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "verify":
             var verify = DashboardRequestParser.ParseVerifySubmission(body);
-            var verification = await new LocalProcessVerifier().RunAsync(verify.Command, workspace.ResolveExecutionDirectory(goal.Id));
+            var verification = await new LocalProcessVerifier().RunAsync(verify.Command, workspace.ResolveExecutionDirectory(goal.Id), goal.Id, task.Id);
             kernel.RecordTaskVerification(goal.Id, task.Id, verification);
             return null;
 

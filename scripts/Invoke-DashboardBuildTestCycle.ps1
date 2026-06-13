@@ -91,6 +91,22 @@ function Wait-DashboardHealth {
     throw "Dashboard did not become healthy at $healthUri within $TimeoutSeconds seconds."
 }
 
+function New-IsolatedDotnetArguments {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmssfff"
+    $suffix = [guid]::NewGuid().ToString("N").Substring(0, 8)
+    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\$stamp-$PID-$suffix"
+
+    [pscustomobject]@{
+        RunRoot = $runRoot
+        Arguments = @(
+            "--artifacts-path",
+            $runRoot,
+            "-maxcpucount:1",
+            "-p:UseSharedCompilation=false"
+        )
+    }
+}
+
 $plan = Invoke-DashboardJson -Path "api/system/build-test-cleanup"
 $stopResult = Invoke-DashboardJson -Path $plan.StopCurrentUrl -Method "POST"
 
@@ -111,14 +127,27 @@ if ($remaining) {
     throw "Dashboard app processes are still running after exact cleanup: $remainingIds"
 }
 
-dotnet build $Solution --no-restore
-if ($LASTEXITCODE -ne 0) {
-    throw "dotnet build failed with exit code $LASTEXITCODE."
-}
+$env:DOTNET_CLI_USE_MSBUILD_SERVER = "0"
+$env:MSBUILDDISABLENODEREUSE = "1"
+$env:UseSharedCompilation = "false"
+$env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
 
-dotnet test $Solution --no-build
-if ($LASTEXITCODE -ne 0) {
-    throw "dotnet test failed with exit code $LASTEXITCODE."
+$buildIsolation = New-IsolatedDotnetArguments
+$isolatedArguments = $buildIsolation.Arguments
+
+try {
+    dotnet build $Solution --no-restore --verbosity minimal @isolatedArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet build failed with exit code $LASTEXITCODE."
+    }
+
+    dotnet test $Solution --no-build --verbosity minimal @isolatedArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet test failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    dotnet build-server shutdown *> $null
 }
 
 Start-RestartCommand -RestartCommand $plan.RestartCommand

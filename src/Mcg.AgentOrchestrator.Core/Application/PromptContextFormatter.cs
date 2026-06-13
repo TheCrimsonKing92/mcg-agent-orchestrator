@@ -250,6 +250,7 @@ internal static class PromptContextFormatter
             ProgressKind.TaskRedelegated or
             ProgressKind.TaskVerificationPlanUpdated or
             ProgressKind.TaskNote or
-            ProgressKind.TaskSubscriptionLimitReviewAcknowledged;
+            ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
+            ProgressKind.GoalPolicyDecision;
     }
 }

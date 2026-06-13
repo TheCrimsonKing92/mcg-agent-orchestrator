@@ -22,25 +22,27 @@ public sealed class HealthInspectorTests
     Assert.Equal("Offline", report.Providers.Single(provider => provider.ProviderName == "Anthropic").Mode);
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_recommends_ollama_for_paid_agents_when_available")]
-    public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAvailable()
+public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAvailable()
 {
-    var port = GetAvailablePort();
-    using var listener = new HttpListener();
-    listener.Prefixes.Add($"http://localhost:{port}/");
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
     listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
     var server = Task.Run(async () =>
     {
-        var context = await listener.GetContextAsync();
+        using var client = await listener.AcceptTcpClientAsync();
+        await using var stream = client.GetStream();
+        var buffer = new byte[1024];
+        await stream.ReadAtLeastAsync(buffer, 1);
         var bytes = System.Text.Encoding.UTF8.GetBytes("{\"version\":\"test\"}");
-        context.Response.StatusCode = 200;
-        context.Response.ContentType = "application/json";
-        await context.Response.OutputStream.WriteAsync(bytes);
-        context.Response.Close();
+        var header = System.Text.Encoding.ASCII.GetBytes(
+            $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n");
+        await stream.WriteAsync(header);
+        await stream.WriteAsync(bytes);
     });
     var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
     {
         ["OPENAI_API_KEY"] = "set",
-        ["OLLAMA_BASE_URL"] = $"http://localhost:{port}"
+        ["OLLAMA_BASE_URL"] = $"http://127.0.0.1:{port}"
     };
 
     var report = OrchestratorHealthInspector.Inspect(environment, AgentCatalog.Default(), WorkerProfileCatalog.Default(), _ => false);
@@ -48,7 +50,7 @@ public sealed class HealthInspectorTests
     var developer = report.Agents.Single(agent => agent.Role == AgentRole.Developer);
     Assert.Contains(developer.Detail, text => text.Contains("local Ollama is available", StringComparison.Ordinal));
     Assert.Contains(developer.Detail, text => text.Contains("switching this role to Ollama before paid work", StringComparison.Ordinal));
-    await server;
+    await server.WaitAsync(TimeSpan.FromSeconds(5));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_subscription_only_agents_by_worker_profile")]
     public void OrchestratorHealthInspectorValidatesSubscriptionOnlyAgentsByWorkerProfile()

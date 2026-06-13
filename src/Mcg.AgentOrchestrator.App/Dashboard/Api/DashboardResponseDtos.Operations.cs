@@ -11,7 +11,8 @@ internal sealed record BatchActionResultDto(
     IReadOnlyList<TaskDetailDto> Tasks,
     IReadOnlyList<ProfileDispatchDto>? Dispatches = null,
     ProcessBatchPlanDto? ProcessPlan = null,
-    IReadOnlyList<ProcessBatchOutcomeDto>? Processes = null);
+    IReadOnlyList<ProcessBatchOutcomeDto>? Processes = null,
+    ParallelExecutionPlanDto? ParallelPlan = null);
 
 internal sealed record ProcessBatchPlanDto(
     ProcessBatchActionKind Action,
@@ -31,6 +32,18 @@ internal sealed record ProcessBatchPlanItemDto(
     string Reason);
 
 internal sealed record ProcessBatchOutcomeDto(int TaskNumber, string TaskId, ProcessDto? Process);
+
+internal sealed record ParallelExecutionPlanDto(
+    IReadOnlyList<ParallelExecutionBatchDto> Batches,
+    IReadOnlyList<ParallelExecutionDecisionDto> Decisions);
+
+internal sealed record ParallelExecutionBatchDto(int Number, IReadOnlyList<string> IntentIds);
+
+internal sealed record ParallelExecutionDecisionDto(
+    string IntentId,
+    ParallelExecutionDisposition Disposition,
+    int? BatchNumber,
+    IReadOnlyList<string> Reasons);
 
 internal sealed record AdvanceResultDto(
     string GoalId,

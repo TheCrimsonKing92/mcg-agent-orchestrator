@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -45,6 +46,87 @@ internal sealed record MonitorDto(
     int PendingHumanInputCount,
     IReadOnlyList<AttentionDto> Attention,
     DateTimeOffset? LastTimelineEventAt);
+
+internal sealed record GoalSupervisorPlanDto(
+    string GoalId,
+    string GoalPrefix,
+    string PolicyName,
+    bool ApplySafe,
+    IReadOnlyList<string> AppliedActions,
+    IReadOnlyList<GoalSupervisorProposalDto> Proposals);
+
+internal sealed record GoalSupervisorProposalDto(
+    GoalSupervisorProposalKind Kind,
+    int? TaskNumber,
+    string? TaskId,
+    AutonomyAction? PolicyAction,
+    bool PolicyAllows,
+    bool CanApply,
+    bool RequiresOperatorGate,
+    string Reason,
+    string SuggestedCommand);
+
+internal sealed record FailureTriageReportDto(
+    string GoalId,
+    string GoalPrefix,
+    string PolicyName,
+    IReadOnlyList<FailureTriageItemDto> Items);
+
+internal sealed record FailureTriageItemDto(
+    int? TaskNumber,
+    string? TaskId,
+    FailureTriageCause Cause,
+    FailureTriageAction Action,
+    AutonomyAction? PolicyAction,
+    bool PolicyAllows,
+    bool CanAutoApply,
+    bool RequiresOperatorGate,
+    string Explanation,
+    string SuggestedCommand);
+
+internal sealed record DashboardActionRecommendationReportDto(
+    string GoalId,
+    string GoalPrefix,
+    string PolicyName,
+    DashboardActionRecommendationDto? Primary,
+    IReadOnlyList<DashboardActionRecommendationDto> Secondary,
+    IReadOnlyList<string> SourceSummaries);
+
+internal sealed record DashboardActionRecommendationDto(
+    DashboardActionRecommendationSource Source,
+    string Title,
+    string Reason,
+    string SuggestedCommand,
+    string? ApiMethod,
+    string? ApiPath,
+    bool CanApply,
+    bool RequiresOperatorGate);
+
+public sealed record OperatorInboxReportDto(
+    string? GoalPrefix,
+    int TotalCount,
+    int OpenCount,
+    int AcknowledgedCount,
+    IReadOnlyList<OperatorInboxItemDto> Items);
+
+public sealed record OperatorInboxItemDto(
+    string Id,
+    OperatorInboxKind Kind,
+    OperatorInboxSeverity Severity,
+    string GoalId,
+    string GoalPrefix,
+    string Objective,
+    string? TaskId,
+    int? TaskNumber,
+    string Title,
+    string Message,
+    string Evidence,
+    string SuggestedAction,
+    string SuggestedCommand,
+    string Source,
+    bool Acknowledged,
+    DateTimeOffset? AcknowledgedAt,
+    string? AcknowledgementNote);
 
 internal sealed record GoalAcceptanceSummaryDto(
     string GoalId,
@@ -147,8 +229,73 @@ internal sealed record GoalWorkSummaryDto(
     bool VerificationSatisfied,
     NextActionDto? NextAction,
     DashboardHostInfoDto? Host,
+    GoalBuildEnvironmentDto BuildEnvironment,
     IReadOnlyList<TaskWorkSummaryDto> Tasks,
-    string? MonitoringStreamPath = null);
+    string? MonitoringStreamPath = null,
+    ParallelExecutionPlanDto? ParallelPlan = null);
+
+internal sealed record GoalBuildEnvironmentDto(
+    string LeaseId,
+    string RootPath,
+    string ArtifactsPath,
+    string LeaseMetadataPath,
+    bool LeaseExists);
+
+internal sealed record BacklogGoalPlanDto(
+    string BacklogPath,
+    int NodeCount,
+    int EdgeCount,
+    CompiledGoalGraphDto CompiledGraph,
+    ParallelExecutionPlanDto ParallelPlan);
+
+internal sealed record CrossGoalStartPlanDto(
+    int CandidateCount,
+    IReadOnlyList<CrossGoalStartCandidateDto> Candidates,
+    ParallelExecutionPlanDto ParallelPlan,
+    GoalDrainPolicyDto? DrainPolicy = null);
+
+internal sealed record GoalDrainPolicyDto(
+    string Name,
+    int MaxSubscriptionStartsPerDrain,
+    IReadOnlyList<string> AllowedRoles,
+    IReadOnlyList<string> AllowedProviders,
+    string LargePromptBehavior,
+    bool RequireReadinessRiskConfirmation,
+    bool RequireAcceptanceGate,
+    IReadOnlyList<string> AllowedLocalTimeWindows);
+
+internal sealed record CrossGoalStartCandidateDto(
+    string GoalId,
+    string GoalPrefix,
+    string Objective,
+    IReadOnlyList<int> TaskNumbers,
+    IReadOnlyList<string> TargetPaths,
+    IReadOnlyList<string> RequiredResources,
+    string? ProviderKey,
+    bool RequiresCostConfirmation,
+    string Detail);
+
+internal sealed record CompiledGoalGraphDto(
+    string GraphId,
+    bool IsRunnable,
+    IReadOnlyList<CompiledGoalNodeDto> Nodes,
+    IReadOnlyList<CompiledGoalEdgeDto> Edges,
+    IReadOnlyList<CompiledGoalValidationFindingDto> Findings);
+
+internal sealed record CompiledGoalNodeDto(
+    string Id,
+    string Heading,
+    IReadOnlyList<string> FileScopes,
+    IReadOnlyList<string> RequiredCapabilities,
+    IReadOnlyList<string> VerificationContracts,
+    string RollbackBoundary,
+    int? ParallelBatch,
+    ParallelExecutionDisposition ParallelDisposition,
+    bool CanCreateGoal);
+
+internal sealed record CompiledGoalEdgeDto(string FromId, string ToId, string Reason);
+
+internal sealed record CompiledGoalValidationFindingDto(string Severity, string NodeId, string Message);
 
 internal sealed record GoalMonitoringBatchDto(
     string GoalId,
@@ -163,7 +310,9 @@ internal sealed record GoalMonitoringSnapshotDto(
     DateTimeOffset ObservedAt,
     long LastEventId,
     MonitorDto Monitor,
-    IReadOnlyList<TaskMonitoringSnapshotDto> Tasks);
+    IReadOnlyList<TaskMonitoringSnapshotDto> Tasks,
+    OperatorInboxReportDto? OperatorInbox = null,
+    ProviderCapacityScheduleDto? ProviderCapacity = null);
 
 internal sealed record TaskMonitoringSnapshotDto(
     int TaskNumber,

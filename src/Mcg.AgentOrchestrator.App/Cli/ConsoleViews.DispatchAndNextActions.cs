@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -45,16 +46,34 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
     }
 
     Console.WriteLine($"Subscription dispatches created: {result.Dispatches.Count}");
+    if (result.ParallelPlan.Decisions.Count > 0)
+    {
+        Console.WriteLine("Parallel plan:");
+        foreach (var decision in result.ParallelPlan.Decisions)
+        {
+            var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id.Value.Equals(decision.IntentId, StringComparison.OrdinalIgnoreCase));
+            var taskLabel = task is null ? decision.IntentId : GetTaskDisplayNumber(goal, task.Id).ToString();
+            var batch = decision.BatchNumber is null ? "n/a" : decision.BatchNumber.Value.ToString();
+            Console.WriteLine($"  Task {taskLabel}: {decision.Disposition} batch={batch} - {OutputTextPreview.CreateTimeline(string.Join("; ", decision.Reasons)).Text}");
+        }
+    }
+
     PrintProcessBatchResult(goal, result.Processes);
 }
 
 public static void PrintNextActions(
     Goal goal,
     GoalNextActions actions,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    GoalHealthReport? health = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
+    if (health is not null)
+    {
+        Console.WriteLine($"Health: {health.Disposition} score={health.Score}; recommendation: {health.Recommendation}; command: {health.SuggestedCommand}");
+    }
+
     Console.WriteLine("Next actions:");
 
     for (var index = 0; index < actions.Items.Count; index++)

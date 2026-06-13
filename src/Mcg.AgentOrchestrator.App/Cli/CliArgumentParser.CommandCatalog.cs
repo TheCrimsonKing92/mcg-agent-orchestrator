@@ -16,19 +16,35 @@ private static bool IsSimpleCommand(string command)
         command.Equals("transcript", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("monitor", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("monitor-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("readiness", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goal-recovery", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("dogfood-eval", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("failure-triage", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("build-lease-cleanup", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("drain-goals", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("evidence", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("stages", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("gates", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("verify-needed", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("input-needed", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-inbox", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-inbox-ack", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("next", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("subscription-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("advance", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("advance-subscription", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("run-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("lifecycle-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goal-plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("intent-template", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("delegate", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("agents", StringComparison.OrdinalIgnoreCase) ||
@@ -43,6 +59,8 @@ private static bool IsSimpleCommand(string command)
         command.Equals("profile-dispatch-ready", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("subscription-dispatch-ready", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("cross-goal-start-plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("start-subscription-ready-goals", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("start-subscription-ready", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("run", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("api-run", StringComparison.OrdinalIgnoreCase) ||

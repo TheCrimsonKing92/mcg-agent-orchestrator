@@ -31,7 +31,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<section class=\"goal-control-group goal-control-group-wide\">");
         html.AppendLine("<h4>Quick reports</h4>");
         html.AppendLine("<p class=\"section-note\">Human-readable previews with links to the full raw output.</p>");
-        RenderGoalDataViewPreviews(html, kernel, goal, goalPrefix);
+        RenderGoalDataViewPreviews(html, kernel, goal, goalPrefix, options);
         html.AppendLine("</section>");
         html.AppendLine("<section class=\"goal-control-group goal-control-group-dispatch\">");
         html.AppendLine("<h4>Goal automation</h4>");

@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -113,12 +114,62 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             Console.WriteLine($"Subscription dispatches created: {subscriptionDispatches.Count}");
             return subscriptionDispatches.Count > 0;
 
+        case "cross-goal-start-plan":
+            ConsoleViews.PrintCrossGoalSubscriptionStartPlan(CrossGoalSubscriptionStartPlanner.Build(
+                context.Kernel,
+                context.Agents,
+                context.WorkerProfiles,
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag)));
+            return false;
+
+        case "start-subscription-ready-goals":
+            var startGoalsPolicy = ResolveCliAutonomyPolicy(parts);
+            startGoalsPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-subscription-ready-goals");
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-batch-start",
+                "start-subscription-ready-goals requires --confirm-batch-start because it can start multiple worker processes across goals.");
+            var crossGoalPlan = CrossGoalSubscriptionStartPlanner.Build(
+                context.Kernel,
+                context.Agents,
+                context.WorkerProfiles,
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
+            ConsoleViews.PrintCrossGoalSubscriptionStartPlan(crossGoalPlan);
+            var startedAny = false;
+            foreach (var candidate in crossGoalPlan.FirstBatchCandidates)
+            {
+                var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, candidate.GoalId);
+                EnsureGoalReadinessAllowsStart(context, goal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
+                RecordPolicyAllowed(context, goal, startGoalsPolicy, AutonomyAction.DispatchStart, "start-subscription-ready-goals");
+                SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+                    SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+                        goal,
+                        context.Agents,
+                        context.WorkerProfiles,
+                        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents)),
+                    HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
+                var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+                    context.Kernel,
+                    context.Workspace,
+                    goal,
+                    context.Agents,
+                    context.WorkerProfiles);
+                ConsoleViews.PrintSubscriptionStartResult(goal, result);
+                startedAny |= result.Dispatches.Count > 0 || result.Processes.Tasks.Count > 0;
+            }
+
+            return startedAny;
+
         case "start-subscription-ready":
+            var startReadyPolicy = ResolveCliAutonomyPolicy(parts);
+            startReadyPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-subscription-ready");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-batch-start",
                 "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-subscription-ready [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
+            EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
+            RecordPolicyAllowed(context, context.CurrentGoal, startReadyPolicy, AutonomyAction.DispatchStart, "start-subscription-ready");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
                     context.CurrentGoal,
@@ -131,11 +182,14 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 
         case "execute-dispatch":
+            var executePolicy = ResolveCliAutonomyPolicy(parts);
+            executePolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "execute-dispatch");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-dispatch-start",
                 "execute-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             var executeTask = ResolveDispatchCommandTask(parts, context, "execute-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
+            RecordPolicyAllowed(context, context.CurrentGoal!, executePolicy, AutonomyAction.DispatchStart, "execute-dispatch");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal!, executeTask),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
@@ -147,11 +201,14 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return true;
 
         case "start-dispatch":
+            var startDispatchPolicy = ResolveCliAutonomyPolicy(parts);
+            startDispatchPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-dispatch");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-dispatch-start",
                 "start-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             var startTask = ResolveDispatchCommandTask(parts, context, "start-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
+            RecordPolicyAllowed(context, context.CurrentGoal!, startDispatchPolicy, AutonomyAction.DispatchStart, "start-dispatch");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal!, startTask),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
@@ -160,11 +217,15 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return true;
 
         case "start-dispatches":
+            var startDispatchesPolicy = ResolveCliAutonomyPolicy(parts);
+            startDispatchesPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-dispatches");
             EnsureCliConfirmation(
                 parts,
                 "--confirm-batch-start",
                 "start-dispatches requires --confirm-batch-start because it can start multiple worker processes.");
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-dispatches [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
+            EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
+            RecordPolicyAllowed(context, context.CurrentGoal, startDispatchesPolicy, AutonomyAction.DispatchStart, "start-dispatches");
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, context.CurrentGoal),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
@@ -173,13 +234,17 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return started.Tasks.Count > 0;
 
         case "refresh-dispatch":
+            var refreshPolicy = ResolveCliAutonomyPolicy(parts);
             var refreshTask = ResolveDispatchCommandTask(parts, context, "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            EnsurePolicyAllows(context, context.CurrentGoal!, refreshPolicy, AutonomyAction.Refresh, "refresh-dispatch");
             new BackgroundDispatchRunner().RefreshLatestProcess(context.Kernel, context.CurrentGoal!.Id, refreshTask.Id);
             ConsoleViews.PrintTask(context.CurrentGoal!, refreshTask);
             return true;
 
         case "refresh-dispatches":
+            var refreshBatchPolicy = ResolveCliAutonomyPolicy(parts);
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
+            EnsurePolicyAllows(context, context.CurrentGoal, refreshBatchPolicy, AutonomyAction.Refresh, "refresh-dispatches");
             var refreshed = GoalManagementCommandService.RefreshDispatches(context.Kernel, context.CurrentGoal);
             ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, refreshed);
             return refreshed.Tasks.Count > 0;

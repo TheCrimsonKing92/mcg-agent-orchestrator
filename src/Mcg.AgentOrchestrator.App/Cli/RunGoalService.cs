@@ -338,6 +338,15 @@ internal static class RunGoalService
             return true;
         }
 
+        if (DispatchFailureClassifier.HasRecoverableProviderModelRejectionFailure(task))
+        {
+            var count = DispatchFailureClassifier.CountRecoverableProviderModelRejectionFailures(task);
+            evidence = new AutomaticFailoverEvidence(
+                $"recoverable provider model rejection evidence ({count} failure(s))",
+                count);
+            return true;
+        }
+
         evidence = null!;
         return false;
     }

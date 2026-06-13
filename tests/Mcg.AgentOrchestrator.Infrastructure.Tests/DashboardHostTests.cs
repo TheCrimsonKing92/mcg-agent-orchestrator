@@ -271,6 +271,10 @@ public sealed class DashboardHostTests
             Assert.Equal(HttpStatusCode.Created, simpleGoalResponse.StatusCode);
             var simpleGoalId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Goal").GetProperty("Id").GetString()!;
             var simpleTaskId = JsonDocument.Parse(simpleGoal).RootElement.GetProperty("Tasks")[0].GetProperty("Id").GetString()!;
+            using var readinessBlockedStartResponse = await client.PostAsync(
+                new Uri(new Uri(url), $"api/goals/{simpleGoalId}/start-subscription-ready?confirmBatchStart=true"),
+                new StringContent(string.Empty));
+            var readinessBlockedStart = await readinessBlockedStartResponse.Content.ReadAsStringAsync();
             var simpleGoalDetail = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}"));
             var simpleGoalWorkSummary = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/work-summary"));
             var simpleGoalEvents = await client.GetStringAsync(new Uri(new Uri(url), $"api/goals/{simpleGoalId}/events"));
@@ -318,6 +322,9 @@ public sealed class DashboardHostTests
             Assert.Contains(developerAgent, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
             Assert.Contains(simpleGoal, text => text.Contains("\"TotalTasks\": 1", StringComparison.Ordinal));
             Assert.Contains(simpleGoal, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
+            Assert.Equal(HttpStatusCode.Conflict, readinessBlockedStartResponse.StatusCode);
+            Assert.Contains(readinessBlockedStart, text => text.Contains("goal readiness preflight blocked start-subscription-ready", StringComparison.Ordinal));
+            Assert.Contains(readinessBlockedStart, text => text.Contains("workspace-missing", StringComparison.Ordinal));
             Assert.Equal(HttpStatusCode.Created, largeAutoHandoffResponse.StatusCode);
             Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"AutoHandoff\"", StringComparison.Ordinal));
             Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"StopReason\"", StringComparison.Ordinal));
@@ -408,8 +415,8 @@ public sealed class DashboardHostTests
                 Assert.True(cleanupDocument.RootElement.GetProperty("CurrentProcessId").GetInt32() > 0);
                 Assert.Equal("/api/system/stop-dashboard", cleanupDocument.RootElement.GetProperty("StopCurrentUrl").GetString());
                 Assert.Equal("/api/system/run-build-test-cycle", cleanupDocument.RootElement.GetProperty("RunBuildTestCycleUrl").GetString());
-                Assert.Contains(cleanupPlan, text => text.Contains("dotnet build Mcg.AgentOrchestrator.sln --no-restore", StringComparison.Ordinal));
-                Assert.Contains(cleanupPlan, text => text.Contains("dotnet test Mcg.AgentOrchestrator.sln --no-build", StringComparison.Ordinal));
+                Assert.Contains(cleanupPlan, text => text.Contains("Invoke-IsolatedDotnet.ps1 build Mcg.AgentOrchestrator.sln --no-restore --verbosity minimal", StringComparison.Ordinal));
+                Assert.Contains(cleanupPlan, text => text.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", StringComparison.Ordinal));
                 Assert.Contains(cleanupPlan, text => text.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", StringComparison.Ordinal));
                 Assert.Contains(cleanupPlan, text => text.Contains("Invoke-DashboardBuildTestCycle.ps1", StringComparison.Ordinal));
             }

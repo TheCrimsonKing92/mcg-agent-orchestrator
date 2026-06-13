@@ -1,14 +1,23 @@
 using System.Text;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 public static partial class DashboardRenderer
 {
-    private static void RenderGoalDataViewPreviews(StringBuilder html, AgentOrchestratorKernel kernel, Goal goal, string goalPrefix)
+    private static void RenderGoalDataViewPreviews(
+        StringBuilder html,
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        string goalPrefix,
+        DashboardRenderOptions options)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var nextActions = kernel.BuildNextActions(goal.Id);
+        var actionRecommendations = BuildDashboardActionRecommendations(kernel, goal, options);
         var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
         var evidence = kernel.BuildGoalEvidenceSummary(goal.Id);
         var stages = kernel.BuildStageReadinessReport(goal.Id);
@@ -17,6 +26,17 @@ public static partial class DashboardRenderer
         var humanInputWorklist = kernel.BuildHumanInputWorklist(goal.Id);
 
         html.AppendLine("<div class=\"report-preview-grid\">");
+        RenderReportPreview(
+            html,
+            "Action recommendation",
+            actionRecommendations?.Primary is null
+                ? "No primary action"
+                : $"{Encode(actionRecommendations.Primary.Title)} &middot; {(actionRecommendations.Primary.CanApply ? "can apply" : "operator gate")}",
+            BuildActionRecommendationPreviewDetails(actionRecommendations),
+            $"/api/goals/{goalPrefix}/action-recommendations",
+            "Open recommendation JSON",
+            "report-preview-card-wide");
+
         RenderReportPreview(
             html,
             "Monitor",
@@ -40,6 +60,17 @@ public static partial class DashboardRenderer
             ],
             $"/api/goals/{goalPrefix}/work-summary",
             "Open compact JSON");
+
+        RenderReportPreview(
+            html,
+            "Failure triage",
+            "Policy-aware failure causes",
+            [
+                "Classifies retry-after, provider failures, file locks, dirty worktrees, and stale branches.",
+                "Includes policy-gated next commands."
+            ],
+            $"/api/goals/{goalPrefix}/failure-triage",
+            "Open triage JSON");
 
         RenderReportPreview(
             html,
@@ -147,6 +178,47 @@ public static partial class DashboardRenderer
             "Open full log",
             "report-preview-card-wide");
         html.AppendLine("</div>");
+    }
+
+    private static DashboardActionRecommendationReport? BuildDashboardActionRecommendations(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        DashboardRenderOptions options)
+    {
+        if (options.Workspace is null)
+        {
+            return null;
+        }
+
+        return DashboardActionRecommendationPlanner.Build(
+            kernel,
+            goal,
+            options.AgentDefinitions ?? [],
+            options.WorkerProfiles ?? WorkerProfileCatalog.Default(),
+            options.Workspace.ExecutionDirectory,
+            AutonomyPolicy.Default);
+    }
+
+    private static List<string> BuildActionRecommendationPreviewDetails(
+        DashboardActionRecommendationReport? report)
+    {
+        if (report?.Primary is not { } primary)
+        {
+            return ["No recommendation sources available."];
+        }
+
+        var details = new List<string>
+        {
+            $"Command: <code>{Encode(primary.SuggestedCommand)}</code>"
+        };
+        if (!string.IsNullOrWhiteSpace(primary.ApiPath))
+        {
+            details.Add($"API: {Encode(primary.ApiMethod ?? "GET")} <code>{Encode(primary.ApiPath)}</code>");
+        }
+
+        details.Add($"Reason: {Encode(TrimPreview(primary.Reason))}");
+        details.Add($"Policy: {Encode(report.PolicyName)}; secondary: {report.Secondary.Count}");
+        return details;
     }
 
     private static List<string> BuildRecordedProofPreviewDetails(GoalEvidenceSummary evidence)

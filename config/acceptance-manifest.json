@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "checks": [
+    {
+      "name": "git diff whitespace",
+      "type": "command",
+      "command": "git",
+      "arguments": [ "diff", "--check" ]
+    },
+    {
+      "name": "infrastructure tests",
+      "type": "dotnet-test",
+      "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+      "arguments": [ "--verbosity", "minimal" ]
+    }
+  ],
+  "forbiddenChangedPathGlobs": [
+    "bin/**",
+    "obj/**",
+    ".scratch/**",
+    ".orchestrator-prototype/**",
+    "TestResults/**",
+    "playwright-report/**"
+  ]
+}

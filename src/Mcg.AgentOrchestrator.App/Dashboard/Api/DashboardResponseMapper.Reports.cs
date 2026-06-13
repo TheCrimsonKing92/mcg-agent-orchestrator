@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -19,6 +20,95 @@ public static MonitorDto ToMonitorDto(GoalMonitor monitor)
         monitor.LastTimelineEventAt);
 }
 
+public static BacklogGoalPlanDto ToBacklogGoalPlanDto(BacklogIntakePlan intake, GoalDependencyPlan plan)
+{
+    return new BacklogGoalPlanDto(
+        intake.BacklogPath,
+        plan.Nodes.Count,
+        plan.Edges.Count,
+        ToCompiledGoalGraphDto(plan.CompiledGraph),
+        ToParallelExecutionPlanDto(plan.ParallelPlan));
+}
+
+public static CrossGoalStartPlanDto ToCrossGoalStartPlanDto(CrossGoalSubscriptionStartPlan plan, GoalDrainPolicy? drainPolicy = null)
+{
+    return new CrossGoalStartPlanDto(
+        plan.Candidates.Count,
+        plan.Candidates.Select(candidate => new CrossGoalStartCandidateDto(
+            candidate.GoalId,
+            candidate.GoalPrefix,
+            SummaryText(candidate.Objective),
+            candidate.TaskNumbers,
+            candidate.TargetPaths,
+            candidate.RequiredResources,
+            candidate.ProviderKey,
+            candidate.RequiresCostConfirmation,
+            TimelineText(candidate.Detail))).ToList(),
+        ToParallelExecutionPlanDto(plan.ParallelPlan),
+        drainPolicy is null ? null : ToGoalDrainPolicyDto(drainPolicy));
+}
+
+private static GoalDrainPolicyDto ToGoalDrainPolicyDto(GoalDrainPolicy policy)
+{
+    return new GoalDrainPolicyDto(
+        policy.Name,
+        policy.MaxSubscriptionStartsPerDrain,
+        policy.AllowedRoles,
+        policy.AllowedProviders,
+        policy.LargePromptBehavior,
+        policy.RequireReadinessRiskConfirmation,
+        policy.RequireAcceptanceGate,
+        (policy.AllowedLocalTimeWindows ?? []).Select(window => window.ToString()).ToList());
+}
+
+public static DashboardActionRecommendationReportDto ToDashboardActionRecommendationReportDto(
+    DashboardActionRecommendationReport report)
+{
+    return new DashboardActionRecommendationReportDto(
+        report.GoalId,
+        report.GoalPrefix,
+        report.PolicyName,
+        report.Primary is null ? null : ToDashboardActionRecommendationDto(report.Primary),
+        report.Secondary.Select(ToDashboardActionRecommendationDto).ToList(),
+        report.SourceSummaries.Select(TimelineText).ToList());
+}
+
+private static DashboardActionRecommendationDto ToDashboardActionRecommendationDto(
+    DashboardActionRecommendation recommendation)
+{
+    return new DashboardActionRecommendationDto(
+        recommendation.Source,
+        TimelineText(recommendation.Title),
+        TimelineText(recommendation.Reason),
+        TimelineText(recommendation.SuggestedCommand),
+        recommendation.ApiMethod,
+        recommendation.ApiPath,
+        recommendation.CanApply,
+        recommendation.RequiresOperatorGate);
+}
+
+private static CompiledGoalGraphDto ToCompiledGoalGraphDto(CompiledGoalGraph graph)
+{
+    return new CompiledGoalGraphDto(
+        graph.GraphId,
+        graph.IsRunnable,
+        graph.Nodes.Select(node => new CompiledGoalNodeDto(
+            node.Id,
+            node.Heading,
+            node.FileScopes,
+            node.RequiredCapabilities,
+            node.VerificationContracts,
+            node.RollbackBoundary,
+            node.ParallelBatch,
+            node.ParallelDisposition,
+            node.CanCreateGoal)).ToList(),
+        graph.Edges.Select(edge => new CompiledGoalEdgeDto(edge.FromId, edge.ToId, edge.Reason)).ToList(),
+        graph.Findings.Select(finding => new CompiledGoalValidationFindingDto(
+            finding.Severity,
+            finding.NodeId,
+            finding.Message)).ToList());
+}
+
 public static GoalAcceptanceSummaryDto ToGoalAcceptanceSummaryDto(Goal goal, GoalAcceptanceSummary summary)
 {
     return new GoalAcceptanceSummaryDto(
@@ -31,6 +121,38 @@ public static GoalAcceptanceSummaryDto ToGoalAcceptanceSummaryDto(Goal goal, Goa
         summary.OpenVerificationCount,
         summary.PendingHumanInputCount,
         summary.Blockers.Select(blocker => ToGoalAcceptanceBlockerDto(goal, blocker)).ToList());
+}
+
+public static OperatorInboxReportDto ToOperatorInboxReportDto(OperatorInboxReport report)
+{
+    return new OperatorInboxReportDto(
+        report.GoalPrefix,
+        report.TotalCount,
+        report.OpenCount,
+        report.AcknowledgedCount,
+        report.Items.Select(ToOperatorInboxItemDto).ToList());
+}
+
+private static OperatorInboxItemDto ToOperatorInboxItemDto(OperatorInboxItem item)
+{
+    return new OperatorInboxItemDto(
+        item.Id,
+        item.Kind,
+        item.Severity,
+        item.GoalId,
+        item.GoalPrefix,
+        SummaryText(item.Objective),
+        item.TaskId,
+        item.TaskNumber,
+        SummaryText(item.Title),
+        TimelineText(item.Message),
+        TimelineText(item.Evidence),
+        TimelineText(item.SuggestedAction),
+        TimelineText(item.SuggestedCommand),
+        item.Source,
+        item.Acknowledged,
+        item.AcknowledgedAt,
+        item.AcknowledgementNote);
 }
 
 public static GoalAcceptanceBlockerDto ToGoalAcceptanceBlockerDto(Goal goal, GoalAcceptanceBlocker blocker)
@@ -137,8 +259,23 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         gate.IsSatisfied,
         nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
         host,
+        ToGoalBuildEnvironmentDto(goal),
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
-        DashboardMonitoringEvents.StreamPath(goal.Id.Value));
+        DashboardMonitoringEvents.StreamPath(goal.Id.Value),
+        ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)));
+}
+
+private static GoalBuildEnvironmentDto ToGoalBuildEnvironmentDto(Goal goal)
+{
+    var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);
+    var artifactsPath = Path.Combine(rootPath, "lease", "artifacts");
+    var leaseMetadataPath = Path.Combine(rootPath, "lease", "lease.json");
+    return new GoalBuildEnvironmentDto(
+        $"goal-{goal.Id.Value[..8].ToLowerInvariant()}",
+        rootPath,
+        artifactsPath,
+        leaseMetadataPath,
+        Directory.Exists(artifactsPath) || File.Exists(leaseMetadataPath));
 }
 
 public static TaskWorkContextDto ToTaskWorkContextDto(

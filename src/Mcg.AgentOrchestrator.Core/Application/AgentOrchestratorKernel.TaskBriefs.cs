@@ -66,7 +66,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (!string.IsNullOrWhiteSpace(contextDirectory))
         {
-            headerLines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first, then {Path.Combine(contextDirectory, "prior-task-summaries.md")} for prior summaries before prior-task-evidence.md; use manifest.md for role-specific artifact priorities and repo-local guidance references.");
+            headerLines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first; use artifact-registry.json for hashes/freshness and manifest.md for role-specific artifact priorities before opening larger evidence.");
         }
 
         var segments = new List<TaskBriefSegment>
@@ -293,6 +293,7 @@ public sealed partial class AgentOrchestratorKernel
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
                 "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.",
+                "Final: WORKER_RESULT.",
                 modelFitInstruction
             ];
         }
@@ -305,6 +306,7 @@ public sealed partial class AgentOrchestratorKernel
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
             "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
             "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads.",
+            "Final: WORKER_RESULT.",
             modelFitInstruction
         ];
     }

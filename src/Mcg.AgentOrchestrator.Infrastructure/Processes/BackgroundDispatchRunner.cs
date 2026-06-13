@@ -219,6 +219,13 @@ public sealed class BackgroundDispatchRunner
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
             }
+
+            if (exitCode == 0 &&
+                !TryValidateWorkerResultContract(task, standardOutput, standardError, worktreeEvidence, out var contractDiagnostic))
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, contractDiagnostic);
+            }
         }
 
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
@@ -298,6 +305,160 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole != AgentRole.Developer &&
             HasExplicitNoChangeRationale(standardOutput, standardError);
+    }
+
+    private static bool TryValidateWorkerResultContract(
+        TaskSpec task,
+        string standardOutput,
+        string standardError,
+        GoalWorktreeDispatchEvidence worktreeEvidence,
+        out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        if (!TryParseWorkerResultContract($"{standardOutput}\n{standardError}", out var contract, out diagnostic))
+        {
+            diagnostic = $"Worker result contract invalid: {diagnostic}";
+            return false;
+        }
+
+        if (!contract.HasNoBlockers)
+        {
+            diagnostic = "Worker result contract reported blockers despite successful process exit.";
+            return false;
+        }
+
+        if (!contract.HasModelFit)
+        {
+            diagnostic = "Worker result contract is missing model_fit evidence.";
+            return false;
+        }
+
+        if (!contract.HasSkillUsage)
+        {
+            diagnostic = "Worker result contract is missing skills evidence.";
+            return false;
+        }
+
+        var verificationPolicy = VerificationPolicyCompiler.Compile(
+            task.RequiredRole,
+            string.Empty,
+            task.Description,
+            task.VerificationPlan,
+            worktreeEvidence.ChangedPaths);
+        if (verificationPolicy.RequiresTests && !contract.HasTestEvidence)
+        {
+            var required = verificationPolicy.Checks
+                .Where(check => check.Required && check.Kind is "dotnet-test" or "browser-smoke")
+                .Select(check => check.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            diagnostic = "Worker result contract is missing required verification policy test evidence: " +
+                string.Join(", ", required) +
+                ". Report executed tests or set blockers instead of successful completion.";
+            return false;
+        }
+
+        var requiresCommit = RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
+            !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
+            worktreeEvidence.HasRelevantCommitAfterDispatch;
+        if (requiresCommit && !contract.CommitMatches(worktreeEvidence.Head))
+        {
+            diagnostic = $"Worker result contract commit '{contract.Commit}' does not match git head '{worktreeEvidence.Head}'.";
+            return false;
+        }
+
+        var expectedFiles = worktreeEvidence.ChangedPaths
+            .Where(IsRelevantSourcePath)
+            .Select(NormalizeContractPath)
+            .ToList();
+        if (expectedFiles.Count > 0)
+        {
+            var reportedFiles = contract.Files.Select(NormalizeContractPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = expectedFiles.Where(path => !reportedFiles.Contains(path)).ToList();
+            if (missing.Count > 0)
+            {
+                diagnostic = $"Worker result contract missing changed file(s): {string.Join(", ", missing)}.";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseWorkerResultContract(string output, out WorkerResultContract contract, out string diagnostic)
+    {
+        contract = WorkerResultContract.Empty;
+        diagnostic = string.Empty;
+        var lines = output.Replace("\r\n", "\n").Split('\n');
+        var start = Array.FindIndex(lines, line => string.Equals(line.Trim(), "WORKER_RESULT:", StringComparison.OrdinalIgnoreCase));
+        if (start < 0)
+        {
+            diagnostic = "missing WORKER_RESULT block.";
+            return false;
+        }
+
+        var end = Array.FindIndex(lines, start + 1, line => string.Equals(line.Trim(), "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
+        if (end < 0)
+        {
+            diagnostic = "missing END_WORKER_RESULT marker.";
+            return false;
+        }
+
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = start + 1; index < end; index++)
+        {
+            var line = lines[index].Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var separator = line.IndexOf(':', StringComparison.Ordinal);
+            if (separator <= 0)
+            {
+                continue;
+            }
+
+            fields[line[..separator].Trim()] = line[(separator + 1)..].Trim();
+        }
+
+        var required = new[] { "files", "commands", "tests", "commit", "blockers", "model_fit", "skills", "confidence" };
+        var missing = required.Where(field => !fields.ContainsKey(field)).ToList();
+        if (missing.Count > 0)
+        {
+            diagnostic = $"missing field(s): {string.Join(", ", missing)}.";
+            return false;
+        }
+
+        contract = new WorkerResultContract(
+            SplitContractList(fields["files"]),
+            fields["commands"],
+            fields["tests"],
+            fields["commit"],
+            fields["blockers"],
+            fields["model_fit"],
+            fields["skills"],
+            fields["confidence"]);
+        return true;
+    }
+
+    private static List<string> SplitContractList(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            string.Equals(value.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        return value
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(path => !string.Equals(path, "none", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private static string NormalizeContractPath(string path)
+    {
+        return path.Trim().Replace('\\', '/').TrimStart('/');
     }
 
     private static bool TryInspectGoalWorktree(
@@ -1022,6 +1183,52 @@ public sealed class BackgroundDispatchRunner
         long StandardErrorBytes)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
+    }
+
+    private sealed record WorkerResultContract(
+        IReadOnlyList<string> Files,
+        string Commands,
+        string Tests,
+        string Commit,
+        string Blockers,
+        string ModelFit,
+        string Skills,
+        string Confidence)
+    {
+        public static WorkerResultContract Empty { get; } = new([], string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+
+        public bool HasNoBlockers =>
+            string.IsNullOrWhiteSpace(Blockers) ||
+            string.Equals(Blockers.Trim(), "none", StringComparison.OrdinalIgnoreCase);
+
+        public bool HasModelFit =>
+            !string.IsNullOrWhiteSpace(ModelFit) &&
+            (ModelFit.Contains("adequate", StringComparison.OrdinalIgnoreCase) ||
+                ModelFit.Contains("overkill", StringComparison.OrdinalIgnoreCase) ||
+                ModelFit.Contains("underpowered", StringComparison.OrdinalIgnoreCase));
+
+        public bool HasSkillUsage =>
+            !string.IsNullOrWhiteSpace(Skills);
+
+        public bool HasTestEvidence =>
+            !string.IsNullOrWhiteSpace(Tests) &&
+            !string.Equals(Tests.Trim(), "none", StringComparison.OrdinalIgnoreCase) &&
+            !Tests.Contains("not run", StringComparison.OrdinalIgnoreCase) &&
+            !Tests.Contains("not executed", StringComparison.OrdinalIgnoreCase);
+
+        public bool CommitMatches(string head)
+        {
+            if (string.IsNullOrWhiteSpace(Commit) ||
+                string.Equals(Commit.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var normalizedCommit = Commit.Trim();
+            var normalizedHead = head.Trim();
+            return normalizedHead.StartsWith(normalizedCommit, StringComparison.OrdinalIgnoreCase) ||
+                normalizedCommit.StartsWith(normalizedHead, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private sealed record GoalWorktreeDispatchEvidence(

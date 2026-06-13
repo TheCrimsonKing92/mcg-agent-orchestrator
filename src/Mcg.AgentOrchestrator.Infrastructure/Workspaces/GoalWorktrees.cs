@@ -9,6 +9,28 @@ public sealed record GoalWorktreeMergeResult(
     string Message,
     string? SuggestedCommand);
 
+public enum GoalWorktreeRebaseStatus
+{
+    Rebased,
+    AlreadyFastForwardable,
+    MissingBranch,
+    MissingWorktree,
+    DirtyWorktree,
+    Conflict,
+    Failed
+}
+
+public sealed record GoalWorktreeRebaseResult(
+    GoalWorktreeRebaseStatus Status,
+    string BranchName,
+    string Message,
+    IReadOnlyList<string> ConflictFiles,
+    string? SuggestedCommand)
+{
+    public bool UpdatedBranch => Status == GoalWorktreeRebaseStatus.Rebased ||
+        Status == GoalWorktreeRebaseStatus.AlreadyFastForwardable;
+}
+
 public sealed record WorktreeLockHolder(int ProcessId, string ProcessName, string? CommandLine);
 
 public sealed record GoalWorktreeRemoveResult(
@@ -109,10 +131,12 @@ public static class GoalWorktrees
 
         if (!BranchExists(executionDirectory, branch))
         {
+            _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             return new GoalWorktreeRemoveResult("Removed workspace.", null, [], null);
         }
 
         var branchRemoval = RunGit(executionDirectory, "branch", "-d", branch);
+        _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         return branchRemoval.ExitCode == 0
             ? new GoalWorktreeRemoveResult($"Removed workspace and merged branch {branch}.", null, [], null)
             : new GoalWorktreeRemoveResult($"Removed workspace; branch {branch} kept because it has unmerged commits.", null, [], null);
@@ -170,6 +194,88 @@ public static class GoalWorktrees
             $"git merge {branch}");
     }
 
+    public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId)
+    {
+        RequireGitWorkTree(executionDirectory);
+
+        var branch = BranchName(goalId);
+        var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+        if (!BranchExists(executionDirectory, branch))
+        {
+            return new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.MissingBranch,
+                branch,
+                $"Goal branch {branch} is missing.",
+                [],
+                "goal-recovery");
+        }
+
+        var worktreePath = TryResolve(executionDirectory, goalId);
+        if (worktreePath is null)
+        {
+            return new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.MissingWorktree,
+                branch,
+                $"Goal branch {branch} has no registered worktree.",
+                [],
+                $"workspace create {Prefix(goalId)}");
+        }
+
+        var status = RunGit(worktreePath, "status", "--porcelain");
+        if (status.ExitCode != 0 || !string.IsNullOrWhiteSpace(status.Output))
+        {
+            return new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.DirtyWorktree,
+                branch,
+                $"Goal worktree for {branch} has uncommitted changes; commit or discard them before rebase recovery.",
+                [],
+                $"goal-recovery {Prefix(goalId)}");
+        }
+
+        if (RunGit(executionDirectory, "merge-base", "--is-ancestor", "HEAD", branch).ExitCode == 0)
+        {
+            return new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.AlreadyFastForwardable,
+                branch,
+                $"Branch {branch} can already fast-forward into main; no rebase needed.",
+                [],
+                $"acceptance {Prefix(goalId)}");
+        }
+
+        var rebase = RunGit(worktreePath, "rebase", baseBranch);
+        if (rebase.ExitCode == 0)
+        {
+            return new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.Rebased,
+                branch,
+                $"Rebased {branch} onto {baseBranch}; acceptance can now fast-forward after review.",
+                [],
+                $"acceptance {Prefix(goalId)}");
+        }
+
+        var conflictFiles = GetConflictFiles(worktreePath);
+        _ = RunGit(worktreePath, "rebase", "--abort");
+        if (conflictFiles.Length > 0)
+        {
+            return new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.Conflict,
+                branch,
+                $"Rebase of {branch} onto {baseBranch} found conflicts; branch was restored to its pre-rebase state.",
+                conflictFiles,
+                $"Create an operator task to resolve conflicts in order: {string.Join(", ", conflictFiles)}");
+        }
+
+        var detail = string.IsNullOrWhiteSpace(rebase.Error) ? rebase.Output.Trim() : rebase.Error.Trim();
+        return new GoalWorktreeRebaseResult(
+            GoalWorktreeRebaseStatus.Failed,
+            branch,
+            string.IsNullOrWhiteSpace(detail)
+                ? $"Rebase of {branch} onto {baseBranch} failed; branch was restored to its pre-rebase state."
+                : $"Rebase of {branch} onto {baseBranch} failed: {detail}",
+            [],
+            $"goal-recovery {Prefix(goalId)}");
+    }
+
     private static string Prefix(GoalId goalId)
     {
         var value = goalId.Value;
@@ -179,6 +285,28 @@ public static class GoalWorktrees
     private static bool BranchExists(string executionDirectory, string branch)
     {
         return RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
+    }
+
+    private static string? GetCurrentBranchName(string executionDirectory)
+    {
+        var result = RunGit(executionDirectory, "branch", "--show-current");
+        var branch = result.Output.Trim();
+        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(branch) ? branch : null;
+    }
+
+    private static string[] GetConflictFiles(string worktreePath)
+    {
+        var result = RunGit(worktreePath, "diff", "--name-only", "--diff-filter=U");
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            return [];
+        }
+
+        return result.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static bool IsRegisteredWorktree(string executionDirectory, string path)

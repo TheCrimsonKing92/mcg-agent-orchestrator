@@ -16,8 +16,61 @@ internal sealed record SubscriptionPlan(
     int? ReadyStartPromptCharacterCount,
     IReadOnlyList<string> ReadyStartCostRiskDetails,
     string? ReadyStartCostRecommendation,
+    ProviderCapacitySchedule CapacitySchedule,
     IReadOnlyList<SubscriptionPlanModelSummary> ReadyModelUsage,
+    IReadOnlyList<SubscriptionProviderBudgetSummary> ProviderBudgets,
     IReadOnlyList<SubscriptionPlanItem> Items);
+
+internal sealed record SubscriptionProviderBudgetSummary(
+    string ProviderName,
+    int TaskCount,
+    int ReadyCount,
+    int DeferredCount,
+    int RecoverableLimitFailureCount,
+    bool IsCoolingDown,
+    DateTimeOffset? RetryAfter,
+    int? RetryDelaySeconds,
+    int? SourceTaskNumber,
+    string Detail);
+
+internal enum ProviderCapacityDisposition
+{
+    Ready,
+    Deferred,
+    Blocked,
+    Review
+}
+
+internal sealed record ProviderCapacitySchedule(
+    ProviderCapacityDisposition Disposition,
+    string Recommendation,
+    int ReadyNowCount,
+    int DeferredCount,
+    DateTimeOffset? NextRetryAfter,
+    bool HasCostRisk,
+    IReadOnlyList<ProviderCapacityAction> Actions);
+
+internal sealed record ProviderCapacityAction(
+    int TaskNumber,
+    string TaskId,
+    string? ProviderName,
+    ProviderCapacityDisposition Disposition,
+    DateTimeOffset? RetryAfter,
+    string Recommendation,
+    IReadOnlyList<string> Alternatives);
+
+internal enum WorkerRouteDisposition
+{
+    Selected,
+    Deferred,
+    Blocked
+}
+
+internal sealed record WorkerRouteDecision(
+    WorkerRouteDisposition Disposition,
+    string Recommendation,
+    IReadOnlyList<string> Reasons,
+    IReadOnlyList<string> Alternatives);
 
 internal sealed record SubscriptionPlanModelSummary(
     string ProviderName,
@@ -65,7 +118,8 @@ internal sealed record SubscriptionPlanItem(
     bool UsesComplexModel = false,
     int? CostGuardPromptCharacterCount = null,
     int? TaskBriefCharacterBudget = null,
-    int? TaskBriefHeadroom = null);
+    int? TaskBriefHeadroom = null,
+    WorkerRouteDecision? Route = null);
 
 internal static class SubscriptionPlanBuilder
 {
@@ -84,7 +138,9 @@ internal static class SubscriptionPlanBuilder
             .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
+        var providerBudgets = BuildProviderBudgetSummary(goal, items);
         var readyStartRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(items, readyModelUsage);
+        var capacitySchedule = ProviderCapacityScheduler.Build(items, providerBudgets, readyStartRisk);
 
         return new SubscriptionPlan(
             goal.Id.Value,
@@ -103,7 +159,9 @@ internal static class SubscriptionPlanBuilder
             readyStartRisk?.PromptCharacterCount,
             readyStartRisk?.Details ?? [],
             readyStartRisk is null ? null : SubscriptionPromptCostGuard.BuildRecommendation(readyStartRisk),
+            capacitySchedule,
             readyModelUsage,
+            providerBudgets,
             items);
     }
 
@@ -136,7 +194,12 @@ internal static class SubscriptionPlanBuilder
                 false,
                 false,
                 false,
-                "Task is not assigned to an agent.");
+                "Task is not assigned to an agent.",
+                Route: new WorkerRouteDecision(
+                    WorkerRouteDisposition.Blocked,
+                    "Assign the task to a subscription-capable agent before dispatch.",
+                    ["task has no assigned agent"],
+                    ["Run delegate or re-delegate before subscription dispatch."]));
         }
 
         var agent = agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
@@ -160,7 +223,12 @@ internal static class SubscriptionPlanBuilder
                 false,
                 false,
                 false,
-                $"Assigned agent '{task.AssignedAgentId.Value}' was not found in the agent catalog.");
+                $"Assigned agent '{task.AssignedAgentId.Value}' was not found in the agent catalog.",
+                Route: new WorkerRouteDecision(
+                    WorkerRouteDisposition.Blocked,
+                    "Restore the assigned agent or re-delegate the task before dispatch.",
+                    [$"assigned agent '{task.AssignedAgentId.Value}' missing from catalog"],
+                    ["Run delegate or add the missing agent profile."]));
         }
 
         var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
@@ -188,10 +256,18 @@ internal static class SubscriptionPlanBuilder
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var now = DateTimeOffset.UtcNow;
             var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
+            var providerCoolingDown = DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+                goal,
+                task.Id,
+                effectiveProviderName,
+                now,
+                out var providerCooldown);
             var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
             var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - now).TotalSeconds))
+                : providerCoolingDown
+                    ? Math.Max(0, (int)Math.Ceiling((providerCooldown.RetryAfter - now).TotalSeconds))
                 : (int?)null;
             var canPrepare = task.Status == WorkTaskStatus.Assigned &&
                 hasProfile &&
@@ -201,6 +277,7 @@ internal static class SubscriptionPlanBuilder
                 (!requiresPatchCapability || patchCapability.IsPatchCapable) &&
                 AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
                 !retryDeferred &&
+                !providerCoolingDown &&
                 !requiresLimitReview;
             var estimatedPromptCharacterCount = canPrepare
                 ? estimatePromptCharacterCount?.Invoke(task)
@@ -227,6 +304,8 @@ internal static class SubscriptionPlanBuilder
                     ? $"Agent execution policy is {agent.ExecutionPolicy}; subscription dispatch is disabled."
                 : retryDeferred
                     ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."
+                : providerCoolingDown
+                    ? $"Provider {providerCooldown.ProviderName} is cooling down after a recoverable subscription usage limit on task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)}; retry after {providerCooldown.RetryAfter:u}."
                 : requiresLimitReview
                     ? $"Repeated recoverable subscription usage limit ({previousLimitFailures}); inspect model, profile, or timing before redispatch."
                 : !hasProfile
@@ -240,6 +319,29 @@ internal static class SubscriptionPlanBuilder
                 : requiresPatchCapability && !patchCapability.IsPatchCapable
                     ? $"Worker profile '{profileName}' is not patch-capable for Developer tasks: {patchCapability.Detail}"
                     : $"Task status is {task.Status}; only assigned tasks are ready for subscription dispatch.";
+            var route = BuildRouteDecision(
+                task,
+                agent,
+                profileName,
+                effectiveProviderName,
+                subscriptionModelName ?? agent.Subscription?.ModelAlias ?? effectiveModelName,
+                taskComplexity,
+                usesComplexModel,
+                canPrepare,
+                AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy),
+                hasProfile,
+                isEchoOnly,
+                pinsSelectedModel,
+                pinsSelectedReasoning,
+                requiresPatchCapability,
+                patchCapability,
+                retryDeferred,
+                providerCoolingDown,
+                requiresLimitReview,
+                recoverableLimitFailures,
+                costGuardPromptCharacterCount,
+                taskBriefHeadroom,
+                detail);
 
             return new SubscriptionPlanItem(
                 taskNumber,
@@ -260,7 +362,7 @@ internal static class SubscriptionPlanBuilder
                 patchCapability.IsPatchCapable,
                 canPrepare,
                 OutputTextPreview.CreateTimeline(detail).Text,
-                retryDeferred ? retryAfter : null,
+                retryDeferred ? retryAfter : providerCoolingDown ? providerCooldown.RetryAfter : null,
                 retryDelaySeconds,
                 taskComplexity,
                 subscriptionModelName,
@@ -270,10 +372,16 @@ internal static class SubscriptionPlanBuilder
                 usesComplexModel,
                 costGuardPromptCharacterCount,
                 taskBriefCharacterBudget,
-                taskBriefHeadroom);
+                taskBriefHeadroom,
+                route);
         }
         catch (InvalidOperationException ex)
         {
+            var route = new WorkerRouteDecision(
+                WorkerRouteDisposition.Blocked,
+                "Fix assignment, profile, or provider capability before subscription dispatch.",
+                [OutputTextPreview.CreateTimeline(ex.Message).Text],
+                []);
             return new SubscriptionPlanItem(
                 taskNumber,
                 task.Id.Value,
@@ -296,8 +404,129 @@ internal static class SubscriptionPlanBuilder
                 TaskComplexity: taskComplexity,
                 SubscriptionModelName: subscriptionModelName,
                 SubscriptionReasoningEffort: subscriptionReasoningEffort,
-                UsesComplexModel: usesComplexModel);
+                UsesComplexModel: usesComplexModel,
+                Route: route);
         }
+    }
+
+    private static WorkerRouteDecision BuildRouteDecision(
+        TaskSpec task,
+        AgentDefinition agent,
+        string profileName,
+        string providerName,
+        string? subscriptionModelName,
+        TaskComplexity? taskComplexity,
+        bool usesComplexModel,
+        bool canPrepare,
+        bool subscriptionAllowed,
+        bool hasProfile,
+        bool isEchoOnly,
+        bool pinsSelectedModel,
+        bool pinsSelectedReasoning,
+        bool requiresPatchCapability,
+        WorkerProfilePatchCapability patchCapability,
+        bool retryDeferred,
+        bool providerCoolingDown,
+        bool requiresLimitReview,
+        int recoverableLimitFailures,
+        int? costGuardPromptCharacterCount,
+        int? taskBriefHeadroom,
+        string detail)
+    {
+        var reasons = new List<string>
+        {
+            $"role={task.RequiredRole}",
+            $"provider={providerName}",
+            $"model={subscriptionModelName ?? agent.Model.ModelName}",
+            $"profile={profileName}",
+            $"complexity={taskComplexity?.ToString() ?? "unknown"}"
+        };
+        if (usesComplexModel)
+        {
+            reasons.Add("selected complex model from complexity or model-fit evidence");
+        }
+
+        if (costGuardPromptCharacterCount is not null)
+        {
+            reasons.Add($"estimated cost-guard prompt chars={costGuardPromptCharacterCount}");
+        }
+
+        if (taskBriefHeadroom is not null)
+        {
+            reasons.Add($"prompt budget headroom={taskBriefHeadroom}");
+        }
+
+        var alternatives = new List<string>();
+        if (usesComplexModel)
+        {
+            alternatives.Add("Review prior model-fit evidence before downgrading to the routine model.");
+        }
+        else if (IsPotentiallyPaidProvider(providerName) && taskComplexity == TaskComplexity.Simple)
+        {
+            alternatives.Add("Consider local Ollama/qwen for routine low-risk work when available.");
+        }
+
+        if (requiresPatchCapability)
+        {
+            reasons.Add(patchCapability.IsPatchCapable
+                ? "patch-capable profile satisfies file-write task"
+                : $"patch capability missing: {patchCapability.Detail}");
+        }
+
+        if (!subscriptionAllowed)
+        {
+            reasons.Add($"execution policy={agent.ExecutionPolicy}");
+            alternatives.Add("Use api-run or change the agent execution policy.");
+        }
+
+        if (!hasProfile)
+        {
+            alternatives.Add($"Create or repair worker profile '{profileName}'.");
+        }
+
+        if (isEchoOnly)
+        {
+            alternatives.Add($"Replace echo-only worker profile '{profileName}' with a real launcher.");
+        }
+
+        if (!pinsSelectedModel)
+        {
+            alternatives.Add($"Add {{subscriptionModelName}} to worker profile '{profileName}'.");
+        }
+
+        if (!pinsSelectedReasoning)
+        {
+            alternatives.Add($"Add {{subscriptionReasoningEffort}} to worker profile '{profileName}'.");
+        }
+
+        if (retryDeferred || providerCoolingDown)
+        {
+            alternatives.Add("Wait for retry-after or route to a different provider profile.");
+        }
+
+        if (requiresLimitReview)
+        {
+            alternatives.Add("Acknowledge limit review with notes or route to a different provider.");
+        }
+
+        if (recoverableLimitFailures > 0)
+        {
+            reasons.Add($"recoverable subscription limit failures={recoverableLimitFailures}");
+        }
+
+        var disposition = canPrepare
+            ? WorkerRouteDisposition.Selected
+            : retryDeferred || providerCoolingDown
+                ? WorkerRouteDisposition.Deferred
+                : WorkerRouteDisposition.Blocked;
+        var recommendation = canPrepare
+            ? "Selected route is ready for subscription dispatch."
+            : detail;
+        return new WorkerRouteDecision(
+            disposition,
+            OutputTextPreview.CreateTimeline(recommendation).Text,
+            reasons,
+            alternatives.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     private static bool UsesComplexModel(AgentDefinition agent, string providerName, string modelName)
@@ -374,6 +603,60 @@ internal static class SubscriptionPlanBuilder
             .ToList();
     }
 
+    private static SubscriptionProviderBudgetSummary[] BuildProviderBudgetSummary(
+        Goal goal,
+        IReadOnlyList<SubscriptionPlanItem> items)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return items
+            .Where(item => !string.IsNullOrWhiteSpace(item.ProviderName))
+            .GroupBy(item => item.ProviderName!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => BuildProviderBudgetSummary(goal, group.Key, group.ToArray(), now))
+            .OrderBy(summary => summary.ProviderName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static SubscriptionProviderBudgetSummary BuildProviderBudgetSummary(
+        Goal goal,
+        string providerName,
+        SubscriptionPlanItem[] items,
+        DateTimeOffset now)
+    {
+        var retryAfter = items
+            .Where(item => item.RetryAfter is not null)
+            .Select(item => item.RetryAfter)
+            .OrderByDescending(item => item)
+            .FirstOrDefault();
+        var sourceTask = retryAfter is null
+            ? null
+            : items
+                .Where(item => item.RetryAfter == retryAfter)
+                .Select(item => (int?)item.TaskNumber)
+                .FirstOrDefault();
+        var retryDelaySeconds = retryAfter is null
+            ? null
+            : (int?)Math.Max(0, (int)Math.Ceiling((retryAfter.Value - now).TotalSeconds));
+        var recoverableFailures = goal.Tasks
+            .Where(task => task.LastDispatch?.ProviderName?.Equals(providerName, StringComparison.OrdinalIgnoreCase) == true)
+            .Sum(DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures);
+        var deferredCount = items.Count(item => item.RetryDelaySeconds is > 0);
+        var detail = retryAfter is null
+            ? "No observed provider cooldown."
+            : $"Provider retry-after is active until {retryAfter:u}; source task {sourceTask}.";
+
+        return new SubscriptionProviderBudgetSummary(
+            providerName,
+            items.Length,
+            items.Count(item => item.CanPrepare),
+            deferredCount,
+            recoverableFailures,
+            retryAfter is not null && retryAfter > now,
+            retryAfter,
+            retryDelaySeconds,
+            sourceTask,
+            detail);
+    }
+
     private static string BuildModelFitKey(string providerName, string modelName)
     {
         return $"{providerName}/{modelName}";
@@ -415,5 +698,83 @@ internal static class SubscriptionPlanBuilder
     {
         return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
+    }
+}
+
+internal static class ProviderCapacityScheduler
+{
+    public static ProviderCapacitySchedule Build(
+        IReadOnlyList<SubscriptionPlanItem> items,
+        IReadOnlyList<SubscriptionProviderBudgetSummary> providerBudgets,
+        PaidSubscriptionPromptRisk? readyStartRisk)
+    {
+        var actions = items
+            .Where(item => item.TaskStatus == WorkTaskStatus.Assigned)
+            .Select(item => BuildAction(item))
+            .ToArray();
+        var readyCount = actions.Count(action => action.Disposition == ProviderCapacityDisposition.Ready);
+        var deferred = actions
+            .Where(action => action.Disposition == ProviderCapacityDisposition.Deferred && action.RetryAfter is not null)
+            .OrderBy(action => action.RetryAfter)
+            .ToArray();
+        var hasCostRisk = readyStartRisk is not null;
+        var disposition = readyCount > 0 && !hasCostRisk
+            ? ProviderCapacityDisposition.Ready
+            : deferred.Length > 0
+                ? ProviderCapacityDisposition.Deferred
+                : hasCostRisk
+                    ? ProviderCapacityDisposition.Review
+                    : ProviderCapacityDisposition.Blocked;
+        var recommendation = disposition switch
+        {
+            ProviderCapacityDisposition.Ready => $"Start {readyCount} ready subscription task(s) now.",
+            ProviderCapacityDisposition.Deferred => $"Wait until {deferred[0].RetryAfter:u} or route deferred work to an alternate provider.",
+            ProviderCapacityDisposition.Review => SubscriptionPromptCostGuard.BuildRecommendation(readyStartRisk!) ??
+                "Review paid prompt/model-fit risk before starting subscription work.",
+            _ => providerBudgets.Count == 0
+                ? "No subscription provider capacity is available for assigned tasks."
+                : "Resolve blocked routes before starting subscription work."
+        };
+
+        return new ProviderCapacitySchedule(
+            disposition,
+            OutputTextPreview.CreateTimeline(recommendation).Text,
+            readyCount,
+            actions.Count(action => action.Disposition == ProviderCapacityDisposition.Deferred),
+            deferred.FirstOrDefault()?.RetryAfter,
+            hasCostRisk,
+            actions);
+    }
+
+    private static ProviderCapacityAction BuildAction(SubscriptionPlanItem item)
+    {
+        var routeDisposition = item.Route?.Disposition;
+        var disposition = item.CanPrepare
+            ? ProviderCapacityDisposition.Ready
+            : routeDisposition == WorkerRouteDisposition.Deferred
+                ? ProviderCapacityDisposition.Deferred
+                : item.Route is not null &&
+                    (item.Route.Reasons.Any(reason => reason.Contains("limit", StringComparison.OrdinalIgnoreCase)) ||
+                        item.Route.Recommendation.Contains("inspect model, profile, or timing", StringComparison.OrdinalIgnoreCase))
+                    ? ProviderCapacityDisposition.Review
+                    : ProviderCapacityDisposition.Blocked;
+        var recommendation = disposition switch
+        {
+            ProviderCapacityDisposition.Ready => "Ready to start with selected provider capacity.",
+            ProviderCapacityDisposition.Deferred when item.RetryAfter is not null =>
+                $"Retry after {item.RetryAfter:u} or choose an alternate provider route.",
+            ProviderCapacityDisposition.Deferred => "Provider route is deferred; choose an alternate provider route.",
+            ProviderCapacityDisposition.Review => "Operator review is required before retrying this provider route.",
+            _ => item.Detail
+        };
+
+        return new ProviderCapacityAction(
+            item.TaskNumber,
+            item.TaskId,
+            item.ProviderName,
+            disposition,
+            item.RetryAfter,
+            OutputTextPreview.CreateTimeline(recommendation).Text,
+            item.Route?.Alternatives ?? []);
     }
 }

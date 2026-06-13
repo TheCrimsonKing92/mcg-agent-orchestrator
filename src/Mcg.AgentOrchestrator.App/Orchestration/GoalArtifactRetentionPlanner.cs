@@ -1,0 +1,243 @@
+using System.Diagnostics;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal enum RetentionGoalState
+{
+    Active,
+    Waiting,
+    ReadyForAcceptance,
+    AcceptedCleaned,
+    Failed,
+    Abandoned,
+    Superseded
+}
+
+internal enum RetentionArtifactKind
+{
+    Worktree,
+    ContextPackage,
+    WorkerLogs,
+    BuildLease,
+    OperationJournal,
+    Transcript
+}
+
+internal enum RetentionDecision
+{
+    Keep,
+    Archive,
+    DeleteWhenSafe,
+    DeleteNow,
+    Missing
+}
+
+internal sealed record GoalArtifactRetentionPlan(
+    GoalId GoalId,
+    string GoalPrefix,
+    RetentionGoalState State,
+    bool DryRun,
+    IReadOnlyList<GoalArtifactRetentionItem> Items);
+
+internal sealed record GoalArtifactRetentionItem(
+    RetentionArtifactKind Kind,
+    RetentionDecision Decision,
+    string Path,
+    bool Exists,
+    string Reason,
+    string? SuggestedCommand);
+
+internal static class GoalArtifactRetentionPlanner
+{
+    public static GoalArtifactRetentionPlan Build(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        bool dryRun = true)
+    {
+        var goalPrefix = goal.Id.Value[..8];
+        var worktreePath = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
+        var branchExists = BranchExists(workspace.ExecutionDirectory, GoalWorktrees.BranchName(goal.Id));
+        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var state = ClassifyState(goal, acceptance, worktreePath is not null, branchExists);
+        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
+        var contextPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator-context", goal.Id.Value);
+        var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
+        var transcriptPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "transcripts", $"{goalPrefix}.md");
+
+        var items = new List<GoalArtifactRetentionItem>
+        {
+            WorktreeItem(goalPrefix, state, worktreePath, branchExists),
+            ContextItem(state, contextPath),
+            LogsItem(state, workspace.LogDirectory),
+            BuildLeaseItem(state, buildLease),
+            JournalItem(journal.Path),
+            TranscriptItem(transcriptPath)
+        };
+
+        return new GoalArtifactRetentionPlan(goal.Id, goalPrefix, state, dryRun, items);
+    }
+
+    private static RetentionGoalState ClassifyState(
+        Goal goal,
+        GoalAcceptanceSummary acceptance,
+        bool hasWorktree,
+        bool hasBranch)
+    {
+        return goal.Status switch
+        {
+            GoalStatus.Completed when acceptance.IsAccepted && !hasWorktree && !hasBranch => RetentionGoalState.AcceptedCleaned,
+            GoalStatus.Completed when acceptance.IsAccepted => RetentionGoalState.ReadyForAcceptance,
+            GoalStatus.Completed => RetentionGoalState.Waiting,
+            GoalStatus.Failed => RetentionGoalState.Failed,
+            GoalStatus.Cancelled => RetentionGoalState.Abandoned,
+            GoalStatus.Superseded => RetentionGoalState.Superseded,
+            GoalStatus.WaitingForHuman => RetentionGoalState.Waiting,
+            _ => RetentionGoalState.Active
+        };
+    }
+
+    private static GoalArtifactRetentionItem WorktreeItem(
+        string goalPrefix,
+        RetentionGoalState state,
+        string? worktreePath,
+        bool branchExists)
+    {
+        var path = worktreePath ?? $"branch:{goalPrefix}";
+        return state switch
+        {
+            RetentionGoalState.AcceptedCleaned => new(
+                RetentionArtifactKind.Worktree,
+                RetentionDecision.Missing,
+                path,
+                Exists: false,
+                "Accepted goal has no remaining worktree or goal branch.",
+                null),
+            RetentionGoalState.ReadyForAcceptance => new(
+                RetentionArtifactKind.Worktree,
+                RetentionDecision.DeleteWhenSafe,
+                path,
+                worktreePath is not null || branchExists,
+                "Keep until acceptance/merge completes; remove after audit evidence is preserved.",
+                $"acceptance {goalPrefix} && workspace remove {goalPrefix}"),
+            RetentionGoalState.Failed or RetentionGoalState.Abandoned or RetentionGoalState.Superseded => new(
+                RetentionArtifactKind.Worktree,
+                RetentionDecision.Archive,
+                path,
+                worktreePath is not null || branchExists,
+                "Preserve failed or abandoned workspace until rollback/abandon workflow archives useful artifacts.",
+                $"goal-recovery {goalPrefix}"),
+            _ => new(
+                RetentionArtifactKind.Worktree,
+                RetentionDecision.Keep,
+                path,
+                worktreePath is not null || branchExists,
+                "Goal is still active or waiting; keep workspace state intact.",
+                null)
+        };
+    }
+
+    private static GoalArtifactRetentionItem ContextItem(RetentionGoalState state, string path)
+    {
+        return new GoalArtifactRetentionItem(
+            RetentionArtifactKind.ContextPackage,
+            state is RetentionGoalState.AcceptedCleaned or RetentionGoalState.Failed or RetentionGoalState.Abandoned or RetentionGoalState.Superseded
+                ? RetentionDecision.Archive
+                : RetentionDecision.Keep,
+            path,
+            Directory.Exists(path),
+            "Context packages are audit evidence and should outlive workspace cleanup.",
+            null);
+    }
+
+    private static GoalArtifactRetentionItem LogsItem(RetentionGoalState state, string path)
+    {
+        return new GoalArtifactRetentionItem(
+            RetentionArtifactKind.WorkerLogs,
+            state is RetentionGoalState.AcceptedCleaned ? RetentionDecision.Archive : RetentionDecision.Keep,
+            path,
+            Directory.Exists(path),
+            "Worker logs remain shared audit evidence; age-based pruning should archive before deletion.",
+            null);
+    }
+
+    private static GoalArtifactRetentionItem BuildLeaseItem(RetentionGoalState state, DotnetBuildLeaseStatus lease)
+    {
+        var decision = state switch
+        {
+            RetentionGoalState.AcceptedCleaned when lease.RootExists => RetentionDecision.DeleteNow,
+            RetentionGoalState.Failed or RetentionGoalState.Abandoned or RetentionGoalState.Superseded when lease.CanCleanup => RetentionDecision.DeleteNow,
+            RetentionGoalState.Failed or RetentionGoalState.Abandoned or RetentionGoalState.Superseded => RetentionDecision.DeleteWhenSafe,
+            _ when !lease.RootExists => RetentionDecision.Missing,
+            _ => RetentionDecision.Keep
+        };
+
+        return new GoalArtifactRetentionItem(
+            RetentionArtifactKind.BuildLease,
+            decision,
+            lease.RootPath,
+            lease.RootExists,
+            lease.Detail,
+            decision is RetentionDecision.DeleteNow or RetentionDecision.DeleteWhenSafe
+                ? "build-lease-cleanup --confirm-build-lease-cleanup"
+                : null);
+    }
+
+    private static GoalArtifactRetentionItem JournalItem(string path)
+    {
+        return new GoalArtifactRetentionItem(
+            RetentionArtifactKind.OperationJournal,
+            RetentionDecision.Keep,
+            path,
+            File.Exists(path),
+            "Operation journal is durable lifecycle audit evidence.",
+            null);
+    }
+
+    private static GoalArtifactRetentionItem TranscriptItem(string path)
+    {
+        return new GoalArtifactRetentionItem(
+            RetentionArtifactKind.Transcript,
+            RetentionDecision.Archive,
+            path,
+            File.Exists(path),
+            "Transcript files are optional but should be archived when present.",
+            null);
+    }
+
+    private static bool BranchExists(string executionDirectory, string branch)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = executionDirectory
+            };
+            startInfo.ArgumentList.Add("rev-parse");
+            startInfo.ArgumentList.Add("--verify");
+            startInfo.ArgumentList.Add("--quiet");
+            startInfo.ArgumentList.Add($"refs/heads/{branch}");
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return false;
+            }
+
+            _ = process.StandardOutput.ReadToEnd();
+            _ = process.StandardError.ReadToEnd();
+            return process.WaitForExit(10000) && process.ExitCode == 0;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+}

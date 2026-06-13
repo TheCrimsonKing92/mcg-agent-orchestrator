@@ -18,7 +18,8 @@ public sealed record DashboardRenderOptions(
     string? FocusGoalPrefix = null,
     DashboardView View = DashboardView.Ops,
     IReadOnlyList<AgentDefinition>? AgentDefinitions = null,
-    WorkerProfileCatalog? WorkerProfiles = null);
+    WorkerProfileCatalog? WorkerProfiles = null,
+    OperatorInboxReportDto? OperatorInbox = null);
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,
@@ -146,6 +147,18 @@ public static partial class DashboardRenderer
                 ? $" data-monitor-stream=\"/api/goals/{Encode(options.FocusGoalPrefix)}/events/stream\""
                 : string.Empty;
         html.AppendLine($"<main id=\"dashboard-content\"{refreshAttribute}{monitorStreamAttribute}>");
+        if (!string.IsNullOrWhiteSpace(monitorStreamAttribute))
+        {
+            html.AppendLine("<section class=\"live-monitor\" data-live-monitor hidden>");
+            html.AppendLine("<h2>Live Goal State</h2>");
+            html.AppendLine("<div class=\"live-monitor-grid\">");
+            html.AppendLine("<span data-live-status>waiting</span>");
+            html.AppendLine("<span data-live-tasks>tasks pending</span>");
+            html.AppendLine("<span data-live-inbox>inbox 0</span>");
+            html.AppendLine("<span data-live-capacity>capacity unknown</span>");
+            html.AppendLine("</div>");
+            html.AppendLine("</section>");
+        }
 
         switch (options.View)
         {
@@ -244,6 +257,7 @@ public static partial class DashboardRenderer
         }
 
         RenderGlobalAttentionSummary(html, kernel, displayedGoals);
+        RenderOperatorInbox(html, options);
 
         foreach (var goal in displayedGoals)
         {
@@ -348,6 +362,8 @@ public static partial class DashboardRenderer
             html.AppendLine("<section><h2>Goal not found</h2><p class=\"meta\">No goal matches the given prefix.</p></section>");
             return;
         }
+
+        RenderOperatorInbox(html, options);
 
         var monitor = kernel.BuildMonitor(goal.Id);
         var verificationGate = kernel.BuildVerificationGate(goal.Id);
@@ -628,6 +644,54 @@ public static partial class DashboardRenderer
             html.AppendLine($"<td>{monitor.TotalTasks}</td>");
             html.AppendLine($"<td{attentionClass}>{monitor.AttentionItems.Count}</td>");
             html.AppendLine($"<td{inputClass}>{monitor.PendingHumanInputCount}</td>");
+            html.AppendLine("</tr>");
+        }
+        html.AppendLine("</tbody></table>");
+        html.AppendLine("</section>");
+    }
+
+    private static void RenderOperatorInbox(StringBuilder html, DashboardRenderOptions options)
+    {
+        var inbox = options.OperatorInbox;
+        if (inbox is null)
+        {
+            return;
+        }
+
+        html.AppendLine("<section>");
+        html.AppendLine("<h2>Operator inbox</h2>");
+        html.AppendLine($"<p class=\"meta\">Open: {inbox.OpenCount} &middot; acknowledged: {inbox.AcknowledgedCount}</p>");
+        if (inbox.Items.Count == 0)
+        {
+            html.AppendLine("<p class=\"ok\">No operator decisions pending.</p>");
+            html.AppendLine("</section>");
+            return;
+        }
+
+        var ackHeader = options.EnableOperatorControls ? "<th>Ack</th>" : string.Empty;
+        html.AppendLine($"<table><thead><tr><th>Severity</th><th>Goal</th><th>Work item</th><th>Decision</th><th>Suggested command</th>{ackHeader}</tr></thead><tbody>");
+        foreach (var item in inbox.Items)
+        {
+            var severityClass = item.Severity == OperatorInboxSeverity.Blocker ? "bad" : item.Severity == OperatorInboxSeverity.Warning ? "warn" : "meta";
+            var workItem = item.TaskNumber is null ? "goal" : $"task {item.TaskNumber}";
+            var ackCell = string.Empty;
+            if (options.EnableOperatorControls)
+            {
+                var ackUrl = $"/api/operator-inbox/ack?itemId={Uri.EscapeDataString(item.Id)}";
+                if (!string.IsNullOrWhiteSpace(options.FocusGoalPrefix))
+                {
+                    ackUrl += $"&goal={Uri.EscapeDataString(options.FocusGoalPrefix)}";
+                }
+
+                ackCell = $"<td><form method=\"post\" action=\"{Encode(ackUrl)}\"><button type=\"submit\">Ack</button></form></td>";
+            }
+
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td><span class=\"{severityClass}\">{Encode(item.Severity.ToString())}</span><br><span class=\"meta\">{Encode(item.Kind.ToString())}</span></td>");
+            html.AppendLine($"<td><a href=\"/goal/{Encode(item.GoalPrefix)}\">{Encode(item.GoalPrefix)}</a><br><span class=\"meta\">{Encode(OutputTextPreview.CreateSummary(item.Objective).Text)}</span></td>");
+            html.AppendLine($"<td>{Encode(workItem)}<br><span class=\"meta\">{Encode(item.Id)}</span></td>");
+            html.AppendLine($"<td><strong>{Encode(item.Title)}</strong><br>{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Evidence).Text)}</span></td>");
+            html.AppendLine($"<td><code>{Encode(item.SuggestedCommand)}</code><br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</span></td>{ackCell}");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");

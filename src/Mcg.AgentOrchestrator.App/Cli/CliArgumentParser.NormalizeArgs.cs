@@ -13,19 +13,19 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 4
-            ? [command, args[1], args[2], string.Join(' ', args.Skip(3))]
-            : args;
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2);
     }
 
-    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 3
-            ? [command, args[1], string.Join(' ', args.Skip(2))]
-            : args;
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
     }
 
-    if (command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+    if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
@@ -35,9 +35,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 3
-            ? [command, args[1], string.Join(' ', args.Skip(2))]
-            : args;
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
     }
 
     if (command.Equals("ask-goal", StringComparison.OrdinalIgnoreCase))
@@ -45,7 +43,12 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return [command, string.Join(' ', args.Skip(1))];
     }
 
-    if (command.Equals("ask", StringComparison.OrdinalIgnoreCase) || command.Equals("answer", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("ask", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
+    }
+
+    if (command.Equals("answer", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
             ? [command, args[1], string.Join(' ', args.Skip(2))]
@@ -54,24 +57,18 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("verify", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 3
-            ? [command, args[1], string.Join(' ', args.Skip(2))]
-            : args;
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
     }
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 4
-            ? [command, args[1], args[2], string.Join(' ', args.Skip(3))]
-            : args;
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2);
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("worker-dispatch", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 4
-            ? [command, args[1], args[2], string.Join(' ', args.Skip(3))]
-            : args;
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2);
     }
 
     if (command.Equals("worker-profile", StringComparison.OrdinalIgnoreCase))
@@ -107,7 +104,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return [command, string.Join(' ', args.Skip(1))];
     }
 
-    if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("lifecycle-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goal-plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("intent-template", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeObjectiveCommandWithFlags(args);
     }
@@ -155,6 +156,13 @@ private static IReadOnlyList<string> NormalizeAgentArgs(string[] args)
 
     parts.AddRange(args.Skip(flagIndex));
     return parts;
+}
+
+private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int trailingArgumentCount)
+{
+    return args.Length > 1
+        ? SplitTaskTargetCommand(args[0], string.Join(' ', args.Skip(1)), trailingArgumentCount)
+        : args;
 }
 
 private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[] args)

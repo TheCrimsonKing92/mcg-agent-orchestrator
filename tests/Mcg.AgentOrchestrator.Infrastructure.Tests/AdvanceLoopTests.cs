@@ -497,6 +497,62 @@ public sealed class AdvanceLoopTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_uses_parallel_planner_first_safe_batch")]
+    public void StartSubscriptionReadyTasksUsesParallelPlannerFirstSafeBatch()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var first = new TaskSpec(TaskId.New(), "Inspect first independent area", AgentRole.Planner, "Record explicit verification.");
+    var second = new TaskSpec(TaskId.New(), "Inspect second independent area", AgentRole.Planner, "Record explicit verification.");
+    var goal = kernel.CreateGoal("Start only the first provider-safe subscription batch", [first, second]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-planner"),
+        "Subscription planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+    ]);
+
+    try
+    {
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            [agent],
+            profiles);
+
+        Assert.Equal(1, result.Dispatches.Count);
+        Assert.Equal(first.Id, result.Dispatches.Single().Task.Id);
+        Assert.Equal(1, result.Processes.Tasks.Count);
+        Assert.Equal(first.Id, result.Processes.Tasks.Single().Id);
+        Assert.True(first.LastProcess is { IsRunning: true });
+        Assert.True(second.LastDispatch is null);
+        Assert.Equal(2, result.ParallelPlan.Batches.Count);
+        Assert.True(result.ParallelPlan.Decisions.Any(decision =>
+            decision.IntentId == first.Id.Value &&
+            decision.Disposition == ParallelExecutionDisposition.Concurrent &&
+            decision.BatchNumber == 1));
+        Assert.True(result.ParallelPlan.Decisions.Any(decision =>
+            decision.IntentId == second.Id.Value &&
+            decision.Disposition == ParallelExecutionDisposition.Serialized &&
+            decision.BatchNumber == 2));
+    }
+    finally
+    {
+        if (first.LastProcess is { IsRunning: true })
+        {
+            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, first.Id);
+        }
+    }
+}
+
     [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_continues_after_subscription_retry_window")]
     public void AdvanceGoalWithSubscriptionsUntilBlockedContinuesAfterSubscriptionRetryWindow()
 {
@@ -632,6 +688,74 @@ public sealed class AdvanceLoopTests
     Assert.True(status.IterationCount > 0);
     Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
     Assert.True(restoredTask.LastVerification?.Succeeded is true);
+}
+
+    [Xunit.Fact(DisplayName = "DashboardContinuationService_applies_safe_supervisor_recovery")]
+    public async Task DashboardContinuationServiceAppliesSafeSupervisorRecovery()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var primary = new AgentDefinition(
+        new AgentId("primary-planner"),
+        "Primary Planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("primary-planner"));
+    var alternate = primary with
+    {
+        Id = new AgentId("alternate-planner"),
+        Name = "Alternate Planner",
+        Subscription = new SubscriptionLaunchProfile("alternate-planner")
+    };
+    var agents = new AgentCatalog([primary, alternate]);
+    AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
+    WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
+
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Recover stalled worker", AgentRole.Planner);
+    var goal = kernel.CreateGoal("Continuation applies supervisor recovery", [task]);
+    kernel.ActivateGoal(goal.Id, agents.Agents);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, DateTimeOffset.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "claude prompt",
+        root,
+        1,
+        string.Empty,
+        "Background dispatch made no observable progress before the stall timeout; wrapper heartbeat state=running.",
+        DateTimeOffset.UtcNow));
+    await repository.SaveAsync(kernel);
+
+    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 1);
+    using var lifetime = new FakeHostLifetime();
+    var services = new DashboardEndpointServices(
+        new DashboardStateService(repository),
+        workspace,
+        new InMemoryModelProviderRegistry([]),
+        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
+        lifetime,
+        service);
+
+    var started = service.StartSubscriptionWatch(services, goal.Id.Value);
+    Assert.True(started.IsRunning);
+
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+    while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
+    {
+        await Task.Delay(25);
+    }
+
+    var restored = await repository.LoadAsync();
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+    var status = service.GetStatuses().Single();
+    Assert.False(status.IsRunning);
+    Assert.Equal(alternate.Id, restoredTask.AssignedAgentId);
+    Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
+    Assert.True(restored.GetTimeline(goal.Id).Any(evt =>
+        evt.Kind == ProgressKind.GoalPolicyDecision &&
+        evt.Message.Contains("allowed supervisor re-delegate", StringComparison.Ordinal)));
+    Assert.True(status.StopReason.Contains("Supervisor applied safe recovery action", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardContinuationService_restores_active_subscription_watch_after_restart")]

@@ -131,8 +131,13 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; only Assigned or Failed tasks can be re-delegated.");
         }
 
+        var currentAgentId = task.AssignedAgentId;
         var agent = availableAgents.FirstOrDefault(candidate =>
-            candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole);
+            candidate.Status == AgentStatus.Available &&
+            candidate.Role == task.RequiredRole &&
+            candidate.Id != currentAgentId) ??
+            availableAgents.FirstOrDefault(candidate =>
+                candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole);
         if (agent is null)
         {
             throw new KeyNotFoundException($"No available {task.RequiredRole} agent was found for task '{taskId}'.");
@@ -302,6 +307,12 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;
+
+    public void RecordGoalPolicyDecision(GoalId goalId, string message)
+    {
+        var goal = GetGoal(goalId);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, message);
+    }
 
     public IReadOnlyList<HumanInputRequest> GetPendingHumanInput(GoalId goalId)
     {

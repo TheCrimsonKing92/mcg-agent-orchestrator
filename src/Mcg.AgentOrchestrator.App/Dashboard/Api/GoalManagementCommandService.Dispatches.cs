@@ -110,6 +110,7 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles)
 {
+    var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     return WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
         goal,
@@ -117,7 +118,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
         profiles,
         workspace.PromptDirectory,
         workspace.ResolveExecutionDirectory(goal.Id),
-        DateTimeOffset.UtcNow);
+        DateTimeOffset.UtcNow,
+        safeBatch.TaskIds);
 }
 
 public static WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -146,13 +148,84 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles)
 {
-    var dispatches = SubscriptionDispatchReadyTasks(kernel, workspace, goal, agents, profiles);
+    var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
+    var dispatches = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        profiles,
+        workspace.PromptDirectory,
+        workspace.ResolveExecutionDirectory(goal.Id),
+        DateTimeOffset.UtcNow,
+        safeBatch.TaskIds);
     var processes = StartDispatches(
         kernel,
         workspace,
         goal,
         dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet());
-    return new SubscriptionStartResult(dispatches, processes);
+    return new SubscriptionStartResult(dispatches, processes, safeBatch.Plan);
+}
+
+private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(Goal goal, IReadOnlyList<AgentDefinition> agents)
+{
+    var assigned = goal.Tasks
+        .Where(task => task.Status == WorkTaskStatus.Assigned)
+        .ToList();
+    var plan = BuildReadyTaskParallelPlan(goal, agents);
+    var firstBatch = plan.Batches.FirstOrDefault();
+    var taskIds = firstBatch is null
+        ? []
+        : assigned
+            .Where(task => firstBatch.IntentIds.Contains(task.Id.Value, StringComparer.OrdinalIgnoreCase))
+            .Select(task => task.Id)
+            .ToHashSet();
+    return new ParallelSafeBatchSelection(taskIds, plan);
+}
+
+public static ParallelExecutionPlan BuildReadyTaskParallelPlan(Goal goal, IReadOnlyList<AgentDefinition>? agents = null)
+{
+    var assigned = goal.Tasks
+        .Where(task => task.Status == WorkTaskStatus.Assigned)
+        .ToList();
+    var intents = assigned
+        .Select(task => new ParallelExecutionIntent(
+            task.Id.Value,
+            goal.Id.Value,
+            InferParallelFileScopes(goal, task),
+            ProviderKey: ResolveParallelProviderKey(task, agents)))
+        .ToList();
+    var providerQuotas = intents
+        .Where(intent => !string.IsNullOrWhiteSpace(intent.ProviderKey))
+        .Select(intent => intent.ProviderKey!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Select(provider => new ParallelExecutionProviderQuota(provider, 1))
+        .ToList();
+    return ParallelExecutionPlanner.Build(intents, providerQuotas);
+}
+
+private sealed record ParallelSafeBatchSelection(HashSet<TaskId> TaskIds, ParallelExecutionPlan Plan);
+
+private static string[] InferParallelFileScopes(Goal goal, TaskSpec task)
+{
+    var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}";
+    var matches = System.Text.RegularExpressions.Regex
+        .Matches(text, @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents)[\\/][A-Za-z0-9_.\\/\-]+")
+        .Select(match => match.Value.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']'))
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    return matches;
+}
+
+private static string? ResolveParallelProviderKey(TaskSpec task, IReadOnlyList<AgentDefinition>? agents)
+{
+    if (task.AssignedAgentId is null || agents is null)
+    {
+        return null;
+    }
+
+    var agent = agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
+    return agent?.Model.ProviderName;
 }
 
 public static ProcessBatchExecutionResult StartDispatches(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)

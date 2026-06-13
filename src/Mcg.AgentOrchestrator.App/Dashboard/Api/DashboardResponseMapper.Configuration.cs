@@ -65,8 +65,49 @@ public static SubscriptionPlanDto ToSubscriptionPlanDto(SubscriptionPlan plan)
         plan.ReadyStartPromptCharacterCount,
         plan.ReadyStartCostRiskDetails,
         plan.ReadyStartCostRecommendation,
+        ToProviderCapacityScheduleDto(plan.CapacitySchedule),
         plan.ReadyModelUsage.Select(ToSubscriptionPlanModelSummaryDto).ToList(),
+        plan.ProviderBudgets.Select(ToSubscriptionProviderBudgetSummaryDto).ToList(),
         plan.Items.Select(ToSubscriptionPlanItemDto).ToList());
+}
+
+private static ProviderCapacityScheduleDto ToProviderCapacityScheduleDto(ProviderCapacitySchedule schedule)
+{
+    return new ProviderCapacityScheduleDto(
+        schedule.Disposition,
+        schedule.Recommendation,
+        schedule.ReadyNowCount,
+        schedule.DeferredCount,
+        schedule.NextRetryAfter,
+        schedule.HasCostRisk,
+        schedule.Actions.Select(ToProviderCapacityActionDto).ToList());
+}
+
+private static ProviderCapacityActionDto ToProviderCapacityActionDto(ProviderCapacityAction action)
+{
+    return new ProviderCapacityActionDto(
+        action.TaskNumber,
+        action.TaskId,
+        action.ProviderName,
+        action.Disposition,
+        action.RetryAfter,
+        action.Recommendation,
+        action.Alternatives);
+}
+
+private static SubscriptionProviderBudgetSummaryDto ToSubscriptionProviderBudgetSummaryDto(SubscriptionProviderBudgetSummary summary)
+{
+    return new SubscriptionProviderBudgetSummaryDto(
+        summary.ProviderName,
+        summary.TaskCount,
+        summary.ReadyCount,
+        summary.DeferredCount,
+        summary.RecoverableLimitFailureCount,
+        summary.IsCoolingDown,
+        summary.RetryAfter,
+        summary.RetryDelaySeconds,
+        summary.SourceTaskNumber,
+        summary.Detail);
 }
 
 private static SubscriptionPlanModelSummaryDto ToSubscriptionPlanModelSummaryDto(SubscriptionPlanModelSummary summary)
@@ -118,6 +159,13 @@ private static SubscriptionPlanItemDto ToSubscriptionPlanItemDto(SubscriptionPla
         item.EstimatedPromptCharacterCount,
         item.RecoverableSubscriptionLimitFailureCount,
         item.UsesComplexModel,
-        item.CostGuardPromptCharacterCount);
+        item.CostGuardPromptCharacterCount,
+        item.Route is null
+            ? null
+            : new WorkerRouteDecisionDto(
+                item.Route.Disposition,
+                item.Route.Recommendation,
+                item.Route.Reasons,
+                item.Route.Alternatives));
 }
 }

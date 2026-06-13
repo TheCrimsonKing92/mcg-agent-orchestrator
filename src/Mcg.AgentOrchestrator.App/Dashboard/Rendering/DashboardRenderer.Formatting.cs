@@ -23,7 +23,11 @@ public static partial class DashboardRenderer
             var history = task.VerificationHistory.Count == 1
                 ? "1 verification"
                 : $"{task.VerificationHistory.Count} verifications";
-            return $"<div class=\"{cls}\">Verification exit {task.LastVerification.ExitCode}: {Encode(task.LastVerification.Command)} <span class=\"meta\">({history})</span></div>{execution}";
+            var skills = ExtractWorkerResultSkills(task.LastVerification);
+            var skillLine = skills.Length == 0
+                ? string.Empty
+                : $"<div class=\"meta\">Skills: {Encode(string.Join(", ", skills))}</div>";
+            return $"<div class=\"{cls}\">Verification exit {task.LastVerification.ExitCode}: {Encode(task.LastVerification.Command)} <span class=\"meta\">({history})</span></div>{skillLine}{execution}";
         }
 
         if (DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task))
@@ -54,6 +58,38 @@ public static partial class DashboardRenderer
         }
 
         return "<span class=\"meta\">none</span>";
+    }
+
+    private static string[] ExtractWorkerResultSkills(TaskVerificationRecord verification)
+    {
+        var lines = $"{verification.StandardOutput}\n{verification.StandardError}"
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var start = Array.FindIndex(lines, line => line.Equals("WORKER_RESULT:", StringComparison.OrdinalIgnoreCase));
+        if (start < 0)
+        {
+            return [];
+        }
+
+        var end = Array.FindIndex(lines, start + 1, line => line.Equals("END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
+        if (end < 0)
+        {
+            return [];
+        }
+
+        var skills = lines
+            .Skip(start + 1)
+            .Take(end - start - 1)
+            .FirstOrDefault(line => line.StartsWith("skills:", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(skills))
+        {
+            return [];
+        }
+
+        return skills["skills:".Length..]
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(skill => !skill.Equals("none", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string RenderExecutionSummary(TaskExecutionRecord execution)

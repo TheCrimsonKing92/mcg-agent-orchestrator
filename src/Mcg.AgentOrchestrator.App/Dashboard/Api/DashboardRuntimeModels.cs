@@ -17,6 +17,9 @@ internal sealed record GoalOperationPath(string GoalIdPrefix, string Operation, 
 
 internal sealed record ProcessBatchExecutionResult(ProcessBatchPlan Plan, IReadOnlyList<TaskSpec> Tasks);
 
-internal sealed record SubscriptionStartResult(IReadOnlyList<WorkerProfileDispatchResult> Dispatches, ProcessBatchExecutionResult Processes);
+internal sealed record SubscriptionStartResult(
+    IReadOnlyList<WorkerProfileDispatchResult> Dispatches,
+    ProcessBatchExecutionResult Processes,
+    ParallelExecutionPlan ParallelPlan);
 
 

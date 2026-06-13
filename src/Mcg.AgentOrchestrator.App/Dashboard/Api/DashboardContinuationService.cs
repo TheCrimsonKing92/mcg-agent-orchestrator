@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
@@ -150,7 +151,38 @@ internal sealed class DashboardContinuationService : IDisposable
                             profiles,
                             services.Workspace,
                             goal);
-                        return Task.FromResult((advance.Executed, advance));
+                        if (advance.Executed)
+                        {
+                            return Task.FromResult((true, advance));
+                        }
+
+                        var supervisor = GoalSupervisor.ApplySafe(
+                            current,
+                            goal,
+                            agents,
+                            services.Workspace,
+                            AutonomyPolicy.SafeAuto);
+                        if (supervisor.AppliedActions.Count == 0)
+                        {
+                            return Task.FromResult((false, advance));
+                        }
+
+                        var step = new AdvanceResultDto(
+                            goal.Id.Value,
+                            true,
+                            null,
+                            NextActionAutomationKind.None,
+                            TimelineMessage($"Supervisor applied {supervisor.AppliedActions.Count} safe recovery action(s)."),
+                            supervisor);
+                        var supervised = new AdvanceLoopResultDto(
+                            goal.Id.Value,
+                            true,
+                            1,
+                            TimelineMessage("Supervisor applied safe recovery action; continuing watch."),
+                            null,
+                            [step],
+                            ContinueAfter: DateTimeOffset.UtcNow);
+                        return Task.FromResult((true, supervised));
                     },
                     watch.Cancellation.Token);
 
