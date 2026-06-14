@@ -27,6 +27,8 @@ internal static class CliPersistentStateRunner
         var changed = stateRepository.TransactAsync(
                 (kernel, _) =>
                 {
+                    var sweptCount = new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
+
                     var commandAgents = nextAgents;
                     var commandProfiles = nextWorkerProfiles;
                     var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
@@ -42,7 +44,8 @@ internal static class CliPersistentStateRunner
                     nextAgents = commandAgents;
                     nextWorkerProfiles = commandProfiles;
                     nextCurrentGoal = commandGoal;
-                    return Task.FromResult((shouldSave, shouldSave));
+                    var anySave = shouldSave || sweptCount > 0;
+                    return Task.FromResult((anySave, anySave));
                 })
             .GetAwaiter()
             .GetResult();

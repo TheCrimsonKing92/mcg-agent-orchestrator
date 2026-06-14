@@ -180,3 +180,19 @@ public enum TaskComplexity
     Simple,
     Complex
 }
+
+public enum GoalLifecycleState
+{
+    Created,
+    WorkspaceReady,
+    Dispatched,
+    Running,
+    AwaitingVerification,
+    Verified,
+    Merged,
+    Recorded,
+    CleanedUp,
+    Failed,
+    Blocked,
+    AwaitingHumanInput
+}

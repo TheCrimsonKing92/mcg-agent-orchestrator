@@ -126,6 +126,34 @@ public sealed class BackgroundDispatchRunner
         return record;
     }
 
+    /// <summary>
+    /// Scans all Running tasks across all goals for an exit file and auto-reconciles any
+    /// whose dispatched process has written its exit code. Idempotent: a task whose
+    /// process already completed (IsRunning == false) is skipped on repeat calls.
+    /// Returns the number of tasks reconciled.
+    /// </summary>
+    public int SweepExitedProcesses(AgentOrchestratorKernel kernel)
+    {
+        var reconciled = 0;
+        foreach (var goal in kernel.Goals)
+        {
+            foreach (var task in goal.Tasks)
+            {
+                var process = task.LastProcess;
+                if (process is not { IsRunning: true })
+                    continue;
+
+                if (!TryReadExitCode(process.ExitCodePath, out _))
+                    continue;
+
+                RefreshLatestProcess(kernel, goal.Id, task.Id);
+                reconciled++;
+            }
+        }
+
+        return reconciled;
+    }
+
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
         var task = kernel.GetTask(goalId, taskId);

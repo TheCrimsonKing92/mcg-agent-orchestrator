@@ -354,6 +354,64 @@ public sealed class VerificationAndProcessLogTests
     Assert.False(findCalled);
 }
 
+    [Xunit.Fact(DisplayName = "SweepExitedProcesses_auto_reconciles_exited_process_without_refresh_dispatch_call")]
+    public void SweepExitedProcessesAutoReconcilesExitedProcessWithoutRefreshDispatchCall()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "local-worker task", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Sweep reconcile", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var workTask = goal.Tasks.Single();
+
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "Worker completed successfully.");
+
+    kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("local", "local-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "local-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, workTask.Id, processRecord);
+
+    Assert.True(workTask.LastProcess!.IsRunning);
+
+    File.WriteAllText(exitPath, "0");
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    var swept = runner.SweepExitedProcesses(kernel);
+
+    Assert.Equal(1, swept);
+    Assert.False(workTask.LastProcess!.IsRunning);
+}
+
+    [Xunit.Fact(DisplayName = "SweepExitedProcesses_is_idempotent_second_sweep_returns_zero")]
+    public void SweepExitedProcessesIsIdempotentSecondSweepReturnsZero()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "local-worker task idempotent", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Sweep idempotent", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var workTask = goal.Tasks.Single();
+
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "Worker completed successfully.");
+    File.WriteAllText(exitPath, "0");
+
+    kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("local", "local-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "local-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, workTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    var firstSwept = runner.SweepExitedProcesses(kernel);
+    var secondSwept = runner.SweepExitedProcesses(kernel);
+
+    Assert.Equal(1, firstSwept);
+    Assert.Equal(0, secondSwept);
+}
+
 private static TaskProcessRecord CreateProcessRecord(string root, string exitPath)
 {
     return new TaskProcessRecord(
