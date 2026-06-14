@@ -867,3 +867,11 @@ Dogfooded via goal a2554f03 (Claude Sonnet, ~28 min, exit 0, merge b3b44c9) and 
 - Operator gate: `acceptance` ran in an isolated build lease and passed all 4 checks - git diff whitespace, core tests 214/214, infrastructure tests 512/512 (incl. 4 new BudgetAwareRoutingTests), forbidden changed paths - then fast-forwarded main. First fully-automated accept+merge of the session (prior goals were merged at git level as a 55MB workaround).
 - Evidence note: operator reviewed the full diff before acceptance; the scorecard-Avoid and budget-exhausted tests inject a real scorecard / real usage-limit failure (Deferred disposition), not string-only assertions.
 - Model fit: Claude Sonnet - adequate - medium feature + tests against a clear spec with existing patterns.
+
+## 2026-06-14 - Meta-metrics loop-health report (CLI)
+
+Dogfooded via goal 19dc4c04 (Claude Sonnet, ~25 min, exit 0, merge 9af2498), verified through `acceptance` (core 214/214, infrastructure 521/521 incl. 9 new LoopHealthReportTests, forbidden paths) then merged (non-ff: main had advanced, so acceptance correctly deferred to an explicit `git merge goal/...` after the green gate). New `loop-health [--last N]` CLI + `LoopHealthReport.Build` pure function trends dispatches-per-successful-merge, false-completion catch rate, operator-prompts-per-goal, rework/retry rate, median time-to-acceptance, per-model outcome mix.
+
+- Operator gate: acceptance passed all 4 checks in an isolated build lease; operator reviewed the diff and validated the report LIVE on the real store (85 goals/72 completed, 1.7 dispatches/merge, 2% false-completion catch, 0.11 prompts/goal, 9% retry, 12 min median) - numbers are sensible and the per-model mix matches model-outcomes.
+- Evidence note: this report is itself a provenance tool - it now lets the dogfood log's claims be checked against measured outcomes. Filed remainder: the false-completion-catch metric is a proxy (first-verification-passed-then-later-failed) and should key off the real false-positive-rejection blocker; dogfood-vs-receipts reconciliation belongs in the provenance item.
+- Model fit: Claude Sonnet - adequate - pure-function report + fixtures against a clear spec.
