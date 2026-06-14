@@ -25,7 +25,8 @@ public enum OperatorInboxKind
     SupervisorProposal,
     SubscriptionRouteWarning,
     ReadinessPreflight,
-    BudgetWarning
+    BudgetWarning,
+    LandingEscalation
 }
 
 public sealed record OperatorInboxReport(
@@ -57,6 +58,7 @@ public sealed record OperatorInboxItem(
 internal static class OperatorInbox
 {
     private const string StoreFileName = "operator-inbox-acks.json";
+    private const string LandingEscalationFileName = "landing-escalations.json";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -84,6 +86,7 @@ internal static class OperatorInbox
             AddSupervisorItems(items, kernel, goal, agents, workspace, acknowledgements);
             AddSubscriptionRouteItems(items, goal, agents, workerProfiles, acknowledgements);
             AddBudgetItems(items, goal, agents, workerProfiles, acknowledgements);
+            AddLandingEscalationItems(items, goal, workspace, acknowledgements);
         }
 
         var ordered = items.Values
@@ -397,6 +400,71 @@ internal static class OperatorInbox
         }
     }
 
+    public static void RecordLandingEscalation(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        string reason,
+        string integrationBranch)
+    {
+        var existing = LoadLandingEscalations(workspace)
+            .Where(e => !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        existing.Add(new LandingEscalationRecord(goal.Id.Value, reason, integrationBranch, DateTimeOffset.UtcNow));
+        SaveLandingEscalations(workspace, existing);
+    }
+
+    private static void AddLandingEscalationItems(
+        Dictionary<string, OperatorInboxItem> items,
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
+    {
+        var escalations = LoadLandingEscalations(workspace);
+        foreach (var escalation in escalations.Where(e =>
+            e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase)))
+        {
+            Add(items, BuildItem(
+                goal,
+                OperatorInboxKind.LandingEscalation,
+                OperatorInboxSeverity.Warning,
+                null,
+                null,
+                $"Landing parked on {escalation.IntegrationBranch}",
+                escalation.Reason,
+                $"escalated at {escalation.EscalatedAt:u}; branch={escalation.IntegrationBranch}",
+                "Review the change and promote manually or rerun land after resolving the issue.",
+                $"land {goal.Id.Value[..8]}",
+                $"landing-escalation:{escalation.GoalId}:{escalation.Reason}",
+                acknowledgements));
+        }
+    }
+
+    private static IReadOnlyList<LandingEscalationRecord> LoadLandingEscalations(OrchestratorWorkspace workspace)
+    {
+        var path = Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName);
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<LandingEscalationStore>(File.ReadAllText(path), JsonOptions)?.Items ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static void SaveLandingEscalations(OrchestratorWorkspace workspace, IReadOnlyList<LandingEscalationRecord> items)
+    {
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        File.WriteAllText(
+            Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName),
+            JsonSerializer.Serialize(new LandingEscalationStore(items), JsonOptions));
+    }
+
     private static OperatorInboxItem BuildItem(
         Goal goal,
         OperatorInboxKind kind,
@@ -528,4 +596,12 @@ internal static class OperatorInbox
     private sealed record OperatorInboxAcknowledgement(string ItemId, DateTimeOffset AcknowledgedAt, string? Note);
 
     private sealed record OperatorInboxAcknowledgementStore(IReadOnlyList<OperatorInboxAcknowledgement> Items);
+
+    private sealed record LandingEscalationRecord(
+        string GoalId,
+        string Reason,
+        string IntegrationBranch,
+        DateTimeOffset EscalatedAt);
+
+    private sealed record LandingEscalationStore(IReadOnlyList<LandingEscalationRecord> Items);
 }

@@ -87,6 +87,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("loop-health", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("provenance", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("accept", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("config", StringComparison.OrdinalIgnoreCase);
+        command.Equals("config", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("land", StringComparison.OrdinalIgnoreCase);
 }
 }

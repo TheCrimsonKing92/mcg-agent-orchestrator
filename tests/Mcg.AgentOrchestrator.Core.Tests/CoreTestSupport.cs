@@ -70,7 +70,7 @@ internal sealed class FakeModelProvider : IModelProvider
     }
 }
 
-internal static class Assert
+internal static partial class Assert
 {
     public static void Equal<T>(T expected, T actual)
     {
