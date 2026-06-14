@@ -220,6 +220,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace));
             return false;
 
+        case "record-goal":
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            HandleRecordGoal(context);
+            return false;
+
         case "failure-triage":
             var triagePolicy = ResolveCliAutonomyPolicy(parts);
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, GetOptionalArgument(parts));
@@ -468,6 +473,27 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
         SubscriptionModelAlias: subscriptionModel,
         ComplexProviderName: complexModelName is null ? null : parts[2],
         ComplexModelName: complexModelName));
+}
+
+private static void HandleRecordGoal(CliExecutionContext context)
+{
+    var goal = context.CurrentGoal!;
+    var entry = DogfoodLogRenderer.Render(goal);
+    var text = entry.Render();
+    Console.Write(text);
+
+    var logPath = Path.Combine(context.Workspace.ExecutionDirectory, "DOGFOOD_LOG.md");
+    if (File.Exists(logPath))
+    {
+        File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + text);
+        Console.WriteLine();
+        Console.WriteLine($"Appended to {logPath}");
+    }
+    else
+    {
+        Console.WriteLine();
+        Console.WriteLine($"DOGFOOD_LOG.md not found at {logPath}; entry printed but not appended.");
+    }
 }
 
 private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyList<string> parts, bool simple)
