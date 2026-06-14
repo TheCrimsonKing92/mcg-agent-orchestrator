@@ -87,17 +87,15 @@ public static class LoopHealthReport
             modelMix);
     }
 
-    // A false completion is caught when the earliest verification succeeded but a
-    // later verification failed — the worker claimed completion, then the verifier caught it.
-    private static bool IsFalseCompletionCatch(TaskSpec task)
-    {
-        var ordered = task.VerificationHistory
-            .OrderBy(v => v.CompletedAt)
-            .ToList();
-        return ordered.Count >= 2 &&
-            ordered[0].Succeeded &&
-            ordered.Skip(1).Any(v => !v.Succeeded);
-    }
+    // Emitted by BackgroundDispatchRunner when a dispatch exits 0 but the file-change guard fires.
+    private const string FalsePositiveRejectionMarker =
+        "did not produce required relevant file-change evidence";
+
+    // A false completion is caught when any verification record's StandardError contains the
+    // rejection marker from the no-relevant-file-change completion guard.
+    private static bool IsFalseCompletionCatch(TaskSpec task) =>
+        task.VerificationHistory.Any(v =>
+            v.StandardError.Contains(FalsePositiveRejectionMarker, StringComparison.Ordinal));
 
     private static List<Goal> ApplyWindow(List<Goal> goals, int? lastN)
     {

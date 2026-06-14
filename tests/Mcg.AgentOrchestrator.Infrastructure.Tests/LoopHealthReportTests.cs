@@ -11,8 +11,8 @@ public sealed class LoopHealthReportTests
 
     // Three-goal fixture used by most tests:
     //   Goal 1 – retry goal (1 task): dispatch fails → RetryTask → dispatch passes → Goal Completed
-    //   Goal 2 – false-completion goal (2 tasks): Task1 dispatch exits 0, then operator catches failure;
-    //            Task2 stays pending so goal remains Active (not terminal), letting RefreshGoalStatus run
+    //   Goal 2 – false-completion goal (2 tasks): Task1 exits 0 but file-change guard fires the rejection
+    //            marker in StandardError; Task2 stays pending so goal remains Active
     //   Goal 3 – clean one-shot goal (1 task): single dispatch passes → Goal Completed
 
     [Xunit.Fact(DisplayName = "LoopHealth_dispatches_per_successful_merge_counts_dispatch_events_over_completed_goals")]
@@ -29,18 +29,47 @@ public sealed class LoopHealthReportTests
         Assert.Equal(2.0, report.DispatchesPerSuccessfulMerge);
     }
 
-    [Xunit.Fact(DisplayName = "LoopHealth_false_completion_catch_rate_detects_pass_then_fail_verification")]
-    public void LoopHealthFalseCompletionCatchRateDetectsPassThenFailVerification()
+    [Xunit.Fact(DisplayName = "LoopHealth_false_completion_catch_rate_counts_tasks_with_false_positive_rejection_marker")]
+    public void LoopHealthFalseCompletionCatchRateCountsTasksWithFalsePositiveRejectionMarker()
     {
         var (kernel, _, _, _) = BuildFixture();
 
         var report = kernel.BuildLoopHealthReport();
 
-        // 4 total tasks (1+2+1); Task2 of Goal2 has no verifications → 3 tasks have any verification
-        // Only Goal2's Task1 has the pass-then-fail pattern → rate = 1/3
+        // 4 total tasks (1+2+1); Task2 of Goal2 has no verifications → 3 tasks have any verification.
+        // Only Goal2's Task1 has a verification whose StandardError contains the rejection marker → rate = 1/3.
         Assert.Equal(4, report.TotalTaskCount);
         var expectedRate = 1.0 / 3.0;
         Assert.True(Math.Abs(report.FalseCompletionCatchRate - expectedRate) < 0.01);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealth_false_completion_catch_rate_does_not_count_plain_pass_then_fail_without_marker")]
+    public void LoopHealthFalseCompletionCatchRateDoesNotCountPlainPassThenFailWithoutMarker()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Unrelated fail goal", [MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        var task = goal.Tasks[0];
+
+        // First verification: passes
+        RecordCompletedDispatch(kernel, goal, task, "Anthropic", "claude-sonnet-4-6");
+
+        // Second verification: fails but NOT due to the false-positive rejection guard
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "dotnet test",
+                WorkDir,
+                1,
+                "Test failed.",
+                "Error: 3 tests failed — not a false-positive rejection",
+                DateTimeOffset.UtcNow));
+
+        var report = kernel.BuildLoopHealthReport();
+
+        // One task has verifications; plain pass→fail without the marker must NOT be counted.
+        Assert.Equal(0.0, report.FalseCompletionCatchRate);
     }
 
     [Xunit.Fact(DisplayName = "LoopHealth_rework_retry_rate_counts_tasks_with_TaskRetried_timeline_events")]
@@ -151,8 +180,8 @@ public sealed class LoopHealthReportTests
 
     // Builds the canonical three-goal fixture.
     // Goal 1 (1 task)  – retry: dispatch fails, RetryTask, dispatch passes → Completed
-    // Goal 2 (2 tasks) – false-completion: Task1 dispatch exits 0 then operator catches failure;
-    //                    Task2 stays pending so RefreshGoalStatus keeps goal Active
+    // Goal 2 (2 tasks) – false-completion: Task1 exits 0, file-change guard fires rejection marker;
+    //                    Task2 stays pending so goal remains Active
     // Goal 3 (1 task)  – clean one-shot: dispatch passes → Completed
     private static (AgentOrchestratorKernel, Goal RetryGoal, Goal FalseCompletionGoal, Goal CleanGoal) BuildFixture()
     {
@@ -171,16 +200,16 @@ public sealed class LoopHealthReportTests
         kernel.ActivateGoal(fcGoal.Id, DefaultAgents);
         var fcTask1 = fcGoal.Tasks[0];
         RecordCompletedDispatch(kernel, fcGoal, fcTask1, "Anthropic", "claude-sonnet-4-6");
-        // Operator verification finds the task is not actually done; Task2 is still pending so goal stays Active
+        // False-positive rejection: the file-change guard fires and emits the rejection marker in StandardError.
         kernel.RecordTaskVerification(
             fcGoal.Id,
             fcTask1.Id,
             new TaskVerificationRecord(
-                "dotnet test",
+                "worker-cli run",
                 WorkDir,
                 1,
-                "Test failed: acceptance criteria not met.",
-                "Error: 3 tests failed",
+                string.Empty,
+                "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence. Blocking completion.",
                 DateTimeOffset.UtcNow));
 
         // Goal 3: clean one-shot
