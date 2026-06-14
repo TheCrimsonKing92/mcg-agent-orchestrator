@@ -1236,37 +1236,8 @@ public static class WorkerContextArtifacts
 
     private static bool TryParseWorkerResultContract(TaskVerificationRecord verification, out Dictionary<string, string> fields)
     {
-        fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var lines = $"{verification.StandardOutput}\n{verification.StandardError}"
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Split('\n');
-        var start = Array.FindIndex(lines, line => line.Trim().Equals("WORKER_RESULT:", StringComparison.OrdinalIgnoreCase));
-        if (start < 0)
-        {
-            return false;
-        }
-
-        var end = Array.FindIndex(lines, start + 1, line => line.Trim().Equals("END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
-        if (end < 0)
-        {
-            // Tolerate missing END marker: treat the next blank line, heading, or EOF as the terminator.
-            end = Array.FindIndex(lines, start + 1, line => { var t = line.Trim(); return t.Length == 0 || t.StartsWith('#'); });
-            if (end < 0) end = lines.Length;
-        }
-
-        for (var index = start + 1; index < end; index++)
-        {
-            var line = lines[index].Trim();
-            var separator = line.IndexOf(':', StringComparison.Ordinal);
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            fields[line[..separator].Trim()] = line[(separator + 1)..].Trim();
-        }
-
-        return fields.Count > 0;
+        var text = $"{verification.StandardOutput}\n{verification.StandardError}";
+        return WorkerResultParser.TryParseFields(text, out fields, out _);
     }
 
     private static string[] SplitContractList(string value)

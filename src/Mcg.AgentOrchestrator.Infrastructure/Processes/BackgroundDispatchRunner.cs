@@ -347,10 +347,11 @@ public sealed class BackgroundDispatchRunner
         var combinedOutput = $"{standardOutput}\n{standardError}";
         if (!TryParseWorkerResultContract(combinedOutput, out var contract, out diagnostic))
         {
-            // If the only problem is the missing block, look for a committed result file.
-            if (diagnostic == "missing WORKER_RESULT block." &&
-                TryReadCommittedWorkerResultFile(workingDirectory, out var fileContent) &&
-                TryParseWorkerResultContract(fileContent, out contract, out diagnostic))
+            // For any format failure in stdout, also try the committed result file.
+            // This handles cases where the result lives only in WORKER_RESULT.md/.txt
+            // or where stdout has prose around a non-conforming committed file.
+            if (TryReadCommittedWorkerResultFile(workingDirectory, out var fileContent) &&
+                TryParseWorkerResultContract(fileContent, out contract, out _))
             {
                 // Parsed successfully from committed file — continue validation.
             }
@@ -430,60 +431,25 @@ public sealed class BackgroundDispatchRunner
     private static bool TryParseWorkerResultContract(string output, out WorkerResultContract contract, out string diagnostic)
     {
         contract = WorkerResultContract.Empty;
-        diagnostic = string.Empty;
-        var lines = output.Replace("\r\n", "\n").Split('\n');
-        var start = Array.FindIndex(lines, line => string.Equals(line.Trim(), "WORKER_RESULT:", StringComparison.OrdinalIgnoreCase));
-        if (start < 0)
+        if (!WorkerResultParser.TryParseFields(output, out var fields, out diagnostic))
         {
-            diagnostic = "missing WORKER_RESULT block.";
-            return false;
-        }
-
-        var end = Array.FindIndex(lines, start + 1, line => string.Equals(line.Trim(), "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
-        if (end < 0)
-        {
-            // Tolerate missing END marker: treat the next blank line, heading, or EOF as the terminator.
-            end = Array.FindIndex(lines, start + 1, line => { var t = line.Trim(); return t.Length == 0 || t.StartsWith('#'); });
-            if (end < 0) end = lines.Length;
-        }
-
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var index = start + 1; index < end; index++)
-        {
-            var line = lines[index].Trim();
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var separator = line.IndexOf(':', StringComparison.Ordinal);
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            fields[line[..separator].Trim()] = line[(separator + 1)..].Trim();
-        }
-
-        var required = new[] { "files", "commands", "tests", "commit", "blockers", "model_fit", "skills", "confidence" };
-        var missing = required.Where(field => !fields.ContainsKey(field)).ToList();
-        if (missing.Count > 0)
-        {
-            diagnostic = $"missing field(s): {string.Join(", ", missing)}.";
             return false;
         }
 
         contract = new WorkerResultContract(
-            SplitContractList(fields["files"]),
-            fields["commands"],
-            fields["tests"],
-            fields["commit"],
-            fields["blockers"],
-            fields["model_fit"],
-            fields["skills"],
-            fields["confidence"]);
+            SplitContractList(GetField(fields, "files")),
+            GetField(fields, "commands"),
+            GetField(fields, "tests"),
+            GetField(fields, "commit"),
+            GetField(fields, "blockers"),
+            GetField(fields, "model_fit"),
+            GetField(fields, "skills"),
+            GetField(fields, "confidence"));
         return true;
     }
+
+    private static string GetField(Dictionary<string, string> fields, string key) =>
+        fields.TryGetValue(key, out var value) ? value : string.Empty;
 
     private static List<string> SplitContractList(string value)
     {
