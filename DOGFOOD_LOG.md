@@ -915,3 +915,19 @@ Dogfooded via goal 85f16186 (Claude Sonnet, ~8 min, exit 0, merge 2cb32a1 fast-f
 - Operator gate: acceptance passed (the metric change is Core-only; tests add a true-catch case and a no-marker pass->fail flip that must NOT count). Reviewed the diff: 3-line method replacing a 10-line heuristic, no snapshot-shape change.
 - Evidence note: the metric now measures what it claims to measure (real gate catches) rather than a coincidental ordering pattern - the meta-metric itself is now evidence-grade.
 - Model fit: Claude Sonnet - adequate - grep-for-marker + single-method rewrite + fixture update.
+
+## 2026-06-14 - next/next --full inspection-verb consolidation (#6 remainder)
+
+Dogfooded via goal ab859242 (Claude Sonnet, ~12 min, exit 0, merge 8d618fb), one of three CONCURRENT goals. `next --full` now folds all 15 inspection reports (status, monitor, readiness, evidence, stages, gates, verify-needed, input-needed, subscription-plan, model-outcomes, loop-health, failure-triage, goal-recovery, supervisor, operator-inbox) into one output via a PrintNextFullDetail helper that CALLS the existing builders (no report internals modified - the constraint that kept it disjoint from the concurrent goals); help banner reorganized into Fundamentals vs Advanced; standalone verbs demoted not deleted; also hardened goal-prefix resolution so --full isn't misread as a prefix.
+
+- Operator gate: acceptance passed (core 214, infra 548); combined-main re-verify after merge confirmed coexistence. Reviewed: aggregation-only, no internal changes, all standalone verbs preserved.
+- Model fit: Claude Sonnet - adequate - CLI wiring + test authoring.
+
+## 2026-06-14 - Budget-aware routing BEHAVIOR half (lane selection)
+
+Dogfooded via goal 1f1bda00 (Claude Sonnet, exit 0, merge 6df6889), concurrent with the above. `AgentOrchestratorKernel.ActivateGoal`/`AddTask` now select agents via `SelectAgentForTask` (Simple -> prefer LocalBridge/local, Complex -> prefer paid, fallback to first eligible, keyed on TaskComplexityEstimator); `SubscriptionPlanBuilder.BuildRouteDecision` now sets Disposition.Blocked when the scorecard says Avoid (was advisory-only). So the SELECTED lane - not just the explanation - reflects {complexity, scorecard, risk}.
+
+- Operator gate: the dispatch was marked Failed by the WORKER_RESULT contract validator because the worker put deferred-decision notes in the blockers field - which my objective had explicitly requested ("report deferred design decisions as blockers"). Operator reviewed commit 48bdaac (correct), recorded a verify-manual override documenting the false-failure, then acceptance independently re-ran the full suite as the authoritative check: core 214, infra 548, blockers none. Combined-main re-verify after merge: 214 + 552 = 766 ALL GREEN.
+- Evidence note: a genuine instance of a safety gate (contract validator) firing on operator-induced wording - the override is recorded with reasoning, and the real gate (acceptance test run) still applied. Lesson: do not instruct workers to put deferred decisions in the blockers field; the contract treats any non-empty blockers as a failure.
+- Deferred (filed): per-provider budget-remaining as a first-class input; scorecard recency/decay; manual lane override despite Avoid.
+- Model fit: Claude Sonnet - adequate - 4-file routing-layer change implemented correctly in one pass.
