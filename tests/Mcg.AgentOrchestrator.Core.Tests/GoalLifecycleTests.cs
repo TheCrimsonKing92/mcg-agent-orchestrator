@@ -207,6 +207,173 @@ public sealed class GoalLifecycleTests
     Assert.Contains(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskAdded);
 }
 
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Created_for_draft_goal")]
+    public void ResolveStateReturnsCreatedForDraftGoal()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Draft goal");
+
+    Assert.Equal(GoalLifecycleState.Created, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Created_for_active_goal_with_no_workspace")]
+    public void ResolveStateReturnsCreatedForActiveGoalWithNoWorkspace()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Active no workspace");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    Assert.Equal(GoalLifecycleState.Created, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_WorkspaceReady_when_workspace_exists_and_no_dispatch")]
+    public void ResolveStateReturnsWorkspaceReadyWhenWorkspaceExistsAndNoDispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Workspace ready");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Dispatched_when_task_is_running_with_dispatch_but_no_process")]
+    public void ResolveStateReturnsDispatchedWhenTaskIsRunningWithDispatchButNoProcess()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Dispatched", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+
+    Assert.Equal(GoalLifecycleState.Dispatched, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Running_when_task_has_live_process")]
+    public void ResolveStateReturnsRunningWhenTaskHasLiveProcess()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Running", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "codex exec prompt.md", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
+
+    Assert.Equal(GoalLifecycleState.Running, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_AwaitingVerification_when_all_tasks_completed_without_verification")]
+    public void ResolveStateReturnsAwaitingVerificationWhenAllTasksCompletedWithoutVerification()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Awaiting verification", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+
+    Assert.Equal(GoalLifecycleState.AwaitingVerification, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_when_goal_is_completed")]
+    public void ResolveStateReturnsVerifiedWhenGoalIsCompleted()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verified", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Merged_when_goal_completed_and_merged")]
+    public void ResolveStateReturnsMergedWhenGoalCompletedAndMerged()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Merged", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalLifecycleState.Merged, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsMerged: true)));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Recorded_when_goal_completed_merged_and_recorded")]
+    public void ResolveStateReturnsRecordedWhenGoalCompletedMergedAndRecorded()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Recorded", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsMerged: true, IsRecorded: true)));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_CleanedUp_when_fully_concluded")]
+    public void ResolveStateReturnsCleanedUpWhenFullyConcluded()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("CleanedUp", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true)));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Failed_when_task_has_failed_status")]
+    public void ResolveStateReturnsFailedWhenTaskHasFailedStatus()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Failed task", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Build error.");
+
+    Assert.Equal(GoalLifecycleState.Failed, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Failed_for_cancelled_goal")]
+    public void ResolveStateReturnsFailedForCancelledGoal()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Cancelled", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.SupersedeGoal(goal.Id, "Replaced by a cleaner goal.");
+
+    Assert.Equal(GoalLifecycleState.Failed, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Blocked_when_IsBlocked_fact_is_set")]
+    public void ResolveStateReturnsBlockedWhenIsBlockedFactIsSet()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Blocked", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    Assert.Equal(GoalLifecycleState.Blocked, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsBlocked: true)));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_AwaitingHumanInput_when_goal_is_waiting_for_human")]
+    public void ResolveStateReturnsAwaitingHumanInputWhenGoalIsWaitingForHuman()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Human input");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Planner);
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Planner started.");
+    kernel.RequestHumanInput(goal.Id, task.Id, "Which repository should I target?");
+
+    Assert.Equal(GoalLifecycleState.AwaitingHumanInput, GoalLifecycle.ResolveState(goal));
+}
+
 static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, AgentRole role, string heading, string detail)
 {
     var task = goal.Tasks.First(task => task.RequiredRole == role);
