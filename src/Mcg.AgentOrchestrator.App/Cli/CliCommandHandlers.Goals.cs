@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -353,16 +354,25 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "next":
-            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+        {
+            var isFull = HasCliConfirmation(parts, "--full");
+            var nextGoalPrefix = GetOptionalArgument(parts, "--full");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, nextGoalPrefix);
+            var nextPolicy = ResolveCliAutonomyPolicy(parts);
             var nextHealth = GoalHealthEvaluator.Build(
                 context.Kernel,
                 context.CurrentGoal,
                 context.Agents,
                 context.WorkerProfiles,
                 context.Workspace.ExecutionDirectory,
-                ResolveCliAutonomyPolicy(parts));
+                nextPolicy);
             ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.Agents, nextHealth);
+            if (isFull)
+            {
+                PrintNextFullDetail(context, nextPolicy);
+            }
             return false;
+        }
 
         case "subscription-plan":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
@@ -793,6 +803,30 @@ private static string Slug(string value)
     }
 
     return slug.Trim('-');
+}
+
+private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPolicy policy)
+{
+    var goal = context.CurrentGoal!;
+    ConsoleViews.PrintGoal(goal);
+    ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(goal.Id));
+    ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory));
+    ConsoleViews.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
+    ConsoleViews.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
+    ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));
+    ConsoleViews.PrintVerificationWorklist(goal, context.Kernel.BuildVerificationWorklist(goal.Id));
+    ConsoleViews.PrintHumanInputWorklist(goal, context.Kernel.BuildHumanInputWorklist(goal.Id));
+    ConsoleViews.PrintSubscriptionPlan(SubscriptionPlanBuilder.Build(
+        goal,
+        context.Agents,
+        context.WorkerProfiles,
+        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents)));
+    ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
+    ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
+    ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
+    ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, goal, context.Workspace.ExecutionDirectory));
+    ConsoleViews.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
+    ConsoleViews.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));
 }
 
 private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
