@@ -3435,11 +3435,16 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_task_commands_accept_goal_prefix_for_non_current_goal")]
     public void CliTaskCommandsAcceptGoalPrefixForNonCurrentGoal()
     {
+        // Seed two goals with deterministic IDs: one all-numeric prefix (the collision case) and one letters prefix.
+        var numericPrefixId = new GoalId("97184249" + new string('0', 24));
+        var lettersPrefixId = new GoalId("abcdef12" + new string('0', 24));
+
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
-        var targetGoal = kernel.CreateGoal("Target older goal", [new TaskSpec(TaskId.New(), "Do target work", AgentRole.Developer)]);
-        var current = kernel.CreateGoal("Current newer goal", [new TaskSpec(TaskId.New(), "Do current work", AgentRole.Developer)]);
+        var numericGoal = kernel.CreateGoal(numericPrefixId, "All-numeric prefix goal", [new TaskSpec(TaskId.New(), "Do numeric goal work", AgentRole.Developer)]);
+        var lettersGoal = kernel.CreateGoal(lettersPrefixId, "Letters prefix goal", [new TaskSpec(TaskId.New(), "Do letters goal work", AgentRole.Developer)]);
+        var current = kernel.CreateGoal("Current goal", [new TaskSpec(TaskId.New(), "Do current work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
         [
             new AgentDefinition(
@@ -3451,11 +3456,21 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = current;
-        var targetPrefix = targetGoal.Id.Value[..8];
-        var targetTask = targetGoal.Tasks.Single();
+        var numericTask = numericGoal.Tasks.Single();
+        var lettersTask = lettersGoal.Tasks.Single();
 
-        var retryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand($"retry {targetPrefix} 1 Retry older goal."),
+        // All-numeric prefix: the collision case that previously misparsed as task display number.
+        var numericRetryChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand("retry 97184249 1 Retry numeric prefix goal."),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        // Letters prefix: the original passing case.
+        var lettersRetryChanged = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal."),
             kernel,
             workspace,
             ref agents,
@@ -3463,7 +3478,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal);
         var manualChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand($"verify-manual --goal {targetPrefix} 1 passed Operator verified older goal."),
+            CliArgumentParser.SplitCommand("verify-manual --goal 97184249 1 passed Operator verified numeric prefix goal."),
             kernel,
             workspace,
             ref agents,
@@ -3471,11 +3486,13 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal);
 
-        Xunit.Assert.True(retryChanged);
+        Xunit.Assert.True(numericRetryChanged);
+        Xunit.Assert.True(lettersRetryChanged);
         Xunit.Assert.True(manualChanged);
-        Xunit.Assert.Equal(targetGoal.Id, currentGoal!.Id);
-        Xunit.Assert.Contains(targetGoal.Timeline, evt => evt.TaskId == targetTask.Id && evt.Kind == ProgressKind.TaskRetried);
-        Xunit.Assert.NotNull(targetTask.LastVerification);
+        Xunit.Assert.Equal(numericGoal.Id, currentGoal!.Id);
+        Xunit.Assert.Contains(numericGoal.Timeline, evt => evt.TaskId == numericTask.Id && evt.Kind == ProgressKind.TaskRetried);
+        Xunit.Assert.Contains(lettersGoal.Timeline, evt => evt.TaskId == lettersTask.Id && evt.Kind == ProgressKind.TaskRetried);
+        Xunit.Assert.NotNull(numericTask.LastVerification);
         Xunit.Assert.Empty(current.Tasks.Single().VerificationHistory);
     }
 

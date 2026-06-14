@@ -10,6 +10,14 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
+    public Goal CreateGoal(GoalId id, string objective, IReadOnlyList<TaskSpec>? tasks = null)
+    {
+        var goal = new Goal(id, objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
+        _goals.Add(goal.Id, goal);
+        Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
+        return goal;
+    }
+
     public DelegationPlan ActivateGoal(GoalId goalId, IReadOnlyList<AgentDefinition> availableAgents)
     {
         var goal = GetGoal(goalId);

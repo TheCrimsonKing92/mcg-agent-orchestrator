@@ -227,7 +227,7 @@ private static (TaskSpec Task, int NextIndex) ResolveCommandTaskTarget(IReadOnly
     }
     else if (parts.Count > 2 &&
         !parts[2].StartsWith("--", StringComparison.Ordinal) &&
-        !int.TryParse(parts[1], out _) &&
+        (!int.TryParse(parts[1], out _) || parts[1].Length >= 8) &&
         TryResolveGoalPrefix(context.Kernel, parts[1], out _))
     {
         goalPrefix = parts[1];

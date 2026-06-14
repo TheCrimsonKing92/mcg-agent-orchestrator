@@ -208,7 +208,7 @@ private static IReadOnlyList<string> SplitTaskTargetCommand(string command, stri
 private static bool LooksLikePositionalGoalTask(string first, string second)
 {
     return !first.StartsWith("--", StringComparison.Ordinal) &&
-        !int.TryParse(first, out _) &&
+        (!int.TryParse(first, out _) || first.Length >= 8) &&
         int.TryParse(second, out _);
 }
 
