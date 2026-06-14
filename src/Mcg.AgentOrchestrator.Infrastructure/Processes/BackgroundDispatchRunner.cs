@@ -249,7 +249,7 @@ public sealed class BackgroundDispatchRunner
             }
 
             if (exitCode == 0 &&
-                !TryValidateWorkerResultContract(task, standardOutput, standardError, worktreeEvidence, out var contractDiagnostic))
+                !TryValidateWorkerResultContract(task, standardOutput, standardError, worktreeEvidence, processRecord.WorkingDirectory, out var contractDiagnostic))
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, contractDiagnostic);
@@ -340,13 +340,25 @@ public sealed class BackgroundDispatchRunner
         string standardOutput,
         string standardError,
         GoalWorktreeDispatchEvidence worktreeEvidence,
+        string workingDirectory,
         out string diagnostic)
     {
         diagnostic = string.Empty;
-        if (!TryParseWorkerResultContract($"{standardOutput}\n{standardError}", out var contract, out diagnostic))
+        var combinedOutput = $"{standardOutput}\n{standardError}";
+        if (!TryParseWorkerResultContract(combinedOutput, out var contract, out diagnostic))
         {
-            diagnostic = $"Worker result contract invalid: {diagnostic}";
-            return false;
+            // If the only problem is the missing block, look for a committed result file.
+            if (diagnostic == "missing WORKER_RESULT block." &&
+                TryReadCommittedWorkerResultFile(workingDirectory, out var fileContent) &&
+                TryParseWorkerResultContract(fileContent, out contract, out diagnostic))
+            {
+                // Parsed successfully from committed file — continue validation.
+            }
+            else
+            {
+                diagnostic = $"Worker result contract invalid: {(string.IsNullOrEmpty(diagnostic) ? "missing WORKER_RESULT block." : diagnostic)}";
+                return false;
+            }
         }
 
         if (!contract.HasNoBlockers)
@@ -389,9 +401,11 @@ public sealed class BackgroundDispatchRunner
         var requiresCommit = RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
             !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
             worktreeEvidence.HasRelevantCommitAfterDispatch;
-        if (requiresCommit && !contract.CommitMatches(worktreeEvidence.Head))
+        if (requiresCommit &&
+            !contract.CommitMatches(worktreeEvidence.Head) &&
+            !IsCommitReachableFromHead(workingDirectory, contract.Commit.Trim()))
         {
-            diagnostic = $"Worker result contract commit '{contract.Commit}' does not match git head '{worktreeEvidence.Head}'.";
+            diagnostic = $"Worker result contract commit '{contract.Commit}' is not reachable from git head '{worktreeEvidence.Head}'.";
             return false;
         }
 
@@ -528,12 +542,13 @@ public sealed class BackgroundDispatchRunner
                 .ToArray()
             : [];
 
+        var filteredStatusOutput = FilterWorkerResultArtifacts(status.Output);
         evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
-            status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output),
-            status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output) ? "clean" : "dirty",
-            FormatStatusShort(status),
+            status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput),
+            status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
+            FormatStatusShort(new GitResult(status.ExitCode, filteredStatusOutput)),
             commitsAfterDispatch,
             pathsChangedAfterDispatch);
         return true;
@@ -548,6 +563,8 @@ public sealed class BackgroundDispatchRunner
         }
 
         return !normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) &&
@@ -559,6 +576,81 @@ public sealed class BackgroundDispatchRunner
             !normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) &&
             !normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCommitReachableFromHead(string workingDirectory, string commit)
+    {
+        if (string.IsNullOrWhiteSpace(commit) ||
+            string.Equals(commit.Trim(), "none", StringComparison.OrdinalIgnoreCase) ||
+            !Directory.Exists(workingDirectory))
+        {
+            return false;
+        }
+
+        // Exit 0 means ancestor, exit 1 means not an ancestor.
+        var result = RunGit(workingDirectory, "merge-base", "--is-ancestor", commit.Trim(), "HEAD");
+        return result.ExitCode == 0;
+    }
+
+    private static bool TryReadCommittedWorkerResultFile(string workingDirectory, out string content)
+    {
+        content = string.Empty;
+        if (!Directory.Exists(workingDirectory))
+        {
+            return false;
+        }
+
+        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
+        {
+            var path = Path.Combine(workingDirectory, fileName);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            // Only accept tracked (committed) result files, not untracked ones.
+            var lsFiles = RunGit(workingDirectory, "ls-files", fileName);
+            if (lsFiles.ExitCode != 0 || string.IsNullOrWhiteSpace(lsFiles.Output))
+            {
+                continue;
+            }
+
+            content = ReadBestEffort(path);
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string FilterWorkerResultArtifacts(string statusOutput)
+    {
+        if (string.IsNullOrWhiteSpace(statusOutput))
+        {
+            return statusOutput;
+        }
+
+        var lines = statusOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !IsWorkerResultArtifactStatusLine(line));
+        return string.Join("\n", lines);
+    }
+
+    private static bool IsWorkerResultArtifactStatusLine(string line)
+    {
+        // Untracked WORKER_RESULT.md/.txt show as "?? WORKER_RESULT.md" in git status --short.
+        // We ignore these as result artifacts, not real work artifacts.
+        var trimmed = line.TrimStart();
+        if (!trimmed.StartsWith("??", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var filename = trimmed[2..].Trim();
+        return string.Equals(filename, "WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(filename, "WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
@@ -1227,7 +1319,8 @@ public sealed class BackgroundDispatchRunner
 
         public bool HasNoBlockers =>
             string.IsNullOrWhiteSpace(Blockers) ||
-            string.Equals(Blockers.Trim(), "none", StringComparison.OrdinalIgnoreCase);
+            string.Equals(Blockers.Trim(), "none", StringComparison.OrdinalIgnoreCase) ||
+            Regex.IsMatch(Blockers.Trim(), @"^none\s*[-;:(]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public bool HasModelFit =>
             !string.IsNullOrWhiteSpace(ModelFit) &&

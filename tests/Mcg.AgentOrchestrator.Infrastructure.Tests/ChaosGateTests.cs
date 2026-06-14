@@ -248,6 +248,241 @@ public sealed class ChaosGateTests
         Assert.Contains(findings, text => text.Contains("uncommitted change", StringComparison.Ordinal));
     }
 
+    // ── Leniency: commit is ancestor (HEAD advanced post-commit) ────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_HeadAdvancedPostCommit_passes_when_reported_commit_is_ancestor")]
+    public void Leniency_HeadAdvancedPostCommit_PassesWhenReportedCommitIsAncestor()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,  // stdout filled in below after we know the worker commit
+            string.Empty,
+            mutateWorktree: null);
+
+        // Commit a source file (this is the "worker commit")
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var workerCommit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        // Simulate HEAD advancing past the worker commit (a subsequent merge/commit).
+        // Use a .log file so it's excluded from relevant-path checking and doesn't
+        // need to appear in the WORKER_RESULT files field.
+        File.WriteAllText(Path.Combine(worktree, "post-worker.log"), "advance");
+        RunGit(worktree, ["add", "-A"], CommittedAt.AddSeconds(30));
+        RunGit(worktree, ["commit", "-m", "Post-worker advance"], CommittedAt.AddSeconds(30));
+
+        // HEAD is now ahead of the worker commit.
+        var currentHead = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+        Assert.False(string.Equals(workerCommit, currentHead, StringComparison.Ordinal));
+
+        // Write stdout containing WORKER_RESULT with the OLD (worker) commit SHA.
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(
+            Path.Combine(logs, $"{AgentRole.Developer}.out.log"),
+            WorkerResultBlock(relPath, "dotnet build", "Passed", commit: workerCommit));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        // Should PASS: worker commit is reachable from HEAD even though HEAD moved.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: commit absent from history still fails ────────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_CommitAbsentFromHistory_still_fails")]
+    public void Leniency_CommitAbsentFromHistory_StillFails()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock(relPath, "dotnet build", "Passed", commit: "deadbeef"),
+            string.Empty,
+            mutateWorktree: wt => CommitSourceFile(wt, relPath, "// feature"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        // "deadbeef" is not in history — must still fail.
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains(task.LastVerification.StandardError,
+            text => text.Contains("is not reachable from git head", StringComparison.Ordinal));
+    }
+
+    // ── Leniency: WORKER_RESULT in committed file passes ────────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_CommittedWorkerResultFile_passes_when_no_stdout_block")]
+    public void Leniency_CommittedWorkerResultFile_PassesWhenNoStdoutBlock()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            "Work complete. See WORKER_RESULT.md for result details.",
+            string.Empty,
+            mutateWorktree: wt =>
+            {
+                CommitSourceFile(wt, relPath, "// feature");
+                // Commit a WORKER_RESULT.md containing the result block.
+                var commit = ReadGit(wt, ["rev-parse", "--short", "HEAD"]);
+                var block = WorkerResultBlock(relPath, "dotnet build", "Passed", commit: commit);
+                File.WriteAllText(Path.Combine(wt, "WORKER_RESULT.md"), block);
+                RunGit(wt, ["add", "-A"], CommittedAt.AddSeconds(5));
+                RunGit(wt, ["commit", "-m", "Add WORKER_RESULT.md"], CommittedAt.AddSeconds(5));
+            });
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: untracked WORKER_RESULT.md does not trip dirty guard ──────
+
+    [Xunit.Fact(DisplayName = "Leniency_UntrackedWorkerResultFile_does_not_trip_dirty_worktree_guard")]
+    public void Leniency_UntrackedWorkerResultFile_DoesNotTripDirtyWorktreeGuard()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock(relPath, "dotnet build", "Passed"),
+            string.Empty,
+            mutateWorktree: wt =>
+            {
+                CommitSourceFile(wt, relPath, "// feature");
+                // Leave an UNTRACKED WORKER_RESULT.md — should be invisible to dirty guard.
+                var commit = ReadGit(wt, ["rev-parse", "--short", "HEAD"]);
+                File.WriteAllText(Path.Combine(wt, "WORKER_RESULT.md"),
+                    WorkerResultBlock(relPath, "dotnet build", "Passed", commit: commit));
+            });
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        // Untracked WORKER_RESULT.md must not trigger the dirty-worktree gate.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.False(task.LastVerification!.StandardError.Contains(
+            "left the worktree dirty", StringComparison.Ordinal));
+    }
+
+    // ── Regression: real uncommitted source still trips dirty guard ──────────
+
+    [Xunit.Fact(DisplayName = "Leniency_RealUncommittedSourceFile_still_trips_dirty_guard")]
+    public void Leniency_RealUncommittedSourceFile_StillTripsDirtyGuard()
+    {
+        var root = CreateSeededRepo();
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock("none", "dotnet build", "not run"),
+            string.Empty,
+            mutateWorktree: wt =>
+            {
+                // Uncommitted real source file — should still trip the dirty guard.
+                File.WriteAllText(Path.Combine(wt, "RealDirty.cs"), "// uncommitted source");
+            });
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains(task.LastVerification.StandardError,
+            text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+    }
+
+    // ── Regression: no WORKER_RESULT anywhere (no stdout block, no file) ────
+
+    [Xunit.Fact(DisplayName = "Leniency_NoWorkerResultAnywhere_still_fails")]
+    public void Leniency_NoWorkerResultAnywhere_StillFails()
+    {
+        // Same as Gate 3a but re-asserted with the new file-fallback path active.
+        var root = CreateSeededRepo();
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            "Done. Files written.",
+            string.Empty,
+            mutateWorktree: wt => CommitSourceFile(wt, "src/Feature.cs", "// feature"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains(task.LastVerification.StandardError,
+            text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+    }
+
+    // ── Leniency: blockers: none followed by informational notes ────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_BlockersNoneWithNotes_passes")]
+    public void Leniency_BlockersNoneWithNotes_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock(relPath, "dotnet build", "Passed", blockers: "none - all edge cases handled in code"),
+            string.Empty,
+            mutateWorktree: wt => CommitSourceFile(wt, relPath, "// feature"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: model_fit is just the keyword 'adequate' ──────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_ModelFitAdequateOnly_passes")]
+    public void Leniency_ModelFitAdequateOnly_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock(relPath, "dotnet build", "Passed", modelFit: "adequate"),
+            string.Empty,
+            mutateWorktree: wt => CommitSourceFile(wt, relPath, "// feature"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Regression: real blockers with non-none value still fail ────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_RealBlockers_still_fail")]
+    public void Leniency_RealBlockers_StillFail()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock(relPath, "dotnet build", "Passed", blockers: "API rate limit hit; retry after 1h"),
+            string.Empty,
+            mutateWorktree: wt => CommitSourceFile(wt, relPath, "// feature"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains(task.LastVerification.StandardError,
+            text => text.Contains("reported blockers despite successful process exit", StringComparison.Ordinal));
+    }
+
     // ── Shared setup helpers ─────────────────────────────────────────────────
 
     private static string CreateSeededRepo()
