@@ -956,3 +956,11 @@ Two concurrent goals landed. (1) Conductor DRIVER (goal 3169aa65, merge dd1ce4a)
 - Evidence note: the recurring contract false-fails (commit-match vs HEAD moves, WORKER_RESULT-to-file) are now a tracked conductor-hardening item - the autonomous loop must treat "contract-format/location-fail + tests-green + committed" as auto-retryable, not a hard escalate, or it will page the human on non-issues.
 - Decomposition note: built these two concurrently (disjoint: conductor core vs OperatorComms) but the conductor LOOP is the integration keystone - kept coherently single (driver now, batch-loop next), deliberately NOT fragmented, since it composes shared lifecycle code.
 - Model fit: Claude Sonnet x2 - adequate - well-scoped against pinned contracts; the driver's DI design made it cleanly unit-testable.
+
+## 2026-06-14 - Harden the WORKER_RESULT contract (pre-autonomy gate robustness)
+
+Dogfooded via goal 63fb8eb9 (Claude Sonnet, exit 0 - landed FULLY CLEAN, no override - the worker emitted WORKER_RESULT to stdout this time, commit==HEAD, so the OLD validator passed), merge fast-forward, 884 tests (273 core + 611 infra). Precisely fixed the three benign contract false-fails that cost 3 overrides this session, WITHOUT weakening the real gates: (1) commit-match accepts a commit reachable-from-HEAD (merge-base --is-ancestor) not just ==HEAD; (2) WORKER_RESULT falls back to a committed WORKER_RESULT.md/.txt; (3) untracked result files no longer dirty the worktree; (4) blockers 'none; <notes>' parses leniently.
+
+- Operator gate: acceptance passed; reviewed the diff carefully as a safety-gate change. The 4 new ChaosGateTests regression-assert the real gates (absent commit, real dirty source, no-WORKER_RESULT-anywhere, real blockers) STILL fire - so the hardening narrows false-positives without opening false-negatives.
+- Evidence note: this is the prerequisite for trustworthy unattended autonomy - an autonomous loop over the OLD flaky gate would have spuriously escalated/stalled on good work. Done deliberately BEFORE enabling the batch loop (operator chose this sequencing).
+- Model fit: Claude Sonnet - adequate - precise safety-gate change with strong regression coverage.
