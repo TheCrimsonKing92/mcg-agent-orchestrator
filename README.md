@@ -409,6 +409,55 @@ The dashboard host also exposes local JSON endpoints for scripted monitoring and
 
 `transcript [path]` writes a Markdown snapshot of the current goal. If no path is provided, it writes `.orchestrator/transcript.md`. The transcript includes monitor status, next actions, attention items, the goal acceptance summary, the goal evidence summary, SDLC stage readiness, the open human-input worklist, verification gates, the open verification worklist, task verification plans, task evidence, verification history, task timelines, and the goal timeline.
 
+## Autonomous Conductor
+
+The conductor drives a goal through its full lifecycle in discrete, policy-gated steps. Each call to `conduct` advances the goal exactly once; the operator can loop it externally or call it from a script.
+
+```text
+conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]
+```
+
+### Lifecycle states
+
+The conductor follows a deterministic state machine:
+
+```
+Created → WorkspaceReady → Dispatched → Running → AwaitingVerification
+        → Verified → Merged → Recorded → CleanedUp
+```
+
+Error states — `Failed`, `Blocked`, and `AwaitingHumanInput` — always escalate to the operator inbox regardless of policy and require human action before the conductor can resume.
+
+At each state the conductor decides `Auto` (proceed) or `Escalate` (pause and page the operator) based on the active policy. Held states (`Dispatched`, `Running`, `AwaitingVerification`) are also `Auto`: the conductor returns immediately and the operator should call `conduct` again after workers have had a chance to make progress.
+
+### Autonomy policy presets
+
+| Preset | Workers | Budget | Auto-promote threshold | Merging |
+|---|---|---|---|---|
+| `Conservative` *(default)* | 2 | $5 | DocsOnly changes only | Escalates for code/build changes |
+| `Permissive` | 5 | $20 | All change types (DocsOnly → Broad) | Auto for all passing changes |
+| `Manual` | 1 | $2 | None | Escalates at every step |
+
+**`Auto`** means the conductor proceeds without human sign-off. **`Escalate`** means the conductor writes a blocker to the operator inbox (and pages Discord) and returns without advancing the state.
+
+The default policy is `Conservative`. Override per-invocation with `--policy`, or persist a custom policy in `.orchestrator/conductor-policy.json`.
+
+### Integration-branch landing
+
+When the goal reaches `Verified`, the conductor runs three gates before promoting to `main`:
+
+1. **Acceptance verification** — runs the configured test/build suite against the goal worktree. A failing suite escalates immediately; no merge is attempted.
+2. **Change-risk gate** — classifies the changed files (`DocsOnly`, `Behavior`, `Build`, `Security`, or `Broad`) and compares the risk against the policy's `AutoPromoteRiskThreshold`. If the change is riskier than the threshold, the conductor escalates rather than auto-promoting.
+3. **Integration-branch merge** — `LandingExecutor` fast-forward merges the goal branch into `main` via the integration branch. If the engine decides `Escalate` (for example, because the branch cannot be fast-forwarded cleanly), the escalation reason is written to the operator inbox.
+
+When all three gates pass the goal moves to `Merged`, then to `Recorded` (appended to `DOGFOOD_LOG.md`), then to `CleanedUp` (worktree removed).
+
+### Operator pager (Discord)
+
+Escalations are routed through the configured `IOperatorChannel`. The built-in Discord channel (`DiscordOperatorChannel`) creates one forum thread per goal the first time an escalation fires for that goal, titled `[<goal-prefix>] Orchestrator Escalations`. Subsequent escalations for the same goal are posted as messages in the existing thread. Thread IDs are persisted in `.orchestrator/discord-threads.json` so they survive process restarts. Buttons attached to each message let the operator acknowledge or act without leaving Discord.
+
+Enable the Discord pager by providing a forum channel ID and bot token; the local operator inbox (`operator-inbox`) remains the fallback when Discord is not configured.
+
 ## Next Slices
 
 - Add a Windows UI or tray host once the headless behavior is stable.
