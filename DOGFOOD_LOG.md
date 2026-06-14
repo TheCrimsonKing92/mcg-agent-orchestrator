@@ -964,3 +964,18 @@ Dogfooded via goal 63fb8eb9 (Claude Sonnet, exit 0 - landed FULLY CLEAN, no over
 - Operator gate: acceptance passed; reviewed the diff carefully as a safety-gate change. The 4 new ChaosGateTests regression-assert the real gates (absent commit, real dirty source, no-WORKER_RESULT-anywhere, real blockers) STILL fire - so the hardening narrows false-positives without opening false-negatives.
 - Evidence note: this is the prerequisite for trustworthy unattended autonomy - an autonomous loop over the OLD flaky gate would have spuriously escalated/stalled on good work. Done deliberately BEFORE enabling the batch loop (operator chose this sequencing).
 - Model fit: Claude Sonnet - adequate - precise safety-gate change with strong regression coverage.
+
+
+## 2026-06-14 - Add a concise 'Autonomous conductor' section to README
+
+Goal b06d235b: Add a concise 'Autonomous conductor' section to README.md documenting: the conductor lifecycle and the 'conduct <goal.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+## 2026-06-14 - Conductor `conduct --once` validated live end-to-end
+
+Before enabling the unattended loop (operator chose: harden -> validate -> loop), drove a real DocsOnly goal (b06d235b, "Autonomous Conductor" README section) through the conductor one transition at a time with `conduct <goal> --once`. The conductor (Conservative policy) executed: Created->workspace created; WorkspaceReady->subscription dispatch started (spawned worker 86c0a576); held on Running; reconciled the finished worker; Verified->LANDED ("Promoted: goal/b06d235b integrated via integration into main"); Merged->recorded to dogfood log; Recorded->workspace cleaned up; done (CleanedUp). The README section is on main via the conductor's own integration merge e09d5fe - autonomous promote-to-main, no human merge step.
+
+- Operator gate: the conductor CORRECTLY escalated a contract false-fail mid-run (worker's WORKER_RESULT was missing the END_WORKER_RESULT marker -> reconciled to Failed -> conductor escalated "operator action required" instead of proceeding). Operator confirmed the docs work was correct (README +49 DocsOnly, committed eea25f1), overrode via verify-manual, and the conductor completed the happy path. The auto-recorded dogfood entry shows "(no receipt)" - the known limitation for verify-manual-overridden goals.
+- Evidence note: this is precisely why (b) sequencing mattered - the live run surfaced that the WORKER_RESULT contract is still format-brittle (END_ marker), so the BATCH LOOP must auto-retry contract-format false-fails rather than escalate them, else autonomy would page the human on good work. Filed to BACKLOG as the loop's hard requirement.
+- Net: the conductor drives a goal end-to-end autonomously and its safety escalation works; remaining gap before unattended operation is auto-retry of format false-fails.
