@@ -875,3 +875,11 @@ Dogfooded via goal 19dc4c04 (Claude Sonnet, ~25 min, exit 0, merge 9af2498), ver
 - Operator gate: acceptance passed all 4 checks in an isolated build lease; operator reviewed the diff and validated the report LIVE on the real store (85 goals/72 completed, 1.7 dispatches/merge, 2% false-completion catch, 0.11 prompts/goal, 9% retry, 12 min median) - numbers are sensible and the per-model mix matches model-outcomes.
 - Evidence note: this report is itself a provenance tool - it now lets the dogfood log's claims be checked against measured outcomes. Filed remainder: the false-completion-catch metric is a proxy (first-verification-passed-then-later-failed) and should key off the real false-positive-rejection blocker; dogfood-vs-receipts reconciliation belongs in the provenance item.
 - Model fit: Claude Sonnet - adequate - pure-function report + fixtures against a clear spec.
+
+## 2026-06-14 - Provenance/receipts audit (evidence over narrative)
+
+Dogfooded via goal 0a74d6ae (Claude Sonnet, ~28 min, exit 0, merge 7ddf52f fast-forward), verified through `acceptance` (core 214/214, infrastructure 530/530 incl. 8 new ProvenanceReportTests, forbidden paths). New `provenance` CLI + `ProvenanceReport.Build` pure function: RECEIPT = a recorded TaskVerificationRecord; classifies every Completed goal Backed/Unbacked by whether each completed task has a receipt, cross-checks DOGFOOD_LOG.md goal references against backed state, exits non-zero on any unbacked completed goal.
+
+- Operator gate: acceptance passed all 4 checks in an isolated build lease; operator reviewed the diff and ran the audit LIVE: 73 completed goals all Backed, 0 unbacked, no unbacked dogfood references (this very session's 5 goals included). The dogfood log's claims are receipt-backed and the completion=receipt invariant holds across all history.
+- Evidence note: the worker discovered GoalStatus.Completed already enforces verification upstream (a normally-reachable unbacked completed goal cannot occur; the unit test bypasses via snapshot) - so the live value is the dogfood cross-reference and defense against out-of-band state. Filed remainder: wire provenance into acceptance as a gate; add commit-sha existence checks.
+- Model fit: Claude Sonnet - adequate - multi-file domain feature requiring careful tracing of the completion/verification invariant.

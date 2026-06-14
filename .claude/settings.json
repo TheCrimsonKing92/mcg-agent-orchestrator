@@ -85,6 +85,8 @@
       "PowerShell(.\\mcg-orchestrator.cmd model-outcomes *)",
       "PowerShell(.\\mcg-orchestrator.cmd loop-health)",
       "PowerShell(.\\mcg-orchestrator.cmd loop-health *)",
+      "PowerShell(.\\mcg-orchestrator.cmd provenance)",
+      "PowerShell(.\\mcg-orchestrator.cmd provenance *)",
       "PowerShell(.\\mcg-orchestrator.cmd next *)",
       "PowerShell(.\\mcg-orchestrator.cmd goals *)",
       "PowerShell(.\\mcg-orchestrator.cmd agents *)",
