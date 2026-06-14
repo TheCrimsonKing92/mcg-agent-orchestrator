@@ -6,6 +6,22 @@ Follow-up work items. Each entry is self-contained: act on it without prior conv
 
 Merge policy auto-ff on `acceptance` (2026-06-10). Qwen Code over codex for qwen models - codex 0.137 removed the chat wire API and its harmony/oss path cannot drive qwen (2026-06-10). Thinking must be disabled via `.qwen/settings.json` `generationConfig.reasoning: false`; Ollama ignores `/no_think` and `/v1` `think:false` but honors `reasoning_effort` (2026-06-10). Optional later phase: native tool loop in `AgentTaskRunner`, and `gpt-oss:20b` for codex `--oss`, if qwen-code reliability disappoints on real tasks.
 
+## Autonomous conductor (internalize the operator loop) — FOUNDATION landed, loop remains
+
+Goal: absorb the human "operator" role into the orchestrator as a deterministic conductor so humans move up to "Director" (curate backlog, set autonomy policy, clear escalations, audit) and intervene only on exceptions. Architecture: Director (human) → Planner (LLM, supervised: intent → dependency-annotated DAG) → Conductor (DETERMINISTIC: drives lifecycle, lands via integration→main-or-escalate, loops) → Workers (LLM) → Gates (deterministic: acceptance/provenance/chaos).
+
+FOUNDATION landed 2026-06-14 (4 goals, dogfooded + landed via acceptance):
+- Lifecycle spine (goal 9d594c85): AUTO-RECONCILE sweep (`BackgroundDispatchRunner.SweepExitedProcesses`, idempotent, transactional, reuses RefreshLatestProcess) wired into the command transaction path — finished workers reconcile with NO `refresh-dispatch`; + `GoalLifecycleState` enum (Domain/OrchestrationEnums.cs) + pure `GoalLifecycle.ResolveState`. Validated live (acceptance auto-reconciled finished workers).
+- Autonomy policy (goal d48af776): immutable `ConductorAutonomyPolicy` (Core/Conductor) — concurrency/budget caps, per-transition Auto/Escalate map, AutoPromoteRiskThreshold; Conservative/Permissive/Manual presets + JSON load. (Defines its OWN `ConductorLifecycleState` enum — DUPLICATE of the spine's `GoalLifecycleState`; unify in the loop.)
+- Auto-recording (goal 92cc3615): `DogfoodLogRenderer` + `record-goal <goal>` CLI — renders a DOGFOOD entry from receipts, emits `(no receipt)` instead of fabricating. KNOWN LIMITATION: goals landed via `verify-manual` override lack WORKER_RESULT receipt fields → sparse entries.
+- Landing engine (goal 857cc368): `LandingDecisionEngine.Decide` (pure: escalate on acceptance-fail/Security/Build/Broad/non-ff/repeated-failures, else Promote) + `LandingExecutor` + `land <goal>` — merges goal→`integration` in an isolated temp worktree, advances main ONLY via `git merge --ff-only` on Promote (never on escalate), escalations to operator-inbox.
+
+REMAINING (the actual self-driving loop):
+1. CONDUCTOR LOOP that composes the above into a continuous state machine: for each goal advance lifecycle transitions whose policy = Auto, run independent goals concurrently within caps, hold dependents, land via the landing engine, auto-record via the renderer, escalate the rest. Must: unify the duplicate lifecycle-state enum; apply the AutonomyPolicy AutoPromoteRiskThreshold OVER the engine default (engine currently auto-promotes Behavior; Conservative policy = DocsOnly only); be observable + instantly stoppable (kill switch).
+2. GOAL-DEPENDENCY EDGES so a plan can express "B after A" and the conductor runs the disjoint nodes in parallel.
+3. PLANNER layer (see goal-intake item below): human direction → dependency-annotated DAG the conductor executes (the one LLM-reasoning step; supervised).
+4. Fix the recurring contract false-fails the conductor will hit: WORKER_RESULT commit-match is intolerant of post-dispatch HEAD moves; treat "contract-format-fail + tests-green + committed" as auto-retryable, not hard-escalate.
+
 ## Integrate goal intake planning into lifecycle execution
 
 Large operator requests should be decomposed into a dependency-aware plan before workers are started. Promote backlog-intake and goal-plan style analysis into the normal lifecycle path so broad objectives produce ordered goal slices, shared context, dependencies, target write scopes, and acceptance criteria without the operator hand-writing separate goals. Done when a lifecycle command can preview the plan, create the planned goals, run only dependency-ready slices, and explain why later slices are held, with tests for single-slice tasks, multi-slice feature work, conflicting slices, and operator edits to the proposed plan.

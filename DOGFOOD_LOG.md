@@ -931,3 +931,19 @@ Dogfooded via goal 1f1bda00 (Claude Sonnet, exit 0, merge 6df6889), concurrent w
 - Evidence note: a genuine instance of a safety gate (contract validator) firing on operator-induced wording - the override is recorded with reasoning, and the real gate (acceptance test run) still applied. Lesson: do not instruct workers to put deferred decisions in the blockers field; the contract treats any non-empty blockers as a failure.
 - Deferred (filed): per-provider budget-remaining as a first-class input; scorecard recency/decay; manual lane override despite Avoid.
 - Model fit: Claude Sonnet - adequate - 4-file routing-layer change implemented correctly in one pass.
+
+
+## 2026-06-14 - Build the deterministic landing engine the conductor will use (single-step la...
+
+Goal 857cc368: Build the deterministic landing engine the conductor will use (single-step landing decision + execution as a reusable.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+## 2026-06-14 - Autonomous conductor FOUNDATION (4 pieces, concurrent)
+
+Landed the deterministic-conductor foundation as 4 concurrent goals (dogfooded, all via acceptance): lifecycle spine + auto-reconcile (9d594c85), autonomy-policy schema (d48af776), auto-recording from receipts (92cc3615), and the integration-branch landing engine (857cc368). Main green: 273 core + 554 infra. Auto-reconcile validated LIVE (acceptance reconciled finished workers with no refresh-dispatch). The landing engine advances main only via `git merge --ff-only` on a CLEAN deterministic decision, escalating everything else to the operator-inbox without touching main.
+
+- Operator gate: each landed via acceptance (now incl. a new `full dotnet tests` manifest check added to satisfy the broad/policy-sensitive verification policy the conductor work triggers). Combined state verified by leaf3's full-suite acceptance on the cumulative branch.
+- Process lessons (both filed to memory + BACKLOG): (1) merging main into a branch AFTER the worker committed moved HEAD and false-failed the WORKER_RESULT commit-match contract on 3 of 4 goals - reconcile BEFORE mutating branch HEAD; recovered via verify-manual override + acceptance re-verify. (2) `record-goal` (the new auto-recorder) correctly emits `(no receipt)` rather than fabricating, but produces sparse entries for verify-manual-overridden goals (their receipts are the manual override, not the worker WORKER_RESULT) - validated live on 857cc368.
+- Decomposition self-critique (operator): initially under-parallelized (serial A→B→C→D); corrected to 4 concurrent leaves against pinned contracts after Miles flagged it - though I duplicated the lifecycle-state enum across two parallel goals (a Planner role would have factored the shared contract once).
+- Model fit: Claude Sonnet x4 - adequate - well-scoped deterministic components against pinned contracts.
