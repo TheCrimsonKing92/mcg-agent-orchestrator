@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.Core.Tests;
@@ -36,7 +37,7 @@ public sealed class ConductorAutonomyPolicyTests
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_contain_all_lifecycle_states")]
     public void ConductorAutonomyPolicyPresetsContainAllLifecycleStates()
     {
-        var allStates = Enum.GetValues<ConductorLifecycleState>();
+        var allStates = Enum.GetValues<GoalLifecycleState>();
         foreach (var policy in ConductorAutonomyPolicy.All)
         {
             foreach (var state in allStates)
@@ -51,23 +52,23 @@ public sealed class ConductorAutonomyPolicyTests
     public void ConductorAutonomyPolicyConservativeEscalatesAtErrorStates()
     {
         var policy = ConductorAutonomyPolicy.Conservative;
-        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(ConductorLifecycleState.Failed));
-        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(ConductorLifecycleState.Blocked));
-        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(ConductorLifecycleState.AwaitingHumanInput));
+        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(GoalLifecycleState.Failed));
+        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(GoalLifecycleState.Blocked));
+        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(GoalLifecycleState.AwaitingHumanInput));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_Conservative_autos_mechanical_transitions")]
     public void ConductorAutonomyPolicyConservativeAutosMechanicalTransitions()
     {
         var policy = ConductorAutonomyPolicy.Conservative;
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.Created));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.WorkspaceReady));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.Dispatched));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.Running));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.AwaitingVerification));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.Verified));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.Recorded));
-        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(ConductorLifecycleState.CleanedUp));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.Created));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.WorkspaceReady));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.Dispatched));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.Running));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.AwaitingVerification));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.Verified));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.Recorded));
+        Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.CleanedUp));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_Conservative_escalates_Merged_by_default")]
@@ -75,7 +76,7 @@ public sealed class ConductorAutonomyPolicyTests
     {
         var policy = ConductorAutonomyPolicy.Conservative;
         // No changeRisk provided — falls back to the base map decision (Escalate)
-        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(ConductorLifecycleState.Merged));
+        Assert.Equal(ConductorTransitionDecision.Escalate, policy.GetTransitionDecision(GoalLifecycleState.Merged));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_Conservative_auto_promotes_Merged_for_DocsOnly_change")]
@@ -84,7 +85,7 @@ public sealed class ConductorAutonomyPolicyTests
         var policy = ConductorAutonomyPolicy.Conservative;
         Assert.Equal(
             ConductorTransitionDecision.Auto,
-            policy.GetTransitionDecision(ConductorLifecycleState.Merged, ChangeRiskTier.DocsOnly));
+            policy.GetTransitionDecision(GoalLifecycleState.Merged, ChangeRiskTier.DocsOnly));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_Conservative_escalates_Merged_for_Behavior_and_above")]
@@ -92,20 +93,20 @@ public sealed class ConductorAutonomyPolicyTests
     {
         var policy = ConductorAutonomyPolicy.Conservative;
         Assert.Equal(ConductorTransitionDecision.Escalate,
-            policy.GetTransitionDecision(ConductorLifecycleState.Merged, ChangeRiskTier.Behavior));
+            policy.GetTransitionDecision(GoalLifecycleState.Merged, ChangeRiskTier.Behavior));
         Assert.Equal(ConductorTransitionDecision.Escalate,
-            policy.GetTransitionDecision(ConductorLifecycleState.Merged, ChangeRiskTier.Build));
+            policy.GetTransitionDecision(GoalLifecycleState.Merged, ChangeRiskTier.Build));
         Assert.Equal(ConductorTransitionDecision.Escalate,
-            policy.GetTransitionDecision(ConductorLifecycleState.Merged, ChangeRiskTier.Security));
+            policy.GetTransitionDecision(GoalLifecycleState.Merged, ChangeRiskTier.Security));
         Assert.Equal(ConductorTransitionDecision.Escalate,
-            policy.GetTransitionDecision(ConductorLifecycleState.Merged, ChangeRiskTier.Broad));
+            policy.GetTransitionDecision(GoalLifecycleState.Merged, ChangeRiskTier.Broad));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_Permissive_autos_all_states")]
     public void ConductorAutonomyPolicyPermissiveAutosAllStates()
     {
         var policy = ConductorAutonomyPolicy.Permissive;
-        foreach (var state in Enum.GetValues<ConductorLifecycleState>())
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
         {
             Assert.True(policy.GetTransitionDecision(state) == ConductorTransitionDecision.Auto,
                 $"Permissive should Auto at {state}");
@@ -119,7 +120,7 @@ public sealed class ConductorAutonomyPolicyTests
         foreach (var tier in Enum.GetValues<ChangeRiskTier>())
         {
             Assert.True(
-                policy.GetTransitionDecision(ConductorLifecycleState.Merged, tier) == ConductorTransitionDecision.Auto,
+                policy.GetTransitionDecision(GoalLifecycleState.Merged, tier) == ConductorTransitionDecision.Auto,
                 $"Permissive should Auto at Merged for {tier}");
         }
     }
@@ -128,7 +129,7 @@ public sealed class ConductorAutonomyPolicyTests
     public void ConductorAutonomyPolicyManualEscalatesAllStates()
     {
         var policy = ConductorAutonomyPolicy.Manual;
-        foreach (var state in Enum.GetValues<ConductorLifecycleState>())
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
         {
             Assert.True(policy.GetTransitionDecision(state) == ConductorTransitionDecision.Escalate,
                 $"Manual should Escalate at {state}");
@@ -141,7 +142,7 @@ public sealed class ConductorAutonomyPolicyTests
         var policy = ConductorAutonomyPolicy.Manual;
         // Manual has null AutoPromoteRiskThreshold; no risk-based upgrade should occur
         Assert.Equal(ConductorTransitionDecision.Escalate,
-            policy.GetTransitionDecision(ConductorLifecycleState.Merged, ChangeRiskTier.DocsOnly));
+            policy.GetTransitionDecision(GoalLifecycleState.Merged, ChangeRiskTier.DocsOnly));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_zero_workers")]
@@ -178,8 +179,8 @@ public sealed class ConductorAutonomyPolicyTests
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_missing_lifecycle_state")]
     public void ConductorAutonomyPolicyValidationRejectsMissingLifecycleState()
     {
-        var incomplete = Enum.GetValues<ConductorLifecycleState>()
-            .Where(s => s != ConductorLifecycleState.Merged)
+        var incomplete = Enum.GetValues<GoalLifecycleState>()
+            .Where(s => s != GoalLifecycleState.Merged)
             .ToDictionary(s => s, _ => ConductorTransitionDecision.Auto);
         var policy = ConductorAutonomyPolicy.Conservative with
         {
@@ -201,7 +202,7 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Equal(original.MaxConcurrentPaidWorkers, restored.MaxConcurrentPaidWorkers);
         Assert.Equal(original.MaxTotalBudget, restored.MaxTotalBudget);
         Assert.Equal(original.AutoPromoteRiskThreshold, restored.AutoPromoteRiskThreshold);
-        foreach (var state in Enum.GetValues<ConductorLifecycleState>())
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
         {
             Assert.True(original.TransitionMap[state] == restored.TransitionMap[state],
                 $"TransitionMap mismatch at {state}");

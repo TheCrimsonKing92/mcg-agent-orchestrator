@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -457,6 +458,32 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");
             Console.WriteLine($"  main-advanced: {landResult.MainAdvanced}");
             return landResult.MainAdvanced;
+
+        case "conduct":
+            CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var conductPolicyName = GetFlagValue(parts, "--policy");
+            var conductPolicy = conductPolicyName is null
+                ? ConductorAutonomyPolicy.Default
+                : ConductorAutonomyPolicy.All.FirstOrDefault(
+                    p => p.Name.Equals(conductPolicyName, StringComparison.OrdinalIgnoreCase))
+                  ?? throw new InvalidOperationException(
+                    $"Unknown conductor policy '{conductPolicyName}'. Valid: {string.Join(", ", ConductorAutonomyPolicy.All.Select(p => p.Name))}");
+            var conductDriver = new ConductorDriver(
+                context.Kernel,
+                context.Workspace,
+                context.AcceptanceVerifier,
+                context.Agents,
+                context.WorkerProfiles);
+            var conductResult = conductDriver.AdvanceOnce(context.CurrentGoal, conductPolicy);
+            Console.WriteLine($"Conduct {conductResult.GoalPrefix} [{conductResult.PolicyName}]: {conductResult.Outcome switch {
+                ConductorAdvanceOutcome.Executed e => $"executed from {e.FromState} — {e.Description}",
+                ConductorAdvanceOutcome.Held h => $"held at {h.State} — {h.Reason}",
+                ConductorAdvanceOutcome.Escalated esc => $"escalated at {esc.State} — {esc.Reason}",
+                ConductorAdvanceOutcome.Done d => $"done ({d.State})",
+                _ => conductResult.Outcome.ToString()
+            }}");
+            return !conductResult.WasEscalated;
 
         default:
             return null;
