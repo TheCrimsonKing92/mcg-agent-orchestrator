@@ -75,6 +75,119 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.False(string.IsNullOrWhiteSpace(runCommand));
     }
 
+    // ─── next --full: folded inspection sections ──────────────────────────────
+
+    [Xunit.Fact(DisplayName = "Cli_next_full_surfaces_detail_sections_not_in_concise_output")]
+    public void CliNextFullSurfacesDetailSectionsNotInConciseOutput()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Expose detail via next full", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.ApiOnly)
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var conciseOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["next"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var fullOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["next", "--full"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        // Concise next prints the health line and the Run: line but not the detail sections
+        Xunit.Assert.Contains("Run: ", conciseOutput);
+        Xunit.Assert.DoesNotContain("Attention:", conciseOutput);
+        Xunit.Assert.DoesNotContain("Goal readiness", conciseOutput);
+        Xunit.Assert.DoesNotContain("Loop health report", conciseOutput);
+        Xunit.Assert.DoesNotContain("Supervisor goal:", conciseOutput);
+        Xunit.Assert.DoesNotContain("Operator inbox:", conciseOutput);
+
+        // next --full includes the detail sections and still prints Run:
+        Xunit.Assert.Contains("Run: ", fullOutput);
+        Xunit.Assert.Contains("Attention:", fullOutput);
+        Xunit.Assert.Contains("Goal readiness", fullOutput);
+        Xunit.Assert.Contains("Loop health report", fullOutput);
+        Xunit.Assert.Contains("Supervisor goal:", fullOutput);
+        Xunit.Assert.Contains("Operator inbox:", fullOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_next_full_includes_model_outcomes_and_subscription_plan")]
+    public void CliNextFullIncludesModelOutcomesAndSubscriptionPlan()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Expose model and subscription detail", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.ApiOnly)
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["next", "--full"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("Model outcome scorecard", output);
+        Xunit.Assert.Contains("subscription plan:", output);
+        Xunit.Assert.Contains("verification worklist:", output);
+        Xunit.Assert.Contains("human input worklist:", output);
+        Xunit.Assert.Contains("SDLC stages:", output);
+        Xunit.Assert.Contains("verification gate:", output);
+        Xunit.Assert.Contains("Goal recovery", output);
+        Xunit.Assert.Contains("Failure triage goal:", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_next_full_accepts_goal_prefix_before_full_flag")]
+    public void CliNextFullAcceptsGoalPrefixBeforeFullFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Goal prefix test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.ApiOnly)
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["next", goal.Id.Value[..8], "--full"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Equal(goal.Id, currentGoal?.Id);
+        Xunit.Assert.Contains("Attention:", output);
+        Xunit.Assert.Contains("Run: ", output);
+    }
+
     // ─── accept alias ─────────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "Cli_accept_alias_prints_acceptance_summary")]
