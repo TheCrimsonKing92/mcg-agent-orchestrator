@@ -191,7 +191,7 @@ internal static class GoalObjectivePlanner
             tokens.Contains("test") ||
             tokens.Contains("dotnet"))
         {
-            tools.Add("scripts/Invoke-IsolatedDotnet.ps1 or dotnet test with goal build lease");
+            tools.Add(InferBuildTestTool(fileScopes, tokens));
         }
 
         if (fileScopes.Any(scope => scope.StartsWith("docs/", StringComparison.OrdinalIgnoreCase)))
@@ -205,6 +205,44 @@ internal static class GoalObjectivePlanner
         }
 
         return tools.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string InferBuildTestTool(string[] fileScopes, HashSet<string> tokens)
+    {
+        var dotnetSignals = tokens.Contains("dotnet") || tokens.Contains("csproj") || tokens.Contains("sln") ||
+            fileScopes.Any(s => s.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+                               s.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                               s.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
+        if (dotnetSignals)
+        {
+            return "scripts/Invoke-IsolatedDotnet.ps1 or dotnet test with goal build lease";
+        }
+
+        var goSignals = tokens.Contains("golang") ||
+            fileScopes.Any(s => s.EndsWith(".go", StringComparison.OrdinalIgnoreCase) ||
+                               s.Contains("go.mod", StringComparison.OrdinalIgnoreCase));
+        if (goSignals)
+        {
+            return "go build / go test ./...";
+        }
+
+        var nodeSignals = tokens.Contains("npm") || tokens.Contains("yarn") ||
+            fileScopes.Any(s => s.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
+                               s.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase) ||
+                               s.Contains("package.json", StringComparison.OrdinalIgnoreCase));
+        if (nodeSignals)
+        {
+            return "npm/yarn (package.json scripts)";
+        }
+
+        var pythonSignals = tokens.Contains("python") || tokens.Contains("pip") || tokens.Contains("pytest") ||
+            fileScopes.Any(s => s.EndsWith(".py", StringComparison.OrdinalIgnoreCase));
+        if (pythonSignals)
+        {
+            return "python / pytest";
+        }
+
+        return "run the project's build and test commands";
     }
 
     private static string[] BuildRequiredVerification(

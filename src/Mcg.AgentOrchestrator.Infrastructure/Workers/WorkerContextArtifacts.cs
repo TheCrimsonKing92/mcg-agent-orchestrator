@@ -31,11 +31,6 @@ public static class WorkerContextArtifacts
     private static readonly Regex PublicMemberRegex = new(
         @"^\s*(public|internal|protected internal|protected)\s+(?:static\s+|async\s+|virtual\s+|override\s+|sealed\s+|abstract\s+|partial\s+|readonly\s+)*(?!class\b|interface\b|record\b|struct\b|enum\b)[A-Za-z_][A-Za-z0-9_<>,\[\].?\s]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(|\{|=>)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly string[] SourceSurveyExtensions =
-    [
-        ".cs", ".csproj", ".sln", ".props", ".targets", ".json", ".md", ".ps1", ".cmd",
-        ".razor", ".cshtml", ".html", ".css", ".js", ".ts", ".yml", ".yaml"
-    ];
 
     private static readonly SkillCandidate[] KnownSkills =
     [
@@ -341,10 +336,40 @@ public static class WorkerContextArtifacts
         {
             var goalPrefix = goal.Id.Value.Length <= 8 ? goal.Id.Value : goal.Id.Value[..8];
             var attemptName = $"{task.RequiredRole.ToString().ToLowerInvariant()}-{task.Id.Value[..8]}";
+            var toolchain = TargetToolchainDetector.Detect(workingDirectory);
             lines.Add(string.Empty);
-            lines.Add("## Isolated .NET Verification");
-            lines.Add($"- Use `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal` instead of raw `dotnet test` for .NET checks.");
-            lines.Add($"- Goal build artifacts are isolated under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}` and reused across tasks in this goal.");
+            if (toolchain == Toolchain.Dotnet)
+            {
+                lines.Add("## Isolated .NET Verification");
+                lines.Add($"- Use `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal` instead of raw `dotnet test` for .NET checks.");
+                lines.Add($"- Goal build artifacts are isolated under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}` and reused across tasks in this goal.");
+            }
+            else if (toolchain == Toolchain.Go)
+            {
+                lines.Add("## Go Verification");
+                lines.Add("- Use `go build ./...` to verify the project compiles.");
+                lines.Add("- Use `go test ./...` to run the full test suite.");
+                lines.Add("- Use `go test ./path/to/package/...` for focused package tests.");
+            }
+            else if (toolchain == Toolchain.Node)
+            {
+                lines.Add("## Node.js Verification");
+                lines.Add("- Use `npm test` (or the package.json test script) to run the test suite.");
+                lines.Add("- Use `npm run build` to verify the project builds.");
+                lines.Add("- Check package.json scripts for the project's test and lint commands.");
+            }
+            else if (toolchain == Toolchain.Python)
+            {
+                lines.Add("## Python Verification");
+                lines.Add("- Use `python -m pytest` (or the project test command) to run tests.");
+                lines.Add("- Check pyproject.toml or requirements.txt for test configuration.");
+            }
+            else
+            {
+                lines.Add("## Verification");
+                lines.Add("- Run the project's standard build and test commands.");
+                lines.Add("- Check the repository README or CI configuration for the correct commands.");
+            }
         }
 
         var changedFiles = ReadChangedFilesForTestImpact(workingDirectory);
@@ -437,6 +462,9 @@ public static class WorkerContextArtifacts
             changedFiles);
         var goalPrefix = goal.Id.Value.Length <= 8 ? goal.Id.Value : goal.Id.Value[..8];
         var attemptName = $"{task.RequiredRole.ToString().ToLowerInvariant()}-{task.Id.Value[..8]}";
+        var toolchain = TargetToolchainDetector.Detect(workingDirectory);
+        var brokerNote = TargetToolchainDetector.GetBrokerBuildTestNote(toolchain);
+        var brokerCommandHint = TargetToolchainDetector.GetBrokerCommandHint(toolchain, goalPrefix, attemptName);
         var lines = new List<string>
         {
             "# Workflow Brokers",
@@ -446,8 +474,8 @@ public static class WorkerContextArtifacts
             "## Available Broker Actions",
             "- build-test-selection",
             "  Artifact: deterministic-verification.md",
-            "  Use for: choosing focused tests, identifying required checks, and avoiding raw unisolated `dotnet test`.",
-            $"  Suggested isolated command shape: `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal`",
+            $"  Use for: choosing focused tests, identifying required checks, and {brokerNote}.",
+            $"  Suggested command shape: `{brokerCommandHint}`",
             $"  Current recommendation: {testImpactPlan.Summary}",
             "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
             "- static-policy-checks",
@@ -1137,8 +1165,11 @@ public static class WorkerContextArtifacts
             return [];
         }
 
+        var toolchain = TargetToolchainDetector.Detect(workingDirectory);
+        var extensions = TargetToolchainDetector.GetSourceExtensions(toolchain);
+
         return EnumerateFilesPruned(workingDirectory, workingDirectory)
-            .Where(path => SourceSurveyExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            .Where(path => extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
     }
 
