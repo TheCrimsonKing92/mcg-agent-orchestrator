@@ -360,6 +360,46 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, null, ProgressKind.GoalPolicyDecision, message);
     }
 
+    public void SetGoalDependency(GoalId dependentId, GoalId dependencyId)
+    {
+        if (dependentId == dependencyId)
+            throw new InvalidOperationException($"Goal '{dependentId.Value[..8]}' cannot depend on itself.");
+
+        var dependent = GetGoal(dependentId);
+        GetGoal(dependencyId); // validate exists
+
+        // Cycle detection: would adding dependent → dependency create a cycle?
+        // A cycle exists if dependencyId can reach dependentId through existing edges.
+        if (WouldCreateCycle(dependentId, dependencyId))
+            throw new InvalidOperationException(
+                $"Adding dependency {dependentId.Value[..8]} → {dependencyId.Value[..8]} would create a cycle.");
+
+        dependent.AddDependency(dependencyId);
+    }
+
+    private bool WouldCreateCycle(GoalId dependentId, GoalId newDependencyId)
+    {
+        // DFS from newDependencyId following DependsOn edges; if we reach dependentId, it's a cycle.
+        var visited = new HashSet<GoalId>();
+        var stack = new Stack<GoalId>();
+        stack.Push(newDependencyId);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (current == dependentId)
+                return true;
+            if (!visited.Add(current))
+                continue;
+            if (!_goals.TryGetValue(current, out var currentGoal))
+                continue;
+            foreach (var dep in currentGoal.DependsOn)
+                stack.Push(dep);
+        }
+
+        return false;
+    }
+
     public IReadOnlyList<HumanInputRequest> GetPendingHumanInput(GoalId goalId)
     {
         return _humanInputRequests.Values

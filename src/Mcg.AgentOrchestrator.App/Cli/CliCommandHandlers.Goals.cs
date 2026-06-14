@@ -78,6 +78,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             HandleLifecycleGoal(context, parts, simple: false);
             return true;
 
+        case "goal-depends":
+        {
+            CliArgumentParser.RequirePartCount(parts, 4, "goal-depends <goal-prefix> --on <dependency-prefix>");
+            var dependentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var onPrefix = GetFlagValue(parts, "--on")
+                ?? throw new ArgumentException("goal-depends requires --on <dependency-prefix>");
+            var dependencyGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, onPrefix);
+            context.Kernel.SetGoalDependency(dependentGoal.Id, dependencyGoal.Id);
+            Console.WriteLine($"Dependency set: {dependentGoal.Id.Value[..8]} depends on {dependencyGoal.Id.Value[..8]}");
+            return true;
+        }
+
         case "goal-plan":
             return HandleGoalPlan(context, parts);
 

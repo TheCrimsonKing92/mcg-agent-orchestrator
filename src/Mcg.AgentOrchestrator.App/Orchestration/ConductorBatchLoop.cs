@@ -24,6 +24,8 @@ internal sealed class ConductorBatchLoop
         int maxVerifyRetries = DefaultMaxVerifyRetries)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
+        var completedGoals = new HashSet<string>(StringComparer.Ordinal);
+        var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
         var retryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var totalTicks = 0;
         var totalAdvanced = 0;
@@ -68,6 +70,29 @@ internal sealed class ConductorBatchLoop
 
             foreach (var goal in eligible)
             {
+                var label = goal.Id.Value[..8];
+
+                // Dependency gate: check all DependsOn goals before advancing.
+                var depHoldReason = GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
+                if (depHoldReason is not null)
+                {
+                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {depHoldReason}");
+                    kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}");
+                    // A goal held due to a failed/escalated dependency will never unblock; exclude it.
+                    if (depHoldReason.StartsWith("dependency escalated", StringComparison.Ordinal))
+                    {
+                        escalatedGoals.Add(goal.Id.Value);
+                        excludedGoals.Add(goal.Id.Value);
+                        tickEscalated++;
+                    }
+                    else
+                    {
+                        tickHeld++;
+                    }
+
+                    continue;
+                }
+
                 var result = driver.AdvanceOnce(goal, policy);
 
                 // Auto-retry transient acceptance verification failures (up to maxVerifyRetries re-verifications)
@@ -85,14 +110,13 @@ internal sealed class ConductorBatchLoop
                     }
                 }
 
-                var label = goal.Id.Value[..8];
                 Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
                 kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; excludedGoals.Add(goal.Id.Value); }
-                else if (result.IsDone)        { tickDone++;      excludedGoals.Add(goal.Id.Value); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
+                else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
             }
 
             totalAdvanced  += tickAdvanced;
@@ -110,6 +134,27 @@ internal sealed class ConductorBatchLoop
         }
 
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, stopRequested);
+    }
+
+    private static string? GetDependencyHoldReason(
+        Goal goal,
+        HashSet<string> completedGoals,
+        HashSet<string> escalatedGoals,
+        AgentOrchestratorKernel kernel)
+    {
+        foreach (var depId in goal.DependsOn)
+        {
+            if (escalatedGoals.Contains(depId.Value))
+                return $"dependency escalated: {depId.Value[..8]}";
+
+            if (!completedGoals.Contains(depId.Value))
+            {
+                var depPrefix = kernel.Goals.FirstOrDefault(g => g.Id == depId)?.Id.Value[..8] ?? depId.Value[..8];
+                return $"waiting on dependency {depPrefix}";
+            }
+        }
+
+        return null;
     }
 
     private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
