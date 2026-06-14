@@ -3213,6 +3213,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     File.WriteAllText(Path.Combine(workingDirectory, "AGENTS.md"), "Repo-local agent guidance.");
     File.WriteAllText(Path.Combine(workingDirectory, "BACKLOG.md"), "Open backlog item.");
     File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Recent dogfood note.");
+    File.WriteAllText(Path.Combine(workingDirectory, "TestRepo.sln"), ""); // mark as dotnet for toolchain detection
     var kernel = new AgentOrchestratorKernel();
     var priorTask = new TaskSpec(TaskId.New(), "Plan implementation.", AgentRole.Planner);
     var currentTask = new TaskSpec(TaskId.New(), "Implement context artifacts.", AgentRole.Developer, "Run worker dispatch tests.");
