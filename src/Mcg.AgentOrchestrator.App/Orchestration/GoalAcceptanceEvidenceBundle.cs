@@ -124,6 +124,20 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
                 $"Goal status is {goal.Status}; acceptance requires Completed.",
                 $"monitor {goal.Id.Value[..8]}");
         }
+        else
+        {
+            var provenance = ProvenanceReport.Build([goal], string.Empty);
+            if (provenance.UnbackedGoalCount > 0)
+            {
+                var record = provenance.Goals[0];
+                AddBlocker(
+                    blockers,
+                    nextCommands,
+                    "provenance-check-failed",
+                    $"Provenance check failed: {record.UnbackedTaskCount} of {record.CompletedTaskCount} completed task(s) have no verification receipt. Run 'provenance' to inspect.",
+                    "provenance");
+            }
+        }
 
         foreach (var summaryBlocker in acceptance.Blockers)
         {

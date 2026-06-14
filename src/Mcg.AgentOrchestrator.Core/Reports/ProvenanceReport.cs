@@ -26,7 +26,8 @@ public sealed record ProvenanceReportSnapshot(
     int BackedGoalCount,
     int UnbackedGoalCount,
     IReadOnlyList<GoalProvenanceRecord> Goals,
-    IReadOnlyList<UnbackedDogfoodReference> UnbackedDogfoodReferences);
+    IReadOnlyList<UnbackedDogfoodReference> UnbackedDogfoodReferences,
+    IReadOnlyList<string> UnbackedCommitShas);
 
 public static class ProvenanceReport
 {
@@ -35,7 +36,14 @@ public static class ProvenanceReport
     private static readonly Regex GoalRefPattern =
         new(@"\bgoal[\s/]+([0-9a-f]{8})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public static ProvenanceReportSnapshot Build(IEnumerable<Goal> goals, string dogfoodLogText)
+    // Matches backtick-quoted hex strings or hex strings after "commit"/"committed".
+    private static readonly Regex CommitShaPattern =
+        new(@"(?:`([0-9a-f]{7,40})`|\bcommit(?:ted)?\s+`?([0-9a-f]{7,40})`?)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public static ProvenanceReportSnapshot Build(
+        IEnumerable<Goal> goals,
+        string dogfoodLogText,
+        Func<string, bool>? shaExists = null)
     {
         var goalList = goals.ToList();
         var completedGoals = goalList.Where(g => g.Status == GoalStatus.Completed).ToList();
@@ -49,12 +57,17 @@ public static class ProvenanceReport
 
         var unbackedRefs = ExtractUnbackedDogfoodReferences(dogfoodLogText, completedGoalByPrefix);
 
+        var unbackedCommitShas = shaExists is not null
+            ? ExtractUnbackedCommitShas(dogfoodLogText, shaExists)
+            : (IReadOnlyList<string>)[];
+
         return new ProvenanceReportSnapshot(
             completedGoals.Count,
             backedCount,
             unbackedCount,
             goalRecords,
-            unbackedRefs);
+            unbackedRefs,
+            unbackedCommitShas);
     }
 
     private static GoalProvenanceRecord BuildGoalRecord(Goal goal)
@@ -70,6 +83,27 @@ public static class ProvenanceReport
             status,
             completedTasks.Count,
             unbackedCount);
+    }
+
+    private static List<string> ExtractUnbackedCommitShas(
+        string text,
+        Func<string, bool> shaExists)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unbacked = new List<string>();
+
+        foreach (Match match in CommitShaPattern.Matches(text))
+        {
+            var sha = (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value).ToLowerInvariant();
+            if (!seen.Add(sha)) continue;
+
+            if (!shaExists(sha))
+            {
+                unbacked.Add(sha);
+            }
+        }
+
+        return unbacked;
     }
 
     private static List<UnbackedDogfoodReference> ExtractUnbackedDogfoodReferences(

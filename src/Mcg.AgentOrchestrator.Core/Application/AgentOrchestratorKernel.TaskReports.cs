@@ -223,9 +223,9 @@ public sealed partial class AgentOrchestratorKernel
         return LoopHealthReport.Build(Goals, HumanInputRequests, lastN);
     }
 
-    public ProvenanceReportSnapshot BuildProvenanceReport(string dogfoodLogText)
+    public ProvenanceReportSnapshot BuildProvenanceReport(string dogfoodLogText, Func<string, bool>? shaExists = null)
     {
-        return ProvenanceReport.Build(Goals, dogfoodLogText);
+        return ProvenanceReport.Build(Goals, dogfoodLogText, shaExists);
     }
 
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)
