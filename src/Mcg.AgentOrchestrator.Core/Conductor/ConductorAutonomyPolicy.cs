@@ -1,24 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Core.Conductor;
-
-// Canonical lifecycle states. Names align exactly with the conductor lifecycle contract.
-public enum ConductorLifecycleState
-{
-    Created,
-    WorkspaceReady,
-    Dispatched,
-    Running,
-    AwaitingVerification,
-    Verified,
-    Merged,
-    Recorded,
-    CleanedUp,
-    Failed,
-    Blocked,
-    AwaitingHumanInput
-}
 
 // Auto = conductor proceeds without human escalation; Escalate = require human sign-off.
 public enum ConductorTransitionDecision
@@ -48,10 +32,10 @@ public sealed record ConductorAutonomyPolicy(
     decimal MaxTotalBudget,
     IReadOnlyDictionary<string, decimal>? PerProviderBudgetCaps,
     ChangeRiskTier? AutoPromoteRiskThreshold,
-    IReadOnlyDictionary<ConductorLifecycleState, ConductorTransitionDecision> TransitionMap)
+    IReadOnlyDictionary<GoalLifecycleState, ConductorTransitionDecision> TransitionMap)
 {
-    private static readonly ConductorLifecycleState[] AllStates =
-        Enum.GetValues<ConductorLifecycleState>();
+    private static readonly GoalLifecycleState[] AllStates =
+        Enum.GetValues<GoalLifecycleState>();
 
     private static readonly JsonDocumentOptions JsonParseOptions = new() { CommentHandling = JsonCommentHandling.Skip };
 
@@ -65,20 +49,20 @@ public sealed record ConductorAutonomyPolicy(
         MaxTotalBudget: 5.00m,
         PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: ChangeRiskTier.DocsOnly,
-        TransitionMap: new Dictionary<ConductorLifecycleState, ConductorTransitionDecision>
+        TransitionMap: new Dictionary<GoalLifecycleState, ConductorTransitionDecision>
         {
-            [ConductorLifecycleState.Created] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.WorkspaceReady] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.Dispatched] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.Running] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.AwaitingVerification] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.Verified] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.Merged] = ConductorTransitionDecision.Escalate,
-            [ConductorLifecycleState.Recorded] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.CleanedUp] = ConductorTransitionDecision.Auto,
-            [ConductorLifecycleState.Failed] = ConductorTransitionDecision.Escalate,
-            [ConductorLifecycleState.Blocked] = ConductorTransitionDecision.Escalate,
-            [ConductorLifecycleState.AwaitingHumanInput] = ConductorTransitionDecision.Escalate,
+            [GoalLifecycleState.Created] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.WorkspaceReady] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.Dispatched] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.Running] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.AwaitingVerification] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.Verified] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.Merged] = ConductorTransitionDecision.Escalate,
+            [GoalLifecycleState.Recorded] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.CleanedUp] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.Failed] = ConductorTransitionDecision.Escalate,
+            [GoalLifecycleState.Blocked] = ConductorTransitionDecision.Escalate,
+            [GoalLifecycleState.AwaitingHumanInput] = ConductorTransitionDecision.Escalate,
         });
 
     // Auto everything within caps. AutoPromoteRiskThreshold = Broad so all change types
@@ -107,12 +91,12 @@ public sealed record ConductorAutonomyPolicy(
     // the AutoPromoteRiskThreshold, upgrades to Auto (risk-gated auto-promotion).
     // AutoPromoteRiskThreshold=null (Manual) never upgrades.
     public ConductorTransitionDecision GetTransitionDecision(
-        ConductorLifecycleState state,
+        GoalLifecycleState state,
         ChangeRiskTier? changeRisk = null)
     {
         var baseDecision = TransitionMap[state];
 
-        if (state == ConductorLifecycleState.Merged
+        if (state == GoalLifecycleState.Merged
             && baseDecision == ConductorTransitionDecision.Escalate
             && changeRisk.HasValue
             && AutoPromoteRiskThreshold.HasValue
@@ -255,13 +239,13 @@ public sealed record ConductorAutonomyPolicy(
                 throw new FormatException(
                     $"conductor-policy.json{src}: transitionMap is required and must be an object.");
 
-            var transitionMap = new Dictionary<ConductorLifecycleState, ConductorTransitionDecision>();
+            var transitionMap = new Dictionary<GoalLifecycleState, ConductorTransitionDecision>();
             foreach (var prop in mapEl.EnumerateObject())
             {
-                if (!Enum.TryParse<ConductorLifecycleState>(prop.Name, ignoreCase: true, out var state))
+                if (!Enum.TryParse<GoalLifecycleState>(prop.Name, ignoreCase: true, out var state))
                     throw new FormatException(
                         $"conductor-policy.json{src}: transitionMap key '{prop.Name}' is not a valid lifecycle state. " +
-                        $"Valid states: {string.Join(", ", Enum.GetNames<ConductorLifecycleState>())}.");
+                        $"Valid states: {string.Join(", ", Enum.GetNames<GoalLifecycleState>())}.");
                 var decisionStr = prop.Value.GetString();
                 if (!Enum.TryParse<ConductorTransitionDecision>(decisionStr, ignoreCase: true, out var decision))
                     throw new FormatException(
@@ -295,7 +279,7 @@ public sealed record ConductorAutonomyPolicy(
         return ParseJson(json, path);
     }
 
-    private static Dictionary<ConductorLifecycleState, ConductorTransitionDecision> BuildUniformMap(
+    private static Dictionary<GoalLifecycleState, ConductorTransitionDecision> BuildUniformMap(
         ConductorTransitionDecision decision) =>
         AllStates.ToDictionary(s => s, _ => decision);
 
