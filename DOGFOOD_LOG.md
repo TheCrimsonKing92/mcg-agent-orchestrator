@@ -859,3 +859,11 @@ Dogfooded via goal 18ac4a60 (Claude Sonnet worker, exit 0, merge f9fdd5c). Repla
 - Friction removed: writes no longer rewrite the whole store (the bloat that broke `goals`/`refresh-dispatch`/`acceptance` at scale); reads are fast; cross-goal queries and real transactions/concurrency are now structurally available.
 - Evidence note: verification deliberately disabled per-project shared compilation and trusted `dotnet test` exit code (not just presence of a green TRX) - consistent with the evidence-over-narrative theme; the migration was verified by reading the migrated `state.db` size + a full read across all goals' tasks, not by the worker's self-report.
 - Model fit: Claude Sonnet - adequate - highest-stakes change (persistence backend + new dependency + live-data migration + transaction rollback); implementation was correct on operator review.
+
+## 2026-06-14 - Budget-aware routing: scorecard wired into SubscriptionPlanBuilder (explanation half)
+
+Dogfooded via goal a2554f03 (Claude Sonnet, ~28 min, exit 0, merge b3b44c9) and - notably - LANDED THROUGH THE ORCHESTRATOR'S OWN `acceptance` GATE, which the 55MB state.json had previously broken and SQLite just unblocked. `SubscriptionPlanBuilder` now threads an optional `ModelOutcomeScorecard` (keyed `{provider}/{model}`) and emits scorecard-driven route reasons (recommendation+reason, Simple->local cost-optimal, Complex->paid) plus alternatives (scorecard-Avoid -> reroute; budget cooldown -> Ollama fallback), advisory-only (no hard-gate override). Remainder filed to BACKLOG: this is the EXPLANATION half; actual lane re-selection (Simple-defaults-to-local) needs an agent-assignment change upstream.
+
+- Operator gate: `acceptance` ran in an isolated build lease and passed all 4 checks - git diff whitespace, core tests 214/214, infrastructure tests 512/512 (incl. 4 new BudgetAwareRoutingTests), forbidden changed paths - then fast-forwarded main. First fully-automated accept+merge of the session (prior goals were merged at git level as a 55MB workaround).
+- Evidence note: operator reviewed the full diff before acceptance; the scorecard-Avoid and budget-exhausted tests inject a real scorecard / real usage-limit failure (Deferred disposition), not string-only assertions.
+- Model fit: Claude Sonnet - adequate - medium feature + tests against a clear spec with existing patterns.

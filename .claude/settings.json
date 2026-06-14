@@ -60,6 +60,10 @@
       "Bash(git show *)",
       "Bash(git branch *)",
       "Bash(git worktree list)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git branch -d *)",
+      "Bash(git merge-base *)",
       "Bash(dotnet test*)",
       "Bash(dotnet build*)",
       "Bash(dotnet build-server *)",
@@ -75,7 +79,13 @@
       "PowerShell(Format-List *)",
       "PowerShell(Start-Sleep *)",
       "PowerShell(.\\scripts\\Invoke-TestSummary.ps1*)",
-      "PowerShell(.\\mcg-orchestrator.cmd model-outcomes)"
+      "PowerShell(.\\mcg-orchestrator.cmd model-outcomes)",
+      "PowerShell(.\\mcg-orchestrator.cmd model-outcomes *)",
+      "PowerShell(.\\mcg-orchestrator.cmd next *)",
+      "PowerShell(.\\mcg-orchestrator.cmd goals *)",
+      "PowerShell(.\\mcg-orchestrator.cmd agents *)",
+      "PowerShell(.\\mcg-orchestrator.cmd doctor *)",
+      "PowerShell(.\\mcg-orchestrator.cmd workspace create *)"
     ]
   }
 }
