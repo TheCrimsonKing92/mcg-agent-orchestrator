@@ -1,0 +1,31 @@
+namespace Mcg.AgentOrchestrator.Infrastructure;
+
+public sealed record OperatorEscalationAction(
+    string Label,
+    string Command,
+    bool RequiresConfirm = false,
+    bool RequiresInput = false);
+
+public sealed record OperatorEscalation(
+    string InboxItemId,
+    string GoalId,
+    string GoalPrefix,
+    string Kind,
+    string Title,
+    string Summary,
+    string KeyEvidence,
+    IReadOnlyList<OperatorEscalationAction> Actions,
+    string? DashboardDeepLink);
+
+public sealed record OperatorDecision(
+    string InboxItemId,
+    string Command,
+    string? FreeText,
+    string ActorId,
+    string IdempotencyKey);
+
+public interface IOperatorChannel
+{
+    string ChannelType { get; }
+    Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default);
+}
