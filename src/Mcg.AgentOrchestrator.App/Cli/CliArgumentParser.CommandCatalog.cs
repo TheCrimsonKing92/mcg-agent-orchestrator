@@ -20,6 +20,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("readiness", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("goal-recovery", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("dogfood-eval", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("record-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("failure-triage", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("build-lease-cleanup", StringComparison.OrdinalIgnoreCase) ||
