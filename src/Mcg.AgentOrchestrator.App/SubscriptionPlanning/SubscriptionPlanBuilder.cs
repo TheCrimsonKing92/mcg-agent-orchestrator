@@ -127,15 +127,20 @@ internal static class SubscriptionPlanBuilder
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        Func<TaskSpec, int?>? estimatePromptCharacterCount = null)
+        Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
+        IReadOnlyList<ModelOutcomeRecord>? scorecard = null)
     {
         var validations = OrchestratorHealthInspector
             .InspectCurrentEnvironment(new AgentCatalog(agents), profiles)
             .WorkerProfiles
             .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
+        var scorecardLookup = scorecard?.ToDictionary(
+            r => $"{r.ProviderName}/{r.ModelName}",
+            StringComparer.OrdinalIgnoreCase);
+
         var items = goal.Tasks
-            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount))
+            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -171,7 +176,8 @@ internal static class SubscriptionPlanBuilder
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
         IReadOnlyDictionary<string, WorkerProfileValidation> validations,
-        Func<TaskSpec, int?>? estimatePromptCharacterCount = null)
+        Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
+        IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -238,6 +244,9 @@ internal static class SubscriptionPlanBuilder
         var subscriptionModelName = GetTemplateValue(templateVariables, "subscriptionModelName");
         var subscriptionReasoningEffort = GetTemplateValue(templateVariables, "subscriptionReasoningEffort");
         var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
+
+        var scorecardKey = $"{effectiveProviderName}/{subscriptionModelName ?? effectiveModelName}";
+        var scorecardRecord = scorecardLookup is not null && scorecardLookup.TryGetValue(scorecardKey, out var rec) ? rec : null;
 
         try
         {
@@ -341,7 +350,8 @@ internal static class SubscriptionPlanBuilder
                 recoverableLimitFailures,
                 costGuardPromptCharacterCount,
                 taskBriefHeadroom,
-                detail);
+                detail,
+                scorecardRecord);
 
             return new SubscriptionPlanItem(
                 taskNumber,
@@ -431,7 +441,8 @@ internal static class SubscriptionPlanBuilder
         int recoverableLimitFailures,
         int? costGuardPromptCharacterCount,
         int? taskBriefHeadroom,
-        string detail)
+        string detail,
+        ModelOutcomeRecord? scorecardRecord = null)
     {
         var reasons = new List<string>
         {
@@ -456,6 +467,22 @@ internal static class SubscriptionPlanBuilder
             reasons.Add($"prompt budget headroom={taskBriefHeadroom}");
         }
 
+        // Budget-aware routing: scorecard-driven lane explanation (reasons only; alternatives added below)
+        if (scorecardRecord is not null)
+        {
+            reasons.Add($"scorecard={scorecardRecord.Recommendation}: {scorecardRecord.Reason}");
+        }
+
+        // Budget-aware routing: local-first lane for simple tasks and complex lane confirmation
+        if (taskComplexity == TaskComplexity.Simple && !IsPotentiallyPaidProvider(providerName))
+        {
+            reasons.Add("simple task complexity; local provider is the cost-optimal lane");
+        }
+        else if (taskComplexity == TaskComplexity.Complex && IsPotentiallyPaidProvider(providerName))
+        {
+            reasons.Add("complex/high-risk task complexity; paid capable model is the recommended lane");
+        }
+
         var alternatives = new List<string>();
         if (usesComplexModel)
         {
@@ -464,6 +491,19 @@ internal static class SubscriptionPlanBuilder
         else if (IsPotentiallyPaidProvider(providerName) && taskComplexity == TaskComplexity.Simple)
         {
             alternatives.Add("Consider local Ollama/qwen for routine low-risk work when available.");
+        }
+
+        // Budget-aware routing: scorecard Avoid blocks even a cheap lane
+        if (scorecardRecord?.Recommendation == ModelOutcomeRecommendation.Avoid)
+        {
+            var avoidModel = subscriptionModelName ?? agent.Model.ModelName;
+            alternatives.Add($"Scorecard says Avoid for {providerName}/{avoidModel}; route to a different provider/model lane.");
+        }
+
+        // Budget-aware routing: budget cooldown fallback to local Ollama
+        if ((retryDeferred || providerCoolingDown) && IsPotentiallyPaidProvider(providerName))
+        {
+            alternatives.Add("Consider routing to local Ollama as a budget fallback while the paid lane is cooling down.");
         }
 
         if (requiresPatchCapability)
