@@ -2814,9 +2814,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing field(s): skills", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_malformed_worker_result_contract_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithMalformedWorkerResultContractFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_fake_commit_sha_fails")]
+    public void BackgroundDispatchRunnerFileRoleWithFakeCommitShaFails()
 {
+    // The END_WORKER_RESULT marker is intentionally absent; the parser now treats EOF as the
+    // terminator (leniency fix). All required contract fields are present, so parsing succeeds.
+    // The fake commit SHA "abc123" is not in git history → rejected at ancestry validation.
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var output = """
@@ -2848,8 +2851,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing END_WORKER_RESULT marker", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("is not reachable from git head", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_worker_result_file_mismatch_fails")]

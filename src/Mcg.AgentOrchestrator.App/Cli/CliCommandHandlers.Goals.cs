@@ -460,6 +460,29 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return landResult.MainAdvanced;
 
         case "conduct":
+            if (HasCliConfirmation(parts, "--loop"))
+            {
+                var loopPolicyName = GetFlagValue(parts, "--policy");
+                var loopPolicy = loopPolicyName is null
+                    ? ConductorAutonomyPolicy.Default
+                    : ConductorAutonomyPolicy.All.FirstOrDefault(
+                        p => p.Name.Equals(loopPolicyName, StringComparison.OrdinalIgnoreCase))
+                      ?? throw new InvalidOperationException(
+                        $"Unknown conductor policy '{loopPolicyName}'. Valid: {string.Join(", ", ConductorAutonomyPolicy.All.Select(p => p.Name))}");
+                int? loopMaxIter = null;
+                if (GetFlagValue(parts, "--max-iterations") is { } miStr)
+                    loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
+                var loopDriver = new ConductorDriver(
+                    context.Kernel,
+                    context.Workspace,
+                    context.AcceptanceVerifier,
+                    context.Agents,
+                    context.WorkerProfiles);
+                var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                var loopSummary = new ConductorBatchLoop().Run(context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter);
+                Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
+                return loopSummary.Escalated == 0;
+            }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var conductPolicyName = GetFlagValue(parts, "--policy");

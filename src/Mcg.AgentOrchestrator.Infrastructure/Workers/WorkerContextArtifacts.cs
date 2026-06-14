@@ -1218,7 +1218,9 @@ public static class WorkerContextArtifacts
         var end = Array.FindIndex(lines, start + 1, line => line.Trim().Equals("END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
         if (end < 0)
         {
-            return false;
+            // Tolerate missing END marker: treat the next blank line, heading, or EOF as the terminator.
+            end = Array.FindIndex(lines, start + 1, line => { var t = line.Trim(); return t.Length == 0 || t.StartsWith('#'); });
+            if (end < 0) end = lines.Length;
         }
 
         for (var index = start + 1; index < end; index++)

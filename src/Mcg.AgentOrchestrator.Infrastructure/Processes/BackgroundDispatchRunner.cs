@@ -442,8 +442,9 @@ public sealed class BackgroundDispatchRunner
         var end = Array.FindIndex(lines, start + 1, line => string.Equals(line.Trim(), "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase));
         if (end < 0)
         {
-            diagnostic = "missing END_WORKER_RESULT marker.";
-            return false;
+            // Tolerate missing END marker: treat the next blank line, heading, or EOF as the terminator.
+            end = Array.FindIndex(lines, start + 1, line => { var t = line.Trim(); return t.Length == 0 || t.StartsWith('#'); });
+            if (end < 0) end = lines.Length;
         }
 
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
