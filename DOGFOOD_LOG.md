@@ -907,3 +907,11 @@ Dogfooded via goal 03c2f302 (Claude Sonnet, ~20 min, exit 0, merge 753923d fast-
 - Operator gate: acceptance passed (no flake); operator confirmed BOTH disambiguation sites were fixed (the worker found the second one in the command splitter, which would have mis-split before the handler ran) and that the no-prefix current-goal form is preserved.
 - Evidence note: this flake had blocked a clean acceptance earlier in the session (provenance follow-on) - exactly the kind of hidden ~2% failure the provenance/meta-metrics theme targets; now eliminated rather than retried-around.
 - Model fit: Claude Sonnet - adequate - two-site predicate fix + test determinism.
+
+## 2026-06-14 - False-completion-catch metric: proxy -> precise marker
+
+Dogfooded via goal 85f16186 (Claude Sonnet, ~8 min, exit 0, merge 2cb32a1 fast-forward), landed through `acceptance` (core 214/214, infrastructure 546/546). First of three goals run CONCURRENTLY (with budget-aware-behavior 1f1bda00 and next-consolidation ab859242). Replaced LoopHealthReport's proxy false-completion-catch heuristic (first-verification-passed-then-later-failed) with a precise check: a task counts as a caught false-completion iff a verification record's StandardError contains the real rejection marker "did not produce required relevant file-change evidence" emitted by BackgroundDispatchRunner's file-change guard. Pinned the marker as a const.
+
+- Operator gate: acceptance passed (the metric change is Core-only; tests add a true-catch case and a no-marker pass->fail flip that must NOT count). Reviewed the diff: 3-line method replacing a 10-line heuristic, no snapshot-shape change.
+- Evidence note: the metric now measures what it claims to measure (real gate catches) rather than a coincidental ordering pattern - the meta-metric itself is now evidence-grade.
+- Model fit: Claude Sonnet - adequate - grep-for-marker + single-method rewrite + fixture update.
