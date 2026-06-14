@@ -218,6 +218,11 @@ public sealed partial class AgentOrchestratorKernel
         return ModelOutcomeScorecard.Build(allTasks, windowSize);
     }
 
+    public LoopHealthSnapshot BuildLoopHealthReport(int? lastN = null)
+    {
+        return LoopHealthReport.Build(Goals, HumanInputRequests, lastN);
+    }
+
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)
     {
         var goal = GetGoal(goalId);

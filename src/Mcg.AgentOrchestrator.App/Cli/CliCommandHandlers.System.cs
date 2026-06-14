@@ -98,6 +98,18 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
                 return false;
 
+            case "loop-health":
+            {
+                int? lastN = null;
+                var lastNStr = GetFlagValue(parts, "--last");
+                if (lastNStr is not null && int.TryParse(lastNStr, out var parsedN) && parsedN > 0)
+                {
+                    lastN = parsedN;
+                }
+                ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(lastN));
+                return false;
+            }
+
             case "monitor-goal":
                 GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
                 return false;
