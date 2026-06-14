@@ -123,6 +123,77 @@ public sealed class ProvenanceReportTests
         Xunit.Assert.Empty(snapshot.Goals);
     }
 
+    // ── Acceptance gate tests ───────────────────────────────────────────────
+
+    [Xunit.Fact(DisplayName = "Acceptance_gate_blocks_unbacked_completed_goal_with_provenance_blocker")]
+    public void AcceptanceGateBlocksUnbackedCompletedGoalWithProvenanceBlocker()
+    {
+        var kernel = BuildKernelWithUnbackedCompletedGoal(out _);
+        var goal = kernel.Goals.Single();
+
+        var bundle = GoalAcceptanceEvidenceBundleBuilder.Build(
+            kernel,
+            goal,
+            worktreePath: null,
+            verification: null,
+            verificationSkipped: true);
+
+        Assert.False(bundle.Passed);
+        var provenanceBlocker = bundle.Blockers.FirstOrDefault(b =>
+            b.Kind.Equals("provenance-check-failed", StringComparison.Ordinal));
+        Xunit.Assert.NotNull(provenanceBlocker);
+        Assert.True(provenanceBlocker!.Message.Contains("no verification receipt", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ── Commit SHA cross-check tests ────────────────────────────────────────
+
+    [Xunit.Fact(DisplayName = "Provenance_dogfood_commit_sha_absent_from_git_history_is_flagged")]
+    public void ProvenanceDogfoodCommitShaAbsentFromGitHistoryIsFlagged()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var dogfoodText = "Landed as `abc1234` in production";
+
+        var snapshot = kernel.BuildProvenanceReport(dogfoodText, sha => false);
+
+        Xunit.Assert.Single(snapshot.UnbackedCommitShas);
+        Assert.Equal("abc1234", snapshot.UnbackedCommitShas[0]);
+    }
+
+    [Xunit.Fact(DisplayName = "Provenance_dogfood_commit_sha_present_in_git_history_is_not_flagged")]
+    public void ProvenanceDogfoodCommitShaPresentInGitHistoryIsNotFlagged()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var dogfoodText = "Landed as `abc1234` in production";
+
+        var snapshot = kernel.BuildProvenanceReport(dogfoodText, sha => true);
+
+        Xunit.Assert.Empty(snapshot.UnbackedCommitShas);
+    }
+
+    [Xunit.Fact(DisplayName = "Provenance_dogfood_commit_sha_via_commit_keyword_is_flagged_when_absent")]
+    public void ProvenanceDogfoodCommitShaViaCommitKeywordIsFlaggedWhenAbsent()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var dogfoodText = "Fixed bug in commit abc1234ef and committed def5678a separately.";
+
+        var snapshot = kernel.BuildProvenanceReport(dogfoodText, sha => false);
+
+        Assert.True(snapshot.UnbackedCommitShas.Count == 2);
+        Assert.True(snapshot.UnbackedCommitShas.Contains("abc1234ef", StringComparer.OrdinalIgnoreCase));
+        Assert.True(snapshot.UnbackedCommitShas.Contains("def5678a", StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "Provenance_commit_sha_check_not_run_when_no_sha_exists_func")]
+    public void ProvenanceCommitShaCheckNotRunWhenNoShaExistsFunc()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var dogfoodText = "Landed as `abc1234` in production";
+
+        var snapshot = kernel.BuildProvenanceReport(dogfoodText);
+
+        Xunit.Assert.Empty(snapshot.UnbackedCommitShas);
+    }
+
     // ── CLI command tests ───────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "Provenance_CLI_throws_when_unbacked_completed_goal_exists")]

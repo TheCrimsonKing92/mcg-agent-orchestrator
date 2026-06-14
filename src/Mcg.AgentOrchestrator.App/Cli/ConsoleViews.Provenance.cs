@@ -45,6 +45,20 @@ internal static partial class ConsoleViews
         }
 
         Console.WriteLine();
+        if (snapshot.UnbackedCommitShas.Count > 0)
+        {
+            Console.WriteLine($"  Commit SHAs absent from git history ({snapshot.UnbackedCommitShas.Count}):");
+            foreach (var sha in snapshot.UnbackedCommitShas)
+            {
+                Console.WriteLine($"    {sha}: not found in git history");
+            }
+        }
+        else
+        {
+            Console.WriteLine("  No unbacked commit SHAs found.");
+        }
+
+        Console.WriteLine();
     }
 
     private static string TruncateObjective(string objective)
