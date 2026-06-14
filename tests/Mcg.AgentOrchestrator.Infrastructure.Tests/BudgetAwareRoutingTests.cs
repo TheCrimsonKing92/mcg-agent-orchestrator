@@ -37,6 +37,52 @@ public sealed class BudgetAwareRoutingTests
                 r.Contains("local", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Xunit.Fact(DisplayName = "BudgetAwareRouting_simple_task_prefers_local_over_paid_when_both_available")]
+    public void BudgetAwareRoutingSimpleTaskPrefersLocalOverPaidWhenBothAvailable()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var ollamaAgent = OllamaDeveloperAgent();
+        var openAiAgents = AgentCatalog.Default().Agents;
+        // Both local and paid agents available
+        var allAgents = openAiAgents.Concat(new[] { ollamaAgent }).ToList();
+
+        var task = new TaskSpec(TaskId.New(), "Verify test output for the deployment check", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Simple maintenance work", [task]);
+        kernel.ActivateGoal(goal.Id, allAgents);
+        var updatedGoal = kernel.GetGoal(goal.Id);
+
+        var plan = SubscriptionPlanBuilder.Build(updatedGoal, allAgents, DefaultProfiles);
+        var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
+
+        // Local (Ollama) agent should be selected for the Simple task, not the paid OpenAI lane
+        Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+        Assert.True(string.Equals("Ollama", item.ProviderName, StringComparison.OrdinalIgnoreCase));
+        Assert.True(
+            item.Route.Reasons.Any(r =>
+                r.Contains("simple", StringComparison.OrdinalIgnoreCase) &&
+                r.Contains("local", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Xunit.Fact(DisplayName = "BudgetAwareRouting_no_local_available_selects_paid_lane")]
+    public void BudgetAwareRoutingNoLocalAvailableSelectsPaidLane()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        // OpenAI-only catalog — no local agents
+        var agents = AgentCatalog.Default().Agents;
+
+        var task = new TaskSpec(TaskId.New(), "Verify test output for the deployment check", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Simple maintenance work", [task]);
+        kernel.ActivateGoal(goal.Id, agents);
+        var updatedGoal = kernel.GetGoal(goal.Id);
+
+        var plan = SubscriptionPlanBuilder.Build(updatedGoal, agents, DefaultProfiles);
+        var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
+
+        // No local agent available → paid lane is selected as the only option
+        Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+        Assert.False(string.Equals("Ollama", item.ProviderName, StringComparison.OrdinalIgnoreCase));
+    }
+
     [Xunit.Fact(DisplayName = "BudgetAwareRouting_scorecard_avoid_overrides_cheap_lane")]
     public void BudgetAwareRoutingScorecardAvoidOverridesCheapLane()
     {
@@ -67,8 +113,10 @@ public sealed class BudgetAwareRoutingTests
         var plan = SubscriptionPlanBuilder.Build(updatedGoal, agents, DefaultProfiles, scorecard: scorecard);
         var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
 
+        // Scorecard Avoid must BLOCK the route even when canPrepare would otherwise be true
+        Assert.Equal(WorkerRouteDisposition.Blocked, item.Route!.Disposition);
         Assert.True(
-            item.Route!.Reasons.Any(r => r.Contains("scorecard=Avoid", StringComparison.OrdinalIgnoreCase)));
+            item.Route.Reasons.Any(r => r.Contains("scorecard=Avoid", StringComparison.OrdinalIgnoreCase)));
         Assert.True(
             item.Route.Alternatives.Any(a =>
                 a.Contains("Scorecard says Avoid", StringComparison.OrdinalIgnoreCase) &&
@@ -125,6 +173,33 @@ public sealed class BudgetAwareRoutingTests
         var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
 
         Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+        Assert.True(
+            item.Route.Reasons.Any(r =>
+                r.Contains("complex", StringComparison.OrdinalIgnoreCase) &&
+                (r.Contains("capable", StringComparison.OrdinalIgnoreCase) || r.Contains("complexity", StringComparison.OrdinalIgnoreCase))));
+    }
+
+    [Xunit.Fact(DisplayName = "BudgetAwareRouting_complex_task_prefers_paid_over_local_when_both_available")]
+    public void BudgetAwareRoutingComplexTaskPrefersPaidOverLocalWhenBothAvailable()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var ollamaAgent = OllamaDeveloperAgent();
+        var openAiAgents = AgentCatalog.Default().Agents;
+        var allAgents = openAiAgents.Concat(new[] { ollamaAgent }).ToList();
+
+        var task = new TaskSpec(TaskId.New(),
+            "Implement comprehensive authentication system with schema migration, distributed state management, and end-to-end integration tests for all new service endpoints",
+            AgentRole.Developer);
+        var goal = kernel.CreateGoal("Security hardening initiative", [task]);
+        kernel.ActivateGoal(goal.Id, allAgents);
+        var updatedGoal = kernel.GetGoal(goal.Id);
+
+        var plan = SubscriptionPlanBuilder.Build(updatedGoal, allAgents, DefaultProfiles);
+        var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
+
+        // Complex task should prefer the capable paid lane
+        Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+        Assert.False(string.Equals("Ollama", item.ProviderName, StringComparison.OrdinalIgnoreCase));
         Assert.True(
             item.Route.Reasons.Any(r =>
                 r.Contains("complex", StringComparison.OrdinalIgnoreCase) &&

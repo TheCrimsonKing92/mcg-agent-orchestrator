@@ -25,8 +25,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Pending))
         {
-            var agent = availableAgents.FirstOrDefault(candidate =>
-                candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole);
+            var agent = SelectAgentForTask(task, goal.Objective, availableAgents);
 
             if (agent is null)
             {
@@ -55,8 +54,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (availableAgents is not null)
         {
-            var agent = availableAgents.FirstOrDefault(candidate =>
-                candidate.Status == AgentStatus.Available && candidate.Role == requiredRole);
+            var agent = SelectAgentForTask(task, goal.Objective, availableAgents);
 
             if (agent is not null)
             {
@@ -67,6 +65,46 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return task;
+    }
+
+    // Selects the most cost-effective agent for a task:
+    // Simple tasks prefer local (LocalBridge) agents; Complex tasks prefer capable paid agents.
+    private static AgentDefinition? SelectAgentForTask(
+        TaskSpec task,
+        string goalObjective,
+        IReadOnlyList<AgentDefinition> availableAgents)
+    {
+        var eligible = availableAgents
+            .Where(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole)
+            .ToList();
+
+        if (eligible.Count == 0)
+        {
+            return null;
+        }
+
+        var complexity = TaskComplexityEstimator.Estimate(task.Description, goalObjective, task.RequiredRole);
+
+        if (complexity == TaskComplexity.Simple)
+        {
+            var local = eligible.FirstOrDefault(candidate =>
+                candidate.Model.SubscriptionMode == SubscriptionMode.LocalBridge);
+            if (local is not null)
+            {
+                return local;
+            }
+        }
+        else if (complexity == TaskComplexity.Complex)
+        {
+            var paid = eligible.FirstOrDefault(candidate =>
+                candidate.Model.SubscriptionMode != SubscriptionMode.LocalBridge);
+            if (paid is not null)
+            {
+                return paid;
+            }
+        }
+
+        return eligible[0];
     }
 
     public TaskSpec SetTaskVerificationPlan(GoalId goalId, TaskId taskId, string verificationPlan)
