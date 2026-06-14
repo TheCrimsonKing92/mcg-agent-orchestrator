@@ -554,14 +554,19 @@ internal static class SubscriptionPlanBuilder
             reasons.Add($"recoverable subscription limit failures={recoverableLimitFailures}");
         }
 
-        var disposition = canPrepare
-            ? WorkerRouteDisposition.Selected
-            : retryDeferred || providerCoolingDown
-                ? WorkerRouteDisposition.Deferred
-                : WorkerRouteDisposition.Blocked;
-        var recommendation = canPrepare
-            ? "Selected route is ready for subscription dispatch."
-            : detail;
+        var scorecardBlocksSelection = canPrepare && scorecardRecord?.Recommendation == ModelOutcomeRecommendation.Avoid;
+        var disposition = scorecardBlocksSelection
+            ? WorkerRouteDisposition.Blocked
+            : canPrepare
+                ? WorkerRouteDisposition.Selected
+                : retryDeferred || providerCoolingDown
+                    ? WorkerRouteDisposition.Deferred
+                    : WorkerRouteDisposition.Blocked;
+        var recommendation = scorecardBlocksSelection
+            ? $"Route blocked by scorecard Avoid for {providerName}/{subscriptionModelName ?? agent.Model.ModelName}; route to a different provider or model lane."
+            : canPrepare
+                ? "Selected route is ready for subscription dispatch."
+                : detail;
         return new WorkerRouteDecision(
             disposition,
             OutputTextPreview.CreateTimeline(recommendation).Text,
