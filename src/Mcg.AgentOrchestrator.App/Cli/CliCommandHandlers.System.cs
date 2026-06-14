@@ -110,6 +110,20 @@ internal static partial class CliCommandHandlers
                 return false;
             }
 
+            case "provenance":
+            {
+                var dogfoodPath = Path.Combine(context.Workspace.RootDirectory, "DOGFOOD_LOG.md");
+                var dogfoodText = File.Exists(dogfoodPath) ? File.ReadAllText(dogfoodPath) : string.Empty;
+                var snapshot = context.Kernel.BuildProvenanceReport(dogfoodText);
+                ConsoleViews.PrintProvenanceReport(snapshot);
+                if (snapshot.UnbackedGoalCount > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Provenance check failed: {snapshot.UnbackedGoalCount} completed goal(s) are unbacked (missing verification receipts).");
+                }
+                return false;
+            }
+
             case "monitor-goal":
                 GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
                 return false;

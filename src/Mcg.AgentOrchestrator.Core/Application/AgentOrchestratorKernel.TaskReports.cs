@@ -223,6 +223,11 @@ public sealed partial class AgentOrchestratorKernel
         return LoopHealthReport.Build(Goals, HumanInputRequests, lastN);
     }
 
+    public ProvenanceReportSnapshot BuildProvenanceReport(string dogfoodLogText)
+    {
+        return ProvenanceReport.Build(Goals, dogfoodLogText);
+    }
+
     public GoalStageReadinessReport BuildStageReadinessReport(GoalId goalId)
     {
         var goal = GetGoal(goalId);

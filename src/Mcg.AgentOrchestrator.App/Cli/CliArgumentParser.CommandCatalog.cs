@@ -85,6 +85,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("workspace", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("model-outcomes", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("loop-health", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("provenance", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("accept", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("config", StringComparison.OrdinalIgnoreCase);
 }
