@@ -93,6 +93,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "goal-plan":
             return HandleGoalPlan(context, parts);
 
+        case "plan":
+            return HandlePlan(context, parts);
+
         case "intent-template":
             return HandleOperatorIntentTemplate(context, parts);
 
@@ -1092,6 +1095,56 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
             : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
     }
+
+    return true;
+}
+
+private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    CliArgumentParser.RequirePartCount(parts, 2, "plan <direction> [--confirm-plan]");
+    var direction = parts[1];
+    var confirmPlan = HasCliConfirmation(parts, "--confirm-plan");
+
+    var objPlan = GoalObjectivePlanner.Build(direction, simple: true);
+    GoalObjectivePlanner.ThrowIfBlocked(objPlan);
+    ConsoleViews.PrintGoalObjectivePlan(objPlan);
+
+    var plannerKernel = new AgentOrchestratorKernel();
+    var plannerTask = new TaskSpec(
+        TaskId.New(),
+        GoalDagDecompositionPlanner.BuildPrompt(direction),
+        AgentRole.Planner,
+        "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
+    var plannerGoal = plannerKernel.CreateGoal(direction, [plannerTask]);
+    plannerKernel.ActivateGoal(plannerGoal.Id, context.Agents);
+
+    Console.WriteLine("Running planner decomposition...");
+    var runner = new AgentTaskRunner(plannerKernel, context.Agents, context.Providers);
+    runner.RunAsync(plannerGoal.Id, plannerTask.Id).GetAwaiter().GetResult();
+
+    var workerOutput = plannerTask.LastExecution?.Output ?? string.Empty;
+    var dagPlan = GoalDagDecompositionPlanner.Parse(direction, workerOutput);
+    ConsoleViews.PrintGoalDagPlan(dagPlan);
+
+    if (!confirmPlan)
+        return false;
+
+    if (!dagPlan.IsValid)
+        throw new InvalidOperationException(
+            $"Plan has {dagPlan.ValidationErrors.Count} validation error(s); inspect the preview and fix the direction before confirming.");
+
+    var goalIds = new Dictionary<string, GoalId>(StringComparer.OrdinalIgnoreCase);
+    foreach (var node in dagPlan.Nodes)
+    {
+        context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            context.Kernel, context.Agents, node.Objective);
+        goalIds[node.Id] = context.CurrentGoal.Id;
+        Console.WriteLine($"Created goal {context.CurrentGoal.Id.Value[..8]} for plan node {node.Id}.");
+    }
+
+    foreach (var node in dagPlan.Nodes)
+        foreach (var depId in node.DependsOn)
+            context.Kernel.SetGoalDependency(goalIds[node.Id], goalIds[depId]);
 
     return true;
 }
