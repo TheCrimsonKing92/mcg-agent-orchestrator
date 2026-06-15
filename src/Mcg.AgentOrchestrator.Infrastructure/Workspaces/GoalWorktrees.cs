@@ -445,7 +445,7 @@ public static class GoalWorktrees
             return [];
         }
 
-        var commandLines = TryGetProcessCommandLines(processesByPid.Keys);
+        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
         var holders = new List<WorktreeLockHolder>();
 
         foreach (var (pid, name) in processesByPid)
@@ -471,48 +471,6 @@ public static class GoalWorktrees
     {
         return string.Equals(processName, "VBCSCompiler", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(processName, "MSBuild", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static Dictionary<int, string> TryGetProcessCommandLines(IEnumerable<int> pids)
-    {
-        try
-        {
-            var pidList = pids.ToList();
-            if (pidList.Count == 0)
-            {
-                return [];
-            }
-
-            var filter = string.Join(" OR ", pidList.Select(pid => $"ProcessId={pid}"));
-            var psi = new ProcessStartInfo
-            {
-                FileName = "wmic",
-                Arguments = $"process where \"({filter})\" get ProcessId,CommandLine /format:list",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return [];
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            if (!process.WaitForExit(3000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                return [];
-            }
-
-            return ParseWmicListOutput(output);
-        }
-        catch
-        {
-            return [];
-        }
     }
 
     internal static Dictionary<int, string> ParseWmicListOutput(string output)

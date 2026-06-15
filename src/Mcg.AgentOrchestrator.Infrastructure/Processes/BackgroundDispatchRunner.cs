@@ -580,7 +580,7 @@ public sealed class BackgroundDispatchRunner
             return [];
         }
 
-        var commandLines = TryGetBuildDaemonCommandLines(processesByPid.Keys);
+        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
         var result = new List<(int, string, string?)>();
 
         foreach (var (pid, name) in processesByPid)
@@ -619,48 +619,6 @@ public sealed class BackgroundDispatchRunner
         catch
         {
             return false;
-        }
-    }
-
-    private static Dictionary<int, string> TryGetBuildDaemonCommandLines(IEnumerable<int> pids)
-    {
-        try
-        {
-            var pidList = pids.ToList();
-            if (pidList.Count == 0)
-            {
-                return [];
-            }
-
-            var filter = string.Join(" OR ", pidList.Select(pid => $"ProcessId={pid}"));
-            var psi = new ProcessStartInfo
-            {
-                FileName = "wmic",
-                Arguments = $"process where \"({filter})\" get ProcessId,CommandLine /format:list",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return [];
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            if (!process.WaitForExit(3000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                return [];
-            }
-
-            return GoalWorktrees.ParseWmicListOutput(output);
-        }
-        catch
-        {
-            return [];
         }
     }
 

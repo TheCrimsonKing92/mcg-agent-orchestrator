@@ -4,6 +4,12 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-15 - Build hygiene (kill the CS2012 build-lock at the source) + cross-platform process introspection
+
+Two related fixes (goal ae16b2d2, landed via acceptance). (1) NODE REUSE: added `Directory.Build.rsp` with `-nodeReuse:false` so MSBuild worker nodes don't linger after a build holding `obj/*.dll` — the recurring CS2012 "file in use" build-lock that `dotnet build-server shutdown` did NOT reliably clear (it targets the Roslyn/VBCSCompiler server, not MSBuild nodes). Pairs with the `UseSharedCompilation=false` from the CS2012 work. Confirmed live this session: after clearing pre-existing stale nodes, the next build ran with node-reuse off, left no lingering node, and the following build was lock-free. (2) CROSS-PLATFORM `wmic`: replaced the duplicated `wmic` command-line plumbing (in `BackgroundDispatchRunner.TryGetBuildDaemonCommandLines` and `GoalWorktrees.TryGetProcessCommandLines`) with one `ProcessCommandLines.Read` helper — `wmic` on Windows, `/proc/<pid>/cmdline` on Linux. This fixes the latent Linux over-reap (the old code treated a null command line as "reapable", so on Linux where wmic is absent it would have killed every build daemon); now command lines resolve on Linux too, so the worktree-path filter works. `ParseWmicListOutput` (tested) retained and reused by the helper.
+- Full suite green (Core 273 + Infrastructure 679). Completes the platform-neutralization arc (part 1 resolver/lock/launcher, part 2 native dispatch host, this = build hygiene + wmic). Remaining filed long pole: auditing the test suite for Linux-cleanliness.
+- Model fit: Claude Opus dogfood session - adequate - build-config + cross-platform helper consolidation; landed through acceptance.
+
 ## 2026-06-15 - Platform-neutralize the runtime, part 2: native C# dispatch host replaces the PowerShell wrapper
 
 Rewrote the detached dispatch launcher (goal c675bc32, landed via acceptance). The old `BuildWrapper` generated a ~40-line PowerShell script (string-concatenated, an injection/maintenance hazard); replaced with a native `DispatchProcessHost` run as a hidden `__dispatch-run <paramsFile>` subcommand of the App. The host sets the build env, launches the worker command through the resolved PowerShell host (`WorkerShell`, part 1), raw-streams stdout/stderr to the log files, writes the periodic heartbeat (same camelCase JSON schema the reader expects), and always records the exit code in a `finally`. `StartLatestDispatch` now writes a params JSON and launches `dotnet exec <App.dll> __dispatch-run` detached — resolving `App.dll` from `AppContext.BaseDirectory` (a sibling of the Infrastructure assembly in production AND in tests, which reference the App). Removed `BuildWrapper` + the now-dead `Quote`/`HeartbeatInterval` and the 5 PowerShell-string wrapper unit tests.
@@ -1061,6 +1067,13 @@ Goal a4408410: Fix recurring CS2012/VBCSCompiler build lock at its source. (1) I
 ## 2026-06-15 - Platform-neutralize the runtime: resolve PowerShell host (pwsh-preferred, pow...
 
 Goal dc038de2: Platform-neutralize the runtime: resolve PowerShell host (pwsh-preferred, powershell.exe fallback) for dispatch and d.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Platform-neutralize part 2: replace the detached PowerShell dispatch wrapper ...
+
+Goal c675bc32: Platform-neutralize part 2: replace the detached PowerShell dispatch wrapper with a native C# DispatchProcessHost (en.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
 
 - Operator gate: (no receipt)
 - (no receipt)
