@@ -160,6 +160,56 @@ public sealed class GoalDagPlanTests
         Assert.True(ex.Message.Contains("validation error", StringComparison.OrdinalIgnoreCase));
     }
 
+    // ── Best-of-N selection ──────────────────────────────────────────────────
+
+    [Xunit.Fact(DisplayName = "BestOfN_AllValid_PicksFewestNodes")]
+    public void BestOfN_AllValid_PicksFewestNodes()
+    {
+        var threeNodePlan = GoalDagDecompositionPlanner.Parse("dir", """
+            ```json
+            [{"id":"g1","objective":"A","dependsOn":[]},{"id":"g2","objective":"B","dependsOn":["g1"]},{"id":"g3","objective":"C","dependsOn":["g2"]}]
+            ```
+            """);
+        var twoNodePlan = GoalDagDecompositionPlanner.Parse("dir", """
+            ```json
+            [{"id":"g1","objective":"A","dependsOn":[]},{"id":"g2","objective":"B","dependsOn":["g1"]}]
+            ```
+            """);
+
+        var selected = GoalDagDecompositionPlanner.SelectBestOfN([threeNodePlan, twoNodePlan]);
+
+        Assert.True(selected.IsValid);
+        Assert.True(selected.Nodes.Count == 2);
+    }
+
+    [Xunit.Fact(DisplayName = "BestOfN_FirstInvalidSecondValid_PicksValid")]
+    public void BestOfN_FirstInvalidSecondValid_PicksValid()
+    {
+        var invalidPlan = GoalDagDecompositionPlanner.Parse("dir", "no fenced json here");
+        var validPlan = GoalDagDecompositionPlanner.Parse("dir", """
+            ```json
+            [{"id":"g1","objective":"A","dependsOn":[]}]
+            ```
+            """);
+
+        var selected = GoalDagDecompositionPlanner.SelectBestOfN([invalidPlan, validPlan]);
+
+        Assert.True(selected.IsValid);
+        Assert.True(selected.Nodes.Count == 1);
+    }
+
+    [Xunit.Fact(DisplayName = "BestOfN_NoneValid_ReturnsFirstErrors")]
+    public void BestOfN_NoneValid_ReturnsFirstErrors()
+    {
+        var invalid1 = GoalDagDecompositionPlanner.Parse("dir", "no json here");
+        var invalid2 = GoalDagDecompositionPlanner.Parse("dir", "also no json");
+
+        var selected = GoalDagDecompositionPlanner.SelectBestOfN([invalid1, invalid2]);
+
+        Assert.False(selected.IsValid);
+        Assert.True(selected.ValidationErrors.Count > 0);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private const string TwoNodeJson = """

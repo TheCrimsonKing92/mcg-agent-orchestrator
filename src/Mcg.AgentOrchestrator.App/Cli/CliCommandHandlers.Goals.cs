@@ -1243,6 +1243,8 @@ private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<stri
     return plan.IsValid;
 }
 
+private const int PlanSampleCount = 3;
+
 private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     CliArgumentParser.RequirePartCount(parts, 2, "plan <direction> [--confirm-plan]");
@@ -1253,21 +1255,26 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
     ConsoleViews.PrintGoalObjectivePlan(objPlan);
 
-    var plannerKernel = new AgentOrchestratorKernel();
-    var plannerTask = new TaskSpec(
-        TaskId.New(),
-        GoalDagDecompositionPlanner.BuildPrompt(direction),
-        AgentRole.Planner,
-        "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
-    var plannerGoal = plannerKernel.CreateGoal(direction, [plannerTask]);
-    plannerKernel.ActivateGoal(plannerGoal.Id, context.Agents);
+    Console.WriteLine($"Running planner decomposition ({PlanSampleCount} samples)...");
+    var sampleTasks = Enumerable.Range(0, PlanSampleCount).Select(_ =>
+    {
+        var sampleKernel = new AgentOrchestratorKernel();
+        var sampleTaskSpec = new TaskSpec(
+            TaskId.New(),
+            GoalDagDecompositionPlanner.BuildPrompt(direction),
+            AgentRole.Planner,
+            "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
+        var sampleGoal = sampleKernel.CreateGoal(direction, [sampleTaskSpec]);
+        sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
+        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers);
+        return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
+            .ContinueWith(__ => GoalDagDecompositionPlanner.Parse(
+                direction, sampleTaskSpec.LastExecution?.Output ?? string.Empty),
+                TaskScheduler.Default);
+    }).ToArray();
 
-    Console.WriteLine("Running planner decomposition...");
-    var runner = new AgentTaskRunner(plannerKernel, context.Agents, context.Providers);
-    runner.RunAsync(plannerGoal.Id, plannerTask.Id).GetAwaiter().GetResult();
-
-    var workerOutput = plannerTask.LastExecution?.Output ?? string.Empty;
-    var dagPlan = GoalDagDecompositionPlanner.Parse(direction, workerOutput);
+    var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
+    var dagPlan = GoalDagDecompositionPlanner.SelectBestOfN(candidates);
     ConsoleViews.PrintGoalDagPlan(dagPlan);
 
     if (!confirmPlan)

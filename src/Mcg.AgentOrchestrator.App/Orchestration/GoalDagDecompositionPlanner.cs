@@ -48,6 +48,24 @@ internal static class GoalDagDecompositionPlanner
         return new GoalDagPlan(direction, nodes, errors);
     }
 
+    // Selects the best candidate from N samples: first valid plan by fewest nodes, then lowest sample index.
+    // Returns the first candidate when none are valid (preserves ValidationErrors for the caller to surface).
+    public static GoalDagPlan SelectBestOfN(IReadOnlyList<GoalDagPlan> candidates)
+    {
+        GoalDagPlan? best = null;
+        var bestNodeCount = int.MaxValue;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            if (candidate.IsValid && candidate.Nodes.Count < bestNodeCount)
+            {
+                best = candidate;
+                bestNodeCount = candidate.Nodes.Count;
+            }
+        }
+        return best ?? candidates[0];
+    }
+
     private static IReadOnlyList<GoalDagNode> ParseNodes(string json)
     {
         using var doc = JsonDocument.Parse(json);
