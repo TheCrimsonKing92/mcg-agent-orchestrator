@@ -51,6 +51,8 @@ internal sealed record OrchestratorWorkspace(
             Path.Combine(orchestrator, "transcript.md"));
     }
 
+    public string DashboardUrlFilePath => Path.Combine(OrchestratorDirectory, ".dashboard-url");
+
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.
     public string ResolveExecutionDirectory(GoalId goalId)

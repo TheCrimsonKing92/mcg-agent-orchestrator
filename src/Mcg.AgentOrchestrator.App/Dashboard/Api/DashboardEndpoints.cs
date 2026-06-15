@@ -141,6 +141,9 @@ internal static partial class DashboardEndpoints
         api.MapGet("/tasks/{taskId}/work-summary", async Task<IResult> (HttpContext context, string taskId) => await Safe(() => GetTaskWorkSummaryAsync(context, taskId, services)));
         api.MapGet("/task/{taskId}", async Task<IResult> (HttpContext context, string taskId) => await Safe(() => GetTaskAsync(context, taskId, services)));
 
+        // Conductor tick push endpoint: CLI conduct --loop --watch POSTs tick events here for SSE broadcast.
+        api.MapPost("/conductor/tick", async Task<IResult> (HttpContext context) => await HandleConductorTickAsync(context));
+
         app.MapFallback(() => Text("not found", "text/plain; charset=utf-8", StatusCodes.Status404NotFound));
     }
 

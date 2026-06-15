@@ -7,6 +7,8 @@ internal sealed class ConductorBatchLoop
 {
     internal const string StopFileName = ".conduct-stop";
     internal const int DefaultMaxVerifyRetries = 2;
+    internal const int DefaultWatchIntervalSeconds = 30;
+    internal const int WatchStopPollIntervalSeconds = 5;
 
     private readonly Action<AgentOrchestratorKernel> _sweep;
 
@@ -21,7 +23,9 @@ internal sealed class ConductorBatchLoop
         ConductorAutonomyPolicy policy,
         string stopFilePath,
         int? maxIterations = null,
-        int maxVerifyRetries = DefaultMaxVerifyRetries)
+        int maxVerifyRetries = DefaultMaxVerifyRetries,
+        TimeSpan? watchInterval = null,
+        Action<BatchTickSummary>? onTick = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -126,11 +130,29 @@ internal sealed class ConductorBatchLoop
 
             Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
 
+            var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false);
             if (tickAdvanced == 0 && tickDone == 0)
             {
-                Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
-                break;
+                if (watchInterval is null)
+                {
+                    Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
+                    onTick?.Invoke(tickSummary);
+                    break;
+                }
+
+                Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {watchInterval.Value.TotalSeconds:0}s for workers to complete.");
+                onTick?.Invoke(tickSummary with { WatchSleeping = true });
+                if (SleepWithStopCheck(watchInterval.Value, stopFilePath))
+                {
+                    stopRequested = true;
+                    Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
+                    break;
+                }
+
+                continue;
             }
+
+            onTick?.Invoke(tickSummary);
         }
 
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, stopRequested);
@@ -165,6 +187,23 @@ internal sealed class ConductorBatchLoop
     private static bool IsStopRequested(string stopFilePath) =>
         !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);
 
+    // Returns true if the stop file appeared during sleep, false if sleep completed normally.
+    private static bool SleepWithStopCheck(TimeSpan interval, string stopFilePath)
+    {
+        var remaining = interval;
+        var poll = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
+        while (remaining > TimeSpan.Zero)
+        {
+            if (IsStopRequested(stopFilePath))
+                return true;
+            var slice = remaining < poll ? remaining : poll;
+            Thread.Sleep(slice);
+            remaining -= slice;
+        }
+
+        return IsStopRequested(stopFilePath);
+    }
+
     private static string FormatOutcome(ConductorAdvanceOutcome outcome) => outcome switch
     {
         ConductorAdvanceOutcome.Executed e  => $"executed from {e.FromState} — {e.Description}",
@@ -182,3 +221,12 @@ public sealed record BatchLoopSummary(
     int Escalated,
     int Retried,
     bool StopRequested);
+
+public sealed record BatchTickSummary(
+    int Tick,
+    int Advanced,
+    int Held,
+    int Escalated,
+    int Retried,
+    int Done,
+    bool WatchSleeping);

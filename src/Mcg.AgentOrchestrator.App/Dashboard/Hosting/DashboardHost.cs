@@ -351,12 +351,15 @@ public static async Task RunDashboardHostAsync(
     var app = builder.Build();
     app.MapDashboardEndpoints(repository, workspace, providers, args, agentCatalogFallback);
 
+    var dashboardUrlFilePath = workspace.DashboardUrlFilePath;
+    var browserUrl = GetBrowserUrl(args);
+    app.Lifetime.ApplicationStarted.Register(() => WriteDashboardUrlFile(dashboardUrlFilePath, browserUrl));
+    app.Lifetime.ApplicationStopped.Register(() => DeleteDashboardUrlFile(dashboardUrlFilePath));
+
     if (args.OpenBrowser)
     {
-        app.Lifetime.ApplicationStarted.Register(() => OpenDashboardInBrowser(GetDashboardPageUrl(GetBrowserUrl(args))));
+        app.Lifetime.ApplicationStarted.Register(() => OpenDashboardInBrowser(GetDashboardPageUrl(browserUrl)));
     }
-
-    var browserUrl = GetBrowserUrl(args);
     var dashboardPageUrl = GetDashboardPageUrl(browserUrl);
     Console.WriteLine($"Dashboard bind URL: {args.UrlPrefix}");
     Console.WriteLine($"Dashboard mode: {(args.EnableOperatorControls ? "operator controls enabled" : "read-only simple hosted view")}");
@@ -384,6 +387,18 @@ public static async Task RunDashboardHostAsync(
 
     Console.WriteLine("Press Ctrl+C to stop.");
     await app.RunAsync();
+}
+
+private static void WriteDashboardUrlFile(string filePath, string url)
+{
+    try { File.WriteAllText(filePath, url); }
+    catch { /* Non-critical: conduct --watch uses this file to discover dashboard URL. */ }
+}
+
+private static void DeleteDashboardUrlFile(string filePath)
+{
+    try { if (File.Exists(filePath)) File.Delete(filePath); }
+    catch { /* Non-critical. */ }
 }
 
 public static void OpenDashboardInBrowser(string url)

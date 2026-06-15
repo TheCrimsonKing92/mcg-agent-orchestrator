@@ -10,6 +10,7 @@ internal static class DashboardMonitoringEvents
 {
     public const string SnapshotEventName = "goal.snapshot";
     public const string KeepAliveEventName = "monitor.keepalive";
+    public const string ConductorTickEventName = "conductor.tick";
 
     public static string StreamPath(string goalId) => $"/api/goals/{goalId}/events/stream";
 
