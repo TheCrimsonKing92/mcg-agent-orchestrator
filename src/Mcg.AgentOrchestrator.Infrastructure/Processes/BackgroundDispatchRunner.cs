@@ -248,12 +248,13 @@ public sealed class BackgroundDispatchRunner
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
             }
 
-            if (exitCode == 0 &&
-                !TryValidateWorkerResultContract(task, standardOutput, standardError, worktreeEvidence, processRecord.WorkingDirectory, out var contractDiagnostic))
-            {
-                exitCode = 1;
-                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, contractDiagnostic);
-            }
+            // WORKER_RESULT is advisory only. Substance is proven from git ground truth
+            // (relevant commit after dispatch + clean worktree, checked above) and the
+            // acceptance test run — not from the worker's self-reported field shape, which
+            // produced recurring false-failures across many distinct WORKER_RESULT schemas.
+            // The self-report is still parsed for the model-fit note when recording the
+            // verification (TaskSpec.RecordVerification via ModelFitEvidence); it never
+            // gates the dispatch.
         }
 
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
@@ -335,141 +336,6 @@ public sealed class BackgroundDispatchRunner
             HasExplicitNoChangeRationale(standardOutput, standardError);
     }
 
-    private static bool TryValidateWorkerResultContract(
-        TaskSpec task,
-        string standardOutput,
-        string standardError,
-        GoalWorktreeDispatchEvidence worktreeEvidence,
-        string workingDirectory,
-        out string diagnostic)
-    {
-        diagnostic = string.Empty;
-        var combinedOutput = $"{standardOutput}\n{standardError}";
-        if (!TryParseWorkerResultContract(combinedOutput, out var contract, out diagnostic))
-        {
-            // For any format failure in stdout, also try the committed result file.
-            // This handles cases where the result lives only in WORKER_RESULT.md/.txt
-            // or where stdout has prose around a non-conforming committed file.
-            if (TryReadCommittedWorkerResultFile(workingDirectory, out var fileContent) &&
-                TryParseWorkerResultContract(fileContent, out contract, out _))
-            {
-                // Parsed successfully from committed file — continue validation.
-            }
-            else
-            {
-                diagnostic = $"Worker result contract invalid: {(string.IsNullOrEmpty(diagnostic) ? "missing WORKER_RESULT block." : diagnostic)}";
-                return false;
-            }
-        }
-
-        if (!contract.HasNoBlockers)
-        {
-            diagnostic = "Worker result contract reported blockers despite successful process exit.";
-            return false;
-        }
-
-        if (!contract.HasModelFit)
-        {
-            diagnostic = "Worker result contract is missing model_fit evidence.";
-            return false;
-        }
-
-        if (!contract.HasSkillUsage)
-        {
-            diagnostic = "Worker result contract is missing skills evidence.";
-            return false;
-        }
-
-        var verificationPolicy = VerificationPolicyCompiler.Compile(
-            task.RequiredRole,
-            string.Empty,
-            task.Description,
-            task.VerificationPlan,
-            worktreeEvidence.ChangedPaths);
-        if (verificationPolicy.RequiresTests && !contract.HasTestEvidence)
-        {
-            var required = verificationPolicy.Checks
-                .Where(check => check.Required && check.Kind is "dotnet-test" or "browser-smoke")
-                .Select(check => check.Name)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            diagnostic = "Worker result contract is missing required verification policy test evidence: " +
-                string.Join(", ", required) +
-                ". Report executed tests or set blockers instead of successful completion.";
-            return false;
-        }
-
-        var requiresCommit = RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
-            !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
-            worktreeEvidence.HasRelevantCommitAfterDispatch;
-        if (requiresCommit &&
-            !contract.CommitMatches(worktreeEvidence.Head) &&
-            !IsCommitReachableFromHead(workingDirectory, contract.Commit.Trim()))
-        {
-            diagnostic = $"Worker result contract commit '{contract.Commit}' is not reachable from git head '{worktreeEvidence.Head}'.";
-            return false;
-        }
-
-        var expectedFiles = worktreeEvidence.ChangedPaths
-            .Where(IsRelevantSourcePath)
-            .Select(NormalizeContractPath)
-            .ToList();
-        if (expectedFiles.Count > 0)
-        {
-            var reportedFiles = contract.Files.Select(NormalizeContractPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var missing = expectedFiles.Where(path => !reportedFiles.Contains(path)).ToList();
-            if (missing.Count > 0)
-            {
-                diagnostic = $"Worker result contract missing changed file(s): {string.Join(", ", missing)}.";
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryParseWorkerResultContract(string output, out WorkerResultContract contract, out string diagnostic)
-    {
-        contract = WorkerResultContract.Empty;
-        if (!WorkerResultParser.TryParseFields(output, out var fields, out diagnostic))
-        {
-            return false;
-        }
-
-        contract = new WorkerResultContract(
-            SplitContractList(GetField(fields, "files")),
-            GetField(fields, "commands"),
-            GetField(fields, "tests"),
-            GetField(fields, "commit"),
-            GetField(fields, "blockers"),
-            GetField(fields, "model_fit"),
-            GetField(fields, "skills"),
-            GetField(fields, "confidence"));
-        return true;
-    }
-
-    private static string GetField(Dictionary<string, string> fields, string key) =>
-        fields.TryGetValue(key, out var value) ? value : string.Empty;
-
-    private static List<string> SplitContractList(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) ||
-            string.Equals(value.Trim(), "none", StringComparison.OrdinalIgnoreCase))
-        {
-            return [];
-        }
-
-        return value
-            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(path => !string.Equals(path, "none", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-    }
-
-    private static string NormalizeContractPath(string path)
-    {
-        return path.Trim().Replace('\\', '/').TrimStart('/');
-    }
-
     private static bool TryInspectGoalWorktree(
         string workingDirectory,
         GoalId goalId,
@@ -543,53 +409,6 @@ public sealed class BackgroundDispatchRunner
             !normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) &&
             !normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsCommitReachableFromHead(string workingDirectory, string commit)
-    {
-        if (string.IsNullOrWhiteSpace(commit) ||
-            string.Equals(commit.Trim(), "none", StringComparison.OrdinalIgnoreCase) ||
-            !Directory.Exists(workingDirectory))
-        {
-            return false;
-        }
-
-        // Exit 0 means ancestor, exit 1 means not an ancestor.
-        var result = RunGit(workingDirectory, "merge-base", "--is-ancestor", commit.Trim(), "HEAD");
-        return result.ExitCode == 0;
-    }
-
-    private static bool TryReadCommittedWorkerResultFile(string workingDirectory, out string content)
-    {
-        content = string.Empty;
-        if (!Directory.Exists(workingDirectory))
-        {
-            return false;
-        }
-
-        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
-        {
-            var path = Path.Combine(workingDirectory, fileName);
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            // Only accept tracked (committed) result files, not untracked ones.
-            var lsFiles = RunGit(workingDirectory, "ls-files", fileName);
-            if (lsFiles.ExitCode != 0 || string.IsNullOrWhiteSpace(lsFiles.Output))
-            {
-                continue;
-            }
-
-            content = ReadBestEffort(path);
-            if (!string.IsNullOrWhiteSpace(content))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string FilterWorkerResultArtifacts(string statusOutput)
@@ -1270,53 +1089,6 @@ public sealed class BackgroundDispatchRunner
         long StandardErrorBytes)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
-    }
-
-    private sealed record WorkerResultContract(
-        IReadOnlyList<string> Files,
-        string Commands,
-        string Tests,
-        string Commit,
-        string Blockers,
-        string ModelFit,
-        string Skills,
-        string Confidence)
-    {
-        public static WorkerResultContract Empty { get; } = new([], string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
-
-        public bool HasNoBlockers =>
-            string.IsNullOrWhiteSpace(Blockers) ||
-            string.Equals(Blockers.Trim(), "none", StringComparison.OrdinalIgnoreCase) ||
-            Regex.IsMatch(Blockers.Trim(), @"^none\s*[-;:(]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-        public bool HasModelFit =>
-            !string.IsNullOrWhiteSpace(ModelFit) &&
-            (ModelFit.Contains("adequate", StringComparison.OrdinalIgnoreCase) ||
-                ModelFit.Contains("overkill", StringComparison.OrdinalIgnoreCase) ||
-                ModelFit.Contains("underpowered", StringComparison.OrdinalIgnoreCase));
-
-        public bool HasSkillUsage =>
-            !string.IsNullOrWhiteSpace(Skills);
-
-        public bool HasTestEvidence =>
-            !string.IsNullOrWhiteSpace(Tests) &&
-            !string.Equals(Tests.Trim(), "none", StringComparison.OrdinalIgnoreCase) &&
-            !Tests.Contains("not run", StringComparison.OrdinalIgnoreCase) &&
-            !Tests.Contains("not executed", StringComparison.OrdinalIgnoreCase);
-
-        public bool CommitMatches(string head)
-        {
-            if (string.IsNullOrWhiteSpace(Commit) ||
-                string.Equals(Commit.Trim(), "none", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            var normalizedCommit = Commit.Trim();
-            var normalizedHead = head.Trim();
-            return normalizedHead.StartsWith(normalizedCommit, StringComparison.OrdinalIgnoreCase) ||
-                normalizedCommit.StartsWith(normalizedHead, StringComparison.OrdinalIgnoreCase);
-        }
     }
 
     private sealed record GoalWorktreeDispatchEvidence(

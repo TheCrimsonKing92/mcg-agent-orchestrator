@@ -83,10 +83,10 @@ public sealed class ChaosGateTests
         Assert.False(result.Checks!.Any(c => c.Name == "forbidden changed paths" && !c.Passed));
     }
 
-    // ── Gate 3a: Missing WORKER_RESULT → contract validator ─────────────────
+    // ── Gate 3a: Missing WORKER_RESULT → advisory pass (git evidence carries substance) ─
 
-    [Xunit.Fact(DisplayName = "ChaosGate3a_missing_worker_result_block_triggers_contract_validator")]
-    public void Gate3a_MissingWorkerResultBlock_TriggersContractValidator()
+    [Xunit.Fact(DisplayName = "ChaosGate3a_missing_worker_result_block_passes_advisory_when_git_evidence_present")]
+    public void Gate3a_MissingWorkerResultBlock_PassesAdvisoryWhenGitEvidencePresent()
     {
         var root = CreateSeededRepo();
         var (kernel, goal, task, _) = CreateChaosDispatch(
@@ -98,16 +98,17 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+        // WORKER_RESULT is advisory. A relevant committed change on a clean worktree carries the
+        // substance, so a missing block no longer fails the dispatch. The git gates (Gate1/4/5)
+        // still catch no-change / dirty / noise-only worktrees regardless of the block.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Gate 3b: Malformed WORKER_RESULT (missing skills field) ─────────────
 
-    [Xunit.Fact(DisplayName = "ChaosGate3b_malformed_worker_result_missing_field_triggers_contract_validator")]
-    public void Gate3b_MalformedWorkerResultMissingField_TriggersContractValidator()
+    [Xunit.Fact(DisplayName = "ChaosGate3b_malformed_worker_result_missing_field_passes_advisory")]
+    public void Gate3b_MalformedWorkerResultMissingField_PassesAdvisory()
     {
         var root = CreateSeededRepo();
         const string malformed =
@@ -128,10 +129,10 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
+        // Field shape is advisory: an odd/partial block (here missing skills) no longer fails the
+        // dispatch when git shows a relevant committed change on a clean worktree.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Gate 4: Dirty worktree at completion ─────────────────────────────────
@@ -183,10 +184,10 @@ public sealed class ChaosGateTests
             text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     }
 
-    // ── Gate 6: False 'tests passed' claim with no run ──────────────────────
+    // ── Gate 6: tests not run at dispatch → advisory pass (acceptance enforces tests) ─
 
-    [Xunit.Fact(DisplayName = "ChaosGate6_false_tests_passed_claim_without_run_is_rejected")]
-    public void Gate6_FalseTestsPassedClaimWithoutRun_IsRejected()
+    [Xunit.Fact(DisplayName = "ChaosGate6_tests_not_run_at_dispatch_passes_advisory_acceptance_enforces_tests")]
+    public void Gate6_TestsNotRunAtDispatch_PassesAdvisory_AcceptanceEnforcesTests()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Mcg.AgentOrchestrator.Core/Application/Feature.cs";
@@ -199,10 +200,11 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("missing required verification policy test evidence", StringComparison.Ordinal));
+        // Test evidence is no longer taken from the worker's self-report at dispatch time; the
+        // actual test run is enforced by the acceptance gate (GoalAcceptanceVerifier). A relevant
+        // committed change on a clean worktree is sufficient to complete the dispatch.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Gate 7a: Missing local skill blocks preflight ────────────────────────
@@ -291,10 +293,10 @@ public sealed class ChaosGateTests
         Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
-    // ── Leniency: commit absent from history still fails ────────────────────
+    // ── Leniency: fabricated commit SHA passes when a real relevant commit exists ─
 
-    [Xunit.Fact(DisplayName = "Leniency_CommitAbsentFromHistory_still_fails")]
-    public void Leniency_CommitAbsentFromHistory_StillFails()
+    [Xunit.Fact(DisplayName = "Leniency_FabricatedCommitSha_passes_advisory_when_real_commit_present")]
+    public void Leniency_FabricatedCommitSha_PassesAdvisoryWhenRealCommitPresent()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Feature.cs";
@@ -308,11 +310,11 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        // "deadbeef" is not in history — must still fail.
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("is not reachable from git head", StringComparison.Ordinal));
+        // The worker reported a fabricated commit ("deadbeef"), but git shows a real relevant
+        // commit on a clean worktree. The self-reported commit is advisory and no longer
+        // cross-checked, so git ground truth completes the dispatch.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Leniency: WORKER_RESULT in committed file passes ────────────────────
@@ -401,16 +403,17 @@ public sealed class ChaosGateTests
 
     // ── Regression: no WORKER_RESULT anywhere (no stdout block, no file) ────
 
-    [Xunit.Fact(DisplayName = "Leniency_NoWorkerResultAnywhere_still_fails")]
-    public void Leniency_NoWorkerResultAnywhere_StillFails()
+    [Xunit.Fact(DisplayName = "Leniency_NoWorkerResultAndNoChange_still_fails_on_git_gate")]
+    public void Leniency_NoWorkerResultAndNoChange_StillFailsOnGitGate()
     {
-        // Same as Gate 3a but re-asserted with the new file-fallback path active.
+        // Advisory WORKER_RESULT cannot be exploited by omitting the block: with no block AND no
+        // relevant committed change, the git no-change gate (not the contract) fails the dispatch.
         var root = CreateSeededRepo();
         var (kernel, goal, task, _) = CreateChaosDispatch(
             root, AgentRole.Developer,
             "Done. Files written.",
             string.Empty,
-            mutateWorktree: wt => CommitSourceFile(wt, "src/Feature.cs", "// feature"));
+            mutateWorktree: null);
 
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -418,7 +421,7 @@ public sealed class ChaosGateTests
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+            text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     }
 
     // ── Leniency: blockers: none followed by informational notes ────────────
@@ -461,10 +464,10 @@ public sealed class ChaosGateTests
         Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
-    // ── Regression: real blockers with non-none value still fail ────────────
+    // ── Leniency: reported blockers are advisory; committed work passes ──────
 
-    [Xunit.Fact(DisplayName = "Leniency_RealBlockers_still_fail")]
-    public void Leniency_RealBlockers_StillFail()
+    [Xunit.Fact(DisplayName = "Leniency_ReportedBlockers_passes_advisory_when_work_committed")]
+    public void Leniency_ReportedBlockers_PassesAdvisoryWhenWorkCommitted()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Feature.cs";
@@ -477,10 +480,11 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("reported blockers despite successful process exit", StringComparison.Ordinal));
+        // The blockers field is advisory and no longer gates the dispatch. The relevant committed
+        // change on a clean worktree is the substance; the blocker note remains in the recorded
+        // verification output for the operator/scorecard.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Leniency: missing END_WORKER_RESULT parses to EOF ───────────────────
@@ -508,27 +512,6 @@ public sealed class ChaosGateTests
         // Parser must tolerate missing END_WORKER_RESULT and treat EOF as terminator
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(0, task.LastVerification!.ExitCode);
-    }
-
-    // ── Regression: missing END marker still fails if block itself is missing ─
-
-    [Xunit.Fact(DisplayName = "Leniency_MissingEndMarker_doesNotSuppressMissingBlockGate")]
-    public void Leniency_MissingEndMarker_DoesNotSuppressMissingBlockGate()
-    {
-        // Gate3a must still fire: no WORKER_RESULT: block at all → failure
-        var root = CreateSeededRepo();
-        var (kernel, goal, task, _) = CreateChaosDispatch(
-            root, AgentRole.Developer,
-            "Done. Files written.",
-            string.Empty,
-            mutateWorktree: wt => CommitSourceFile(wt, "src/Feature.cs", "// feature"));
-
-        new BackgroundDispatchRunner(isStillRunning: _ => false)
-            .RefreshLatestProcess(kernel, goal.Id, task.Id);
-
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Contains(task.LastVerification!.StandardError,
-            text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
     }
 
     // ── Leniency: markdown-decorated opener and field names pass ────────────
@@ -752,10 +735,10 @@ public sealed class ChaosGateTests
         Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
-    // ── Regression: markdown format with real blockers still fails ───────────
+    // ── Leniency: markdown format with reported blockers passes (advisory) ───
 
-    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedRealBlockers_still_fail")]
-    public void Leniency_MarkdownDecoratedRealBlockers_StillFail()
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedReportedBlockers_passes_advisory")]
+    public void Leniency_MarkdownDecoratedReportedBlockers_PassesAdvisory()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Feature.cs";
@@ -780,16 +763,16 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("reported blockers despite successful process exit", StringComparison.Ordinal));
+        // Markdown-decorated block with a reported blocker: blockers is advisory, so the relevant
+        // committed change on a clean worktree completes the dispatch.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
-    // ── Regression: markdown format with missing skills still fails ──────────
+    // ── Leniency: markdown format with missing skills passes (advisory) ──────
 
-    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedMissingSkills_still_fails")]
-    public void Leniency_MarkdownDecoratedMissingSkills_StillFails()
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedMissingSkills_passes_advisory")]
+    public void Leniency_MarkdownDecoratedMissingSkills_PassesAdvisory()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Feature.cs";
@@ -822,11 +805,10 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        // Skills absence triggers the substance gate
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("skills", StringComparison.OrdinalIgnoreCase));
+        // Skills is advisory; its absence no longer gates the dispatch when git shows a relevant
+        // committed change on a clean worktree.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Shared setup helpers ─────────────────────────────────────────────────

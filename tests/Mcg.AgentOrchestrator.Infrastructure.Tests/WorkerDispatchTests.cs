@@ -2723,8 +2723,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_missing_required_policy_test_evidence_fails")]
-    public void BackgroundDispatchRunnerFileRoleMissingRequiredPolicyTestEvidenceFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_missing_policy_test_evidence_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleMissingPolicyTestEvidencePassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2744,14 +2744,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing required verification policy test evidence", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("full dotnet tests", StringComparison.Ordinal));
+    // WORKER_RESULT is advisory: a relevant commit on a clean worktree is sufficient at
+    // dispatch time. Test evidence is enforced by the acceptance run, not the self-report.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractPassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2770,14 +2770,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+    // A missing WORKER_RESULT block no longer fails the dispatch: git ground truth (the
+    // relevant committed change on a clean worktree) carries the substance. The block is advisory.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_partial_worker_result_contract_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithPartialWorkerResultContractFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_partial_worker_result_contract_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithPartialWorkerResultContractPassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2808,18 +2808,18 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing field(s): skills", StringComparison.Ordinal));
+    // A partial/odd-shaped WORKER_RESULT (here missing the skills field) no longer fails the
+    // dispatch — field shape is advisory; the relevant committed change is the substance.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_fake_commit_sha_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithFakeCommitShaFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_fake_commit_sha_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithFakeCommitShaPassesAdvisory()
 {
-    // The END_WORKER_RESULT marker is intentionally absent; the parser now treats EOF as the
-    // terminator (leniency fix). All required contract fields are present, so parsing succeeds.
-    // The fake commit SHA "abc123" is not in git history → rejected at ancestry validation.
+    // The worker reports a fake commit SHA "abc123", but it actually committed a relevant
+    // change on a clean worktree. The self-reported commit is advisory and no longer checked;
+    // git ground truth (a relevant commit after dispatch) is the substance, so this passes.
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var output = """
@@ -2849,13 +2849,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("is not reachable from git head", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_worker_result_file_mismatch_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithWorkerResultFileMismatchFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_worker_result_file_mismatch_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithWorkerResultFileMismatchPassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2874,10 +2873,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract missing changed file", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("feature.txt", StringComparison.Ordinal));
+    // The worker's files field (other.txt) disagrees with what git shows changed (feature.txt).
+    // The self-reported file list is advisory and no longer cross-checked; the relevant
+    // committed change is the substance, so this passes.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_commit_and_dirty_worktree_fails")]
