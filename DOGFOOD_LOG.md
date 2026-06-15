@@ -4,6 +4,13 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-15 - Platform-neutralize the runtime, part 1: PowerShell-host resolver + cross-platform build lock + bash launcher
+
+First, safe pass at making the runtime cross-platform without breaking this Windows box (goal dc038de2, landed via acceptance). Measured the real coupling first: only ~9 runtime Windowsisms, most already cross-platform (`Process.GetProcessesByName`) or guarded (`CreateNewProcessGroup`). Landed: (1) `WorkerShell` resolver — prefers cross-platform `pwsh`, falls back to `powershell.exe` on Windows (this machine has only Windows PowerShell 5.1, so behavior here is byte-identical); wired into `BackgroundDispatchRunner` dispatch launch and the dashboard build/test runner, with `-ExecutionPolicy Bypass` now Windows-only. (2) `DotnetBuildEnvironmentManager` build-lease lock swapped from `FileStream.Lock` (CA1416, unsupported on macOS) to an exclusive `FileShare.None` open — cross-platform. (3) `mcg-orchestrator.sh` launcher mirroring the `.cmd`. Full suite green (Core 273 + Infrastructure 683, +2 WorkerShell tests).
+- DEFERRED to part 2 (own focused change + live dispatch smoke, since it's the core launch path): rewrite the detached PowerShell wrapper (`BuildWrapper`) as a native C# dispatch host (env/redirect/heartbeat in C#, command run via the resolved shell) and make the `wmic` process-command-line enrichment cross-platform (`/proc` on Linux) so daemon-reaping doesn't over-kill there. The bigger long pole is auditing the TEST SUITE for Linux-cleanliness.
+- Also filed: a ranked partial-state-hydration design (investigated via subagent) folded into the SQLite follow-ons item — #1 metadata-only listing/resolve, #2 lazy single-goal hydration (with the orphan-delete data-loss trap flagged), #3 incremental human_input_requests, #4 cross-goal subset hydration.
+- Model fit: Claude Opus dogfood session - adequate - cross-platform refactor across 5 files + 2 ideation subagents (CS2012 already landed; state-hydration filed); landed through acceptance.
+
 ## 2026-06-14 - Acceptance owns verify+record+rebase; one `recover` unblocks stuck goals (more chorekeeping out of operator hands)
 
 Pushed four more operator chores into the deterministic acceptance/recovery path (goal 64e1e42f, dogfooded + landed via acceptance). (1) **Auto-verify from git ground truth**: `acceptance`/`accept` now derive task verification from a clean worktree + committed changes against main (`GoalWorktrees.HasChangesAgainstMain`/`IsWorktreeClean`) instead of requiring a manual `verify-manual`; the acceptance suite + evidence bundle stay the authoritative gates (no-change/dirty/failed-suite still block). (2) **Auto-record**: a successful merge appends a `DogfoodLogRenderer` entry to DOGFOOD_LOG.md (`--no-record` opts out). (3) **Auto-rebase**: when the goal branch is behind main, `RunAcceptanceWorkspaceMerge` rebases onto main via `TryRebaseOntoMain` then ff-merges instead of punting to the operator (conflict → escalate). (4) **`recover <goal> <note>`**: one command owns the memorized unblock dances — answers open human-input requests, normalizes stuck/orphaned tasks to Failed so `RetryTask` accepts them, and retries them dispatchable, all with one note.
@@ -1034,3 +1041,11 @@ Two more landed. (1) --watch + SSE (d1a79b76, merge bdc1820): conduct --loop --w
 - KEY DECISION (filed URGENT): stop chasing WORKER_RESULT format variants. The fundamental fix is to derive the substance receipt from GIT GROUND-TRUTH (commit reachable + files changed) + the acceptance run, and treat the worker's self-report as advisory. That permanently ends the recurring false-fails (8 verify-manual overrides this session) blocking unattended autonomy.
 - With --watch + the lenient parser, conduct --loop --watch can now drain the backlog unattended (escalations to operator-inbox/console; Discord deferred per operator).
 - Model fit: Claude Sonnet x2 - adequate; --watch is a clean ConductorBatchLoop extension, ideation mirrors the Planner with citation enforcement.
+
+
+## 2026-06-15 - Fix recurring CS2012/VBCSCompiler build lock at its source
+
+Goal a4408410: Fix recurring CS2012/VBCSCompiler build lock at its source. (1) In the existing root Directory.Build.props PropertyGr.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 7ce2a5f). Acceptance passed.
+
+- Operator gate: Developer: pass ΓÇö 273 Core.Tests + 681 Infrastructure.Tests = 954 total, 0 failed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted multi-file edit with unit test addition - clear spec, bounded scope, no ambiguity required.

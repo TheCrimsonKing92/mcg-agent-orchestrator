@@ -91,7 +91,7 @@ public sealed class BackgroundDispatchRunner
             disableSharedCompilation: !isLocalDispatch);
         var startInfo = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = WorkerShell.Executable,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = dispatch.WorkingDirectory
@@ -102,10 +102,11 @@ public sealed class BackgroundDispatchRunner
             startInfo.CreateNewProcessGroup = true;
         }
 
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-Command");
+        foreach (var argument in WorkerShell.BaseArguments())
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         startInfo.ArgumentList.Add(wrapper);
 
         var process = Process.Start(startInfo)
