@@ -1612,10 +1612,12 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     return true;
 }
 
-// Advisory semantic-acceptance pass: a local judge decides whether the diff actually accomplishes
-// the objective (not merely that tests pass), recorded as a receipt. ADVISORY — it never changes
-// the merge outcome and swallows every failure. Dormant unless a LocalBridge (Ollama) agent is
-// configured, so acceptance is unchanged on machines/tenants without one.
+// Advisory semantic-acceptance pass: the configured judge lanes decide whether the diff actually
+// accomplishes the objective (not merely that tests pass), recorded as a receipt. ADVISORY — it
+// never changes the merge outcome and swallows every failure. Dormant unless one or more Judge-role
+// agents are configured (one per lane: free-local / cheap-API / capable), so acceptance is
+// unchanged on machines/tenants without any. Judges run in parallel; their agreement is the signal
+// for whether a cheaper lane suffices before the eventual blocking flip.
 private static void RunAdvisorySemanticAcceptance(
     CliExecutionContext context,
     Goal goal,
@@ -1627,9 +1629,8 @@ private static void RunAdvisorySemanticAcceptance(
         return;
     }
 
-    var localAgent = context.Agents.FirstOrDefault(agent =>
-        agent.Model.SubscriptionMode == SubscriptionMode.LocalBridge);
-    if (localAgent is null)
+    var judges = SemanticAcceptanceEvaluator.BuildJudges(context.Agents, context.Providers);
+    if (judges.Count == 0)
     {
         return;
     }
@@ -1656,13 +1657,8 @@ private static void RunAdvisorySemanticAcceptance(
             GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
             testSummary);
 
-        var judge = new ModelRegistrySemanticJudge(
-            context.Providers,
-            localAgent.Model.ProviderName,
-            localAgent.Model.ModelName);
-
         var report = SemanticAcceptanceEvaluator
-            .EvaluateAsync([judge], inputs, TimeSpan.FromSeconds(90))
+            .EvaluateAsync(judges, inputs, TimeSpan.FromSeconds(90))
             .GetAwaiter()
             .GetResult();
 

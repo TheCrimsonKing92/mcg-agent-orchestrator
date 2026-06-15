@@ -146,6 +146,43 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("ollama:qwen3:8b", judge.Name);
     }
 
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_resolves_judge_role_agents_deduped")]
+    public void BuildJudgesResolvesJudgeRoleAgentsDeduped()
+    {
+        var providers = new InMemoryModelProviderRegistry([]);
+        var agents = new[]
+        {
+            JudgeAgent("judge-local", "Ollama", "qwen3:8b", SubscriptionMode.LocalBridge),
+            JudgeAgent("judge-cheap", "Anthropic", "claude-haiku-4-5", SubscriptionMode.ApiKey),
+            JudgeAgent("judge-local-dup", "Ollama", "qwen3:8b", SubscriptionMode.LocalBridge),
+            new AgentDefinition(new AgentId("dev"), "Dev", AgentRole.Developer,
+                new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge))
+        };
+
+        var judges = SemanticAcceptanceEvaluator.BuildJudges(agents, providers);
+
+        // Two distinct lanes; the duplicate Ollama/qwen3:8b judge is deduped; the Developer agent is ignored.
+        Assert.Equal(2, judges.Count);
+        Assert.True(judges.Any(judge => judge.Name == "ollama:qwen3:8b"));
+        Assert.True(judges.Any(judge => judge.Name == "anthropic:claude-haiku-4-5"));
+    }
+
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_empty_when_no_judge_agents")]
+    public void BuildJudgesEmptyWhenNoJudgeAgents()
+    {
+        var providers = new InMemoryModelProviderRegistry([]);
+        var agents = new[]
+        {
+            new AgentDefinition(new AgentId("dev"), "Dev", AgentRole.Developer,
+                new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge))
+        };
+
+        Assert.Equal(0, SemanticAcceptanceEvaluator.BuildJudges(agents, providers).Count);
+    }
+
+    private static AgentDefinition JudgeAgent(string id, string provider, string model, SubscriptionMode mode) =>
+        new(new AgentId(id), id, AgentRole.Judge, new ModelProfile(provider, model, ModelCapability.Text, mode));
+
     private sealed class FakeJudge(string name, Func<SemanticAcceptanceInputs, SemanticAcceptanceVerdict> verdict) : ISemanticJudge
     {
         public string Name { get; } = name;

@@ -1119,3 +1119,10 @@ Goal cb62d4e7: SQLite hydration increment 1: add cheap metadata-only goal listin
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - Semantic acceptance increment 1 (advisory, local judge): add a pure SemanticA...
+
+Goal c8716bd3: Semantic acceptance increment 1 (advisory, local judge): add a pure SemanticAcceptancePlanner (evidence context + pro.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)

@@ -121,7 +121,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     public void OrchestratorHealthInspectorReportsConfiguredSubscriptionCapableAlternates()
 {
     var catalog = AgentCatalog.Default();
-    foreach (var role in Enum.GetValues<AgentRole>())
+    foreach (var role in AgentRoles.Worker)
     {
         catalog = catalog.AddOrReplaceById(CreateSubscriptionAlternate(
             role,

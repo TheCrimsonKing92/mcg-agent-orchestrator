@@ -66,7 +66,7 @@ public static class PrototypeWorkspaceSeeder
         var catalog = AgentCatalogStore.Load(agentCatalogPath, defaultAgents);
         var defaults = defaultAgents ?? AgentCatalog.Default();
 
-        foreach (var role in Enum.GetValues<AgentRole>())
+        foreach (var role in AgentRoles.Worker)
         {
             var desired = defaults.GetRequired(role);
             var current = catalog.Agents.FirstOrDefault(agent => agent.Role == role);

@@ -76,37 +76,65 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
 
 internal static class SemanticAcceptanceEvaluator
 {
-    // Runs each judge with its own timeout. ADVISORY: a judge that throws, times out, or returns an
-    // unparseable verdict is recorded as an invalid verdict and NEVER propagates — semantic
-    // acceptance must not be able to break the deterministic merge gate while it is advisory.
+    // Resolves the configured judge lanes from the agent catalog: one `ModelRegistrySemanticJudge`
+    // per Judge-role agent, deduped by provider/model so the same lane isn't judged twice. Returns
+    // empty when no Judge agent is configured (semantic acceptance then stays dormant).
+    public static IReadOnlyList<ISemanticJudge> BuildJudges(
+        IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers)
+    {
+        return agents
+            .Where(agent => agent.Role == AgentRole.Judge)
+            .DistinctBy(
+                agent => $"{agent.Model.ProviderName}/{agent.Model.ModelName}",
+                StringComparer.OrdinalIgnoreCase)
+            .Select(agent => (ISemanticJudge)new ModelRegistrySemanticJudge(
+                providers,
+                agent.Model.ProviderName,
+                agent.Model.ModelName))
+            .ToList();
+    }
+
+    // Runs all judges IN PARALLEL, each with its own timeout. ADVISORY: a judge that throws, times
+    // out, or returns an unparseable verdict is recorded as an invalid verdict and NEVER propagates
+    // — semantic acceptance must not be able to break the deterministic merge gate while advisory.
+    // Verdict order matches judge order (Task.WhenAll preserves it); aggregation is set-based so it
+    // is order-independent regardless.
     public static async Task<SemanticAcceptanceReport> EvaluateAsync(
         IReadOnlyList<ISemanticJudge> judges,
         SemanticAcceptanceInputs inputs,
         TimeSpan perJudgeTimeout,
         CancellationToken cancellationToken = default)
     {
-        var verdicts = new List<JudgeVerdict>();
-        foreach (var judge in judges)
-        {
-            SemanticAcceptanceVerdict verdict;
-            try
-            {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(perJudgeTimeout);
-                verdict = await judge.JudgeAsync(inputs, timeoutCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                verdict = SemanticAcceptanceVerdict.Invalid($"Judge '{judge.Name}' timed out after {perJudgeTimeout.TotalSeconds:F0}s.");
-            }
-            catch (Exception ex)
-            {
-                verdict = SemanticAcceptanceVerdict.Invalid($"Judge '{judge.Name}' failed: {ex.Message}");
-            }
-
-            verdicts.Add(new JudgeVerdict(judge.Name, verdict));
-        }
+        var verdicts = await Task.WhenAll(
+            judges.Select(judge => RunJudgeAsync(judge, inputs, perJudgeTimeout, cancellationToken)))
+            .ConfigureAwait(false);
 
         return new SemanticAcceptanceReport(verdicts);
+    }
+
+    private static async Task<JudgeVerdict> RunJudgeAsync(
+        ISemanticJudge judge,
+        SemanticAcceptanceInputs inputs,
+        TimeSpan perJudgeTimeout,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(perJudgeTimeout);
+            var verdict = await judge.JudgeAsync(inputs, timeoutCts.Token).ConfigureAwait(false);
+            return new JudgeVerdict(judge.Name, verdict);
+        }
+        catch (OperationCanceledException)
+        {
+            return new JudgeVerdict(judge.Name, SemanticAcceptanceVerdict.Invalid(
+                $"Judge '{judge.Name}' timed out after {perJudgeTimeout.TotalSeconds:F0}s."));
+        }
+        catch (Exception ex)
+        {
+            return new JudgeVerdict(judge.Name, SemanticAcceptanceVerdict.Invalid(
+                $"Judge '{judge.Name}' failed: {ex.Message}"));
+        }
     }
 }
