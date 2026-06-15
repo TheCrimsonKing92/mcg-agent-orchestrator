@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public enum AgentRole
 {
     Planner,
+    Ideation,
     Researcher,
     Developer,
     Tester,

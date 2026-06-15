@@ -44,6 +44,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("goal-depends", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("goal-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("ideate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("intent-template", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("delegate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||

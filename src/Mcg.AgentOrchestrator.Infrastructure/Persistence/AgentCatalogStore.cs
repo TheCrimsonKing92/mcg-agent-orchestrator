@@ -61,6 +61,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(
         [
             new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
+            new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
             new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
             new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
             new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
@@ -82,6 +83,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(
         [
             new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-ideation"), "Anthropic ideation", AgentRole.Ideation, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
             new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
             new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
             new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
@@ -100,6 +102,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(
         [
             new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
+            new(new AgentId("ollama-ideation"), "Ollama ideation", AgentRole.Ideation, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
             new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
             new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
             new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
