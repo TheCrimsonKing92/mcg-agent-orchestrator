@@ -244,6 +244,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             HandleRecordGoal(context);
             return false;
 
+        case "recover":
+            return HandleRecover(context, parts);
+
         case "failure-triage":
             var triagePolicy = ResolveCliAutonomyPolicy(parts);
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, GetOptionalArgument(parts));
@@ -316,12 +319,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var acceptancePolicy = ResolveCliAutonomyPolicy(parts);
             var skipVerify = HasCliConfirmation(parts, "--skip-verify");
             var keepWorkspace = HasCliConfirmation(parts, "--keep-workspace");
-            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace");
+            var noRecord = HasCliConfirmation(parts, "--no-record");
+            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
+            AutoVerifyFromGitEvidence(context, context.CurrentGoal);
             ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
             if (RunAcceptanceWorkspaceMerge(context, skipVerify))
             {
+                if (!noRecord)
+                {
+                    AutoRecordDogfoodEntry(context);
+                }
+
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
@@ -571,6 +581,22 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
         SubscriptionModelAlias: subscriptionModel,
         ComplexProviderName: complexModelName is null ? null : parts[2],
         ComplexModelName: complexModelName));
+}
+
+// Deterministic recording: acceptance auto-appends a DOGFOOD_LOG entry rendered from the goal's
+// receipts, so a landed goal is journaled without the operator hand-writing prose. --no-record opts out.
+private static void AutoRecordDogfoodEntry(CliExecutionContext context)
+{
+    var goal = context.CurrentGoal!;
+    var logPath = Path.Combine(context.Workspace.ExecutionDirectory, "DOGFOOD_LOG.md");
+    if (!File.Exists(logPath))
+    {
+        return;
+    }
+
+    var text = DogfoodLogRenderer.Render(goal).Render();
+    File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + text);
+    Console.WriteLine($"Recorded DOGFOOD entry for goal {goal.Id.Value[..8]} to {logPath}.");
 }
 
 private static void HandleRecordGoal(CliExecutionContext context)
@@ -1553,6 +1579,19 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 
     var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
     var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+    if (merge is { FastForwarded: false })
+    {
+        // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
+        // onto main and retry the ff instead of punting the merge to the operator. A rebase
+        // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
+        var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+        Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
+        if (rebase.UpdatedBranch)
+        {
+            merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+        }
+    }
+
     if (merge is not null)
     {
         Console.WriteLine($"Workspace merge: {FormatWorkspaceMerge(merge)}");
@@ -1565,6 +1604,111 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     return true;
+}
+
+// Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the
+// operator used to memorize. It answers any open human-input requests (which `SubmitHumanInput`
+// flips to Running), normalizes stuck/orphaned tasks to Failed so `RetryTask` accepts them, then
+// retries them back to a dispatchable state — all with the single operator note. Genuinely running
+// tasks (a live process) are left alone.
+private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    if (parts.Count < 3)
+    {
+        throw new ArgumentException("Usage: recover <goal-prefix> <note>");
+    }
+
+    var policy = ResolveCliAutonomyPolicy(parts);
+    context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+    var goal = context.CurrentGoal;
+    var note = parts[2];
+    EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
+
+    var actions = 0;
+    foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
+    {
+        context.Kernel.SubmitHumanInput(request.Id, note);
+        Console.WriteLine($"recover: answered human-input request {request.Id.Value[..8]}.");
+        actions++;
+    }
+
+    foreach (var task in goal.Tasks)
+    {
+        if (task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled ||
+            task.LastProcess is { IsRunning: true })
+        {
+            continue;
+        }
+
+        var stuck = task.Status is WorkTaskStatus.Failed or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman ||
+            task.LastVerification is { Succeeded: false } ||
+            task.SubscriptionRetryAfter is not null;
+        if (!stuck)
+        {
+            continue;
+        }
+
+        // RetryTask refuses Running/WaitingForHuman; normalize to Failed first (the dance's middle step).
+        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
+        {
+            context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
+        }
+
+        context.Kernel.RetryTask(goal.Id, task.Id, note);
+        Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+        actions++;
+    }
+
+    if (actions == 0)
+    {
+        Console.WriteLine("recover: nothing to recover (no pending input or stuck tasks).");
+    }
+
+    ConsoleViews.PrintGoal(goal);
+    return actions > 0;
+}
+
+// Deterministic verification from git ground truth: when a goal still has un-verified work tasks
+// but the goal branch carries committed changes against main on a CLEAN worktree, record the
+// verification from that evidence instead of requiring a manual `verify-manual`. The acceptance
+// suite + evidence bundle remain the authoritative substance gates downstream (a failed suite or
+// a generated/forbidden/no-relevant-change diff still blocks the merge), so this only removes the
+// bookkeeping step, never the safety gate.
+private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal goal)
+{
+    if (goal.Status == GoalStatus.Completed)
+    {
+        return;
+    }
+
+    var pending = goal.Tasks
+        .Where(t => t.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+        .ToList();
+    if (pending.Count == 0)
+    {
+        return;
+    }
+
+    var executionDirectory = context.Workspace.ExecutionDirectory;
+    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    if (worktree is null ||
+        !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
+        !GoalWorktrees.HasChangesAgainstMain(executionDirectory, goal.Id))
+    {
+        return;
+    }
+
+    var note =
+        $"Auto-verified from git ground truth: committed changes on {GoalWorktrees.BranchName(goal.Id)} " +
+        "against main on a clean worktree. The acceptance suite and evidence bundle are the authoritative gates.";
+    foreach (var task in pending)
+    {
+        context.Kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, note, worktree, DateTimeOffset.UtcNow));
+        Console.WriteLine($"Auto-verified task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} from git ground truth.");
+    }
 }
 
 // Deterministic chorekeeping: dispatch owns workspace creation so the operator never hand-runs

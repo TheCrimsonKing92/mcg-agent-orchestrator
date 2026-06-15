@@ -834,6 +834,181 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_auto_verifies_from_git_evidence")]
+    public void CliAcceptanceAutoVerifiesFromGitEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Auto verify test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            // No manual verification recorded: the goal is not Completed and the task is Assigned.
+            Assert.Equal(GoalStatus.Active, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            // Acceptance derives the verification from git evidence (committed change + clean worktree).
+            Assert.True(output.Contains("Auto-verified", StringComparison.Ordinal));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_does_not_auto_verify_without_committed_changes")]
+    public void CliAcceptanceDoesNotAutoVerifyWithoutCommittedChanges()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("No change auto verify test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            GoalWorktrees.Ensure(repo, goal.Id); // worktree exists but has no commits against the base branch
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            // No committed work → no auto-verify → the goal stays un-accepted (anti-fabrication preserved).
+            Assert.False(output.Contains("Auto-verified", StringComparison.Ordinal));
+            Assert.Equal(GoalStatus.Active, goal.Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_auto_rebases_when_goal_branch_behind_main")]
+    public void CliAcceptanceAutoRebasesWhenGoalBranchBehindMain()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Rebase behind main test", repo);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            // Advance the base branch so the goal branch can no longer fast-forward.
+            File.WriteAllText(Path.Combine(repo, "mainline.txt"), "main advance");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main advance");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace"], context));
+
+            // Acceptance rebases onto main then fast-forwards instead of punting the merge to the operator.
+            Assert.True(output.Contains("Workspace rebase", StringComparison.Ordinal));
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "mainline.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_auto_records_dogfood_entry")]
+    public void CliAcceptanceAutoRecordsDogfoodEntry()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Add dogfood log");
+
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Autorecord distinctive objective", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace"], context));
+
+            // Acceptance appends a rendered DOGFOOD entry from receipts (a "## " heading beyond the file header).
+            Assert.True(output.Contains("Recorded DOGFOOD entry", StringComparison.Ordinal));
+            var log = File.ReadAllText(Path.Combine(repo, "DOGFOOD_LOG.md"));
+            Assert.True(log.Contains("## ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_no_record_skips_dogfood_entry")]
+    public void CliAcceptanceNoRecordSkipsDogfoodEntry()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Add dogfood log");
+
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "No record objective", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace", "--no-record"], context));
+
+            var log = File.ReadAllText(Path.Combine(repo, "DOGFOOD_LOG.md"));
+            Assert.False(log.Contains("## ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_recover_resets_failed_task_to_dispatchable")]
+    public void CliRecoverResetsFailedTaskToDispatchable()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Recover test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "boom");
+            Assert.Equal(WorkTaskStatus.Failed, task.Status);
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "redo the work"], context));
+
+            // One recover call brings the failed task back to a dispatchable state.
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_safe_auto_blocks_merge")]
     public void CliAcceptanceSafeAutoBlocksMerge()
     {

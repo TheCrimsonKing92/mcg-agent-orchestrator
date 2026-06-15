@@ -27,13 +27,20 @@ private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionC
     var policy = ResolveCliAutonomyPolicy(parts);
     var skipVerify = HasCliConfirmation(parts, "--skip-verify");
     var keepWorkspace = HasCliConfirmation(parts, "--keep-workspace");
-    var goalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace");
+    var noRecord = HasCliConfirmation(parts, "--no-record");
+    var goalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
     context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPart);
     EnsurePolicyAllows(context, context.CurrentGoal, policy, AutonomyAction.Acceptance, "accept");
+    AutoVerifyFromGitEvidence(context, context.CurrentGoal);
     ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
     if (!RunAcceptanceWorkspaceMerge(context, skipVerify))
     {
         return false;
+    }
+
+    if (!noRecord)
+    {
+        AutoRecordDogfoodEntry(context);
     }
 
     CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, policy, keepWorkspace);

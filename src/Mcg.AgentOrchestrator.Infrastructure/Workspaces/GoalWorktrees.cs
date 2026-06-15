@@ -142,6 +142,38 @@ public static class GoalWorktrees
             : new GoalWorktreeRemoveResult($"Removed workspace; branch {branch} kept because it has unmerged commits.", null, [], null);
     }
 
+    /// <summary>
+    /// True when the goal worktree has committed changes against the base/main branch (work to
+    /// accept), comparing the goal branch tip to its merge-base with the current branch.
+    /// </summary>
+    public static bool HasChangesAgainstMain(string executionDirectory, GoalId goalId)
+    {
+        var worktree = TryResolve(executionDirectory, goalId);
+        if (worktree is null)
+        {
+            return false;
+        }
+
+        var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+        var result = RunGit(worktree, "diff", "--name-only", $"{baseBranch}...HEAD");
+        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output);
+    }
+
+    /// <summary>
+    /// True when the goal worktree has no uncommitted changes (git status --short is empty).
+    /// </summary>
+    public static bool IsWorktreeClean(string executionDirectory, GoalId goalId)
+    {
+        var worktree = TryResolve(executionDirectory, goalId);
+        if (worktree is null)
+        {
+            return false;
+        }
+
+        var result = RunGit(worktree, "status", "--short");
+        return result.ExitCode == 0 && string.IsNullOrWhiteSpace(result.Output);
+    }
+
     public static string? TryGetBranchDiff(string executionDirectory, GoalId goalId)
     {
         var worktreePath = TryResolve(executionDirectory, goalId);
