@@ -1140,3 +1140,10 @@ Goal 04d0070f: Generalize the domain taxonomy: stop modeling orchestrator-intern
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - Add best-of-N sampling to the planner DAG decomposition so one stochastic sam...
+
+Goal 534fedb2: Add best-of-N sampling to the planner DAG decomposition so one stochastic sample cannot yield an invalid DAG. The 'pl.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 7d39b18). Acceptance passed.
+
+- Operator gate: Developer: 972/972 pass (273 Core + 699 Infrastructure); 11/11 GoalDagPlan tests green including 3 new BestOfN tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature addition with unit tests - bounded change across 3 files, deterministic selection logic, parallel Task.WhenAll wiring; no overengineering needed.
