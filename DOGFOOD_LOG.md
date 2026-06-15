@@ -1133,3 +1133,10 @@ Goal 96ae86bc: Semantic acceptance increment 2: config-driven multi-lane paralle
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - Generalize the domain taxonomy: stop modeling orchestrator-internal model use...
+
+Goal 04d0070f: Generalize the domain taxonomy: stop modeling orchestrator-internal model uses as AgentRole. Revert AgentRole.Judge (.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)

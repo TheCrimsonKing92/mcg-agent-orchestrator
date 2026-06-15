@@ -42,6 +42,16 @@ This repository implements an AI agent orchestrator. Avoid recursive or high-fan
 - Core and Infrastructure intentionally keep flat public namespaces: `Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`.
 - Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
 
+## Architecture & Design Discipline
+
+Before adding a member, field, case, or flag, think about the system ontology — what KIND of thing each type represents and what invariant it encodes — not just "where does my new thing compile." A change that types cleanly but violates the model is debt, not progress.
+
+- **Every type carries an unwritten invariant. Name it before you extend it.** `AgentRole` means "an SDLC worker that executes a tracked goal Task via dispatch" — so a judge (a model the orchestrator invokes for its OWN function, never assigned a task) is NOT a role. It was first hacked in as `AgentRole.Judge` and immediately required an `AgentRoles.Worker` exclusion set everywhere roles are enumerated; that churn was the tell. It now lives as a `ModelFunctionBinding{Purpose, Lane, Model}` in a separate registry. Worker agents vs orchestrator-internal model functions are different kinds of thing; keep them in different homes.
+- **The exclusion-set smell.** If adding a value to an enum/type forces you to special-case or exclude it almost everywhere that type is consumed, it does not belong in that type. Model it as its own concept instead of pounding a square peg into a round hole.
+- **Open domains take open extension points, not enum churn.** When the set of things is expected to grow (orchestrator-internal model functions: judges, samplers, summarizers, oracles), extend via a composable point — an open `Purpose` string + a registry — so the next one needs zero taxonomy change. Reserve enums for genuinely closed, exhaustive sets (the 6 SDLC roles).
+- **Constraints are load-bearing; do not trade them for convenience.** The deterministic gates, subscription-budget-first posture, and evidence-over-narrative spine are invariants of this system. New work composes WITH them (e.g. an LLM judgment lands ADVISORY, never inside a deterministic gate; fan-out goes on free/cheap lanes, never the paid CLI). If a feature seems to require breaking one, that is a design signal to rethink the placement, not a license.
+- **Put behavior where its data and invariant already live.** Prefer extending an existing seam that owns the concept over threading a parallel path; reuse the deterministic signal that already exists (e.g. select among parallel model outputs by an existing validator, not a model self-rating). Match the surrounding idiom.
+
 ## Dashboard / Dogfood Boundary
 
 For ordinary implementation or debugging, inspect and edit source directly.
