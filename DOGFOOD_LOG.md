@@ -4,6 +4,14 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-15 - Platform-neutralize the runtime, part 2: native C# dispatch host replaces the PowerShell wrapper
+
+Rewrote the detached dispatch launcher (goal c675bc32, landed via acceptance). The old `BuildWrapper` generated a ~40-line PowerShell script (string-concatenated, an injection/maintenance hazard); replaced with a native `DispatchProcessHost` run as a hidden `__dispatch-run <paramsFile>` subcommand of the App. The host sets the build env, launches the worker command through the resolved PowerShell host (`WorkerShell`, part 1), raw-streams stdout/stderr to the log files, writes the periodic heartbeat (same camelCase JSON schema the reader expects), and always records the exit code in a `finally`. `StartLatestDispatch` now writes a params JSON and launches `dotnet exec <App.dll> __dispatch-run` detached — resolving `App.dll` from `AppContext.BaseDirectory` (a sibling of the Infrastructure assembly in production AND in tests, which reference the App). Removed `BuildWrapper` + the now-dead `Quote`/`HeartbeatInterval` and the 5 PowerShell-string wrapper unit tests.
+- VALIDATION: the in-suite integration test (`...NonLocalDispatchRunsWithSharedCompilationDisabled`) already exercises the host end-to-end (real launch → command via shell with env set → redirect → heartbeat → exit → reconcile) and stays green. Plus a LIVE SMOKE: a real claude-sonnet-4-6 subscription dispatch through the new host created+committed SMOKE.md, wrote a valid heartbeat (camelCase schema), and reconciled clean with NO override — confirming the real `claude ... -p (Get-Content -Raw '...')` command survives the params-JSON round-trip + ArgumentList path. Smoke goal abandoned/branch discarded after.
+- Full suite green (Core 273 + Infrastructure 679; −5 obsolete wrapper tests, +1 host params test, +2 WorkerShell from part 1).
+- DEFERRED (filed): make the `wmic` process-command-line enrichment cross-platform (`/proc` on Linux) so daemon-reaping doesn't over-kill there — kept out of this landing to keep the core-path rewrite clean; wmic already degrades to empty off Windows. Bigger long pole remains auditing the TEST SUITE for Linux-cleanliness.
+- Model fit: Claude Opus dogfood session - adequate - core dispatch-path rewrite validated by integration test + a live subscription smoke; landed through acceptance.
+
 ## 2026-06-15 - Platform-neutralize the runtime, part 1: PowerShell-host resolver + cross-platform build lock + bash launcher
 
 First, safe pass at making the runtime cross-platform without breaking this Windows box (goal dc038de2, landed via acceptance). Measured the real coupling first: only ~9 runtime Windowsisms, most already cross-platform (`Process.GetProcessesByName`) or guarded (`CreateNewProcessGroup`). Landed: (1) `WorkerShell` resolver — prefers cross-platform `pwsh`, falls back to `powershell.exe` on Windows (this machine has only Windows PowerShell 5.1, so behavior here is byte-identical); wired into `BackgroundDispatchRunner` dispatch launch and the dashboard build/test runner, with `-ExecutionPolicy Bypass` now Windows-only. (2) `DotnetBuildEnvironmentManager` build-lease lock swapped from `FileStream.Lock` (CA1416, unsupported on macOS) to an exclusive `FileShare.None` open — cross-platform. (3) `mcg-orchestrator.sh` launcher mirroring the `.cmd`. Full suite green (Core 273 + Infrastructure 683, +2 WorkerShell tests).
@@ -1049,3 +1057,10 @@ Goal a4408410: Fix recurring CS2012/VBCSCompiler build lock at its source. (1) I
 
 - Operator gate: Developer: pass ΓÇö 273 Core.Tests + 681 Infrastructure.Tests = 954 total, 0 failed (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted multi-file edit with unit test addition - clear spec, bounded scope, no ambiguity required.
+
+## 2026-06-15 - Platform-neutralize the runtime: resolve PowerShell host (pwsh-preferred, pow...
+
+Goal dc038de2: Platform-neutralize the runtime: resolve PowerShell host (pwsh-preferred, powershell.exe fallback) for dispatch and d.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)

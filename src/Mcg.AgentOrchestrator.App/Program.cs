@@ -1,6 +1,13 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+// Hidden detached dispatch-host entrypoint (see DispatchProcessHost). Must run before any tenant,
+// workspace, or state setup so the detached worker process stays minimal and self-contained.
+if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
+{
+    return DispatchProcessHost.Run(args[1]);
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
 OrchestratorTenantSelection tenantSelection;
 try

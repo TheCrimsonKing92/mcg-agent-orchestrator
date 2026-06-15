@@ -11,7 +11,6 @@ public sealed class BackgroundDispatchRunner
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
-    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
@@ -81,17 +80,22 @@ public sealed class BackgroundDispatchRunner
         var heartbeatPath = Path.Combine(logRoot, $"{prefix}.heartbeat.json");
 
         var isLocalDispatch = IsLocalDispatch(dispatch);
-        var wrapper = BuildWrapper(
+        var parametersPath = Path.Combine(logRoot, $"{prefix}.dispatch.json");
+        DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatch.Command,
+            dispatch.WorkingDirectory,
             stdoutPath,
             stderrPath,
             exitCodePath,
             heartbeatPath,
-            shutdownBuildServerOnExit: !isLocalDispatch,
-            disableSharedCompilation: !isLocalDispatch);
+            ShutdownBuildServerOnExit: !isLocalDispatch,
+            DisableSharedCompilation: !isLocalDispatch));
+
+        // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
+        // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
         var startInfo = new ProcessStartInfo
         {
-            FileName = WorkerShell.Executable,
+            FileName = "dotnet",
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = dispatch.WorkingDirectory
@@ -102,12 +106,10 @@ public sealed class BackgroundDispatchRunner
             startInfo.CreateNewProcessGroup = true;
         }
 
-        foreach (var argument in WorkerShell.BaseArguments())
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        startInfo.ArgumentList.Add(wrapper);
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(ResolveDispatchHostAssembly());
+        startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
+        startInfo.ArgumentList.Add(parametersPath);
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
@@ -1009,74 +1011,18 @@ public sealed class BackgroundDispatchRunner
         return new GitResult(process.ExitCode, output);
     }
 
-    internal static string BuildWrapper(
-        string command,
-        string stdoutPath,
-        string stderrPath,
-        string exitCodePath,
-        string? heartbeatPath = null,
-        bool shutdownBuildServerOnExit = true,
-        bool disableSharedCompilation = true)
+    // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
+    // to this Infrastructure assembly in every run context (the App output dir in production; the
+    // test output dir in tests, which reference the App project), so resolve it from the base dir.
+    private static string ResolveDispatchHostAssembly()
     {
-        var cleanup = shutdownBuildServerOnExit
-            ? "try { & dotnet build-server shutdown *> $null } catch { }; "
-            : string.Empty;
-
-        var envSetup = disableSharedCompilation
-            ? "$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'; $env:MSBUILDDISABLENODEREUSE = '1'; $env:UseSharedCompilation = 'false'; "
-            : string.Empty;
-
-        return
-            "$code = 1; $heartbeatJob = $null; " +
-            "$heartbeatPath = " + Quote(heartbeatPath ?? string.Empty) + "; " +
-            "$stdoutPath = " + Quote(stdoutPath) + "; " +
-            "$stderrPath = " + Quote(stderrPath) + "; " +
-            "$exitCodePath = " + Quote(exitCodePath) + "; " +
-            "$startedAt = (Get-Date).ToUniversalTime(); " +
-            "$lastProgressAt = $startedAt; $lastStdoutBytes = -1; $lastStderrBytes = -1; " +
-            "function Get-LogLength([string]$path) { try { if ([IO.File]::Exists($path)) { return [int64](Get-Item -LiteralPath $path).Length } } catch { }; return [int64]0 }; " +
-            "function Write-Heartbeat([string]$state) { " +
-            "if ([string]::IsNullOrWhiteSpace($heartbeatPath)) { return }; " +
-            "$outBytes = Get-LogLength $stdoutPath; $errBytes = Get-LogLength $stderrPath; " +
-            "if (($outBytes -ne $script:lastStdoutBytes) -or ($errBytes -ne $script:lastStderrBytes)) { $script:lastProgressAt = (Get-Date).ToUniversalTime(); $script:lastStdoutBytes = $outBytes; $script:lastStderrBytes = $errBytes }; " +
-            "$payload = [ordered]@{ pid = $PID; childPid = $null; startedAt = $script:startedAt.ToString('o'); lastObservedAt = (Get-Date).ToUniversalTime().ToString('o'); lastProgressAt = $script:lastProgressAt.ToString('o'); state = $state; stdoutBytes = $outBytes; stderrBytes = $errBytes; exitFileExists = [IO.File]::Exists($exitCodePath) }; " +
-            "$tmp = $heartbeatPath + '.tmp'; [IO.File]::WriteAllText($tmp, ($payload | ConvertTo-Json -Compress)); Move-Item -LiteralPath $tmp -Destination $heartbeatPath -Force " +
-            "}; " +
-            "function Start-Heartbeat { " +
-            "if ([string]::IsNullOrWhiteSpace($heartbeatPath)) { return }; " +
-            "$script:heartbeatJob = Start-Job -ScriptBlock { " +
-            "param($heartbeatPath, $stdoutPath, $stderrPath, $exitCodePath, $parentPid, $startedAtText, $intervalMs); " +
-            "$startedAt = [DateTimeOffset]::Parse($startedAtText); $lastProgressAt = $startedAt; $lastStdoutBytes = -1; $lastStderrBytes = -1; " +
-            "function Get-LogLength([string]$path) { try { if ([IO.File]::Exists($path)) { return [int64](Get-Item -LiteralPath $path).Length } } catch { }; return [int64]0 }; " +
-            "while ($true) { " +
-            "$outBytes = Get-LogLength $stdoutPath; $errBytes = Get-LogLength $stderrPath; " +
-            "if (($outBytes -ne $lastStdoutBytes) -or ($errBytes -ne $lastStderrBytes)) { $lastProgressAt = (Get-Date).ToUniversalTime(); $lastStdoutBytes = $outBytes; $lastStderrBytes = $errBytes }; " +
-            "$payload = [ordered]@{ pid = $parentPid; childPid = $null; startedAt = $startedAt.ToString('o'); lastObservedAt = (Get-Date).ToUniversalTime().ToString('o'); lastProgressAt = $lastProgressAt.ToString('o'); state = 'running'; stdoutBytes = $outBytes; stderrBytes = $errBytes; exitFileExists = [IO.File]::Exists($exitCodePath) }; " +
-            "$tmp = $heartbeatPath + '.tmp'; try { [IO.File]::WriteAllText($tmp, ($payload | ConvertTo-Json -Compress)); Move-Item -LiteralPath $tmp -Destination $heartbeatPath -Force } catch { }; " +
-            "Start-Sleep -Milliseconds $intervalMs " +
-            "} " +
-            "} -ArgumentList $heartbeatPath, $stdoutPath, $stderrPath, $exitCodePath, $PID, $startedAt.ToString('o'), " + ((int)HeartbeatInterval.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + " " +
-            "}; " +
-            "try { " +
-            envSetup +
-            "Write-Heartbeat 'starting'; " +
-            "Start-Heartbeat; " +
-            $"& {{ {command} }} 1> $stdoutPath 2> $stderrPath; " +
-            "$code = if ($global:LASTEXITCODE -ne $null) { $global:LASTEXITCODE } elseif ($?) { 0 } else { 1 }; " +
-            "} finally { " +
-            cleanup +
-            "if ($heartbeatJob -ne $null) { try { Stop-Job -Job $heartbeatJob -ErrorAction SilentlyContinue; Remove-Job -Job $heartbeatJob -Force -ErrorAction SilentlyContinue } catch { } }; " +
-            "Write-Heartbeat 'exiting'; " +
-            "[IO.File]::WriteAllText($exitCodePath, [string]$code) " +
-            "}; exit $code";
+        return Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
     }
-
     private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
     {
         return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
     private sealed record GitResult(int ExitCode, string Output);
 
