@@ -315,11 +315,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "acceptance":
             var acceptancePolicy = ResolveCliAutonomyPolicy(parts);
             var skipVerify = HasCliConfirmation(parts, "--skip-verify");
-            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify");
+            var keepWorkspace = HasCliConfirmation(parts, "--keep-workspace");
+            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
             ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
-            RunAcceptanceWorkspaceMerge(context, skipVerify);
+            if (RunAcceptanceWorkspaceMerge(context, skipVerify))
+            {
+                CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
+            }
+
             return false;
 
         case "workspace":
@@ -1560,6 +1565,77 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     return true;
+}
+
+// Deterministic chorekeeping: dispatch owns workspace creation so the operator never hand-runs
+// `workspace create` before dispatching. Idempotent — a no-op when the worktree already exists.
+// Without this, ResolveExecutionDirectory silently falls back to the repo root and a dispatch
+// would prepare context artifacts into the main checkout.
+private static void EnsureGoalWorkspaceForDispatch(CliExecutionContext context, Goal goal)
+{
+    if (GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null)
+    {
+        return;
+    }
+
+    // Deterministic creation needs a git work tree to host the worktree; outside a git repo,
+    // fall back to the existing execution-directory resolution rather than failing the dispatch.
+    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    {
+        return;
+    }
+
+    var branch = GoalWorktrees.BranchName(goal.Id);
+    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
+    var path = GoalWorktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
+    GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", path);
+    Console.WriteLine($"Workspace auto-created: {path} (branch {branch})");
+}
+
+// Deterministic post-merge chorekeeping: the acceptance path owns workspace cleanup so the
+// operator never hand-runs `workspace remove` after a successful merge. Gated by autonomy
+// policy and journaled. A policy block or --keep-workspace leaves the workspace in place and
+// is NOT treated as a failure (the merge already succeeded); an incomplete removal (e.g. a
+// lock holder) prints a resume hint rather than throwing.
+private static void CleanupGoalWorkspaceAfterMerge(
+    CliExecutionContext context, Goal goal, AutonomyPolicy policy, bool keepWorkspace)
+{
+    var goalPrefix = goal.Id.Value[..8];
+    if (keepWorkspace)
+    {
+        Console.WriteLine($"Workspace kept (--keep-workspace). Remove later with: workspace remove {goalPrefix}");
+        return;
+    }
+
+    if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "workspace cleanup", out _))
+    {
+        Console.WriteLine(
+            $"Workspace cleanup skipped by policy. Remove with: workspace remove {goalPrefix} --autonomy {AutonomyPolicy.SupervisedAuto.Name}");
+        return;
+    }
+
+    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Acceptance removing goal workspace.");
+    GoalWorktreeRemoveResult removeResult;
+    try
+    {
+        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id);
+    }
+    catch (InvalidOperationException ex)
+    {
+        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
+        Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
+        return;
+    }
+
+    PrintWorkspaceRemoveResult(removeResult);
+    if (removeResult.IsComplete)
+    {
+        GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+    }
+    else
+    {
+        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+    }
 }
 
 private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)

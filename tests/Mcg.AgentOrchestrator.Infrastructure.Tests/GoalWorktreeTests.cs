@@ -713,6 +713,127 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_removes_workspace_after_successful_merge")]
+    public void CliAcceptanceRemovesWorkspaceAfterSuccessfulMerge()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance cleanup test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            // Acceptance now deterministically owns post-merge cleanup: no separate `workspace remove`.
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_keep_workspace_retains_workspace_after_merge")]
+    public void CliAcceptanceKeepWorkspaceRetainsWorkspaceAfterMerge()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance keep-workspace test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var fakeVerifier = new GoalAcceptanceVerifier(
+                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace"], context));
+
+            // --keep-workspace opts out of the deterministic cleanup; the merge still happens.
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(output.Contains("Workspace kept (--keep-workspace)", StringComparison.Ordinal));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_auto_creates_workspace_when_missing")]
+    public void CliProfileDispatchAutoCreatesWorkspaceWhenMissing()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Dispatch auto-create test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, [EchoDeveloper()]);
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
+
+            // Dispatch must own workspace creation: none exists yet.
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["profile-dispatch", "1", "local"], context));
+
+            Assert.True(output.Contains("Workspace auto-created", StringComparison.Ordinal));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_safe_auto_blocks_merge")]
     public void CliAcceptanceSafeAutoBlocksMerge()
     {

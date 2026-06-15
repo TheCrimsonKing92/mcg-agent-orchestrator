@@ -330,13 +330,23 @@ public static class GoalWorktrees
         return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
-    private static void RequireGitWorkTree(string executionDirectory)
+    /// <summary>
+    /// Returns true when <paramref name="executionDirectory"/> is inside a git work tree.
+    /// Lets callers decide whether deterministic worktree chorekeeping is possible before
+    /// attempting it (e.g. dispatch auto-create falls back to the execution directory otherwise).
+    /// </summary>
+    public static bool IsGitWorkTree(string executionDirectory)
     {
         var result = RunGit(executionDirectory, "rev-parse", "--is-inside-work-tree");
-        if (result.ExitCode != 0 || !result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+        return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void RequireGitWorkTree(string executionDirectory)
+    {
+        if (!IsGitWorkTree(executionDirectory))
         {
             throw new InvalidOperationException(
-                $"Goal workspaces require '{executionDirectory}' to be inside a git work tree: {result.Error}");
+                $"Goal workspaces require '{executionDirectory}' to be inside a git work tree.");
         }
     }
 
