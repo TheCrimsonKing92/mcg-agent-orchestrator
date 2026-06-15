@@ -487,6 +487,29 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 int? loopMaxIter = null;
                 if (GetFlagValue(parts, "--max-iterations") is { } miStr)
                     loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
+
+                // --watch: sleep instead of exiting when all goals are held, enabling continuous unattended operation.
+                TimeSpan? watchInterval = null;
+                if (HasCliConfirmation(parts, "--watch"))
+                {
+                    var intervalSec = GetFlagValue(parts, "--watch-interval");
+                    var seconds = intervalSec is not null
+                        ? int.Parse(intervalSec, System.Globalization.CultureInfo.InvariantCulture)
+                        : ConductorBatchLoop.DefaultWatchIntervalSeconds;
+                    watchInterval = TimeSpan.FromSeconds(seconds);
+                    Console.WriteLine($"[conduct --loop --watch] Watch mode active; will sleep {seconds}s between ticks when all goals are held.");
+                }
+
+                // SSE push: discover dashboard URL and build onTick callback.
+                Action<BatchTickSummary>? onTick = null;
+                var dashboardUrl = GetFlagValue(parts, "--dashboard-url")
+                    ?? ConductorTickPusher.TryReadDashboardUrl(context.Workspace.DashboardUrlFilePath);
+                if (dashboardUrl is not null)
+                {
+                    Console.WriteLine($"[conduct --loop] Dashboard SSE push enabled: {dashboardUrl}");
+                    onTick = ConductorTickPusher.CreateCallback(dashboardUrl);
+                }
+
                 var loopDriver = new ConductorDriver(
                     context.Kernel,
                     context.Workspace,
@@ -494,7 +517,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Agents,
                     context.WorkerProfiles);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
-                var loopSummary = new ConductorBatchLoop().Run(context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter);
+                var loopSummary = new ConductorBatchLoop().Run(
+                    context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
+                    watchInterval: watchInterval, onTick: onTick);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }

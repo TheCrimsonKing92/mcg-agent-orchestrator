@@ -191,4 +191,147 @@ public sealed class ConductorBatchLoopTests
             File.Delete(stopFile);
         }
     }
+
+    // ── Watch mode: continues when all held instead of breaking ──────────
+
+    [Xunit.Fact(DisplayName = "WatchMode_continuesAfterHeld_thenExitsWhenStopped")]
+    public void WatchMode_ContinuesAfterHeld_ThenExitsWhenStopped()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal 0");
+
+        // dispatchAndStart records a real dispatch so the goal transitions to Dispatched state,
+        // which is always Held on the next tick — no capacity tricks needed.
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                return true;
+            });
+
+        var stopFile = NoStopPath();
+        var tickCount = 0;
+        var watchInterval = TimeSpan.FromMilliseconds(50); // very short for tests
+
+        // After the 2nd tick (goal held, watch sleeping), create the stop file.
+        void OnTick(BatchTickSummary tick)
+        {
+            tickCount++;
+            if (tickCount >= 2)
+                File.WriteAllText(stopFile, "stop");
+        }
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+                watchInterval: watchInterval, onTick: OnTick);
+
+            // Tick 1: WorkspaceReady → dispatch (advanced=1).
+            // Tick 2: Worker slots full → held → watch sleeps → stop detected.
+            Assert.True(summary.Ticks >= 2);
+            Assert.True(summary.Advanced >= 1);
+            Assert.True(summary.StopRequested);
+            Assert.True(tickCount >= 2);
+        }
+        finally
+        {
+            if (File.Exists(stopFile)) File.Delete(stopFile);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WatchMode_withoutWatchFlag_breaksWhenAllHeld")]
+    public void WatchMode_WithoutWatchFlag_BreaksWhenAllHeld()
+    {
+        var (kernel, _) = SimpleGoal();
+        // getRunningCount is at cap from the start so the goal is held once WorkspaceReady.
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        var stopFile = NoStopPath();
+        // No watchInterval → non-watch behavior: exit when all goals are held, not sleep-and-continue.
+        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile, maxIterations: 10);
+
+        // The loop must exit well before maxIterations once all goals are held.
+        Assert.False(summary.StopRequested);   // exited cleanly, not via kill-switch
+        Assert.True(summary.Ticks < 10);       // not looping indefinitely (watch-mode would)
+        Assert.True(summary.Held >= 1);        // at least one held tick caused the exit
+    }
+
+    // ── onTick callback: invoked after each tick ──────────────────────────
+
+    [Xunit.Fact(DisplayName = "OnTick_CalledAfterEachTick_WithCorrectSummary")]
+    public void OnTick_CalledAfterEachTick_WithCorrectSummary()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+
+        var tickSummaries = new List<BatchTickSummary>();
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,   // Verified state
+            runAcceptance: _ => true,
+            land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok"),
+            record: _ => { },
+            cleanup: _ => { });
+
+        var stopFile = NoStopPath();
+        var summary = new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+            maxIterations: 3, onTick: tickSummaries.Add);
+
+        Assert.True(tickSummaries.Count > 0);
+        foreach (var t in tickSummaries)
+            Assert.True(t.Tick >= 1);
+    }
+
+    [Xunit.Fact(DisplayName = "OnTick_WatchSleeping_TrueWhenAllHeldInWatchMode")]
+    public void OnTick_WatchSleeping_TrueWhenAllHeldInWatchMode()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held goal");
+
+        // dispatchAndStart records a real dispatch so the goal transitions to Dispatched state,
+        // which is always Held on the next tick — no capacity tricks needed.
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                return true;
+            });
+
+        var stopFile = NoStopPath();
+        BatchTickSummary? sleepingTick = null;
+        var watchInterval = TimeSpan.FromMilliseconds(30);
+
+        void OnTick(BatchTickSummary tick)
+        {
+            if (tick.WatchSleeping)
+            {
+                sleepingTick = tick;
+                File.WriteAllText(stopFile, "stop"); // stop after first sleep tick
+            }
+        }
+
+        try
+        {
+            new ConductorBatchLoop().Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+                watchInterval: watchInterval, onTick: OnTick);
+
+            Assert.True(sleepingTick is not null);
+            Assert.True(sleepingTick!.WatchSleeping);
+            Assert.Equal(0, sleepingTick.Advanced); // all held tick
+        }
+        finally
+        {
+            if (File.Exists(stopFile)) File.Delete(stopFile);
+        }
+    }
 }
