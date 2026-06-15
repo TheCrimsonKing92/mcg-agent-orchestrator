@@ -4,6 +4,13 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-15 - Validated cross-platform on real Linux (WSL): 952/952, fixed the 4 Linux-isms
+
+Stood up a real Linux validation env (WSL2 Ubuntu + .NET 10 SDK + pwsh, repo cloned to ext4) and ran the suite on Linux. First run: build clean, 948/952 (4 failures) — confirming the platform-neutralization PRODUCTION code (pwsh resolver, native DispatchProcessHost, FileShare.None lock, wmic→/proc helper) all works on Linux; the 4 failures were Windows assumptions in TESTS. Fixed all 4 (all test-only): (1-2) `GoalWorktrees_remove_*` asserted Windows mandatory-lock semantics (open handle blocks dir delete) — branched on `OperatingSystem.IsWindows()`: Windows asserts leftover/lock-holder/resume, POSIX asserts removal completes (open files unlink fine). (3) `SubscriptionPromptCostGuard_applies_prior_evidence_allowance` pinned a CRLF-vs-LF-sensitive char count to the exact 2000 allowance boundary (`Environment.NewLine` is 1 char shorter on Linux, and the estimate is capped near the allowance) — relaxed the precondition to `> allowance/2` (the behavioral `Assert.Null(risk)` is the real check). (4) the `RunPowerShellCommand` TEST helper hardcoded `powershell.exe` → on WSL that resolved via interop to Windows PowerShell against a Linux CWD, so the inline `git add/commit` left `.agents/` untracked; switched it to the `WorkerShell` resolver (pwsh on Linux) like production.
+- Result: **Linux 952/952 green** (Core 273 + Infrastructure 679), Windows still 952. The platform-neutralization arc is now genuinely cross-platform-validated, not just Windows-asserted. Also validated pwsh-on-Windows: installing pwsh flips the resolver and the dispatch integration test passes under PowerShell Core.
+- WSL env persists for future Linux checks (`git pull && dotnet test` in ~/mcg-agent-orchestrator); setup recorded in the linux-validation-wsl memory.
+- Model fit: Claude Opus dogfood session - adequate - real cross-platform validation + 4 test-portability fixes; landed through acceptance.
+
 ## 2026-06-15 - Build hygiene (kill the CS2012 build-lock at the source) + cross-platform process introspection
 
 Two related fixes (goal ae16b2d2, landed via acceptance). (1) NODE REUSE: added `Directory.Build.rsp` with `-nodeReuse:false` so MSBuild worker nodes don't linger after a build holding `obj/*.dll` — the recurring CS2012 "file in use" build-lock that `dotnet build-server shutdown` did NOT reliably clear (it targets the Roslyn/VBCSCompiler server, not MSBuild nodes). Pairs with the `UseSharedCompilation=false` from the CS2012 work. Confirmed live this session: after clearing pre-existing stale nodes, the next build ran with node-reuse off, left no lingering node, and the following build was lock-free. (2) CROSS-PLATFORM `wmic`: replaced the duplicated `wmic` command-line plumbing (in `BackgroundDispatchRunner.TryGetBuildDaemonCommandLines` and `GoalWorktrees.TryGetProcessCommandLines`) with one `ProcessCommandLines.Read` helper — `wmic` on Windows, `/proc/<pid>/cmdline` on Linux. This fixes the latent Linux over-reap (the old code treated a null command line as "reapable", so on Linux where wmic is absent it would have killed every build daemon); now command lines resolve on Linux too, so the worktree-path filter works. `ParseWmicListOutput` (tested) retained and reused by the helper.
@@ -1074,6 +1081,13 @@ Goal dc038de2: Platform-neutralize the runtime: resolve PowerShell host (pwsh-pr
 ## 2026-06-15 - Platform-neutralize part 2: replace the detached PowerShell dispatch wrapper ...
 
 Goal c675bc32: Platform-neutralize part 2: replace the detached PowerShell dispatch wrapper with a native C# DispatchProcessHost (en.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Build hygiene + cross-platform process introspection: disable MSBuild node re...
+
+Goal ae16b2d2: Build hygiene + cross-platform process introspection: disable MSBuild node reuse repo-wide via Directory.Build.rsp to.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
 
 - Operator gate: (no receipt)
 - (no receipt)

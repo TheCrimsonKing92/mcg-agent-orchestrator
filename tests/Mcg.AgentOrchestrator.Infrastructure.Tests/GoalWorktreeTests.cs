@@ -146,15 +146,25 @@ public sealed class GoalWorktreeTests
                 partial = GoalWorktrees.Remove(repo, goalId);
             }
 
-            Assert.False(partial.IsComplete);
-            Assert.Equal(path, partial.LeftoverPath);
-            Assert.Equal("workspace remove", partial.ResumeCommand);
-            Assert.True(partial.Message.Contains("could not be removed", StringComparison.OrdinalIgnoreCase));
-            Assert.True(Directory.Exists(path));
+            if (OperatingSystem.IsWindows())
+            {
+                // Windows holds the file exclusively, so removal is partial until the lock releases.
+                Assert.False(partial.IsComplete);
+                Assert.Equal(path, partial.LeftoverPath);
+                Assert.Equal("workspace remove", partial.ResumeCommand);
+                Assert.True(partial.Message.Contains("could not be removed", StringComparison.OrdinalIgnoreCase));
+                Assert.True(Directory.Exists(path));
 
-            // Lock released; resume call deletes the directory and cleans up the branch.
-            var final = GoalWorktrees.Remove(repo, goalId);
-            Assert.True(final.IsComplete);
+                // Lock released; resume call deletes the directory and cleans up the branch.
+                var final = GoalWorktrees.Remove(repo, goalId);
+                Assert.True(final.IsComplete);
+            }
+            else
+            {
+                // POSIX allows unlinking files with open handles, so removal completes immediately.
+                Assert.True(partial.IsComplete);
+            }
+
             Assert.False(Directory.Exists(path));
             Assert.False(BranchExists(repo, branch));
         }
@@ -186,10 +196,18 @@ public sealed class GoalWorktreeTests
                 partial = GoalWorktrees.Remove(repo, goalId);
             }
 
-            Assert.False(partial.IsComplete);
-            Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
-            Assert.Equal(path, partial.LeftoverPath);
-            Assert.True(partial.LockHolders.Count >= 0); // collection always initialized
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(partial.IsComplete);
+                Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
+                Assert.Equal(path, partial.LeftoverPath);
+                Assert.True(partial.LockHolders.Count >= 0); // collection always initialized
+            }
+            else
+            {
+                // POSIX: the held handle does not block removal, so it completes.
+                Assert.True(partial.IsComplete);
+            }
         }
         finally
         {
