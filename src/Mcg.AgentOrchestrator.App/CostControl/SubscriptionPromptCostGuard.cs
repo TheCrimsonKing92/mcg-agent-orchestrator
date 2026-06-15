@@ -14,7 +14,8 @@ internal sealed record PaidSubscriptionPromptRisk(
     bool UsesComplexPaidModel,
     bool HasPriorOverkillFit,
     bool HasPriorUnderpoweredFit,
-    IReadOnlyList<string> Details);
+    IReadOnlyList<string> Details,
+    bool IsAnomalous);
 
 internal static class SubscriptionPromptCostGuard
 {
@@ -126,9 +127,13 @@ internal static class SubscriptionPromptCostGuard
             BuildReadyModelFitSummaries(goal));
     }
 
+    // Only a genuinely ANOMALOUS prompt (disproportionate to its task complexity, or an extreme
+    // batch fan-in) requires explicit acknowledgement. A routine large paid start that the operator
+    // already initiated and the autonomy policy already authorizes proceeds without the confirm
+    // flag; the non-anomalous risk is still surfaced (plan/dashboard) as an advisory, not a gate.
     public static void ThrowIfConfirmationRequired(PaidSubscriptionPromptRisk? risk, bool confirmed)
     {
-        if (risk is null || confirmed)
+        if (risk is null || !risk.IsAnomalous || confirmed)
         {
             return;
         }
@@ -247,6 +252,10 @@ internal static class SubscriptionPromptCostGuard
             .Where(candidate => candidate.TaskComplexity == TaskComplexity.Complex || candidate.UsesComplexModel)
             .ToList();
         var tooManyPaidTasks = candidates.Count > PaidPromptThresholds.BatchPaidTasks;
+        // Anomaly = a prompt disproportionate to its complexity, or an extreme batch fan-in. Only
+        // these block; routine-large/fanout/prior-fit are advisory and proceed.
+        var anomalousCount = candidates.Count(candidate => candidate.CostGuardPromptCharacterCount >= AnomalyThreshold(candidate));
+        var isAnomalous = anomalousCount > 0 || total >= PaidPromptThresholds.AnomalyBatchThreshold;
 
         if (total <= PaidPromptThresholds.BatchPaidPrompt &&
             !tooManyPaidTasks &&
@@ -311,7 +320,8 @@ internal static class SubscriptionPromptCostGuard
             complex.Count > 0,
             priorOverkill.Count > 0,
             priorUnderpowered.Count > 0,
-            details);
+            details,
+            isAnomalous);
     }
 
     private static List<SubscriptionPlanModelSummary> BuildReadyModelFitSummaries(Goal goal)
@@ -347,6 +357,11 @@ internal static class SubscriptionPromptCostGuard
     private static int PromptThreshold(PaidPromptCandidate candidate)
     {
         return PaidPromptThresholds.PromptThreshold(candidate.TaskComplexity, candidate.UsesComplexModel);
+    }
+
+    private static int AnomalyThreshold(PaidPromptCandidate candidate)
+    {
+        return PaidPromptThresholds.AnomalyPromptThreshold(candidate.TaskComplexity, candidate.UsesComplexModel);
     }
 
     private sealed record PaidPromptCandidate(

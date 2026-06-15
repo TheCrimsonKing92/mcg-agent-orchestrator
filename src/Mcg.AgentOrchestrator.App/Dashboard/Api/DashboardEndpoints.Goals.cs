@@ -612,7 +612,7 @@ internal static partial class DashboardEndpoints
 
     private static IResult? RequireLargePaidSubscriptionStartConfirmation(HttpContext context, PaidSubscriptionPromptRisk? risk)
     {
-        if (risk is null)
+        if (risk is null || !risk.IsAnomalous)
         {
             return null;
         }

@@ -1534,6 +1534,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(12001, risk!.PromptCharacterCount);
     Assert.False(risk.PromptExceedsBatchThreshold);
     Assert.True(risk.HasOversizedPrompt);
+    Assert.True(risk.IsAnomalous);
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.False(risk.UsesComplexPaidModel);
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
@@ -1543,8 +1544,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ex.Message, text => text.Contains("Inspect the generated prompt before paid subscription start", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
-    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_fanout_with_small_prompts")]
-    public void SubscriptionPromptCostGuardBlocksPaidBatchFanoutWithSmallPrompts()
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_paid_batch_fanout_with_small_prompts_is_advisory_not_blocking")]
+    public void SubscriptionPromptCostGuardPaidBatchFanoutWithSmallPromptsIsAdvisoryNotBlocking()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Plan paid batch subscription start");
@@ -1556,8 +1557,6 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         agents,
         WorkerProfileCatalog.Default(),
         _ => 500);
-    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
-
     Assert.True(risk is not null);
     Assert.Equal(5, risk!.TaskCount);
     Assert.Equal(2500, risk.PromptCharacterCount);
@@ -1565,9 +1564,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(risk.HasOversizedPrompt);
     Assert.True(risk.TaskCountExceedsThreshold);
     Assert.False(risk.UsesComplexPaidModel);
+    Assert.False(risk.IsAnomalous);
     Assert.Equal("paid subscription fanout", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.True(risk.Details.Any(detail => detail.Contains("Paid task count 5 exceeds 3", StringComparison.Ordinal)));
-    Assert.Contains(ex.Message, text => text.Contains("thresholds 18000 chars or 3 task(s)", StringComparison.Ordinal));
+    // Fan-out with small prompts is advisory, not an anomaly, so the start is not blocked.
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_allows_complex_paid_start_under_size_threshold")]
     public void SubscriptionPromptCostGuardAllowsComplexPaidStartUnderSizeThreshold()
@@ -1629,8 +1630,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, nextTask.Id) > PaidPromptThresholds.PriorTaskEvidenceAllowance / 2);
     Xunit.Assert.Null(risk);
 }
-    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_prompt_total")]
-    public void SubscriptionPromptCostGuardBlocksPaidBatchPromptTotal()
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_proportionate_batch_total_is_advisory_not_blocking")]
+    public void SubscriptionPromptCostGuardProportionateBatchTotalIsAdvisoryNotBlocking()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1655,16 +1656,48 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         [agent],
         WorkerProfileCatalog.Default(),
         _ => 8000);
-    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
-
+    // 24000 across 3 Complex tasks (each within the complexity band) exceeds the soft batch ceiling
+    // but is below the anomaly batch ceiling (2x), so it is advisory only and does not block.
     Assert.True(risk is not null);
     Assert.Equal(24000, risk!.PromptCharacterCount);
     Assert.True(risk.PromptExceedsBatchThreshold);
     Assert.False(risk.HasOversizedPrompt);
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.True(risk.UsesComplexPaidModel);
+    Assert.False(risk.IsAnomalous);
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
-    Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_large_but_proportionate_prompt_is_advisory_anomalous_prompt_blocks")]
+    public void SubscriptionPromptCostGuardLargeButProportionatePromptIsAdvisoryAnomalousPromptBlocks()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan a paid subscription task",
+        [new TaskSpec(TaskId.New(), "Do substantial paid subscription work.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    // 11000 chars: over the soft prompt ceiling but under the anomaly ceiling for either complexity
+    // classification -> advisory only, does NOT block (the behavior change: no rote confirm flag).
+    var proportionate = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal, [agent], WorkerProfileCatalog.Default(), _ => 11000);
+    Assert.True(proportionate is not null);
+    Assert.True(proportionate!.HasOversizedPrompt);
+    Assert.False(proportionate.IsAnomalous);
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(proportionate, confirmed: false);
+
+    // 20000 chars: disproportionate to complexity -> anomaly -> requires explicit confirmation.
+    var anomalous = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal, [agent], WorkerProfileCatalog.Default(), _ => 20000);
+    Assert.True(anomalous!.IsAnomalous);
+    Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(anomalous, confirmed: false));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
     public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()

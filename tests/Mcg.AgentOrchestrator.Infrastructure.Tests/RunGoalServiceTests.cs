@@ -683,7 +683,7 @@ public sealed class RunGoalServiceTests
         var now = DateTimeOffset.UtcNow;
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "local", "Write-Output gpt-4o-mini", workspace.ExecutionDirectory, now,
-            ProviderName: "OpenAI", ModelName: "gpt-4o-mini", PromptCharacterCount: 7000));
+            ProviderName: "OpenAI", ModelName: "gpt-4o-mini", PromptCharacterCount: 13000));
 
         var result = await RunGoalService.RunAsync(
             kernel,

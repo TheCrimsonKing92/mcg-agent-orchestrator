@@ -212,7 +212,7 @@ public sealed class CliCommandTests
             "gpt-5.3-codex",
             "medium",
             TaskComplexity.Complex,
-            12001));
+            20000));
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
         var command = ConsoleViews.BuildSuggestedCommand(goal, action);

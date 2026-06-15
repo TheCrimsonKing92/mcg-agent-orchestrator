@@ -1648,7 +1648,7 @@ public sealed class DashboardRenderingTests
         "gpt-5.3-codex",
         "medium",
         TaskComplexity.Complex,
-        12001));
+        20000));
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
     var goalPrefix = goal.Id.Value[..8];
 
