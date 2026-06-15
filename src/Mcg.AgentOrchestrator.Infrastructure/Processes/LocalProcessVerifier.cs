@@ -10,6 +10,19 @@ public sealed class LocalProcessVerifier
         string ArtifactPathEvidence,
         DotnetBuildEnvironment? BuildEnvironment = null);
 
+    internal sealed record CommandResult(int ExitCode, string Stdout, string Stderr = "");
+
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
+
+    private readonly Func<string[], string, CancellationToken, Task<CommandResult>> _runner;
+
+    public LocalProcessVerifier() : this(RunCommandAsync) { }
+
+    internal LocalProcessVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
+    {
+        _runner = runner;
+    }
+
     public async Task<TaskVerificationRecord> RunAsync(
         string command,
         string workingDirectory,
@@ -27,52 +40,38 @@ public sealed class LocalProcessVerifier
             throw new ArgumentException("Value cannot be empty.", nameof(workingDirectory));
         }
 
+        // Shut down build servers to release file locks before running verification.
+        await _runner(["dotnet", "build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
+
         var completedAt = DateTimeOffset.UtcNow;
         var preparedCommand = PrepareCommand(command, goalId, taskId);
         var elapsed = Stopwatch.StartNew();
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add(preparedCommand.Command);
-
-        startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
-        startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
-        startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
+        string[] psArgs = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", preparedCommand.Command];
 
         using var leaseLock = preparedCommand.BuildEnvironment is null
             ? null
             : DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(preparedCommand.BuildEnvironment, cancellationToken);
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start verification process.");
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var result = await _runner(psArgs, workingDirectory, cancellationToken).ConfigureAwait(false);
 
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0 && (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
+        {
+            // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
+            // clears residual compiler processes before the single allowed retry.
+            await _runner(["dotnet", "build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
+            result = await _runner(psArgs, workingDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
         elapsed.Stop();
         completedAt = DateTimeOffset.UtcNow;
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
 
         return new TaskVerificationRecord(
             preparedCommand.Command,
             workingDirectory,
-            process.ExitCode,
-            BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, process.ExitCode, stdout, stderr) + stdout,
-            stderr,
+            result.ExitCode,
+            BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) + result.Stdout,
+            result.Stderr,
             completedAt);
     }
 
@@ -150,5 +149,46 @@ public sealed class LocalProcessVerifier
             line.Contains("Failed:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("Passed:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("Total:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task<CommandResult> RunCommandAsync(
+        string[] args,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = args[0],
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            startInfo.ArgumentList.Add(args[i]);
+        }
+
+        startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
+        startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
+        startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start process: {args[0]}");
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(CommandTimeout);
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+
+        await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
+        return new CommandResult(process.ExitCode, stdout, stderr);
     }
 }

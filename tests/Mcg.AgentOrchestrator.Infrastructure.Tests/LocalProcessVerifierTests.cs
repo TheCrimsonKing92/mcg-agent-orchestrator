@@ -98,6 +98,46 @@ public sealed class LocalProcessVerifierTests
         Assert.Equal(string.Empty, prepared.ArtifactPathEvidence);
     }
 
+    [Xunit.Fact(DisplayName = "LocalProcessVerifier_retries_once_on_CS2012_and_returns_passed")]
+    public async Task LocalProcessVerifierRetriesOnceOnCs2012AndReturnsPassed()
+    {
+        var goalId = new GoalId("fedcba98fedcba98fedcba98fedcba98");
+        var calls = new List<string[]>();
+        var responses = new Queue<LocalProcessVerifier.CommandResult>([
+            new(0, "", ""),
+            new(1, "error CS2012: Cannot open 'Core.dll' for writing", ""),
+            new(0, "", ""),
+            new(0, "Test run succeeded.", "")
+        ]);
+
+        var verifier = new LocalProcessVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        try
+        {
+            var record = await verifier.RunAsync(
+                "dotnet test Example.sln",
+                "C:\\fake\\dir",
+                goalId,
+                TaskId.New());
+
+            Assert.Equal(0, record.ExitCode);
+            Assert.Equal(4, calls.Count);
+            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.Equal("powershell.exe", calls[1][0]);
+            Assert.Equal("powershell.exe", calls[3][0]);
+            Assert.True(calls[1].SequenceEqual(calls[3]));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     private static void DeleteDirectory(string path)
     {
         if (Directory.Exists(path))
