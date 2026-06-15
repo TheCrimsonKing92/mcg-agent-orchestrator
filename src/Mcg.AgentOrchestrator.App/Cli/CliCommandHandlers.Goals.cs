@@ -96,6 +96,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "plan":
             return HandlePlan(context, parts);
 
+        case "ideate":
+            return HandleIdeate(context, parts);
+
         case "intent-template":
             return HandleOperatorIntentTemplate(context, parts);
 
@@ -1122,6 +1125,52 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
     }
 
     return true;
+}
+
+private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var appendBacklog = HasCliConfirmation(parts, "--append-backlog");
+
+    Console.WriteLine("Gathering evidence context...");
+    var evidenceContext = IdeationProposalPlanner.BuildEvidenceContext(context.Kernel, context.Workspace);
+
+    // Use Ideation role when a matching agent is configured; fall back to Planner for LLM-reasoning lane.
+    var ideationRole = context.Agents.Any(a => a.Status == AgentStatus.Available && a.Role == AgentRole.Ideation)
+        ? AgentRole.Ideation
+        : AgentRole.Planner;
+    var ideationKernel = new AgentOrchestratorKernel();
+    var ideationTask = new TaskSpec(
+        TaskId.New(),
+        IdeationProposalPlanner.BuildPrompt(evidenceContext),
+        ideationRole,
+        "Output only a fenced JSON array of ranked idea objects with title, rationale, scope, value, effort, and risk fields.");
+    var ideationGoal = ideationKernel.CreateGoal("Propose improvement ideas", [ideationTask]);
+    ideationKernel.ActivateGoal(ideationGoal.Id, context.Agents);
+
+    Console.WriteLine("Running ideation worker...");
+    var runner = new AgentTaskRunner(ideationKernel, context.Agents, context.Providers);
+    runner.RunAsync(ideationGoal.Id, ideationTask.Id).GetAwaiter().GetResult();
+
+    var workerOutput = ideationTask.LastExecution?.Output ?? string.Empty;
+    var plan = IdeationProposalPlanner.Parse(workerOutput);
+    ConsoleViews.PrintIdeationPlan(plan);
+
+    if (appendBacklog && plan.IsValid && plan.Ideas.Count > 0)
+    {
+        var backlogPath = Path.Combine(context.Workspace.ExecutionDirectory, "BACKLOG.md");
+        if (!File.Exists(backlogPath))
+            throw new InvalidOperationException($"BACKLOG.md not found at {backlogPath}; cannot append ideas.");
+        var entries = string.Concat(plan.Ideas.Select(IdeationProposalPlanner.FormatBacklogEntry));
+        File.AppendAllText(backlogPath, entries);
+        Console.WriteLine($"Appended {plan.Ideas.Count} idea(s) to BACKLOG.md.");
+    }
+    else if (appendBacklog && !plan.IsValid)
+    {
+        throw new InvalidOperationException(
+            $"ideate --append-backlog blocked: plan has {plan.ValidationErrors.Count} validation error(s). Fix hand-wavy ideas before appending.");
+    }
+
+    return plan.IsValid;
 }
 
 private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string> parts)

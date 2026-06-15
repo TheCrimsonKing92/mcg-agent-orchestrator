@@ -11,7 +11,7 @@ public sealed class AgentCatalogTests
 {
     var catalog = AgentCatalog.Default();
 
-    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal(6, catalog.Agents.Count);
 
     foreach (var role in Enum.GetValues<AgentRole>())
     {
@@ -54,7 +54,7 @@ public sealed class AgentCatalogTests
 {
     var catalog = AgentCatalog.AnthropicDefault();
 
-    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal(6, catalog.Agents.Count);
 
     foreach (var role in Enum.GetValues<AgentRole>())
     {
@@ -80,7 +80,7 @@ public sealed class AgentCatalogTests
 
     var catalog = AgentCatalog.Default().UpsertRole(replacement);
 
-    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal(6, catalog.Agents.Count);
     Assert.Equal("Anthropic developer", catalog.GetRequired(AgentRole.Developer).Name);
     Assert.Equal("claude-test", catalog.GetRequired(AgentRole.Developer).Model.ModelName);
 }
@@ -102,7 +102,7 @@ public sealed class AgentCatalogTests
     catalog = catalog.AddOrReplaceById(replacement);
 
     var developers = catalog.Agents.Where(agent => agent.Role == AgentRole.Developer).ToList();
-    Assert.Equal(6, catalog.Agents.Count);
+    Assert.Equal(7, catalog.Agents.Count);
     Assert.Equal("openai-developer", developers[0].Id.Value);
     Assert.Equal("anthropic-developer-claude", developers[1].Id.Value);
     Assert.Equal("Anthropic fallback developer", developers[1].Name);

@@ -3749,7 +3749,7 @@ public sealed class CliCommandTests
             ref currentGoal);
 
         var developer = agents.Single(agent => agent.Role == AgentRole.Developer);
-        Xunit.Assert.Equal(5, agents.Count);
+        Xunit.Assert.Equal(6, agents.Count);
         Xunit.Assert.Equal("anthropic-developer", developer.Id.Value);
         Xunit.Assert.Equal("Anthropic", developer.Model.ProviderName);
     }
@@ -3787,7 +3787,7 @@ public sealed class CliCommandTests
             .Where(agent => agent.Role == AgentRole.Developer)
             .ToList();
 
-        Xunit.Assert.Equal(6, agents.Count);
+        Xunit.Assert.Equal(7, agents.Count);
         Xunit.Assert.Equal("openai-developer", developers[0].Id.Value);
         Xunit.Assert.Equal("anthropic-developer-claude-fallback", developers[1].Id.Value);
         Xunit.Assert.Equal("Claude fallback", developers[1].Name);
