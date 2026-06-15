@@ -376,6 +376,11 @@ public interface IOrchestratorStateRepository
     Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
 
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
+
+    // Cheap, hydration-free goal listing for read-only surfaces (the `goals` command, prefix
+    // resolution). The SQLite backend reads the indexed metadata columns directly; the file
+    // backend projects from a full load (no perf win, kept correct so the interface stays honest).
+    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 }
 
 public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
@@ -406,6 +411,20 @@ public sealed class FileOrchestratorStateRepository : ITransactionalOrchestrator
     public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
         return OrchestratorStateStore.SaveAsync(_path, kernel, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
+    {
+        var kernel = await OrchestratorStateStore.LoadAsync(_path, cancellationToken);
+        return kernel.Goals
+            .Select(goal => (goal, at: goal.Timeline.LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue))
+            .OrderByDescending(item => item.at)
+            .Select(item => new GoalSummary(
+                item.goal.Id.Value,
+                item.goal.Status.ToString(),
+                item.goal.Objective,
+                item.at.ToString("O")))
+            .ToList();
     }
 
     public Task<T> TransactAsync<T>(

@@ -4321,6 +4321,32 @@ public sealed class CliCommandTests
         """);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_bare_goals_to_metadata_only_listing")]
+    public void RunnerRoutesBareGoalsToMetadataOnlyListing()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsMetadataOnlyListing(["goals"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsMetadataOnlyListing(["GOALS"]));
+        // Anything beyond the bare verb must fall through to the normal (hydrating) path.
+        Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing(["goals", "extra"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing(["next"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing([]));
+    }
+
+    [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
+    public void PrintGoalsRendersMetadataSummaries()
+    {
+        IReadOnlyList<GoalSummary> summaries =
+        [
+            new GoalSummary("0123456789abcdef0123456789abcdef", "Active", "Build the widget", "2026-06-15T00:00:00.0000000+00:00"),
+            new GoalSummary("fedcba98", "Completed", "Ship the gadget", "2026-06-14T00:00:00.0000000+00:00")
+        ];
+
+        var output = CaptureConsole(() => ConsoleViews.PrintGoals(summaries));
+
+        Xunit.Assert.Contains("01234567 Active: Build the widget", output);
+        Xunit.Assert.Contains("fedcba98 Completed: Ship the gadget", output);
+    }
+
     private static void MakeLeaseOwnerStale(string metadataPath)
     {
         var text = File.ReadAllText(metadataPath);

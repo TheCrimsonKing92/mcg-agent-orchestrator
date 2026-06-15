@@ -1105,3 +1105,10 @@ Goal 0de5f77b: Make the large-paid subscription cost gate anomaly-aware: block o
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - Reconcile stale docs after the CS2012 root-cause fix and the anomaly cost-gat...
+
+Goal 87867f5f: Reconcile stale docs after the CS2012 root-cause fix and the anomaly cost-gate change: update AGENTS.md operator-cycl.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)

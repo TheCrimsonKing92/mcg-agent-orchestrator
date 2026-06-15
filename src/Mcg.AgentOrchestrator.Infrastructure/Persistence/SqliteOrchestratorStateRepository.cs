@@ -229,7 +229,23 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await RunNonQueryAsync(conn, "DELETE FROM human_input_requests", cancellationToken);
+        // Incremental upsert + scoped delete (mirrors the goals table) instead of a global
+        // DELETE-all + re-insert. Harmless while the kernel is whole-aggregate, but a PREREQUISITE
+        // for lazy single-goal hydration: once the kernel holds only the touched goal's requests,
+        // a global wipe would erase every other goal's pending input.
+        var existingRequestIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id FROM human_input_requests";
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                existingRequestIds.Add(reader.GetString(0));
+        }
+
+        var currentRequestIds = snapshot.HumanInputRequests
+            .Select(request => request.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var request in snapshot.HumanInputRequests)
         {
             var json = JsonSerializer.Serialize(request, SerializerOptions);
@@ -237,10 +253,21 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             cmd.CommandText = """
                 INSERT INTO human_input_requests (id, goal_id, snapshot_json)
                 VALUES ($id, $goal_id, $json)
+                ON CONFLICT(id) DO UPDATE SET
+                    goal_id       = excluded.goal_id,
+                    snapshot_json = excluded.snapshot_json
                 """;
             cmd.Parameters.AddWithValue("$id", request.Id);
             cmd.Parameters.AddWithValue("$goal_id", request.GoalId);
             cmd.Parameters.AddWithValue("$json", json);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var id in existingRequestIds.Where(id => !currentRequestIds.Contains(id)))
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM human_input_requests WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", id);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
     }

@@ -15,6 +15,17 @@ internal static partial class ConsoleViews
         }
     }
 
+    // Metadata-only listing: renders the same line as the kernel overload from GoalSummary rows
+    // (already ordered by the repository) without hydrating any goal snapshot.
+    public static void PrintGoals(IReadOnlyList<GoalSummary> goals)
+    {
+        foreach (var goal in goals)
+        {
+            var prefix = goal.Id.Length >= 8 ? goal.Id[..8] : goal.Id;
+            Console.WriteLine($"{prefix} {goal.Status}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+        }
+    }
+
     public static void PrintWorkerProfiles(WorkerProfileCatalog catalog)
     {
         Console.WriteLine("Worker profiles:");

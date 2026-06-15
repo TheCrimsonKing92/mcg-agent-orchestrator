@@ -243,6 +243,78 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(goal.Id, restored.HumanInputRequests.Single().GoalId);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]
+    public async Task HumanInputUpsertUpdatesExistingRow()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Goal needing input");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which option?");
+        await repo.SaveAsync(kernel);
+
+        // Answer it and re-save: the incremental upsert must UPDATE the existing row, not duplicate it.
+        kernel.SubmitHumanInput(request.Id, "Option A");
+        await repo.SaveAsync(kernel);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(1, restored.HumanInputRequests.Count);
+        var restoredRequest = restored.HumanInputRequests.Single();
+        Assert.True(restoredRequest.IsCompleted);
+        Assert.Equal("Option A", restoredRequest.Answer);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_orphan_removed_on_save")]
+    public async Task HumanInputOrphanRemovedOnSave()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+
+        var kernelWith = new AgentOrchestratorKernel();
+        var goal = kernelWith.CreateGoal("Goal needing input");
+        kernelWith.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernelWith.RequestHumanInput(goal.Id, task.Id, "Which option?");
+        await repo.SaveAsync(kernelWith);
+
+        // A later save whose snapshot no longer carries that request must scope-delete the orphan row.
+        var kernelWithout = new AgentOrchestratorKernel();
+        kernelWithout.CreateGoal("Goal needing input");
+        await repo.SaveAsync(kernelWithout);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(0, restored.HumanInputRequests.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "FileOrchestratorStateRepository_lists_goal_metadata")]
+    public async Task FileRepositoryListsGoalMetadata()
+    {
+        var dir = CreateTempDirectory();
+        var path = Path.Combine(dir, "state.json");
+        var repo = new FileOrchestratorStateRepository(path);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("First goal");
+        kernel.CreateGoal("Second goal");
+        await repo.SaveAsync(kernel);
+
+        var listing = await repo.ListGoalMetadataAsync();
+
+        Assert.Equal(2, listing.Count);
+        Assert.True(listing.Any(m => m.Objective == "First goal"));
+        Assert.True(listing.Any(m => m.Objective == "Second goal"));
+        Assert.True(listing.All(m => m.Status == GoalStatus.Draft.ToString()));
+    }
+
     private static string TempDb()
     {
         var dir = CreateTempDirectory();
