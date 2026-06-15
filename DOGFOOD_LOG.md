@@ -1126,3 +1126,10 @@ Goal c8716bd3: Semantic acceptance increment 1 (advisory, local judge): add a pu
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - Semantic acceptance increment 2: config-driven multi-lane parallel judging
+
+Goal 96ae86bc: Semantic acceptance increment 2: config-driven multi-lane parallel judging. Add an opt-in AgentRole.Judge (never task.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)

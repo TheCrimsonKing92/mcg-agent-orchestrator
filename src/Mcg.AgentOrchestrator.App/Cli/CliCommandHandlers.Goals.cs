@@ -207,6 +207,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintAgents(context.Agents);
             return false;
 
+        case "model-functions":
+            ConsoleViews.PrintModelFunctions(ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath));
+            return false;
+
+        case "model-function-add":
+            CliArgumentParser.RequirePartCount(parts, 5, "model-function-add <purpose> <lane> <provider> <model> [name]");
+            AddModelFunctionBinding(context, parts);
+            return false;
+
         case "status":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             ConsoleViews.PrintGoal(context.CurrentGoal);
@@ -570,6 +579,35 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         default:
             return null;
     }
+}
+
+// Adds/replaces an orchestrator-internal model-function binding (e.g. an acceptance-judge lane).
+// Distinct from agents: these are models the orchestrator invokes for its own functions, not workers.
+private static void AddModelFunctionBinding(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var purpose = parts[1];
+    var lane = CliArgumentParser.ParseModelLane(parts[2]);
+    var provider = parts[3];
+    var model = parts[4];
+    var name = parts.Count > 5 && !parts[5].StartsWith("--", StringComparison.Ordinal) ? parts[5] : null;
+    var subscriptionMode = lane == ModelLane.Local ? SubscriptionMode.LocalBridge : SubscriptionMode.ApiKey;
+    var binding = new ModelFunctionBinding(
+        purpose,
+        lane,
+        new ModelProfile(provider, model, ModelCapability.Text, subscriptionMode),
+        name);
+
+    var path = context.Workspace.ModelFunctionCatalogPath;
+    var bindings = ModelFunctionCatalogStore.Load(path).Bindings
+        .Where(existing => !(string.Equals(existing.Purpose, purpose, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.Model.ProviderName, provider, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.Model.ModelName, model, StringComparison.OrdinalIgnoreCase)))
+        .Append(binding)
+        .ToList();
+
+    var catalog = new ModelFunctionCatalog(bindings);
+    ModelFunctionCatalogStore.Save(path, catalog);
+    ConsoleViews.PrintModelFunctions(catalog);
 }
 
 private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> parts)
@@ -1629,7 +1667,8 @@ private static void RunAdvisorySemanticAcceptance(
         return;
     }
 
-    var judges = SemanticAcceptanceEvaluator.BuildJudges(context.Agents, context.Providers);
+    var modelFunctions = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
+    var judges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers);
     if (judges.Count == 0)
     {
         return;

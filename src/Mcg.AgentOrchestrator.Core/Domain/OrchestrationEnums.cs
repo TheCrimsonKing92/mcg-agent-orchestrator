@@ -1,5 +1,9 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+// Every AgentRole is an SDLC worker that executes a tracked goal Task via dispatch. Orchestrator-
+// INTERNAL model uses (the acceptance judge, future samplers/summarizers/oracles) are NOT roles —
+// they are ModelFunctionBinding entries (see ModelFunctions.cs), so this enum stays exhaustive and
+// catalog/health/seeder code can rely on "one agent per role" again.
 public enum AgentRole
 {
     Planner,
@@ -7,21 +11,7 @@ public enum AgentRole
     Researcher,
     Developer,
     Tester,
-    Reviewer,
-    // Not a task-executing role: a Judge agent is never assigned work tasks (no task carries
-    // RequiredRole=Judge), so task routing ignores it. It exists only to configure semantic-
-    // acceptance judge models — one Judge agent per lane (free-local / cheap-API / capable).
-    Judge
-}
-
-public static class AgentRoles
-{
-    // The SDLC work roles: every one carries a default catalog agent and can be assigned tasks.
-    // Excludes Judge, which is an opt-in semantic-acceptance judge lane — never assigned tasks and
-    // not present in the default catalog — so catalog/health/seeder code that requires "an agent per
-    // role" must iterate THIS, not Enum.GetValues<AgentRole>() (which would demand a Judge agent).
-    public static IReadOnlyList<AgentRole> Worker { get; } =
-        [.. Enum.GetValues<AgentRole>().Where(role => role != AgentRole.Judge)];
+    Reviewer
 }
 
 public enum AgentStatus

@@ -81,4 +81,15 @@ public static AgentRole ParseAgentRole(string value)
         ? role
         : throw new ArgumentException($"Role must be one of: {string.Join(", ", Enum.GetNames<AgentRole>())}.");
 }
+
+public static ModelLane ParseModelLane(string value)
+{
+    return value.Trim().ToLowerInvariant() switch
+    {
+        "local" => ModelLane.Local,
+        "cheap" or "cheap-api" or "cheapapi" => ModelLane.CheapApi,
+        "capable" or "paid" => ModelLane.Capable,
+        _ => throw new ArgumentException("Lane must be one of: local, cheap-api, capable.")
+    };
+}
 }

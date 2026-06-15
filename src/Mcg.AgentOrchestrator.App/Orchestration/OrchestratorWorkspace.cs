@@ -58,6 +58,10 @@ internal sealed record OrchestratorWorkspace(
     // acceptance diff. Source for the local-vs-subscription judge agreement comparison.
     public string SemanticAcceptanceLogPath => Path.Combine(OrchestratorDirectory, "semantic-acceptance.jsonl");
 
+    // Registry of orchestrator-internal model functions (acceptance-judge lanes, future samplers,
+    // etc.) — separate from the worker agent catalog so internal model uses never touch task routing.
+    public string ModelFunctionCatalogPath => Path.Combine(OrchestratorDirectory, "model-functions.json");
+
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.
     public string ResolveExecutionDirectory(GoalId goalId)

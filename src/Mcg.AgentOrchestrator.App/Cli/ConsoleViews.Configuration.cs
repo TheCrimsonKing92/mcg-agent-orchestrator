@@ -26,6 +26,22 @@ internal static partial class ConsoleViews
         }
     }
 
+    public static void PrintModelFunctions(ModelFunctionCatalog catalog)
+    {
+        if (catalog.Bindings.Count == 0)
+        {
+            Console.WriteLine("Model functions: (none configured)");
+            return;
+        }
+
+        Console.WriteLine("Model functions (orchestrator-internal model uses, not workers):");
+        foreach (var binding in catalog.Bindings)
+        {
+            var name = string.IsNullOrWhiteSpace(binding.Name) ? string.Empty : $" ({binding.Name})";
+            Console.WriteLine($"  {binding.Purpose} [{binding.Lane}]: {binding.Model.ProviderName}/{binding.Model.ModelName}{name}");
+        }
+    }
+
     public static void PrintWorkerProfiles(WorkerProfileCatalog catalog)
     {
         Console.WriteLine("Worker profiles:");

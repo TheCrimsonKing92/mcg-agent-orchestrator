@@ -76,22 +76,24 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
 
 internal static class SemanticAcceptanceEvaluator
 {
-    // Resolves the configured judge lanes from the agent catalog: one `ModelRegistrySemanticJudge`
-    // per Judge-role agent, deduped by provider/model so the same lane isn't judged twice. Returns
-    // empty when no Judge agent is configured (semantic acceptance then stays dormant).
+    // Resolves the configured judge lanes from the orchestrator's model-function registry: one
+    // `ModelRegistrySemanticJudge` per `acceptance-judge` binding, deduped by provider/model so the
+    // same lane isn't judged twice. Returns empty when none is configured (semantic acceptance then
+    // stays dormant). Judges are model-function bindings, NOT worker agents — they never touch task
+    // routing or the SDLC role catalog.
     public static IReadOnlyList<ISemanticJudge> BuildJudges(
-        IReadOnlyList<AgentDefinition> agents,
+        ModelFunctionCatalog modelFunctions,
         IModelProviderRegistry providers)
     {
-        return agents
-            .Where(agent => agent.Role == AgentRole.Judge)
+        return modelFunctions
+            .ForPurpose(ModelFunctionPurposes.AcceptanceJudge)
             .DistinctBy(
-                agent => $"{agent.Model.ProviderName}/{agent.Model.ModelName}",
+                binding => $"{binding.Model.ProviderName}/{binding.Model.ModelName}",
                 StringComparer.OrdinalIgnoreCase)
-            .Select(agent => (ISemanticJudge)new ModelRegistrySemanticJudge(
+            .Select(binding => (ISemanticJudge)new ModelRegistrySemanticJudge(
                 providers,
-                agent.Model.ProviderName,
-                agent.Model.ModelName))
+                binding.Model.ProviderName,
+                binding.Model.ModelName))
             .ToList();
     }
 

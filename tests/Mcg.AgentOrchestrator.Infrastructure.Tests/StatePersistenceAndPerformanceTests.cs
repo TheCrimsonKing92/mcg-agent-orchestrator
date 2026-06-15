@@ -74,7 +74,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         var restored = AgentCatalogStore.Load(agentPath);
 
-        foreach (var role in AgentRoles.Worker)
+        foreach (var role in Enum.GetValues<AgentRole>())
         {
             var agent = restored.GetRequired(role);
             Assert.Equal("Ollama", agent.Model.ProviderName);
@@ -94,7 +94,7 @@ public sealed class StatePersistenceAndPerformanceTests
         PrototypeWorkspaceSeeder.Create(root, AgentCatalog.OllamaDefault());
 
         var restored = AgentCatalogStore.Load(agentPath);
-        foreach (var role in AgentRoles.Worker)
+        foreach (var role in Enum.GetValues<AgentRole>())
         {
             Assert.Equal("Ollama", restored.GetRequired(role).Model.ProviderName);
         }

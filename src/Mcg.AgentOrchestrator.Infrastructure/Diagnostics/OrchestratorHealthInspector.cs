@@ -139,7 +139,7 @@ public static class OrchestratorHealthInspector
             provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) &&
             provider.IsConfigured &&
             provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase));
-        var roles = AgentRoles.Worker;
+        var roles = Enum.GetValues<AgentRole>();
 
         foreach (var role in roles)
         {

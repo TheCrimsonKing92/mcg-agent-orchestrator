@@ -146,42 +146,47 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("ollama:qwen3:8b", judge.Name);
     }
 
-    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_resolves_judge_role_agents_deduped")]
-    public void BuildJudgesResolvesJudgeRoleAgentsDeduped()
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_resolves_acceptance_judge_bindings_deduped")]
+    public void BuildJudgesResolvesAcceptanceJudgeBindingsDeduped()
     {
         var providers = new InMemoryModelProviderRegistry([]);
-        var agents = new[]
-        {
-            JudgeAgent("judge-local", "Ollama", "qwen3:8b", SubscriptionMode.LocalBridge),
-            JudgeAgent("judge-cheap", "Anthropic", "claude-haiku-4-5", SubscriptionMode.ApiKey),
-            JudgeAgent("judge-local-dup", "Ollama", "qwen3:8b", SubscriptionMode.LocalBridge),
-            new AgentDefinition(new AgentId("dev"), "Dev", AgentRole.Developer,
-                new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge))
-        };
+        var catalog = new ModelFunctionCatalog(
+        [
+            JudgeBinding(ModelLane.Local, "Ollama", "qwen3:8b"),
+            JudgeBinding(ModelLane.CheapApi, "Anthropic", "claude-haiku-4-5"),
+            JudgeBinding(ModelLane.Local, "Ollama", "qwen3:8b"),
+            // A binding for a DIFFERENT purpose must be ignored by the acceptance-judge resolution.
+            new ModelFunctionBinding("planner-sampler", ModelLane.CheapApi,
+                new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
 
-        var judges = SemanticAcceptanceEvaluator.BuildJudges(agents, providers);
+        var judges = SemanticAcceptanceEvaluator.BuildJudges(catalog, providers);
 
-        // Two distinct lanes; the duplicate Ollama/qwen3:8b judge is deduped; the Developer agent is ignored.
+        // Two distinct acceptance-judge lanes; the duplicate Ollama/qwen3:8b is deduped; the
+        // planner-sampler binding is ignored.
         Assert.Equal(2, judges.Count);
         Assert.True(judges.Any(judge => judge.Name == "ollama:qwen3:8b"));
         Assert.True(judges.Any(judge => judge.Name == "anthropic:claude-haiku-4-5"));
     }
 
-    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_empty_when_no_judge_agents")]
-    public void BuildJudgesEmptyWhenNoJudgeAgents()
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_empty_when_no_acceptance_judge_binding")]
+    public void BuildJudgesEmptyWhenNoAcceptanceJudgeBinding()
     {
         var providers = new InMemoryModelProviderRegistry([]);
-        var agents = new[]
-        {
-            new AgentDefinition(new AgentId("dev"), "Dev", AgentRole.Developer,
-                new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge))
-        };
+        var catalog = new ModelFunctionCatalog(
+        [
+            new ModelFunctionBinding("planner-sampler", ModelLane.CheapApi,
+                new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
 
-        Assert.Equal(0, SemanticAcceptanceEvaluator.BuildJudges(agents, providers).Count);
+        Assert.Equal(0, SemanticAcceptanceEvaluator.BuildJudges(catalog, providers).Count);
+        Assert.Equal(0, SemanticAcceptanceEvaluator.BuildJudges(ModelFunctionCatalog.Empty, providers).Count);
     }
 
-    private static AgentDefinition JudgeAgent(string id, string provider, string model, SubscriptionMode mode) =>
-        new(new AgentId(id), id, AgentRole.Judge, new ModelProfile(provider, model, ModelCapability.Text, mode));
+    private static ModelFunctionBinding JudgeBinding(ModelLane lane, string provider, string model) =>
+        new(ModelFunctionPurposes.AcceptanceJudge, lane,
+            new ModelProfile(provider, model, ModelCapability.Text,
+                lane == ModelLane.Local ? SubscriptionMode.LocalBridge : SubscriptionMode.ApiKey));
 
     private sealed class FakeJudge(string name, Func<SemanticAcceptanceInputs, SemanticAcceptanceVerdict> verdict) : ISemanticJudge
     {

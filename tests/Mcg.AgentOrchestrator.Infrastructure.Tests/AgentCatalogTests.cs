@@ -13,7 +13,7 @@ public sealed class AgentCatalogTests
 
     Assert.Equal(6, catalog.Agents.Count);
 
-    foreach (var role in AgentRoles.Worker)
+    foreach (var role in Enum.GetValues<AgentRole>())
     {
         var agent = catalog.GetRequired(role);
         Assert.Equal("OpenAI", agent.Model.ProviderName);
@@ -27,7 +27,7 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 
-    foreach (var role in AgentRoles.Worker)
+    foreach (var role in Enum.GetValues<AgentRole>())
     {
         var agent = catalog.GetRequired(role);
         Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Model.ReasoningEffort);
@@ -56,7 +56,7 @@ public sealed class AgentCatalogTests
 
     Assert.Equal(6, catalog.Agents.Count);
 
-    foreach (var role in AgentRoles.Worker)
+    foreach (var role in Enum.GetValues<AgentRole>())
     {
         var agent = catalog.GetRequired(role);
         Assert.Equal("Anthropic", agent.Model.ProviderName);

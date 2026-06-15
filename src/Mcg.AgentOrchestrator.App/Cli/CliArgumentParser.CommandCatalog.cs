@@ -54,6 +54,8 @@ private static bool IsSimpleCommand(string command)
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("agents", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("agent-add", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("model-functions", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("model-function-add", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("timeline", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("task-timeline", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("worker-profiles", StringComparison.OrdinalIgnoreCase) ||
