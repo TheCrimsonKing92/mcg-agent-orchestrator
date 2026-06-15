@@ -1098,3 +1098,10 @@ Goal 8a5ad09f: Make the test suite Linux-clean: branch the GoalWorktrees lock-ho
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - Make the large-paid subscription cost gate anomaly-aware: block only on promp...
+
+Goal 0de5f77b: Make the large-paid subscription cost gate anomaly-aware: block only on prompts disproportionate to task complexity (.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
