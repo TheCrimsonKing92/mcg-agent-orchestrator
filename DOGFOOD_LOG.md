@@ -1112,3 +1112,10 @@ Goal 87867f5f: Reconcile stale docs after the CS2012 root-cause fix and the anom
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-15 - SQLite hydration increment 1: add cheap metadata-only goal listing (ListGoalM...
+
+Goal cb62d4e7: SQLite hydration increment 1: add cheap metadata-only goal listing (ListGoalMetadataAsync on the repository interface.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)

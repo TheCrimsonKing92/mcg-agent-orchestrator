@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -1577,6 +1578,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
     }
 
+    // Advisory only (does not gate the merge): ask a local judge whether the diff actually
+    // accomplishes the objective, beyond passing tests. Records a receipt for the eventual
+    // local-vs-subscription comparison and blocking flip. Any failure is swallowed.
+    RunAdvisorySemanticAcceptance(context, goal, worktreePath, verification);
+
     var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
     var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
     if (merge is { FastForwarded: false })
@@ -1604,6 +1610,128 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     return true;
+}
+
+// Advisory semantic-acceptance pass: a local judge decides whether the diff actually accomplishes
+// the objective (not merely that tests pass), recorded as a receipt. ADVISORY — it never changes
+// the merge outcome and swallows every failure. Dormant unless a LocalBridge (Ollama) agent is
+// configured, so acceptance is unchanged on machines/tenants without one.
+private static void RunAdvisorySemanticAcceptance(
+    CliExecutionContext context,
+    Goal goal,
+    string? worktreePath,
+    AcceptanceVerificationResult? verification)
+{
+    if (worktreePath is null)
+    {
+        return;
+    }
+
+    var localAgent = context.Agents.FirstOrDefault(agent =>
+        agent.Model.SubscriptionMode == SubscriptionMode.LocalBridge);
+    if (localAgent is null)
+    {
+        return;
+    }
+
+    try
+    {
+        var criteria = goal.Tasks
+            .Select(task => task.VerificationPlan)
+            .Where(plan => !string.IsNullOrWhiteSpace(plan))
+            .Select(plan => plan!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var testSummary = verification?.Checks is { Count: > 0 } checks
+            ? string.Join(Environment.NewLine, checks
+                .Where(check => !string.IsNullOrWhiteSpace(check.ResultSummary))
+                .Select(check => $"{check.Name}: {check.ResultSummary}"))
+            : null;
+
+        var inputs = new SemanticAcceptanceInputs(
+            goal.Objective,
+            criteria,
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
+            GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
+            testSummary);
+
+        var judge = new ModelRegistrySemanticJudge(
+            context.Providers,
+            localAgent.Model.ProviderName,
+            localAgent.Model.ModelName);
+
+        var report = SemanticAcceptanceEvaluator
+            .EvaluateAsync([judge], inputs, TimeSpan.FromSeconds(90))
+            .GetAwaiter()
+            .GetResult();
+
+        PrintSemanticAcceptanceReport(report);
+        AppendSemanticAcceptanceReceipt(context, goal, report);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Semantic acceptance (advisory): skipped after error: {ex.Message}");
+    }
+}
+
+private static void PrintSemanticAcceptanceReport(SemanticAcceptanceReport report)
+{
+    Console.WriteLine("Semantic acceptance (advisory — does not gate the merge):");
+    foreach (var entry in report.Verdicts)
+    {
+        var verdict = entry.Verdict;
+        if (!verdict.IsValid)
+        {
+            Console.WriteLine($"  {entry.Judge}: no verdict ({string.Join("; ", verdict.ValidationErrors)})");
+            continue;
+        }
+
+        var summary = verdict.CriteriaMet ? "criteria MET" : "criteria NOT met";
+        Console.WriteLine($"  {entry.Judge}: {summary} (confidence {verdict.Confidence})");
+        foreach (var reason in verdict.Reasons.Take(3))
+        {
+            Console.WriteLine($"    - {reason}");
+        }
+
+        foreach (var unmet in verdict.UnmetCriteria)
+        {
+            Console.WriteLine($"    unmet: {unmet}");
+        }
+    }
+}
+
+private static void AppendSemanticAcceptanceReceipt(
+    CliExecutionContext context,
+    Goal goal,
+    SemanticAcceptanceReport report)
+{
+    var receipt = new
+    {
+        at = DateTimeOffset.UtcNow,
+        goalId = goal.Id.Value,
+        objective = goal.Objective,
+        consensus = report.Consensus,
+        judges = report.Verdicts.Select(entry => new
+        {
+            judge = entry.Judge,
+            valid = entry.Verdict.IsValid,
+            criteriaMet = entry.Verdict.CriteriaMet,
+            confidence = entry.Verdict.Confidence,
+            reasons = entry.Verdict.Reasons,
+            unmetCriteria = entry.Verdict.UnmetCriteria,
+            errors = entry.Verdict.ValidationErrors
+        })
+    };
+
+    var path = context.Workspace.SemanticAcceptanceLogPath;
+    var directory = Path.GetDirectoryName(path);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.AppendAllText(path, JsonSerializer.Serialize(receipt) + Environment.NewLine);
 }
 
 // Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the

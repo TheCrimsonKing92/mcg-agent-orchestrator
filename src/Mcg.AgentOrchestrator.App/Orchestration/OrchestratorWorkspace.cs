@@ -53,6 +53,11 @@ internal sealed record OrchestratorWorkspace(
 
     public string DashboardUrlFilePath => Path.Combine(OrchestratorDirectory, ".dashboard-url");
 
+    // Append-only advisory log of semantic-acceptance verdicts (one JSON object per line), kept in
+    // the orchestrator state directory (NOT a goal worktree) so writing a receipt never dirties an
+    // acceptance diff. Source for the local-vs-subscription judge agreement comparison.
+    public string SemanticAcceptanceLogPath => Path.Combine(OrchestratorDirectory, "semantic-acceptance.jsonl");
+
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.
     public string ResolveExecutionDirectory(GoalId goalId)

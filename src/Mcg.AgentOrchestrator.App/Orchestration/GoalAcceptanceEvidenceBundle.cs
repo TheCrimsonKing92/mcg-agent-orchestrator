@@ -326,6 +326,16 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
     public static string[] GetChangedFiles(string workingDirectory) =>
         SplitLines(RunGit(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)));
 
+    // Bounded unified diff of the goal branch against its base, for feeding an advisory semantic
+    // judge. Truncated so a large change cannot blow the judge's context/cost budget.
+    public static string GetDiffExcerpt(string workingDirectory, int maxChars = 6000)
+    {
+        var diff = RunGit(workingDirectory, "diff", BuildDiffSpec(workingDirectory));
+        return diff.Length <= maxChars
+            ? diff
+            : diff[..maxChars] + $"{Environment.NewLine}...(diff truncated at {maxChars} chars)";
+    }
+
     private static string BuildDiffSpec(string workingDirectory)
     {
         if (GitSucceeds(workingDirectory, "rev-parse", "--verify", "main"))
