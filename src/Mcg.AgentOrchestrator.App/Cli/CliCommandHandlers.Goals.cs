@@ -1675,8 +1675,8 @@ private static void RunAdvisorySemanticAcceptance(
     }
 
     var modelFunctions = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
-    var judges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers);
-    if (judges.Count == 0)
+    var baseJudges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers);
+    if (baseJudges.Count == 0)
     {
         return;
     }
@@ -1696,12 +1696,18 @@ private static void RunAdvisorySemanticAcceptance(
                 .Select(check => $"{check.Name}: {check.ResultSummary}"))
             : null;
 
+        var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath);
         var inputs = new SemanticAcceptanceInputs(
             goal.Objective,
             criteria,
             GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
             GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
-            testSummary);
+            testSummary,
+            perFileDiffs);
+
+        var judges = baseJudges
+            .Select(j => (ISemanticJudge)new RecursivePerFileSemanticJudge(j))
+            .ToList();
 
         var report = SemanticAcceptanceEvaluator
             .EvaluateAsync(judges, inputs, TimeSpan.FromSeconds(90))

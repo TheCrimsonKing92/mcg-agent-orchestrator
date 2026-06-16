@@ -183,6 +183,104 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal(0, SemanticAcceptanceEvaluator.BuildJudges(ModelFunctionCatalog.Empty, providers).Count);
     }
 
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_one_not_met_makes_overall_not_met")]
+    public async Task RecursiveJudgeAndAggregatesOneNotMetMakesOverallNotMet()
+    {
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            var file = inputs.ChangedFiles.Count > 0 ? inputs.ChangedFiles[0] : string.Empty;
+            return file == "src/A.cs"
+                ? new SemanticAcceptanceVerdict(true, "high", ["A ok"], [], [])
+                : new SemanticAcceptanceVerdict(false, "medium", ["B missing X"], ["X not implemented"], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective",
+            [],
+            ["src/A.cs", "src/B.cs"],
+            string.Empty,
+            null,
+            [("src/A.cs", "diff A"), ("src/B.cs", "diff B")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.True(verdict.IsValid);
+        Assert.False(verdict.CriteriaMet);
+        Assert.True(verdict.UnmetCriteria.Contains("X not implemented"));
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_all_met_makes_overall_met")]
+    public async Task RecursiveJudgeAndAggregatesAllMetMakesOverallMet()
+    {
+        var leaf = new FakeJudge("leaf", inputs =>
+            new SemanticAcceptanceVerdict(true, "high", [$"{inputs.ChangedFiles[0]} ok"], [], []));
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective",
+            [],
+            ["src/A.cs", "src/B.cs"],
+            string.Empty,
+            null,
+            [("src/A.cs", "diff A"), ("src/B.cs", "diff B")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_falls_back_to_whole_diff_when_no_per_file_diffs")]
+    public async Task RecursiveJudgeFallsBackToWholeDiffWhenNoPerFileDiffs()
+    {
+        var leafCallCount = 0;
+        string? capturedDiff = null;
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            leafCallCount++;
+            capturedDiff = inputs.DiffExcerpt;
+            return new SemanticAcceptanceVerdict(true, "high", ["whole diff ok"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = SampleInputs(); // PerFileDiffs is null — should delegate to leaf with whole diff
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.Equal(1, leafCallCount);
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+        Assert.Equal(inputs.DiffExcerpt, capturedDiff);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_name_wraps_leaf_name")]
+    public void RecursiveJudgeNameWrapsLeafName()
+    {
+        var leaf = new FakeJudge("ollama:qwen3:8b", _ => SemanticAcceptanceVerdict.Invalid("unused"));
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        Assert.Equal("recursive(ollama:qwen3:8b)", judge.Name);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_confidence_is_lowest_among_valid_verdicts")]
+    public async Task RecursiveJudgeConfidenceIsLowest()
+    {
+        var verdicts = new[] { "high", "medium", "low" };
+        var idx = 0;
+        var leaf = new FakeJudge("leaf", _ =>
+            new SemanticAcceptanceVerdict(true, verdicts[idx++], [], [], []));
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "obj", [], ["a", "b", "c"], string.Empty, null,
+            [("a", "diff a"), ("b", "diff b"), ("c", "diff c")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.True(verdict.IsValid);
+        Assert.Equal("low", verdict.Confidence);
+    }
+
     private static ModelFunctionBinding JudgeBinding(ModelLane lane, string provider, string model) =>
         new(ModelFunctionPurposes.AcceptanceJudge, lane,
             new ModelProfile(provider, model, ModelCapability.Text,

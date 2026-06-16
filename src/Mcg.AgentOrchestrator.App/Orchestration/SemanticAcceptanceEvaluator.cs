@@ -74,6 +74,71 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
     }
 }
 
+// Decorator that runs a leaf judge once per changed file rather than once over the whole diff,
+// fixing the 6KB truncation blind spot for large changes. Falls back to whole-diff judging when
+// PerFileDiffs is empty (graceful degradation for callers that don't populate it).
+internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
+{
+    private readonly ISemanticJudge _leaf;
+
+    public RecursivePerFileSemanticJudge(ISemanticJudge leaf) => _leaf = leaf;
+
+    public string Name => $"recursive({_leaf.Name})";
+
+    public async Task<SemanticAcceptanceVerdict> JudgeAsync(
+        SemanticAcceptanceInputs inputs,
+        CancellationToken cancellationToken)
+    {
+        var perFileDiffs = inputs.PerFileDiffs;
+        if (perFileDiffs is null or { Count: 0 })
+        {
+            return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
+        }
+
+        var perFileVerdicts = await Task.WhenAll(
+            perFileDiffs.Select(file => _leaf.JudgeAsync(
+                inputs with
+                {
+                    DiffExcerpt = file.Diff,
+                    ChangedFiles = [file.File],
+                    PerFileDiffs = null
+                },
+                cancellationToken)))
+            .ConfigureAwait(false);
+
+        return Aggregate(perFileVerdicts);
+    }
+
+    private static SemanticAcceptanceVerdict Aggregate(SemanticAcceptanceVerdict[] verdicts)
+    {
+        var valid = verdicts.Where(v => v.IsValid).ToList();
+        if (valid.Count == 0)
+        {
+            return SemanticAcceptanceVerdict.Invalid(
+                "RecursivePerFileSemanticJudge: no valid per-file verdict to aggregate.");
+        }
+
+        var criteriaMet = valid.All(v => v.CriteriaMet);
+        var confidence = LowestConfidence(valid.Select(v => v.Confidence));
+        var reasons = valid.SelectMany(v => v.Reasons).ToList();
+        var unmet = valid.SelectMany(v => v.UnmetCriteria).Distinct(StringComparer.Ordinal).ToList();
+        return new SemanticAcceptanceVerdict(criteriaMet, confidence, reasons, unmet, []);
+    }
+
+    private static string LowestConfidence(IEnumerable<string> confidences)
+    {
+        static int Rank(string c) => c switch
+        {
+            "high" => 3,
+            "medium" => 2,
+            "low" => 1,
+            _ => 0
+        };
+
+        return confidences.OrderBy(Rank).FirstOrDefault() ?? "unknown";
+    }
+}
+
 internal static class SemanticAcceptanceEvaluator
 {
     // Resolves the configured judge lanes from the orchestrator's model-function registry: one

@@ -25,7 +25,8 @@ internal sealed record SemanticAcceptanceInputs(
     IReadOnlyList<string> AcceptanceCriteria,
     IReadOnlyList<string> ChangedFiles,
     string DiffExcerpt,
-    string? TestSummary);
+    string? TestSummary,
+    IReadOnlyList<(string File, string Diff)>? PerFileDiffs = null);
 
 internal static class SemanticAcceptancePlanner
 {
