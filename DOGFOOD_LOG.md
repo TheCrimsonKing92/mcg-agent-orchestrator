@@ -1317,3 +1317,10 @@ Goal 4bdddea9: Add a backlog-reopen CLI verb, the inverse of backlog-close, to t
 
 - Operator gate: Developer: pass — 18/18 BacklogStore tests passed (17 pre-existing + 1 new BacklogStore_reopen_flips_done_back_to_open) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped CRUD extension - clear mirror pattern with no architectural ambiguity.
+
+## 2026-06-16 - Fix the orchestrator workspace so its
+
+Goal fb00a150: Fix the orchestrator workspace so its .orchestrator state directory is anchored to a deterministic repository root in.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 631b44a). Acceptance passed.
+
+- Operator gate: Developer: pass — 1058/1058 (275 Core + 783 Infrastructure including 10 new WorkspaceConsolidatorTests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file C# implementation with file system path resolution, SQLite state merging, and test writing - handled all parts without needing more capability.
