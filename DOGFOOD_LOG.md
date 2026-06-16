@@ -1238,3 +1238,10 @@ Goal 0308f6dd: Fix the subscription-CLI semantic-acceptance judge lanes timing o
 
 - Operator gate: (no receipt)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted interface extension + logic guard in internal types with clear existing conventions - task shape was straightforward, well within sonnet's scope.
+
+## 2026-06-16 - Move the backlog from markdown to a STRUCTURED STORE as source-of-truth, with...
+
+Goal cf5df54d: Move the backlog from markdown to a STRUCTURED STORE as source-of-truth, with a generated markdown VIEW (decision rec.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 7f427f5). Acceptance passed.
+
+- Operator gate: Developer: 17 new BacklogStore tests pass; full suite 1022/1022 green (no regressions) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - medium-scope multi-file feature - straightforward pattern replication; well within model capability.
