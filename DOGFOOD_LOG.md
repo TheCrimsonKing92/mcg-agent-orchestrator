@@ -1175,3 +1175,10 @@ Goal be05acb8: Add recency/time decay to ModelOutcomeScorecard so recent outcome
 
 - Operator gate: Developer: Core.Tests 275/275 passed (273 pre-existing + 2 new); Infrastructure ModelOutcomeScorecard 5/5 passed (no regressions) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - pure logic + test change on a small, well-bounded file - no infra or UI work needed
+
+## 2026-06-16 - Add best-of-N sampling to 'ideate', mirroring the best-of-N planner just land...
+
+Goal c0b3cd76: Add best-of-N sampling to 'ideate', mirroring the best-of-N planner just landed (GoalDagDecompositionPlanner.SelectBe.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 09737d4). Acceptance passed.
+
+- Operator gate: Developer: pass — 987 total, 0 failed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file C# edit with unit tests - pattern was clear from the existing `HandlePlan`/`GoalDagDecompositionPlanner.SelectBestOfN` implementation, no architectural ambiguity.
