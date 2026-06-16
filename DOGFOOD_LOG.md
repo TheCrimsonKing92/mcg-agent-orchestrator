@@ -1182,3 +1182,10 @@ Goal c0b3cd76: Add best-of-N sampling to 'ideate', mirroring the best-of-N plann
 
 - Operator gate: Developer: pass — 987 total, 0 failed (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file C# edit with unit tests - pattern was clear from the existing `HandlePlan`/`GoalDagDecompositionPlanner.SelectBestOfN` implementation, no architectural ambiguity.
+
+## 2026-06-16 - Speed up the acceptance gate by removing the REDUNDANT GRANULAR test checks, ...
+
+Goal c632f84b: Speed up the acceptance gate by removing the REDUNDANT GRANULAR test checks, keeping the solution-level one. config/a.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 422baf0). Acceptance passed.
+
+- Operator gate: Developer: not-run (no dotnet test invoked; test assertions for "infrastructure tests"/"core tests" in GoalAcceptanceVerifierTests.cs and RepositoryChangeClassifierTests.cs exercise RepositoryTestImpactPlanner logic, not the manifest file; SemanticAcceptanceTests.cs uses "core tests" as fake test output text in SampleInputs, also unrelated to the manifest) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - overkill - single-file JSON edit with targeted grep verification - task required no reasoning beyond read, verify, delete two JSON objects, confirm valid JSON; Haiku would handle this.
