@@ -28,6 +28,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --simple");
                 var simpleAliasParts = new List<string> { "simple-goal", parts[1] };
+                foreach (var flag in parts.Skip(2).Where(p =>
+                    p.StartsWith("--", StringComparison.Ordinal) &&
+                    !p.Equals("--simple", StringComparison.OrdinalIgnoreCase)))
+                    simpleAliasParts.Add(flag);
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
             }
             // --from-backlog: delegate to backlog-intake (objective used as heading filter)
@@ -70,6 +74,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, parts[1]);
             ConsoleViews.PrintGoal(context.CurrentGoal);
+            if (HasCliConfirmation(parts, "--dispatch"))
+            {
+                EnsureCliConfirmation(
+                    parts,
+                    "--confirm-dispatch-start",
+                    "simple-goal --dispatch requires --confirm-dispatch-start as the certainty signal.");
+                var dispatchParts = new List<string> { "subscription-dispatch", "1", "--confirm-dispatch-start" };
+                TryExecuteWorkerCommand("subscription-dispatch", dispatchParts, context);
+            }
             return true;
 
         case "lifecycle-simple-goal":

@@ -101,7 +101,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("simple-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, string.Join(' ', args.Skip(1))];
+        return NormalizeObjectiveCommandWithFlags(args);
     }
 
     if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||

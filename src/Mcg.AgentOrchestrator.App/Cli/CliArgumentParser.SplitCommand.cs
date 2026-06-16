@@ -150,7 +150,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("simple-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, remainder];
+        return SplitObjectiveCommandWithFlags(command, remainder);
     }
 
     if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||

@@ -4210,6 +4210,82 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_with_dispatch_creates_goal_and_launches_worker")]
+    public void CliSimpleGoalWithDispatchCreatesGoalAndLaunchesWorker()
+    {
+        var root = CreateTempDirectory();
+        // Fake a git worktree at root so WorkerSandboxCapabilityPlanner passes the .git existence
+        // check when no goal worktree has been created yet (EnsureGoalWorkspaceForDispatch is a
+        // no-op outside a real git repo, so the working directory falls back to root).
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: fake");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        try
+        {
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["simple-goal", "Implement src/Test.cs with tests coverage", "--dispatch", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Single(kernel.Goals);
+            Xunit.Assert.NotNull(currentGoal);
+            var task = currentGoal!.Tasks.Single();
+            Xunit.Assert.NotNull(task.LastDispatch);
+            Xunit.Assert.NotNull(task.LastProcess);
+        }
+        finally
+        {
+            var goal = kernel.Goals.FirstOrDefault();
+            if (goal is not null)
+            {
+                var task = goal.Tasks.SingleOrDefault();
+                if (task?.LastProcess is { IsRunning: true })
+                    new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_without_dispatch_only_creates_goal")]
+    public void CliSimpleGoalWithoutDispatchOnlyCreatesGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Inspect docs/usage.md and summarize"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Null(currentGoal!.Tasks.Single().LastDispatch);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_profile_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
     public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
