@@ -4356,6 +4356,170 @@ public sealed class CliCommandTests
             StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
+    public void CliSubscriptionDispatchWithConfirmDispatchStartPreparesAndLaunches()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("One-step subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        try
+        {
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["subscription-dispatch", "1", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.NotNull(task.LastDispatch);
+            Xunit.Assert.NotNull(task.LastProcess);
+        }
+        finally
+        {
+            if (task.LastProcess is { IsRunning: true })
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_without_confirm_dispatch_start_only_prepares")]
+    public void CliSubscriptionDispatchWithoutConfirmDispatchStartOnlyPrepares()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Prepare-only subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
+    public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("One-step profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Start-Sleep -Seconds 60")]);
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        try
+        {
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["profile-dispatch", "1", "codex-cli", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.NotNull(task.LastDispatch);
+            Xunit.Assert.NotNull(task.LastProcess);
+        }
+        finally
+        {
+            if (task.LastProcess is { IsRunning: true })
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_without_confirm_dispatch_start_only_prepares")]
+    public void CliProfileDispatchWithoutConfirmDispatchStartOnlyPrepares()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Prepare-only profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Write-Output ok")]);
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["profile-dispatch", "1", "codex-cli"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
     private static string CaptureConsole(Action action)
     {
         var originalOut = Console.Out;
