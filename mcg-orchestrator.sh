@@ -9,12 +9,25 @@ APP_PROJECT="$ROOT/src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.cspro
 APP_DLL="$ROOT/src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 LOCK_DIR="$ROOT/.build-lock"
 
-# Reclaim stale lock (left by a prior crashed invocation; trap doesn't fire on SIGKILL)
+# Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
+# If owner.pid exists and the owner process is alive, do NOT reclaim.
+# If owner.pid is missing or unreadable, fall back to a generous 300-s age threshold.
 if [ -d "$LOCK_DIR" ]; then
-    lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 9999999999)
-    now=$(date +%s)
-    if [ $((now - lock_mtime)) -gt 60 ]; then
-        rmdir "$LOCK_DIR" 2>/dev/null || true
+    PID_FILE="$LOCK_DIR/owner.pid"
+    reclaim=0
+    if [ -f "$PID_FILE" ] && owner_pid=$(cat "$PID_FILE" 2>/dev/null) && [ -n "$owner_pid" ]; then
+        if ! kill -0 "$owner_pid" 2>/dev/null; then
+            reclaim=1
+        fi
+    else
+        lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 9999999999)
+        now=$(date +%s)
+        if [ $((now - lock_mtime)) -gt 300 ]; then
+            reclaim=1
+        fi
+    fi
+    if [ "$reclaim" -eq 1 ]; then
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
     fi
 fi
 
@@ -28,11 +41,13 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     fi
     sleep 1
 done
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+# Record our PID so concurrent invocations can test our liveness before reclaiming.
+echo $$ > "$LOCK_DIR/owner.pid"
+trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 dotnet build "$APP_PROJECT" --nologo -v q >/dev/null 2>&1
 
-rmdir "$LOCK_DIR" 2>/dev/null || true
+rm -rf "$LOCK_DIR" 2>/dev/null || true
 trap - EXIT
 
 exec dotnet "$APP_DLL" "$@"
