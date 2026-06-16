@@ -1217,3 +1217,10 @@ Goal 6c9da183: Fix the codex/spark semantic-acceptance judge lane that returns '
 
 - Operator gate: Developer: PASS — 997/997 green (24 SemanticAcceptance tests including 3 new) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped two-file bug fix with targeted tests - root cause pre-diagnosed, changes mechanical.
+
+## 2026-06-16 - Correct the subscription-CLI semantic-acceptance judge to reason at HIGH effo...
+
+Goal dfbb5f16: Correct the subscription-CLI semantic-acceptance judge to reason at HIGH effort (judging is reasoning-heavy), and mak.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - mechanical three-file fix with clear test evidence - no ambiguity in scope.
