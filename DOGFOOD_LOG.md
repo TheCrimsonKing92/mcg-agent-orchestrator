@@ -1245,3 +1245,10 @@ Goal cf5df54d: Move the backlog from markdown to a STRUCTURED STORE as source-of
 
 - Operator gate: Developer: 17 new BacklogStore tests pass; full suite 1022/1022 green (no regressions) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - medium-scope multi-file feature - straightforward pattern replication; well within model capability.
+
+## 2026-06-16 - Enable SAFE PARALLEL dispatch by removing the per-invocation App rebuild from...
+
+Goal 3174f2c4: Enable SAFE PARALLEL dispatch by removing the per-invocation App rebuild from the orchestrator launcher. Today mcg-or.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a75ccabc5d3d1a28901da99136d28f8480bc4292). Acceptance passed.
+
+- Operator gate: Developer: not-run (launchers not in test suite per brief); manual verification: single CMD invocation exit 0; second CMD invocation (no-op build 1.38s) exit 0; two concurrent Start-Process cmd.exe invocations both exit 0 with no CS2012; bash single invocation exit 0; two concurrent bash invocations both succeed (MSB3026 copy retry warning on /mnt/c DrvFs, which is MSBuild's own retry — not CS2012; not a factor on Linux ext4); lock dir cleaned up after all runs (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell script locking with cross-platform edge cases - model navigated `timeout`/`choice` stdin redirection failures, CRLF encoding, and DrvFs vs ext4 lock semantics without needing a larger model.
