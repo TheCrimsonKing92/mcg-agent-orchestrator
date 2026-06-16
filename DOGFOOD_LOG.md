@@ -1310,3 +1310,10 @@ Goal 0bbe5928: Make background dispatch self-healing so a hung worker wrapper no
 
 - Operator gate: Developer: 773/773 green including both new tests (pipe-drain timeout + claude-cli hung-wrapper reap) and both formerly-failing regressions (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - async pipe drain + process-tree signaling, test-suite regression fix - well-scoped infrastructure change with clear discriminant (childPid null = worker exited)
+
+## 2026-06-16 - Add a backlog-reopen CLI verb, the inverse of backlog-close, to the SQLite-ba...
+
+Goal 4bdddea9: Add a backlog-reopen CLI verb, the inverse of backlog-close, to the SQLite-backed backlog store. (1) Add a method to .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 49e0e72). Acceptance passed.
+
+- Operator gate: Developer: pass — 18/18 BacklogStore tests passed (17 pre-existing + 1 new BacklogStore_reopen_flips_done_back_to_open) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped CRUD extension - clear mirror pattern with no architectural ambiguity.
