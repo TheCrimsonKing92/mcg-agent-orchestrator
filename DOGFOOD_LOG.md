@@ -1210,3 +1210,10 @@ Goal ec847d68: Add a one-step create-and-dispatch flag so an operator who alread
 
 - Operator gate: (no receipt)
 - model fit: good - task was pure seam-reuse; no new dispatch logic, all branching follows existing patterns
+
+## 2026-06-16 - Fix the codex/spark semantic-acceptance judge lane that returns 'no verdict'
+
+Goal 6c9da183: Fix the codex/spark semantic-acceptance judge lane that returns 'no verdict'. ROOT CAUSE (diagnosed): SubscriptionCli.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5d0d585). Acceptance passed.
+
+- Operator gate: Developer: PASS — 997/997 green (24 SemanticAcceptance tests including 3 new) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped two-file bug fix with targeted tests - root cause pre-diagnosed, changes mechanical.
