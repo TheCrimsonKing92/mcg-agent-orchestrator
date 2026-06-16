@@ -195,6 +195,25 @@ public sealed class BackgroundDispatchRunner
                 return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, diagnostic);
             }
 
+            if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
+            {
+                TryKillProcess(processRecord.ProcessId);
+                if (RequiresFileChangeEvidence(task) &&
+                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
+                    wt.IsClean && wt.HasRelevantCommitAfterDispatch)
+                {
+                    var reapNote =
+                        "Background dispatch wrapper appears hung with stalled heartbeat; no exit file was written. " +
+                        $"Wrapper process reaped; task completed based on relevant file-change evidence " +
+                        $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
+                    TryWriteExitCode(processRecord.ExitCodePath, 0);
+                    return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 0, reapNote);
+                }
+
+                TryWriteExitCode(processRecord.ExitCodePath, 1);
+                return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic);
+            }
+
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
             {
                 TryKillProcess(processRecord.ProcessId);
@@ -713,6 +732,47 @@ public sealed class BackgroundDispatchRunner
         }
 
         diagnostic = $"Background dispatch wrapper appears hung after codex final output; no exit file was written after {FormatDuration(idleFor)} of idle logs. Marking dispatch failed with captured stdout/stderr evidence.";
+        return true;
+    }
+
+    private bool TryDetectHungSubscriptionWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        // Codex dispatches have their own output-content detector; skip them here.
+        if (IsCodexDispatch(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
+        {
+            return false;
+        }
+
+        // Only Developer/Tester subscription dispatches carry file-change evidence;
+        // other roles use the broader progress-stall timeout instead.
+        if (!RequiresFileChangeEvidence(task))
+        {
+            return false;
+        }
+
+        if (!TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        {
+            return false;
+        }
+
+        // A null childPid means the worker process has exited. Combined with a stalled
+        // progress heartbeat and no exit file, this is the hung-wrapper signature:
+        // the worker finished but a grandchild inherited the pipe and blocked the drain.
+        if (heartbeat.ChildProcessId is not null)
+        {
+            return false;
+        }
+
+        var idleFor = _clock.UtcNow - heartbeat.LastProgressAt;
+        if (idleFor < _postOutputIdleTimeout)
+        {
+            return false;
+        }
+
+        diagnostic =
+            $"Background dispatch wrapper appears hung with stalled heartbeat for {FormatDuration(idleFor)}; no exit file was written. " +
+            "Marking dispatch based on worktree evidence.";
         return true;
     }
 

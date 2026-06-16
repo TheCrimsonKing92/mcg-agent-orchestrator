@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -35,6 +36,66 @@ public sealed class DispatchProcessHostTests
         }
         finally
         {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_exit_file_when_grandchild_holds_pipe_after_worker_exits")]
+    public void DispatchProcessHostWritesExitFileWhenGrandchildHoldsPipeAfterWorkerExits()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-drain-test", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        Process? hostProcess = null;
+        try
+        {
+            // Command: spawn a long-running grandchild (inheriting the pipe handles),
+            // then the worker exits immediately. The dispatch host must time-out the
+            // drain and write the exit-code file rather than blocking forever.
+            var hangCommand = OperatingSystem.IsWindows()
+                ? "$psi = [System.Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 30 127.0.0.1'); $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; [void][System.Diagnostics.Process]::Start($psi); Write-Output 'done'; exit 0"
+                : "$psi = [System.Diagnostics.ProcessStartInfo]::new('sleep', '60'); $psi.UseShellExecute = $false; [void][System.Diagnostics.Process]::Start($psi); Write-Output 'done'; exit 0";
+
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            var stdoutPath = Path.Combine(dir, "out.log");
+            var stderrPath = Path.Combine(dir, "err.log");
+            var exitCodePath = Path.Combine(dir, "exit.txt");
+
+            DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
+                hangCommand,
+                dir,
+                stdoutPath,
+                stderrPath,
+                exitCodePath,
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false));
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = dir
+            };
+            startInfo.ArgumentList.Add("exec");
+            startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+            startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
+            startInfo.ArgumentList.Add(parametersPath);
+
+            hostProcess = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start dispatch host.");
+
+            // The exit file must appear within the drain timeout (~12 s) plus buffer.
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            while (!File.Exists(exitCodePath) && DateTimeOffset.UtcNow < deadline)
+                Thread.Sleep(200);
+
+            Assert.True(File.Exists(exitCodePath));
+            Assert.Equal("0", File.ReadAllText(exitCodePath));
+        }
+        finally
+        {
+            try { hostProcess?.Kill(entireProcessTree: true); } catch { }
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }

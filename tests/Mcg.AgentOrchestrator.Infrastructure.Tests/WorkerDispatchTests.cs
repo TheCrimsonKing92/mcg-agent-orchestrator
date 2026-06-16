@@ -2445,6 +2445,55 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_claude_cli_wrapper_completes_when_worktree_evidence_passes")]
+    public void BackgroundDispatchRunnerHungClaudeCliWrapperCompletesWhenWorktreeEvidencePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Hung claude-cli wrapper with evidence", [taskSpec]);
+    var agent = new AgentDefinition(
+        new AgentId("claude-developer"),
+        "Claude Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+    RunGit(worktree, ["add", "-A"], now.AddMinutes(-4));
+    RunGit(worktree, ["commit", "-m", "Feature"], now.AddMinutes(-4));
+
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, "dev.out.log");
+    var stderr = Path.Combine(logs, "dev.err.log");
+    var exit = Path.Combine(logs, "dev.exit.txt");
+    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stderr, string.Empty);
+
+    var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    // Heartbeat: childPid=null signals the worker has already exited; stalled progress
+    // beyond postOutputIdleTimeout of 2 minutes triggers the hung-wrapper detector.
+    WriteHeartbeat(process, now.AddMinutes(-3), now.AddMinutes(-3), "running", 0, 0, childPid: null);
+
+    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(0, completed.ExitCode);
+    Assert.Equal(clock.UtcNow, completed.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.True(File.Exists(exit));
+    Assert.Equal("0", File.ReadAllText(exit));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("Wrapper process reaped", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_Developer_worktree_evidence_missing")]
     public void BackgroundDispatchRunnerHungWrapperFailsWhenDeveloperWorktreeEvidenceMissing()
 {
@@ -3709,13 +3758,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     DateTimeOffset lastProgressAt,
     string state,
     long stdoutBytes,
-    long stderrBytes)
+    long stderrBytes,
+    int? childPid = 888888)
 {
+    var childPidJson = childPid.HasValue ? childPid.Value.ToString() : "null";
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
         "\"pid\":999999," +
-        "\"childPid\":888888," +
+        $"\"childPid\":{childPidJson}," +
         $"\"startedAt\":\"{process.StartedAt:O}\"," +
         $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
         $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +

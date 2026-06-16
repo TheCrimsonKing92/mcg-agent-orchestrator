@@ -138,15 +138,29 @@ public static class DispatchProcessHost
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
             using var stdout = new FileStream(parameters.StdoutPath, FileMode.Create, FileAccess.Write, FileShare.Read);
             using var stderr = new FileStream(parameters.StderrPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-            var copyOut = worker.StandardOutput.BaseStream.CopyToAsync(stdout);
-            var copyErr = worker.StandardError.BaseStream.CopyToAsync(stderr);
+            using var drainCts = new CancellationTokenSource();
+            var copyOut = worker.StandardOutput.BaseStream.CopyToAsync(stdout, drainCts.Token);
+            var copyErr = worker.StandardError.BaseStream.CopyToAsync(stderr, drainCts.Token);
 
             heartbeatTimer.Change(HeartbeatInterval, HeartbeatInterval);
 
             worker.WaitForExit();
-            Task.WaitAll(copyOut, copyErr);
-            stdout.Flush();
-            stderr.Flush();
+
+            // Drain with a bounded timeout. A grandchild that inherits the pipe handle
+            // (e.g. claude-cli's node child) keeps CopyToAsync alive indefinitely after
+            // the worker exits. Cap the wait and cancel so the finally block always
+            // writes the exit-code file.
+            const int DrainTimeoutMs = 12_000;
+            var drainTasks = new Task[] { copyOut, copyErr };
+            if (!Task.WaitAll(drainTasks, DrainTimeoutMs))
+            {
+                drainCts.Cancel();
+                TryKillWorkerTree(worker);
+                try { Task.WaitAll(drainTasks, 2000); } catch { }
+            }
+
+            try { stdout.Flush(); } catch { }
+            try { stderr.Flush(); } catch { }
             exitCode = worker.ExitCode;
         }
         catch
@@ -177,6 +191,18 @@ public static class DispatchProcessHost
         catch
         {
             return 0L;
+        }
+    }
+
+    private static void TryKillWorkerTree(Process worker)
+    {
+        try
+        {
+            worker.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best-effort: worker may have already exited.
         }
     }
 
