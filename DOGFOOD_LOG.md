@@ -1324,3 +1324,10 @@ Goal fb00a150: Fix the orchestrator workspace so its .orchestrator state directo
 
 - Operator gate: Developer: pass — 1058/1058 (275 Core + 783 Infrastructure including 10 new WorkspaceConsolidatorTests) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file C# implementation with file system path resolution, SQLite state merging, and test writing - handled all parts without needing more capability.
+
+## 2026-06-16 - Let goal briefs be supplied from a file so large briefs no longer overflow th...
+
+Goal 779f1a7b: Let goal briefs be supplied from a file so large briefs no longer overflow the CLI parser or trip permission limits. .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a6a7256). Acceptance passed.
+
+- Operator gate: Developer: pass — 2 new tests green, 1061 total (275 Core + 786 Infrastructure), ALL GREEN (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped CLI parser extension with conditional file I/O - clear scope, no architectural ambiguity, single-pass implementation.
