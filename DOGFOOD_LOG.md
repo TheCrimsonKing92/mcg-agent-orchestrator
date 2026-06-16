@@ -1231,3 +1231,10 @@ Goal f843345c: Speed up acceptance to a SINGLE test run WITHOUT changing which c
 
 - Operator gate: Developer: pass — 1000/1000 green; 3 new tests added (deferred pass, deferred fail, sln-file-reading path) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - bounded algorithmic change in a single method with clear test-driven acceptance criteria - the implementation is self-contained and the verification is deterministic.
+
+## 2026-06-16 - Fix the subscription-CLI semantic-acceptance judge lanes timing out
+
+Goal 0308f6dd: Fix the subscription-CLI semantic-acceptance judge lanes timing out. The RecursivePerFileSemanticJudge (src/Mcg.Agent.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted interface extension + logic guard in internal types with clear existing conventions - task shape was straightforward, well within sonnet's scope.
