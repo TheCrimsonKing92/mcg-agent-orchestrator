@@ -1196,3 +1196,10 @@ Goal 9429cf4f: Re-enable test parallelization in the Infrastructure test suite t
 
 - Operator gate: Developer: pass — 712/712 across 3 consecutive parallel runs, ~75s execution per run (was ~2.5min serial) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - large mechanical refactoring with precise file edits and build/test verification - adequate for pattern-matching code transformation across many files.
+
+## 2026-06-16 - Add a SUBSCRIPTION-CLI semantic-acceptance judge so acceptance-judge lanes ca...
+
+Goal 5a353018: Add a SUBSCRIPTION-CLI semantic-acceptance judge so acceptance-judge lanes can run via the claude-cli/codex-cli SUBSC.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit ecfb465). Acceptance passed.
+
+- Operator gate: Developer: pass/992 — 275 Core + 717 Infrastructure, ALL GREEN (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - cross-file feature addition with clear spec and stable API to mirror - adequate for this level of reading + writing without needing extended reasoning.
