@@ -1161,3 +1161,17 @@ Goal a46d77ec: Add a one-step dispatch-and-start option so a certain operator ne
 
 - Operator gate: Developer: pass/976 — 273 Core + 703 Infrastructure, ALL GREEN (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - CLI handler refactor + targeted test addition - task was well-scoped and evidence was directly locatable in source; no planning overhead needed.
+
+## 2026-06-16 - Make 'acceptance' commit its own DOGFOOD_LOG
+
+Goal 5189d2a9: Make 'acceptance' commit its own DOGFOOD_LOG.md record so dogfood entries don't accumulate uncommitted on main. In sr.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 1ebc63d). Acceptance passed.
+
+- Operator gate: Developer: pass — 982/982 green; new test Cli_acceptance_commits_dogfood_entry_after_recording passed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted feature addition with git process pattern reuse - task is well-scoped file editing with clear acceptance criteria; Sonnet handled it cleanly.
+
+## 2026-06-16 - Add recency/time decay to ModelOutcomeScorecard so recent outcomes count more...
+
+Goal be05acb8: Add recency/time decay to ModelOutcomeScorecard so recent outcomes count more than old ones. Today src/Mcg.AgentOrche.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit cc3d204). Acceptance passed.
+
+- Operator gate: Developer: Core.Tests 275/275 passed (273 pre-existing + 2 new); Infrastructure ModelOutcomeScorecard 5/5 passed (no regressions) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - pure logic + test change on a small, well-bounded file - no infra or UI work needed
