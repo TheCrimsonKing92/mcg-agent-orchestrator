@@ -1289,3 +1289,10 @@ Goal 0397cb10: Make the JSON config stores write atomically and load corruption-
 
 - Operator gate: Developer: pass — 1042/1042 green; 13 new regression tests covering atomic write, .bak recovery, and corruption fallback across all three stores (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped file-IO hardening with regression tests - applied a well-defined atomic-write/bak-recovery pattern uniformly across three static store classes; no novel design decisions required.
+
+## 2026-06-16 - Fix a false-positive in the worker sandbox capability guard
+
+Goal ebc15ae9: Fix a false-positive in the worker sandbox capability guard. WorkerSandboxCapabilityPlanner (src/Mcg.AgentOrchestrato.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit aea0562). Acceptance passed.
+
+- Operator gate: Developer: pass — Failed: 0, Passed: 4, Skipped: 0, Total: 4 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted guard logic fix + test authoring - the change was a localized string-matching refinement; no architectural reasoning required.
