@@ -7,7 +7,7 @@ internal sealed class ConductorBatchLoop
 {
     internal const string StopFileName = ".conduct-stop";
     internal const int DefaultMaxVerifyRetries = 2;
-    internal const int DefaultWatchIntervalSeconds = 30;
+    internal const int DefaultWatchIntervalSeconds = 15;
     internal const int WatchStopPollIntervalSeconds = 5;
 
     private readonly Action<AgentOrchestratorKernel> _sweep;
@@ -25,7 +25,9 @@ internal sealed class ConductorBatchLoop
         int? maxIterations = null,
         int maxVerifyRetries = DefaultMaxVerifyRetries,
         TimeSpan? watchInterval = null,
-        Action<BatchTickSummary>? onTick = null)
+        Action<BatchTickSummary>? onTick = null,
+        Func<TimeSpan, bool>? sleepFunc = null,
+        TimeSpan? maxDuration = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -37,19 +39,29 @@ internal sealed class ConductorBatchLoop
         var totalEscalated = 0;
         var totalRetried = 0;
         var stopRequested = false;
+        var started = DateTimeOffset.UtcNow;
 
         while (true)
         {
             if (IsStopRequested(stopFilePath))
             {
                 stopRequested = true;
+                EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
                 break;
             }
 
             if (maxIterations.HasValue && totalTicks >= maxIterations.Value)
             {
+                EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
+                break;
+            }
+
+            if (maxDuration.HasValue && DateTimeOffset.UtcNow - started >= maxDuration.Value)
+            {
+                EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
+                Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
                 break;
             }
 
@@ -61,11 +73,15 @@ internal sealed class ConductorBatchLoop
 
             if (eligible.Length == 0)
             {
+                EmitProgress($"LOOP_STOP tick={totalTicks} reason=all-done-or-escalated");
                 Console.WriteLine($"[conduct --loop] All goals done or escalated; loop complete after {totalTicks} ticks.");
                 break;
             }
 
             totalTicks++;
+            var tickLines = new List<string>();
+            EmitProgress($"TICK tick={totalTicks} eligible={eligible.Length}", tickLines);
+
             var tickAdvanced = 0;
             var tickHeld = 0;
             var tickEscalated = 0;
@@ -80,6 +96,7 @@ internal sealed class ConductorBatchLoop
                 var depHoldReason = GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
                 if (depHoldReason is not null)
                 {
+                    EmitProgress($"GOAL goal={label} result=held reason={Sanitize(depHoldReason)}", tickLines);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {depHoldReason}");
                     kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}");
                     // A goal held due to a failed/escalated dependency will never unblock; exclude it.
@@ -108,12 +125,14 @@ internal sealed class ConductorBatchLoop
                         retries++;
                         retryCounts[goal.Id.Value] = retries;
                         tickRetried++;
+                        EmitProgress($"GOAL goal={label} result=retry attempt={retries}/{maxVerifyRetries}", tickLines);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {goal.Id.Value[..8]} acceptance flake (retry {retries}/{maxVerifyRetries})");
                         kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})");
                         result = driver.AdvanceOnce(goal, policy);
                     }
                 }
 
+                EmitProgress(FormatGoalProgressLine(label, result.Outcome), tickLines);
                 Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
                 kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
 
@@ -128,23 +147,36 @@ internal sealed class ConductorBatchLoop
             totalEscalated += tickEscalated;
             totalRetried   += tickRetried;
 
+            EmitProgress($"TICK_END tick={totalTicks} advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} done={tickDone}", tickLines);
             Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
 
-            var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false);
+            var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false)
+            {
+                ProgressLines = tickLines
+            };
             if (tickAdvanced == 0 && tickDone == 0)
             {
                 if (watchInterval is null)
                 {
+                    EmitProgress($"LOOP_STOP tick={totalTicks} reason=no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     onTick?.Invoke(tickSummary);
                     break;
                 }
 
-                Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {watchInterval.Value.TotalSeconds:0}s for workers to complete.");
+                var sleepSeconds = (int)watchInterval.Value.TotalSeconds;
+                EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
+                Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
                 onTick?.Invoke(tickSummary with { WatchSleeping = true });
-                if (SleepWithStopCheck(watchInterval.Value, stopFilePath))
+
+                var stopDuringSleep = sleepFunc is not null
+                    ? sleepFunc(watchInterval.Value)
+                    : SleepWithStopCheck(watchInterval.Value, stopFilePath);
+
+                if (stopDuringSleep)
                 {
                     stopRequested = true;
+                    EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
                     break;
                 }
@@ -157,6 +189,30 @@ internal sealed class ConductorBatchLoop
 
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, stopRequested);
     }
+
+    // Emit a compact progress line to stdout with immediate flush; optionally accumulate in a list.
+    private static void EmitProgress(string line, List<string>? accumulator = null)
+    {
+        Console.WriteLine(line);
+        Console.Out.Flush();
+        accumulator?.Add(line);
+    }
+
+    // Sanitize a detail string for compact line format (no spaces, max 40 chars).
+    private static string Sanitize(string value)
+    {
+        var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
+        return s.Length > 40 ? s[..40] : s;
+    }
+
+    private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome) => outcome switch
+    {
+        ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}",
+        ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}",
+        ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}",
+        ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}",
+        _                                   => $"GOAL goal={label} result=unknown"
+    };
 
     private static string? GetDependencyHoldReason(
         Goal goal,
@@ -229,4 +285,7 @@ public sealed record BatchTickSummary(
     int Escalated,
     int Retried,
     int Done,
-    bool WatchSleeping);
+    bool WatchSleeping)
+{
+    public IReadOnlyList<string>? ProgressLines { get; init; }
+}

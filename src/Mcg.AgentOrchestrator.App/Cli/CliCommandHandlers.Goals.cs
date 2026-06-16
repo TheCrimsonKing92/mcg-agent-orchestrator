@@ -531,16 +531,22 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
 
                 // --watch: sleep instead of exiting when all goals are held, enabling continuous unattended operation.
+                // Accepts --poll-seconds N (preferred) or legacy --watch-interval N.
                 TimeSpan? watchInterval = null;
                 if (HasCliConfirmation(parts, "--watch"))
                 {
-                    var intervalSec = GetFlagValue(parts, "--watch-interval");
+                    var intervalSec = GetFlagValue(parts, "--poll-seconds") ?? GetFlagValue(parts, "--watch-interval");
                     var seconds = intervalSec is not null
                         ? int.Parse(intervalSec, System.Globalization.CultureInfo.InvariantCulture)
                         : ConductorBatchLoop.DefaultWatchIntervalSeconds;
                     watchInterval = TimeSpan.FromSeconds(seconds);
                     Console.WriteLine($"[conduct --loop --watch] Watch mode active; will sleep {seconds}s between ticks when all goals are held.");
                 }
+
+                // --max-duration N: stop after N seconds of wall-clock time (independent of --max-iterations).
+                TimeSpan? maxDuration = null;
+                if (GetFlagValue(parts, "--max-duration") is { } mdStr)
+                    maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
 
                 // SSE push: discover dashboard URL and build onTick callback.
                 Action<BatchTickSummary>? onTick = null;
@@ -561,7 +567,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 var loopSummary = new ConductorBatchLoop().Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
-                    watchInterval: watchInterval, onTick: onTick);
+                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }

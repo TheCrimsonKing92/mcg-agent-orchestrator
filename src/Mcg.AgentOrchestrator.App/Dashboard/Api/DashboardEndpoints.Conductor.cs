@@ -24,7 +24,10 @@ internal static partial class DashboardEndpoints
             var done = root.TryGetProperty("done", out var d) ? d.GetInt32() : 0;
             var watchSleeping = root.TryGetProperty("watchSleeping", out var ws) && ws.GetBoolean();
 
-            ConductorEventBus.RecordTick(tick, advanced, held, escalated, retried, done, watchSleeping);
+            var progressLines = root.TryGetProperty("progressLines", out var pl)
+                ? pl.EnumerateArray().Select(e => e.GetString() ?? string.Empty).Where(s => s.Length > 0).ToList()
+                : null;
+            ConductorEventBus.RecordTick(tick, advanced, held, escalated, retried, done, watchSleeping, progressLines);
             return Results.Ok(new { recorded = true, tick });
         }
         catch (JsonException ex)

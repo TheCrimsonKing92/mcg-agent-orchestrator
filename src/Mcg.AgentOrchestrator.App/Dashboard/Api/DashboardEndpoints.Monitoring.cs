@@ -80,6 +80,18 @@ internal static partial class DashboardEndpoints
                     id: null,
                     context.RequestAborted);
                 sinceTickSeq = tick.Seq;
+                if (tick.ProgressLines is { Count: > 0 })
+                {
+                    foreach (var line in tick.ProgressLines)
+                    {
+                        await DashboardMonitoringEvents.WriteServerSentEventAsync(
+                            context.Response.Body,
+                            DashboardMonitoringEvents.ConductorProgressEventName,
+                            new { line },
+                            id: null,
+                            context.RequestAborted);
+                    }
+                }
             }
 
             await DashboardMonitoringEvents.WriteKeepAliveAsync(context.Response.Body, context.RequestAborted);

@@ -17,12 +17,13 @@ internal static class ConductorEventBus
         int escalated,
         int retried,
         int done,
-        bool watchSleeping)
+        bool watchSleeping,
+        IReadOnlyList<string>? progressLines = null)
     {
         lock (_lock)
         {
             var seq = System.Threading.Interlocked.Increment(ref _seq);
-            _recent.Add(new ConductorTickEvent(seq, DateTimeOffset.UtcNow, tick, advanced, held, escalated, retried, done, watchSleeping));
+            _recent.Add(new ConductorTickEvent(seq, DateTimeOffset.UtcNow, tick, advanced, held, escalated, retried, done, watchSleeping, progressLines));
             if (_recent.Count > 200)
                 _recent.RemoveAt(0);
         }
@@ -54,4 +55,5 @@ internal sealed record ConductorTickEvent(
     int Escalated,
     int Retried,
     int Done,
-    bool WatchSleeping);
+    bool WatchSleeping,
+    IReadOnlyList<string>? ProgressLines = null);

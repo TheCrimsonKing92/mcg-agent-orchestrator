@@ -43,7 +43,8 @@ internal static class ConductorTickPusher
                 tick.Escalated,
                 tick.Retried,
                 tick.Done,
-                tick.WatchSleeping
+                tick.WatchSleeping,
+                progressLines = (IReadOnlyList<string>?)tick.ProgressLines ?? Array.Empty<string>()
             };
             var json = JsonSerializer.Serialize(dto);
             var content = new StringContent(json, Encoding.UTF8, "application/json");

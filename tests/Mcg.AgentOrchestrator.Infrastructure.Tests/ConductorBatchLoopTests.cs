@@ -334,4 +334,170 @@ public sealed class ConductorBatchLoopTests
             if (File.Exists(stopFile)) File.Delete(stopFile);
         }
     }
+
+    // ── Injectable sleep: sleepFunc is called during watch sleep ─────────
+
+    [Xunit.Fact(DisplayName = "WatchMode_InjectableSleep_SleepFuncCalledAndContinues")]
+    public void WatchMode_InjectableSleep_SleepFuncCalledAndContinues()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held goal");
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                return true;
+            });
+
+        var stopFile = NoStopPath();
+        var sleepCallCount = 0;
+        var allIntervalsCorrect = true;
+
+        // Inject a sleep func that records calls and returns false (no stop).
+        // Stop via stop file after 2nd sleep call.
+        Func<TimeSpan, bool> fakeSleep = interval =>
+        {
+            sleepCallCount++;
+            if (interval != TimeSpan.FromSeconds(15))
+                allIntervalsCorrect = false;
+            if (sleepCallCount >= 2)
+                File.WriteAllText(stopFile, "stop");
+            return File.Exists(stopFile);
+        };
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+                watchInterval: TimeSpan.FromSeconds(15),
+                sleepFunc: fakeSleep);
+
+            // Sleep func should have been called at least once (goal dispatched, next tick held)
+            Assert.True(sleepCallCount >= 1);
+            // Each sleep call should have received the watch interval
+            Assert.True(allIntervalsCorrect);
+            // Loop should have stopped via the stop file
+            Assert.True(summary.StopRequested);
+        }
+        finally
+        {
+            if (File.Exists(stopFile)) File.Delete(stopFile);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WatchMode_InjectableSleep_StopReturnedFromSleepFunc")]
+    public void WatchMode_InjectableSleep_StopReturnedFromSleepFunc()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held goal");
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                return true;
+            });
+
+        var stopFile = NoStopPath();
+
+        // Inject a sleep func that immediately signals stop (returns true).
+        Func<TimeSpan, bool> fakeSleepStop = _ => true;
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+                watchInterval: TimeSpan.FromSeconds(15),
+                sleepFunc: fakeSleepStop);
+
+            // Loop exits because the sleep func returned true (stop signaled during sleep)
+            Assert.True(summary.StopRequested);
+        }
+        finally
+        {
+            if (File.Exists(stopFile)) File.Delete(stopFile);
+        }
+    }
+
+    // ── Progress emission: compact lines emitted to stdout ───────────────
+
+    [Xunit.Fact(DisplayName = "ProgressEmission_CompactLinesIncludeTickAndGoalEvents")]
+    public void ProgressEmission_CompactLinesIncludeTickAndGoalEvents()
+    {
+        var (kernel, _) = SimpleGoal();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        var stopFile = NoStopPath();
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            new ConductorBatchLoop().Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile, maxIterations: 1);
+        });
+
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        Assert.True(lines.Any(l => l.StartsWith("TICK tick=1 eligible=", StringComparison.Ordinal)));
+        Assert.True(lines.Any(l => l.StartsWith("GOAL goal=", StringComparison.Ordinal)));
+        Assert.True(lines.Any(l => l.StartsWith("TICK_END tick=1 ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressEmission_TickSummaryContainsProgressLines")]
+    public void ProgressEmission_TickSummaryContainsProgressLines()
+    {
+        var (kernel, _) = SimpleGoal();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        var stopFile = NoStopPath();
+        BatchTickSummary? capturedTick = null;
+
+        new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+            maxIterations: 1, onTick: t => capturedTick = t);
+
+        Assert.True(capturedTick is not null);
+        var lines = capturedTick!.ProgressLines;
+        Assert.True(lines is not null && lines.Count > 0);
+        Assert.True(lines!.Any(l => l.StartsWith("TICK ", StringComparison.Ordinal)));
+        Assert.True(lines.Any(l => l.StartsWith("GOAL ", StringComparison.Ordinal)));
+    }
+
+    // ── Duration cap: loop exits when max-duration is reached ────────────
+
+    [Xunit.Fact(DisplayName = "MaxDuration_ParameterAcceptedAndLoopExitsCleanly")]
+    public void MaxDuration_ParameterAcceptedAndLoopExitsCleanly()
+    {
+        var (kernel, _) = SimpleGoal();
+
+        // Goal is always held (concurrent cap) so without a cap the loop would exit on first no-progress tick.
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        var stopFile = NoStopPath();
+
+        // maxDuration is generous (won't fire), maxIterations not set.
+        // Loop exits on first held tick via the no-watch-mode no-progress path.
+        var summary = new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile,
+            maxDuration: TimeSpan.FromSeconds(60));
+
+        // Loop exits cleanly (not via stop file, not via duration cap — via no-progress exit path)
+        Assert.False(summary.StopRequested);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(0, summary.Advanced);
+    }
 }
