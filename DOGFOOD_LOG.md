@@ -1268,3 +1268,10 @@ Goal f2deaac8: Fix `subscription-dispatch --goal` mis-targeting (resolved to the
 - Operator gate: full suite green (Core 275, Infrastructure 754, 0 failures).
 - CRITICAL finding (not yet fixed): the dispatch wrapper can hang AFTER the worker finishes+commits — no heartbeat, no auto-reconcile, command never returns. This (plus the session-limit case) makes manual worktree recovery the norm rather than the exception; the Claude Agent SDK worker harness is the real fix.
 - More friction surfaced this round: a stale `.build-lock` bricked the launcher until manually cleared (goal A territory); the entire agent catalog reverted to Ollama/ApiOnly (manual Developer restore); the `.git`-internals sandbox guard false-trips on any brief mentioning `.gitignore` (`WorkerSandboxCapabilityPlanner.cs:65` does `text.Contains(".git")`).
+
+## 2026-06-16 - Launcher hardening: stale-lock recovery + silent build + .build-lock gitignored
+
+Goal c7ca347f: Harden the launcher scripts. Developer task via Anthropic/claude-sonnet-4-6 (commit 54e92a8). This dispatch did NOT hang (clean exit 0) — the teardown hang is intermittent. Changes: `.gitignore` +`.build-lock`; mcg-orchestrator.cmd + .sh add stale-lock reclaim (remove the lock dir if its mtime is >60s old, i.e. left by a crashed prior invocation) and suppress build output (`>nul`/`>/dev/null`) with exit-code propagation.
+
+- Operator gate: full suite green (Core 275, Infrastructure 754); plus LIVE launcher smoke (not in the test suite): a normal command exits 0 with zero CA-warning lines, and a manually-backdated stale `.build-lock` is reclaimed and the command runs. Fixes the three issues this session repeatedly hit (lock brick, warning spam, nonzero exit on read commands).
+- Residual follow-up: reclaim is mtime-only (>60s), not PID-liveness as the brief also asked — a slow cold build (>60s) could be false-reclaimed by a concurrent invocation. Net-positive over today's permanent-brick-on-crash; PID-liveness hardening filed.
