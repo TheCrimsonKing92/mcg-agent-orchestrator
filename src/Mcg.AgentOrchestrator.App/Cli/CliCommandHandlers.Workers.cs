@@ -72,43 +72,91 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return true;
 
         case "profile-dispatch":
-            CliArgumentParser.RequirePartCount(parts, 3, "profile-dispatch <task-number> <profile-name>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var profileTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var profile = context.WorkerProfiles.GetRequired(parts[2]);
-            EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
-            var profileDispatch = GoalManagementCommandService.ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile, context.Agents);
-            Console.WriteLine($"Prompt: {profileDispatch.PromptPath}");
-            ConsoleViews.PrintTask(context.CurrentGoal, profileTask);
-            if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
-                LaunchLatestDispatch(context, context.CurrentGoal, profileTask, parts, "profile-dispatch");
-            return true;
-
-        case "profile-dispatch-ready":
-            CliArgumentParser.RequirePartCount(parts, 2, "profile-dispatch-ready <profile-name>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var readyProfile = context.WorkerProfiles.GetRequired(parts[1]);
-            EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
-            var dispatched = GoalManagementCommandService.ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile, context.Agents);
-            foreach (var dispatchResult in dispatched)
             {
-                Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} prompt: {dispatchResult.PromptPath}");
+                string? profileGoalPrefix = null;
+                string profileTaskNumber;
+                int profileIndex;
+                if (parts.Count > 1 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts.Count < 5)
+                        throw new ArgumentException("Usage: profile-dispatch [--goal <goal-prefix>] <task-number> <profile-name>");
+                    profileGoalPrefix = parts[2];
+                    profileTaskNumber = parts[3];
+                    profileIndex = 4;
+                }
+                else
+                {
+                    if (parts.Count < 3)
+                        throw new ArgumentException("Usage: profile-dispatch [--goal <goal-prefix>] <task-number> <profile-name>");
+                    profileTaskNumber = parts[1];
+                    profileIndex = 2;
+                }
+
+                context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, profileGoalPrefix);
+                var profileTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, profileTaskNumber);
+                var profile = context.WorkerProfiles.GetRequired(parts[profileIndex]);
+                EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
+                try
+                {
+                    var profileDispatch = GoalManagementCommandService.ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile, context.Agents);
+                    Console.WriteLine($"Prompt: {profileDispatch.PromptPath}");
+                    ConsoleViews.PrintTask(context.CurrentGoal, profileTask);
+                    if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
+                        LaunchLatestDispatch(context, context.CurrentGoal, profileTask, parts, "profile-dispatch");
+                    return true;
+                }
+                catch (InvalidOperationException profileEx)
+                {
+                    throw new InvalidOperationException(
+                        $"Goal '{context.CurrentGoal.Id.Value[..8]}' task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, profileTask.Id)}: {profileEx.Message}", profileEx);
+                }
             }
 
-            Console.WriteLine($"Profile dispatches created: {dispatched.Count}");
-            return dispatched.Count > 0;
+        case "profile-dispatch-ready":
+            {
+                string? readyGoalPrefix = null;
+                int readyProfileIndex = 1;
+                if (parts.Count > 1 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts.Count < 4)
+                        throw new ArgumentException("Usage: profile-dispatch-ready [--goal <goal-prefix>] <profile-name>");
+                    readyGoalPrefix = parts[2];
+                    readyProfileIndex = 3;
+                }
+                if (parts.Count <= readyProfileIndex)
+                    throw new ArgumentException("Usage: profile-dispatch-ready [--goal <goal-prefix>] <profile-name>");
+                context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, readyGoalPrefix);
+                var readyProfile = context.WorkerProfiles.GetRequired(parts[readyProfileIndex]);
+                EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
+                var dispatched = GoalManagementCommandService.ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile, context.Agents);
+                foreach (var dispatchResult in dispatched)
+                {
+                    Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} prompt: {dispatchResult.PromptPath}");
+                }
+
+                Console.WriteLine($"Profile dispatches created: {dispatched.Count}");
+                return dispatched.Count > 0;
+            }
 
         case "subscription-dispatch":
             var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>]");
             AcknowledgeSubscriptionLimitReviewFromCli(context, subscriptionTask, parts);
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal!);
-            var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles);
-            Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
-            Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
-            ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);
-            if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
-                LaunchLatestDispatch(context, context.CurrentGoal!, subscriptionTask, parts, "subscription-dispatch");
-            return true;
+            try
+            {
+                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles);
+                Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
+                Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
+                ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);
+                if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
+                    LaunchLatestDispatch(context, context.CurrentGoal!, subscriptionTask, parts, "subscription-dispatch");
+                return true;
+            }
+            catch (InvalidOperationException subscriptionEx)
+            {
+                throw new InvalidOperationException(
+                    $"Goal '{context.CurrentGoal!.Id.Value[..8]}' task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal!, subscriptionTask.Id)}: {subscriptionEx.Message}", subscriptionEx);
+            }
 
         case "subscription-dispatch-ready":
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "subscription-dispatch-ready [goal-prefix|--goal <goal-prefix>]");
@@ -356,6 +404,17 @@ private static (TaskSpec Task, int NextIndex) ResolveDispatchCommandTaskWithNext
 
         goalPrefix = parts[2];
         taskNumber = parts[3];
+        nextIndex = 4;
+    }
+    else if (parts.Count > 2 && parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        if (parts.Count < 4)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        goalPrefix = parts[3];
+        taskNumber = parts[1];
         nextIndex = 4;
     }
     else if (parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal))

@@ -1963,6 +1963,101 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(latestGoal.Tasks.Single().LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_goal_flag_targets_named_goal_over_current")]
+    public void CliSubscriptionDispatchGoalFlagTargetsNamedGoalOverCurrent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var olderGoal = kernel.CreateGoal(
+            "Keep older worker reachable",
+            [new TaskSpec(TaskId.New(), "Do older work", AgentRole.Developer)]);
+        var latestGoal = kernel.CreateGoal(
+            "Do newer work",
+            [new TaskSpec(TaskId.New(), "Do newer work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = latestGoal;
+        kernel.ActivateGoal(olderGoal.Id, agents);
+        kernel.ActivateGoal(latestGoal.Id, agents);
+        var olderWorktreePath = GoalWorktrees.WorktreePath(root, olderGoal.Id);
+        Directory.CreateDirectory(olderWorktreePath);
+        File.WriteAllText(Path.Combine(olderWorktreePath, ".git"), "gitdir: ..");
+        var olderGoalPrefix = olderGoal.Id.Value[..8];
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1", "--goal", olderGoalPrefix],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(olderGoal.Id, currentGoal!.Id);
+        Xunit.Assert.NotNull(olderGoal.Tasks.Single().LastDispatch);
+        Xunit.Assert.Null(latestGoal.Tasks.Single().LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_already_verified_task_throws_with_goal_context")]
+    public void CliSubscriptionDispatchAlreadyVerifiedTaskThrowsWithGoalContext()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Target goal",
+            [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id,
+            new TaskVerificationRecord("check", root, 0, "passed", "", DateTimeOffset.UtcNow));
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["subscription-dispatch", "1"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains(goal.Id.Value[..8], ex!.Message);
+        Xunit.Assert.Contains("task 1", ex.Message);
+        Xunit.Assert.Contains("passing verification", ex.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_logs_stream_arg_is_not_misinterpreted_as_goal_prefix")]
     public void CliLogsStreamArgIsNotMisinterpretedAsGoalPrefix()
     {
