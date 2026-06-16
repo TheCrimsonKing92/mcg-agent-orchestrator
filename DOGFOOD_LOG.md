@@ -1147,3 +1147,17 @@ Goal 534fedb2: Add best-of-N sampling to the planner DAG decomposition so one st
 
 - Operator gate: Developer: 972/972 pass (273 Core + 699 Infrastructure); 11/11 GoalDagPlan tests green including 3 new BestOfN tests (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature addition with unit tests - bounded change across 3 files, deterministic selection logic, parallel Task.WhenAll wiring; no overengineering needed.
+
+## 2026-06-16 - Implement recursive per-file diff judging for semantic acceptance (RLM survey...
+
+Goal a6ae7030: Implement recursive per-file diff judging for semantic acceptance (RLM survey #3), behind the existing ISemanticJudge.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 4a6cb18). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 273/273 Core.Tests + 704/704 Infrastructure.Tests (977 total) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file C# decorator implementation with async parallel aggregation - scoped change, no ambiguity in design, fits comfortably in context.
+
+## 2026-06-16 - Add a one-step dispatch-and-start option so a certain operator needn't run tw...
+
+Goal a46d77ec: Add a one-step dispatch-and-start option so a certain operator needn't run two commands. Today 'subscription-dispatch.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit ea936a8). Acceptance passed.
+
+- Operator gate: Developer: pass/976 — 273 Core + 703 Infrastructure, ALL GREEN (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - CLI handler refactor + targeted test addition - task was well-scoped and evidence was directly locatable in source; no planning overhead needed.
