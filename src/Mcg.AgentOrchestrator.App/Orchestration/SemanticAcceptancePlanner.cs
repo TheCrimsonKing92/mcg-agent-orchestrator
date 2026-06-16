@@ -35,6 +35,11 @@ internal static class SemanticAcceptancePlanner
         @"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Fallback: bare JSON object at the top level (no fences), possibly with preamble/postamble text.
+    private static readonly Regex BareJsonRegex = new(
+        @"\{[\s\S]*\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public static string BuildEvidenceContext(SemanticAcceptanceInputs inputs)
     {
         var sb = new StringBuilder();
@@ -112,14 +117,25 @@ internal static class SemanticAcceptancePlanner
         }
 
         var match = FencedJsonRegex.Match(workerOutput);
-        if (!match.Success)
+        string jsonCandidate;
+        if (match.Success)
         {
-            return SemanticAcceptanceVerdict.Invalid("Judge output did not contain a fenced JSON object.");
+            jsonCandidate = match.Groups[1].Value;
+        }
+        else
+        {
+            var bareMatch = BareJsonRegex.Match(workerOutput);
+            if (!bareMatch.Success)
+            {
+                return SemanticAcceptanceVerdict.Invalid("Judge output did not contain a fenced JSON object.");
+            }
+
+            jsonCandidate = bareMatch.Value;
         }
 
         try
         {
-            using var doc = JsonDocument.Parse(match.Groups[1].Value);
+            using var doc = JsonDocument.Parse(jsonCandidate);
             var root = doc.RootElement;
             if (!root.TryGetProperty("criteria_met", out var metElement) ||
                 (metElement.ValueKind != JsonValueKind.True && metElement.ValueKind != JsonValueKind.False))

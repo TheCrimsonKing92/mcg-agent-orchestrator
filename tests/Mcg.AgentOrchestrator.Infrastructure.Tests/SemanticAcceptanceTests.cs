@@ -46,6 +46,33 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal(1, verdict.UnmetCriteria.Count);
     }
 
+    [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_parses_a_bare_top_level_json_object")]
+    public void ParsesBareTopLevelJsonObject()
+    {
+        var output = """{"criteria_met": true, "confidence": "medium", "reasons": ["bare json ok"], "unmet_criteria": []}""";
+
+        var verdict = SemanticAcceptancePlanner.Parse(output);
+
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+        Assert.Equal("medium", verdict.Confidence);
+    }
+
+    [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_parses_bare_json_with_preamble_text")]
+    public void ParsesBareJsonWithPreambleText()
+    {
+        var output = """
+            Here is my verdict.
+            {"criteria_met": false, "confidence": "low", "reasons": ["incomplete"], "unmet_criteria": ["X missing"]}
+            """;
+
+        var verdict = SemanticAcceptancePlanner.Parse(output);
+
+        Assert.True(verdict.IsValid);
+        Assert.False(verdict.CriteriaMet);
+        Assert.Equal(1, verdict.UnmetCriteria.Count);
+    }
+
     [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_rejects_output_without_fenced_json")]
     public void RejectsOutputWithoutFencedJson()
     {
@@ -287,6 +314,35 @@ public sealed class SemanticAcceptanceTests
         Assert.True(verdict.CriteriaMet);
         Assert.Equal("high", verdict.Confidence);
         Assert.Equal("sub:claude-cli:claude-sonnet-4-6", judge.Name);
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_null_reasoning_effort_renders_low_in_command")]
+    public async Task SubscriptionCliJudgeNullReasoningEffortRendersLow()
+    {
+        string? capturedCommand = null;
+        Task<string> CapturingRunner(string command, string workingDirectory, CancellationToken ct)
+        {
+            capturedCommand = command;
+            return Task.FromResult("""
+                ```json
+                {"criteria_met": true, "confidence": "high", "reasons": ["ok"], "unmet_criteria": []}
+                ```
+                """);
+        }
+
+        var judge = new SubscriptionCliSemanticJudge(
+            "codex --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -p {promptPath}",
+            "codex-cli",
+            "gpt-5.3-codex-spark",
+            null,
+            CapturingRunner);
+
+        var verdict = await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.True(verdict.IsValid);
+        Assert.True(capturedCommand is not null);
+        Assert.True(capturedCommand!.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+        Assert.False(capturedCommand!.Contains("model_reasoning_effort=''", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_returns_invalid_when_runner_throws")]
