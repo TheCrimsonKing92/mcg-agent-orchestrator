@@ -1224,3 +1224,10 @@ Goal dfbb5f16: Correct the subscription-CLI semantic-acceptance judge to reason 
 
 - Operator gate: (no receipt)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - mechanical three-file fix with clear test evidence - no ambiguity in scope.
+
+## 2026-06-16 - Speed up acceptance to a SINGLE test run WITHOUT changing which checks the po...
+
+Goal f843345c: Speed up acceptance to a SINGLE test run WITHOUT changing which checks the policy gate sees. DO NOT modify config/acc.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 0df7124). Acceptance passed.
+
+- Operator gate: Developer: pass — 1000/1000 green; 3 new tests added (deferred pass, deferred fail, sln-file-reading path) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - bounded algorithmic change in a single method with clear test-driven acceptance criteria - the implementation is self-contained and the verification is deterministic.
