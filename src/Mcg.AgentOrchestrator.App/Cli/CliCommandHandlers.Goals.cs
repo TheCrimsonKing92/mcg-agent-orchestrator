@@ -26,11 +26,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
             {
-                CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --simple");
-                var simpleAliasParts = new List<string> { "simple-goal", parts[1] };
+                var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple");
+                var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
                 foreach (var flag in parts.Skip(2).Where(p =>
                     p.StartsWith("--", StringComparison.Ordinal) &&
-                    !p.Equals("--simple", StringComparison.OrdinalIgnoreCase)))
+                    !p.Equals("--simple", StringComparison.OrdinalIgnoreCase) &&
+                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)))
                     simpleAliasParts.Add(flag);
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
             }
@@ -48,31 +49,32 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --run: create 5-role goal then delegate to run-goal
             if (HasCliConfirmation(parts, "--run"))
             {
-                CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --run --confirm-batch-start");
-                var runObjective = parts[1];
+                var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run");
                 var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, runObjective);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                runParts.AddRange(parts.Skip(2).Where(p => !p.Equals("--run", StringComparison.OrdinalIgnoreCase)));
+                runParts.AddRange(parts.Skip(2).Where(p =>
+                    !p.Equals("--run", StringComparison.OrdinalIgnoreCase) &&
+                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)));
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
-            CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> [--simple] [--from-backlog] [--run]");
-            var goalObjectivePlan = GoalObjectivePlanner.Build(parts[1], simple: false);
+            var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
+            var goalObjectivePlan = GoalObjectivePlanner.Build(goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, parts[1]);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
         case "simple-goal":
-            CliArgumentParser.RequirePartCount(parts, 2, "simple-goal <objective>");
-            var simpleObjectivePlan = GoalObjectivePlanner.Build(parts[1], simple: true);
+            var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path>");
+            var simpleObjectivePlan = GoalObjectivePlanner.Build(simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, parts[1]);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, simpleObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
@@ -1523,9 +1525,25 @@ private static bool IsCliValueFlag(string part)
 {
     return part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--subscription-reasoning", StringComparison.OrdinalIgnoreCase);
+}
+
+private static string ResolveBriefObjective(IReadOnlyList<string> parts, string usage)
+{
+    var briefFilePath = GetFlagValue(parts, "--brief-file");
+    if (briefFilePath is not null)
+    {
+        if (!File.Exists(briefFilePath))
+        {
+            throw new InvalidOperationException($"--brief-file not found: {briefFilePath}");
+        }
+        return File.ReadAllText(briefFilePath, System.Text.Encoding.UTF8);
+    }
+    CliArgumentParser.RequirePartCount(parts, 2, usage);
+    return parts[1];
 }
 
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)

@@ -108,6 +108,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return args;
     }
 
+    if (command.Equals("goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeObjectiveCommandWithFlags(args);
+    }
+
     if (command.Equals("simple-goal", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeObjectiveCommandWithFlags(args);

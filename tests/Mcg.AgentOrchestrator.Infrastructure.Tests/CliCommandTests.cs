@@ -4381,6 +4381,60 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(currentGoal!.Tasks.Single().LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_brief_file_creates_goal_with_file_content")]
+    public void CliSimpleGoalBriefFileCreatesGoalWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Implement src/Mcg.AgentOrchestrator.App/Cli/CliArgumentParser.NormalizeArgs.cs with --brief-file flag support and tests coverage.\n\nMulti-line brief content that would overflow an inline CLI argument.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "--brief-file", briefPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_brief_file_missing_gives_clear_error")]
+    public void CliSimpleGoalBriefFileMissingGivesClearError()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var missingPath = Path.Combine(root, "does-not-exist.md");
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "--brief-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("--brief-file not found", ex.Message);
+        Xunit.Assert.Contains(missingPath, ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_profile_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
     public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
