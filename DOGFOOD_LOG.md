@@ -1275,3 +1275,10 @@ Goal c7ca347f: Harden the launcher scripts. Developer task via Anthropic/claude-
 
 - Operator gate: full suite green (Core 275, Infrastructure 754); plus LIVE launcher smoke (not in the test suite): a normal command exits 0 with zero CA-warning lines, and a manually-backdated stale `.build-lock` is reclaimed and the command runs. Fixes the three issues this session repeatedly hit (lock brick, warning spam, nonzero exit on read commands).
 - Residual follow-up: reclaim is mtime-only (>60s), not PID-liveness as the brief also asked — a slow cold build (>60s) could be false-reclaimed by a concurrent invocation. Net-positive over today's permanent-brick-on-crash; PID-liveness hardening filed.
+
+## 2026-06-16 - Fix a lost-update data-loss footgun in the SQLite state store (src/Mcg
+
+Goal 779159c0: Fix a lost-update data-loss footgun in the SQLite state store (src/Mcg.AgentOrchestrator.Infrastructure/Persistence/S.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 4d03ce9). Acceptance passed.
+
+- Operator gate: Developer: pass — 754/754 Infrastructure tests green; 13 SQLite repo tests including 2 new regression tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - surgical data-loss fix with verification - scope was two files, required reading kernel aggregate to confirm no hard-removals exist, then deleting dead code paths.
