@@ -100,7 +100,7 @@ public static class GoalWorktrees
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
-            throw new InvalidOperationException($"Goal '{Prefix(goalId)}' has no workspace to remove.");
+            return new GoalWorktreeRemoveResult("Workspace already clean; nothing to remove.", null, [], null);
         }
 
         var wasAlreadyUnregistered = !hasRegisteredWorktree;
@@ -113,6 +113,12 @@ public static class GoalWorktrees
                 throw new InvalidOperationException(
                     $"Failed to remove goal workspace '{path}': {removal.Error} Commit or discard its changes, or remove it manually with: git worktree remove --force \"{path}\"");
             }
+        }
+        else
+        {
+            // Worktree already unregistered; prune any stale tracking entries left by a prior
+            // partial removal so git's internal state is consistent before we finish cleanup.
+            RunGit(executionDirectory, "worktree", "prune");
         }
 
         if (Directory.Exists(path) && !DeleteDirectoryWithRetry(path))

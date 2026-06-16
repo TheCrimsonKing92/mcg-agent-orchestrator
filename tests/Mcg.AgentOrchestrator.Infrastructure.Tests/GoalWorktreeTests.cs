@@ -174,6 +174,74 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_is_idempotent_when_already_clean")]
+    public void GoalWorktreesRemoveIsIdempotentWhenAlreadyClean()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            GoalWorktrees.Ensure(repo, goalId);
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+            Assert.True(first.IsComplete);
+
+            // Second call with nothing left must return success, not throw.
+            var second = GoalWorktrees.Remove(repo, goalId);
+            Assert.True(second.IsComplete);
+            Assert.True(second.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_retries_and_succeeds_when_transient_lock_releases")]
+    public void GoalWorktreesRemoveRetriesAndSucceedsWhenTransientLockReleases()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+
+            // Simulate the half-removed state: worktree already unregistered, directory lingers.
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var lockedFile = Path.Combine(path, "transient-hold.log");
+            File.WriteAllText(lockedFile, "held");
+
+            GoalWorktreeRemoveResult result;
+            if (OperatingSystem.IsWindows())
+            {
+                // Hold the file exclusively then release it partway through the retry window so
+                // that a single Remove() call succeeds without requiring a second invocation.
+                var fs = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None);
+                _ = Task.Delay(150).ContinueWith(_ => fs.Dispose());
+
+                result = GoalWorktrees.Remove(repo, goalId);
+
+                Assert.True(result.IsComplete);
+            }
+            else
+            {
+                // POSIX: open handles do not prevent deletion, so removal completes immediately.
+                result = GoalWorktrees.Remove(repo, goalId);
+                Assert.True(result.IsComplete);
+            }
+
+            Assert.False(Directory.Exists(path));
+            Assert.False(BranchExists(repo, branch));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_partial_result_identifies_branch_state")]
     public void GoalWorktreesRemovePartialResultIdentifiesBranchState()
     {
