@@ -25,8 +25,14 @@ catch (Exception ex)
 var startupArgs = tenantSelection.CommandArgs.Count == 0
     ? []
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
+// MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
+// that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
+// the solution file so .orchestrator is always at the repo root regardless of launch CWD.
+var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
+    ? executionDirectory
+    : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
 var workspace = OrchestratorWorkspace.ForDirectory(
-    Environment.CurrentDirectory,
+    repoRoot,
     string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
     tenantSelection.TenantName);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
@@ -50,6 +56,7 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
 }
 
 await SqliteStateJsonMigrator.MigrateIfNeededAsync(workspace.StatePath, workspace.SqliteStatePath);
+await LegacyWorkspaceConsolidator.ConsolidateAsync(workspace);
 ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 var kernel = await stateRepository.LoadAsync();
 var currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);

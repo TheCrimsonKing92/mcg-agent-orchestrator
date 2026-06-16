@@ -20,6 +20,34 @@ internal sealed record OrchestratorWorkspace(
 {
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";
+    private const string SolutionFileName = "Mcg.AgentOrchestrator.sln";
+
+    // Walks up from startDirectory (then AppContext.BaseDirectory) looking for the
+    // solution file to find a stable repo root regardless of launch CWD.
+    public static string ResolveRepoRoot(string? startDirectory = null, string? fallbackDirectory = null)
+    {
+        var candidates = new[]
+        {
+            startDirectory ?? Environment.CurrentDirectory,
+            fallbackDirectory ?? AppContext.BaseDirectory
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                continue;
+
+            var dir = new DirectoryInfo(Path.GetFullPath(candidate));
+            while (dir != null)
+            {
+                if (File.Exists(Path.Combine(dir.FullName, SolutionFileName)))
+                    return dir.FullName;
+                dir = dir.Parent;
+            }
+        }
+
+        return startDirectory ?? Environment.CurrentDirectory;
+    }
 
     public static OrchestratorWorkspace ForDirectory(
         string rootDirectory,
