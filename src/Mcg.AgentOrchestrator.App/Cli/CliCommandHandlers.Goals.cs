@@ -226,7 +226,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "model-function-add":
-            CliArgumentParser.RequirePartCount(parts, 5, "model-function-add <purpose> <lane> <provider> <model> [name] [--subscription <worker-profile> [--subscription-model <alias>]]");
+            CliArgumentParser.RequirePartCount(parts, 5, "model-function-add <purpose> <lane> <provider> <model> [name] [--subscription <worker-profile> [--subscription-model <alias>] [--subscription-reasoning <effort>]]");
             AddModelFunctionBinding(context, parts);
             return false;
 
@@ -607,8 +607,9 @@ private static void AddModelFunctionBinding(CliExecutionContext context, IReadOn
     var subscriptionMode = lane == ModelLane.Local ? SubscriptionMode.LocalBridge : SubscriptionMode.ApiKey;
     var subscriptionProfileName = GetFlagValue(parts, "--subscription");
     var subscriptionModelAlias = GetFlagValue(parts, "--subscription-model");
+    var subscriptionReasoning = GetFlagValue(parts, "--subscription-reasoning");
     SubscriptionLaunchProfile? subscription = subscriptionProfileName is not null
-        ? new SubscriptionLaunchProfile(subscriptionProfileName, subscriptionModelAlias)
+        ? new SubscriptionLaunchProfile(subscriptionProfileName, subscriptionModelAlias, subscriptionReasoning)
         : null;
     var binding = new ModelFunctionBinding(
         purpose,
@@ -1517,7 +1518,8 @@ private static bool IsCliValueFlag(string part)
     return part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
-        part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase);
+        part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--subscription-reasoning", StringComparison.OrdinalIgnoreCase);
 }
 
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)

@@ -153,7 +153,7 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
         return template
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
-            .Replace("{subscriptionReasoningEffort}", Quote(string.IsNullOrWhiteSpace(reasoningEffort) ? AgentCatalog.RoutineSubscriptionReasoningEffort : reasoningEffort), StringComparison.OrdinalIgnoreCase)
+            .Replace("{subscriptionReasoningEffort}", Quote(string.IsNullOrWhiteSpace(reasoningEffort) ? AgentCatalog.ComplexReasoningEffort : reasoningEffort), StringComparison.OrdinalIgnoreCase)
             .Replace("{sandboxMode}", Quote("read-only"), StringComparison.OrdinalIgnoreCase)
             .Replace("{permissionMode}", Quote("plan"), StringComparison.OrdinalIgnoreCase)
             .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);

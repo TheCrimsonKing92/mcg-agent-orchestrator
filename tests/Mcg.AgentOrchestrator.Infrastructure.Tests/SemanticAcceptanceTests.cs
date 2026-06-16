@@ -316,8 +316,8 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("sub:claude-cli:claude-sonnet-4-6", judge.Name);
     }
 
-    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_null_reasoning_effort_renders_low_in_command")]
-    public async Task SubscriptionCliJudgeNullReasoningEffortRendersLow()
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_null_reasoning_effort_renders_high_in_command")]
+    public async Task SubscriptionCliJudgeNullReasoningEffortRendersHigh()
     {
         string? capturedCommand = null;
         Task<string> CapturingRunner(string command, string workingDirectory, CancellationToken ct)
@@ -341,8 +341,37 @@ public sealed class SemanticAcceptanceTests
 
         Assert.True(verdict.IsValid);
         Assert.True(capturedCommand is not null);
-        Assert.True(capturedCommand!.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+        Assert.True(capturedCommand!.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
         Assert.False(capturedCommand!.Contains("model_reasoning_effort=''", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_explicit_reasoning_effort_overrides_default")]
+    public async Task SubscriptionCliJudgeExplicitReasoningEffortOverridesDefault()
+    {
+        string? capturedCommand = null;
+        Task<string> CapturingRunner(string command, string workingDirectory, CancellationToken ct)
+        {
+            capturedCommand = command;
+            return Task.FromResult("""
+                ```json
+                {"criteria_met": true, "confidence": "high", "reasons": ["ok"], "unmet_criteria": []}
+                ```
+                """);
+        }
+
+        var judge = new SubscriptionCliSemanticJudge(
+            "codex --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -p {promptPath}",
+            "codex-cli",
+            "gpt-5.3-codex-spark",
+            "medium",
+            CapturingRunner);
+
+        var verdict = await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.True(verdict.IsValid);
+        Assert.True(capturedCommand is not null);
+        Assert.True(capturedCommand!.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
+        Assert.False(capturedCommand!.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_returns_invalid_when_runner_throws")]
