@@ -214,11 +214,29 @@ public static class WorkerProfileStore
             return WorkerProfileCatalog.Default();
         }
 
-        var catalog = JsonSerializer.Deserialize<WorkerProfileCatalog>(File.ReadAllText(path), JsonOptions());
-        var merged = catalog?.Profiles is null || catalog.Profiles.Count == 0
-            ? WorkerProfileCatalog.Default()
-            : WorkerProfileCatalog.Default().Merge(catalog);
-        return RepairBuiltInSubscriptionProfiles(merged);
+        var catalog = TryDeserialize(path);
+        if (catalog?.Profiles is not null && catalog.Profiles.Count > 0)
+        {
+            return RepairBuiltInSubscriptionProfiles(WorkerProfileCatalog.Default().Merge(catalog));
+        }
+
+        var bak = path + ".bak";
+        if (File.Exists(bak))
+        {
+            Console.Error.WriteLine($"[WorkerProfileStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty; recovering from backup.");
+            var bakCatalog = TryDeserialize(bak);
+            if (bakCatalog?.Profiles is not null && bakCatalog.Profiles.Count > 0)
+            {
+                return RepairBuiltInSubscriptionProfiles(WorkerProfileCatalog.Default().Merge(bakCatalog));
+            }
+            Console.Error.WriteLine("[WorkerProfileStore] WARNING: backup is also corrupt; falling back to built-in defaults.");
+        }
+        else
+        {
+            Console.Error.WriteLine($"[WorkerProfileStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty and no backup exists; falling back to built-in defaults.");
+        }
+
+        return RepairBuiltInSubscriptionProfiles(WorkerProfileCatalog.Default());
     }
 
     public static WorkerProfileCatalog LoadRequired(string path)
@@ -228,13 +246,24 @@ public static class WorkerProfileStore
             throw new FileNotFoundException("Worker profile file was not found.", path);
         }
 
-        var catalog = JsonSerializer.Deserialize<WorkerProfileCatalog>(File.ReadAllText(path), JsonOptions());
-        if (catalog?.Profiles is null || catalog.Profiles.Count == 0)
+        var catalog = TryDeserialize(path);
+        if (catalog?.Profiles is not null && catalog.Profiles.Count > 0)
         {
-            throw new InvalidDataException("Worker profile file did not contain any profiles.");
+            return new WorkerProfileCatalog([]).Merge(catalog);
         }
 
-        return new WorkerProfileCatalog([]).Merge(catalog);
+        var bak = path + ".bak";
+        if (File.Exists(bak))
+        {
+            Console.Error.WriteLine($"[WorkerProfileStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty; recovering from backup.");
+            var bakCatalog = TryDeserialize(bak);
+            if (bakCatalog?.Profiles is not null && bakCatalog.Profiles.Count > 0)
+            {
+                return new WorkerProfileCatalog([]).Merge(bakCatalog);
+            }
+        }
+
+        throw new InvalidDataException("Worker profile file did not contain any profiles.");
     }
 
     public static void Save(string path, WorkerProfileCatalog catalog)
@@ -245,7 +274,19 @@ public static class WorkerProfileStore
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(path, JsonSerializer.Serialize(catalog, JsonOptions()));
+        var tmp = path + ".tmp";
+        var bak = path + ".bak";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, JsonOptions()));
+        if (File.Exists(path))
+            File.Replace(tmp, path, bak);
+        else
+            File.Move(tmp, path);
+    }
+
+    private static WorkerProfileCatalog? TryDeserialize(string path)
+    {
+        try { return JsonSerializer.Deserialize<WorkerProfileCatalog>(File.ReadAllText(path), JsonOptions()); }
+        catch { return null; }
     }
 
     private static JsonSerializerOptions JsonOptions()

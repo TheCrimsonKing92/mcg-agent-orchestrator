@@ -122,14 +122,47 @@ public static class AgentCatalogStore
             return NormalizePaidProviderCaps(defaultCatalog);
         }
 
-        var catalog = JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), JsonOptions());
-        return NormalizePaidProviderCaps(catalog is null || catalog.Agents.Count == 0 ? defaultCatalog : catalog);
+        var catalog = TryDeserialize(path);
+        if (catalog is not null && catalog.Agents.Count > 0)
+        {
+            return NormalizePaidProviderCaps(catalog);
+        }
+
+        var bak = path + ".bak";
+        if (File.Exists(bak))
+        {
+            Console.Error.WriteLine($"[AgentCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty; recovering from backup.");
+            var bakCatalog = TryDeserialize(bak);
+            if (bakCatalog is not null && bakCatalog.Agents.Count > 0)
+            {
+                return NormalizePaidProviderCaps(bakCatalog);
+            }
+            Console.Error.WriteLine("[AgentCatalogStore] WARNING: backup is also corrupt; falling back to built-in defaults.");
+        }
+        else
+        {
+            Console.Error.WriteLine($"[AgentCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty and no backup exists; falling back to built-in defaults.");
+        }
+
+        return NormalizePaidProviderCaps(defaultCatalog);
     }
 
     public static void Save(string path, AgentCatalog catalog)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(catalog, JsonOptions()));
+        var tmp = path + ".tmp";
+        var bak = path + ".bak";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, JsonOptions()));
+        if (File.Exists(path))
+            File.Replace(tmp, path, bak);
+        else
+            File.Move(tmp, path);
+    }
+
+    private static AgentCatalog? TryDeserialize(string path)
+    {
+        try { return JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), JsonOptions()); }
+        catch { return null; }
     }
 
     private static JsonSerializerOptions JsonOptions()

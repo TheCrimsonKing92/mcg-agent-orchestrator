@@ -17,14 +17,55 @@ public static class ModelFunctionCatalogStore
             return ModelFunctionCatalog.Empty;
         }
 
-        var catalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(path), JsonOptions());
-        return catalog is null || catalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : catalog;
+        ModelFunctionCatalog? catalog;
+        try
+        {
+            catalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(path), JsonOptions());
+        }
+        catch
+        {
+            catalog = null;
+        }
+
+        if (catalog is not null)
+        {
+            return catalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : catalog;
+        }
+
+        // Parse failure on existing file — try backup
+        var bak = path + ".bak";
+        if (File.Exists(bak))
+        {
+            Console.Error.WriteLine($"[ModelFunctionCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt; recovering from backup.");
+            try
+            {
+                var bakCatalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(bak), JsonOptions());
+                if (bakCatalog is not null)
+                {
+                    return bakCatalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : bakCatalog;
+                }
+            }
+            catch { }
+            Console.Error.WriteLine("[ModelFunctionCatalogStore] WARNING: backup is also corrupt; falling back to empty catalog.");
+        }
+        else
+        {
+            Console.Error.WriteLine($"[ModelFunctionCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt and no backup exists; falling back to empty catalog.");
+        }
+
+        return ModelFunctionCatalog.Empty;
     }
 
     public static void Save(string path, ModelFunctionCatalog catalog)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(catalog, JsonOptions()));
+        var tmp = path + ".tmp";
+        var bak = path + ".bak";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, JsonOptions()));
+        if (File.Exists(path))
+            File.Replace(tmp, path, bak);
+        else
+            File.Move(tmp, path);
     }
 
     private static JsonSerializerOptions JsonOptions()
