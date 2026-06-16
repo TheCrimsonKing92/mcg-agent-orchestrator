@@ -207,34 +207,30 @@ public sealed class ProvenanceReportTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var output = new StringWriter();
-        var original = Console.Out;
-        Console.SetOut(output);
         InvalidOperationException? caught = null;
-        try
+        var captured = CaptureConsole(() =>
         {
-            CliCommandDispatcher.ExecuteCommand(
-                ["provenance"],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        catch (InvalidOperationException ex)
-        {
-            caught = ex;
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
+            try
+            {
+                CliCommandDispatcher.ExecuteCommand(
+                    ["provenance"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            }
+            catch (InvalidOperationException ex)
+            {
+                caught = ex;
+            }
+        });
 
         Xunit.Assert.NotNull(caught);
         Xunit.Assert.Contains("Provenance check failed", caught!.Message);
         Xunit.Assert.Contains("unbacked", caught.Message);
-        Xunit.Assert.Contains("UNBACKED", output.ToString());
+        Xunit.Assert.Contains("UNBACKED", captured);
     }
 
     [Xunit.Fact(DisplayName = "Provenance_CLI_returns_without_throwing_when_all_goals_backed")]
@@ -252,11 +248,8 @@ public sealed class ProvenanceReportTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
 
-        var output = new StringWriter();
-        var original = Console.Out;
-        Console.SetOut(output);
-        bool changed;
-        try
+        bool changed = false;
+        var captured = CaptureConsole(() =>
         {
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["provenance"],
@@ -266,14 +259,10 @@ public sealed class ProvenanceReportTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
+        });
 
         Xunit.Assert.False(changed);
-        Xunit.Assert.Contains("BACKED", output.ToString());
+        Xunit.Assert.Contains("BACKED", captured);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

@@ -651,19 +651,7 @@ public sealed class GoalWorktreeTests
             {
                 AcceptanceVerifier = fakeVerifier
             };
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            Console.SetOut(writer);
-            try
-            {
-                CliCommandHandlers.Execute(["acceptance"], context);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-
-            var output = writer.ToString();
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
             Assert.True(output.Contains("failed (exit 1)", StringComparison.Ordinal));
             Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
             Assert.True(output.Contains("Test run failed", StringComparison.Ordinal));
@@ -706,19 +694,7 @@ public sealed class GoalWorktreeTests
             {
                 AcceptanceVerifier = fakeVerifier
             };
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            Console.SetOut(writer);
-            try
-            {
-                CliCommandHandlers.Execute(["acceptance"], context);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-
-            var output = writer.ToString();
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
             Assert.True(output.Contains("Acceptance evidence bundle: passed", StringComparison.Ordinal));
             Assert.True(output.Contains($"lease id: goal-{goal.Id.Value[..8].ToLowerInvariant()}", StringComparison.Ordinal));
             Assert.True(output.Contains("Verification check: passed", StringComparison.Ordinal));
@@ -1355,19 +1331,7 @@ public sealed class GoalWorktreeTests
             {
                 AcceptanceVerifier = fakeVerifier
             };
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            Console.SetOut(writer);
-            try
-            {
-                CliCommandHandlers.Execute(["acceptance", "--skip-verify"], context);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-
-            var output = writer.ToString();
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--skip-verify"], context));
             Assert.False(verifierCalled);
             Assert.True(output.Contains("skipped (--skip-verify)", StringComparison.Ordinal));
             Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
@@ -1646,23 +1610,6 @@ public sealed class GoalWorktreeTests
         {
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
         }
-    }
-
-    private static string CaptureConsole(Action action)
-    {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        Console.SetOut(writer);
-        try
-        {
-            action();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        return writer.ToString();
     }
 
     private static int RunGitExitCode(string workingDirectory, params string[] arguments)

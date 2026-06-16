@@ -8,6 +8,8 @@ using System.Net.Sockets;
 
 internal static class InfrastructureTestSupport
 {
+public static string CaptureConsole(Action action) => AsyncLocalConsoleRouter.Capture(action);
+
 public static ModelRequest TestRequest(ModelOptions? options = null)
 {
     return new ModelRequest(

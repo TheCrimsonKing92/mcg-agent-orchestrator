@@ -100,13 +100,8 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        try
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
-
             var tenantChanged = CliCommandDispatcher.ExecuteCommand(
                 ["tenant"],
                 kernel,
@@ -126,13 +121,7 @@ public sealed class CliCommandTests
 
             Xunit.Assert.False(tenantChanged);
             Xunit.Assert.False(architectureChanged);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.Contains("Tenant: acme", output);
         Xunit.Assert.Contains("Tenant scoped: True", output);
         Xunit.Assert.Contains(Path.Combine(".orchestrator", "tenants", "acme", "state.json"), output);
@@ -350,20 +339,7 @@ public sealed class CliCommandTests
             "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
             string.Empty,
             DateTimeOffset.UtcNow));
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]));
         Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
         Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try local Ollama/qwen3:8b via agent configuration before paid API run.", output);
     }
@@ -446,13 +422,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["backlog-intake", "dashboard operator inbox"],
                 kernel,
@@ -461,13 +433,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Empty(kernel.Goals);
@@ -498,13 +464,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["backlog-intake", "build/test broker", "--create-simple-goal"],
                 kernel,
@@ -513,11 +475,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        });
 
         Xunit.Assert.True(changed);
         Xunit.Assert.NotNull(currentGoal);
@@ -525,7 +483,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Single(currentGoal!.Tasks);
         Xunit.Assert.Contains("Backlog slice: Add deterministic build/test broker", currentGoal.Objective);
         Xunit.Assert.Contains("scripts/Invoke-IsolatedDotnet.ps1", currentGoal.Objective);
-        Xunit.Assert.Contains("Created simple goal from backlog slice.", writer.ToString());
+        Xunit.Assert.Contains("Created simple goal from backlog slice.", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_plan_prints_dependency_graph_without_mutating_state")]
@@ -539,13 +497,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal-plan"],
                 kernel,
@@ -554,13 +508,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Empty(kernel.Goals);
@@ -584,13 +532,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal", "Update docs/usage.md to explain goal objective planning"],
                 kernel,
@@ -599,13 +543,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.True(changed);
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Single(kernel.Goals);
@@ -671,13 +609,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["intent-template", "feature", "Add dashboard action recommendations"],
                 kernel,
@@ -686,13 +620,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Empty(kernel.Goals);
@@ -715,13 +643,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["intent-template", "dashboard", "Expose failure triage in the goal page", "--create-simple-goal"],
                 kernel,
@@ -730,11 +654,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        });
 
         Xunit.Assert.True(changed);
         Xunit.Assert.NotNull(currentGoal);
@@ -744,7 +664,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Request: Expose failure triage in the goal page", currentGoal.Objective);
         Xunit.Assert.Contains("Expose the same state through API DTOs before relying on rendered HTML.", currentGoal.Objective);
         Xunit.Assert.Contains("Run focused dashboard rendering/API tests.", currentGoal.Objective);
-        Xunit.Assert.Contains("Created simple goal from intent template.", writer.ToString());
+        Xunit.Assert.Contains("Created simple goal from intent template.", output);
     }
 
     [Xunit.Fact(DisplayName = "GoalDependencyPlanner_compiles_stable_graph_and_batches_independent_scopes")]
@@ -813,13 +733,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal-plan", "--create-simple-goals"],
                 kernel,
@@ -828,18 +744,14 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        });
 
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(3, kernel.Goals.Count);
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.DoesNotContain(kernel.Goals, goal => goal.Objective.Contains("Explicit dependencies:", StringComparison.Ordinal));
         Xunit.Assert.All(kernel.Goals, goal => Xunit.Assert.Single(goal.Tasks));
-        Xunit.Assert.Contains("Created simple goal", writer.ToString());
+        Xunit.Assert.Contains("Created simple goal", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_recovery_reports_stale_process_and_resume_commands")]
@@ -860,13 +772,9 @@ public sealed class CliCommandTests
             goal.Id,
             task.Id,
             new TaskProcessRecord(999999, "codex exec prompt.md", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal-recovery"],
                 kernel,
@@ -875,13 +783,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Contains("Goal recovery", output);
         Xunit.Assert.Contains("recorded process pid=999999 is not alive", output);
@@ -962,27 +864,14 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Worker reported done.");
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        try
-        {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
         Xunit.Assert.Contains("task completed without verification evidence", output);
         Xunit.Assert.Contains("command: verify 1 <command>", output);
     }
@@ -1748,26 +1637,14 @@ public sealed class CliCommandTests
         RunGit(worktree, "add", "-A");
         RunGit(worktree, "commit", "-m", "Shared infrastructure change");
 
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
         Xunit.Assert.Contains("Change classification:", output);
         Xunit.Assert.Contains("broad=True", output);
         Xunit.Assert.Contains("shared infrastructure changed", output);
@@ -1812,26 +1689,14 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         GoalOperationJournal.Begin(root, goal, "acceptance", "acceptance started before interruption");
 
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
         Xunit.Assert.Contains("Operation journal:", output);
         Xunit.Assert.Contains("Interrupted operations:", output);
         Xunit.Assert.Contains("acceptance", output);
@@ -1854,27 +1719,22 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
         MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
+        string output;
         try
         {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
+            output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["goal-recovery", goal.Id.Value[..8]],
                 kernel,
                 workspace,
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal));
         }
         finally
         {
-            Console.SetOut(originalOut);
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
         }
-
-        var output = writer.ToString();
         Xunit.Assert.Contains("Build lease: goal-", output);
         Xunit.Assert.Contains("canCleanup=True", output);
         Xunit.Assert.Contains("goal build lease is orphaned", output);
@@ -1907,27 +1767,24 @@ public sealed class CliCommandTests
             ref currentGoal));
         Xunit.Assert.Contains("--confirm-build-lease-cleanup", blocked.Message);
 
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
+        string leaseOutput;
         try
         {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
+            leaseOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["build-lease-cleanup", goal.Id.Value[..8], "--confirm-build-lease-cleanup"],
                 kernel,
                 workspace,
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal));
         }
         finally
         {
-            Console.SetOut(originalOut);
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
         }
 
-        Xunit.Assert.Contains("Deleted orphaned build lease", writer.ToString());
+        Xunit.Assert.Contains("Deleted orphaned build lease", leaseOutput);
         Xunit.Assert.False(Directory.Exists(environment.RootPath));
     }
 
@@ -2167,22 +2024,11 @@ public sealed class CliCommandTests
 """);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-        using var writer = new StringWriter();
-        var originalOut = Console.Out;
-
-        try
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             ConsoleViews.PrintTask(goal, task);
             ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
-
+        });
         Xunit.Assert.Contains("heartbeat: available state=running pid=777 child_pid=888", output);
         Xunit.Assert.Contains($"heartbeat path: {BackgroundDispatchRunner.GetHeartbeatPath(process)}", output);
         Xunit.Assert.Contains("log bytes: stdout=123 stderr=45", output);
@@ -2726,12 +2572,9 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var task = goal.Tasks.Single();
 
-        using var writer = new StringWriter();
-        var originalOut = Console.Out;
-        bool dispatched;
-        try
+        bool dispatched = false;
+        var dispatchOutput = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             dispatched = CliCommandDispatcher.ExecuteCommand(
                 ["profile-dispatch", "1", "codex-cli"],
                 kernel,
@@ -2740,13 +2583,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var dispatchOutput = writer.ToString();
+        });
         var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
 
         Xunit.Assert.True(dispatched);
@@ -2884,20 +2721,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.DoesNotContain("Ready start risk:", output);
         Xunit.Assert.DoesNotContain("--confirm-large-paid-subscription-start", output);
         Xunit.Assert.Contains("gpt-5.5", output);
@@ -2923,20 +2747,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 8500);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("estPrompt=8500chars", output);
         Xunit.Assert.Contains("budget=9000chars headroom=500chars", output);
     }
@@ -2960,20 +2771,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 1200);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("route: Selected", output);
         Xunit.Assert.Contains("reason: role=Developer", output);
         Xunit.Assert.Contains("reason: provider=OpenAI", output);
@@ -2999,20 +2797,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 9100);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("estPrompt=9100chars", output);
         Xunit.Assert.Contains("budget=8000chars over=1100chars", output);
     }
@@ -3045,20 +2830,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("prior fit 1: overkill 1", output);
         Xunit.Assert.Contains("shapes copy-only change", output);
         Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", output);
@@ -4566,23 +4338,6 @@ public sealed class CliCommandTests
 
         var logOutput = RunGitOutput(root, "log", "--oneline", "-5");
         Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
-    }
-
-    private static string CaptureConsole(Action action)
-    {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            action();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        return writer.ToString();
     }
 
     private static AgentDefinition SubscriptionPlanner(string id, string name) => new(

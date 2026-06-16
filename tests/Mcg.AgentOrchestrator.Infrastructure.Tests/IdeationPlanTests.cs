@@ -280,19 +280,4 @@ public sealed class IdeationPlanTests
         return (kernel, workspace, agents, providers);
     }
 
-    private static string CaptureConsole(Action action)
-    {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        Console.SetOut(writer);
-        try
-        {
-            action();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-        return writer.ToString();
-    }
 }
