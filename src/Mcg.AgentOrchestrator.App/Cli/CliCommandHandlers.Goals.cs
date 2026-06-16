@@ -1249,6 +1249,8 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
     return true;
 }
 
+private const int IdeationSampleCount = 3;
+
 private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     var appendBacklog = HasCliConfirmation(parts, "--append-backlog");
@@ -1260,21 +1262,28 @@ private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<stri
     var ideationRole = context.Agents.Any(a => a.Status == AgentStatus.Available && a.Role == AgentRole.Ideation)
         ? AgentRole.Ideation
         : AgentRole.Planner;
-    var ideationKernel = new AgentOrchestratorKernel();
-    var ideationTask = new TaskSpec(
-        TaskId.New(),
-        IdeationProposalPlanner.BuildPrompt(evidenceContext),
-        ideationRole,
-        "Output only a fenced JSON array of ranked idea objects with title, rationale, scope, value, effort, and risk fields.");
-    var ideationGoal = ideationKernel.CreateGoal("Propose improvement ideas", [ideationTask]);
-    ideationKernel.ActivateGoal(ideationGoal.Id, context.Agents);
 
-    Console.WriteLine("Running ideation worker...");
-    var runner = new AgentTaskRunner(ideationKernel, context.Agents, context.Providers);
-    runner.RunAsync(ideationGoal.Id, ideationTask.Id).GetAwaiter().GetResult();
+    var prompt = IdeationProposalPlanner.BuildPrompt(evidenceContext);
+    Console.WriteLine($"Running ideation worker ({IdeationSampleCount} samples)...");
+    var sampleTasks = Enumerable.Range(0, IdeationSampleCount).Select(_ =>
+    {
+        var sampleKernel = new AgentOrchestratorKernel();
+        var sampleTaskSpec = new TaskSpec(
+            TaskId.New(),
+            prompt,
+            ideationRole,
+            "Output only a fenced JSON array of ranked idea objects with title, rationale, scope, value, effort, and risk fields.");
+        var sampleGoal = sampleKernel.CreateGoal("Propose improvement ideas", [sampleTaskSpec]);
+        sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
+        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers);
+        return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
+            .ContinueWith(__ => IdeationProposalPlanner.Parse(
+                sampleTaskSpec.LastExecution?.Output ?? string.Empty),
+                TaskScheduler.Default);
+    }).ToArray();
 
-    var workerOutput = ideationTask.LastExecution?.Output ?? string.Empty;
-    var plan = IdeationProposalPlanner.Parse(workerOutput);
+    var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
+    var plan = IdeationProposalPlanner.SelectBestOfN(candidates);
     ConsoleViews.PrintIdeationPlan(plan);
 
     if (appendBacklog && plan.IsValid && plan.Ideas.Count > 0)

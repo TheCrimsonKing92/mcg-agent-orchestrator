@@ -123,6 +123,24 @@ internal static class IdeationProposalPlanner
         return new IdeationPlan(ideas, errors);
     }
 
+    // Selects the best candidate from N samples: valid plan with the most ideas, tie-break by lowest sample index.
+    // Returns the first candidate when none are valid (preserves ValidationErrors for the caller to surface).
+    public static IdeationPlan SelectBestOfN(IReadOnlyList<IdeationPlan> candidates)
+    {
+        IdeationPlan? best = null;
+        var bestIdeaCount = -1;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            if (candidate.IsValid && candidate.Ideas.Count > bestIdeaCount)
+            {
+                best = candidate;
+                bestIdeaCount = candidate.Ideas.Count;
+            }
+        }
+        return best ?? candidates[0];
+    }
+
     public static string FormatBacklogEntry(IdeaProposal idea) =>
         $"""
 

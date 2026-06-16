@@ -193,6 +193,62 @@ public sealed class IdeationPlanTests
         Assert.True(File.ReadAllText(backlogPath) == originalContent);
     }
 
+    // ── SelectBestOfN: all-valid picks the most-ideas plan ──────────────────
+
+    [Xunit.Fact(DisplayName = "IdeationPlan_SelectBestOfN_AllValid_PicksMostIdeas")]
+    public void IdeationPlan_SelectBestOfN_AllValid_PicksMostIdeas()
+    {
+        var two = MakeValidPlan(2);
+        var three = MakeValidPlan(3);
+        var one = MakeValidPlan(1);
+
+        var best = IdeationProposalPlanner.SelectBestOfN([two, three, one]);
+
+        Assert.True(best.Ideas.Count == 3);
+    }
+
+    // ── SelectBestOfN: first invalid + second valid picks the valid one ──────
+
+    [Xunit.Fact(DisplayName = "IdeationPlan_SelectBestOfN_FirstInvalidSecondValid_PicksValid")]
+    public void IdeationPlan_SelectBestOfN_FirstInvalidSecondValid_PicksValid()
+    {
+        var invalid = new IdeationPlan([], ["Worker output did not contain a fenced JSON block."]);
+        var valid = MakeValidPlan(2);
+
+        var best = IdeationProposalPlanner.SelectBestOfN([invalid, valid]);
+
+        Assert.True(best.IsValid);
+        Assert.True(best.Ideas.Count == 2);
+    }
+
+    // ── SelectBestOfN: none valid returns ValidationErrors ───────────────────
+
+    [Xunit.Fact(DisplayName = "IdeationPlan_SelectBestOfN_NoneValid_ReturnsValidationErrors")]
+    public void IdeationPlan_SelectBestOfN_NoneValid_ReturnsValidationErrors()
+    {
+        var first = new IdeationPlan([], ["Parse failed."]);
+        var second = new IdeationPlan([], ["No fenced JSON."]);
+
+        var best = IdeationProposalPlanner.SelectBestOfN([first, second]);
+
+        Assert.False(best.IsValid);
+        Assert.True(best.ValidationErrors.Count > 0);
+    }
+
+    private static IdeationPlan MakeValidPlan(int ideaCount)
+    {
+        var ideas = Enumerable.Range(1, ideaCount)
+            .Select(i => new IdeaProposal(
+                $"Idea {i}",
+                $"loop-health shows {i}% rework",
+                "conductor",
+                "value",
+                "Low",
+                "None"))
+            .ToList();
+        return new IdeationPlan(ideas, []);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private const string SingleIdeaJson = """
