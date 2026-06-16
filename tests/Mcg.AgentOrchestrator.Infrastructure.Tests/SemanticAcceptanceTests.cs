@@ -479,6 +479,97 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("low", verdict.Confidence);
     }
 
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_skips_per_file_recursion_for_subscription_cli_leaf")]
+    public async Task RecursiveJudgeSkipsRecursionForCliLeaf()
+    {
+        var callCount = 0;
+        Task<string> CountingRunner(string command, string workingDirectory, CancellationToken ct)
+        {
+            callCount++;
+            return Task.FromResult("""
+                ```json
+                {"criteria_met": true, "confidence": "high", "reasons": ["cli ok"], "unmet_criteria": []}
+                ```
+                """);
+        }
+
+        var cliLeaf = new SubscriptionCliSemanticJudge(
+            "echo {promptPath}",
+            "claude-cli",
+            "claude-haiku-4-5",
+            null,
+            CountingRunner);
+
+        var judge = new RecursivePerFileSemanticJudge(cliLeaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [], ["src/A.cs", "src/B.cs", "src/C.cs"],
+            "big diff",
+            null,
+            [("src/A.cs", "diff A"), ("src/B.cs", "diff B"), ("src/C.cs", "diff C")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        // CLI leaf must make exactly ONE call (whole diff), not one per file.
+        Assert.Equal(1, callCount);
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_keeps_per_file_recursion_for_non_cli_leaf")]
+    public async Task RecursiveJudgeKeepsPerFileRecursionForNonCliLeaf()
+    {
+        var capturedFiles = new List<string>();
+        var leaf = new FakeJudge("local", inputs =>
+        {
+            capturedFiles.Add(inputs.ChangedFiles.Count > 0 ? inputs.ChangedFiles[0] : "?");
+            return new SemanticAcceptanceVerdict(true, "high", ["ok"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [], ["src/A.cs", "src/B.cs"],
+            "diff",
+            null,
+            [("src/A.cs", "diff A"), ("src/B.cs", "diff B")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        // Local/API leaf must be called once per file.
+        Assert.Equal(2, capturedFiles.Count);
+        Assert.True(capturedFiles.Contains("src/A.cs"));
+        Assert.True(capturedFiles.Contains("src/B.cs"));
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_has_180s_judge_timeout")]
+    public void SubscriptionCliJudgeHas180sTimeout()
+    {
+        var judge = new SubscriptionCliSemanticJudge(
+            "echo {promptPath}",
+            "claude-cli",
+            "claude-haiku-4-5",
+            null,
+            (_, _, _) => Task.FromResult(string.Empty));
+
+        Assert.Equal(TimeSpan.FromSeconds(180), judge.JudgeTimeout);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_exposes_leaf_judge_timeout")]
+    public void RecursiveJudgeExposesLeafJudgeTimeout()
+    {
+        var cliLeaf = new SubscriptionCliSemanticJudge(
+            "echo {promptPath}",
+            "claude-cli",
+            "claude-haiku-4-5",
+            null,
+            (_, _, _) => Task.FromResult(string.Empty));
+
+        var judge = new RecursivePerFileSemanticJudge(cliLeaf);
+
+        Assert.Equal(TimeSpan.FromSeconds(180), judge.JudgeTimeout);
+    }
+
     private static ModelFunctionBinding JudgeBinding(ModelLane lane, string provider, string model) =>
         new(ModelFunctionPurposes.AcceptanceJudge, lane,
             new ModelProfile(provider, model, ModelCapability.Text,
@@ -487,6 +578,7 @@ public sealed class SemanticAcceptanceTests
     private sealed class FakeJudge(string name, Func<SemanticAcceptanceInputs, SemanticAcceptanceVerdict> verdict) : ISemanticJudge
     {
         public string Name { get; } = name;
+        public TimeSpan? JudgeTimeout => null;
 
         public Task<SemanticAcceptanceVerdict> JudgeAsync(SemanticAcceptanceInputs inputs, CancellationToken cancellationToken)
             => Task.FromResult(verdict(inputs));
@@ -495,6 +587,7 @@ public sealed class SemanticAcceptanceTests
     private sealed class ThrowingJudge : ISemanticJudge
     {
         public string Name => "throwing";
+        public TimeSpan? JudgeTimeout => null;
 
         public Task<SemanticAcceptanceVerdict> JudgeAsync(SemanticAcceptanceInputs inputs, CancellationToken cancellationToken)
             => throw new InvalidOperationException("judge boom");

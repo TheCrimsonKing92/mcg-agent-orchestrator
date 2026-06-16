@@ -11,6 +11,9 @@ internal interface ISemanticJudge
 {
     string Name { get; }
 
+    // null means use the per-judge default passed to EvaluateAsync; non-null overrides it for slow lanes.
+    TimeSpan? JudgeTimeout { get; }
+
     Task<SemanticAcceptanceVerdict> JudgeAsync(SemanticAcceptanceInputs inputs, CancellationToken cancellationToken);
 }
 
@@ -59,6 +62,8 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
     }
 
     public string Name => $"{_providerName.ToLowerInvariant()}:{_modelName}";
+
+    public TimeSpan? JudgeTimeout => null;
 
     public async Task<SemanticAcceptanceVerdict> JudgeAsync(
         SemanticAcceptanceInputs inputs,
@@ -113,6 +118,8 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
     }
 
     public string Name => $"sub:{_profileName}:{_modelAlias}";
+
+    public TimeSpan? JudgeTimeout => TimeSpan.FromSeconds(180);
 
     public async Task<SemanticAcceptanceVerdict> JudgeAsync(
         SemanticAcceptanceInputs inputs,
@@ -214,12 +221,16 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
 
     public string Name => $"recursive({_leaf.Name})";
 
+    public TimeSpan? JudgeTimeout => _leaf.JudgeTimeout;
+
     public async Task<SemanticAcceptanceVerdict> JudgeAsync(
         SemanticAcceptanceInputs inputs,
         CancellationToken cancellationToken)
     {
         var perFileDiffs = inputs.PerFileDiffs;
-        if (perFileDiffs is null or { Count: 0 })
+        // CLI judges have a cold-start cost per invocation; fan-out multiplies that cost N-fold and
+        // caused observed 90s timeouts on 3-file changes. Judge the whole diff in one call instead.
+        if (perFileDiffs is null or { Count: 0 } || _leaf is SubscriptionCliSemanticJudge)
         {
             return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
         }
@@ -318,17 +329,18 @@ internal static class SemanticAcceptanceEvaluator
         TimeSpan perJudgeTimeout,
         CancellationToken cancellationToken)
     {
+        var effectiveTimeout = judge.JudgeTimeout ?? perJudgeTimeout;
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(perJudgeTimeout);
+            timeoutCts.CancelAfter(effectiveTimeout);
             var verdict = await judge.JudgeAsync(inputs, timeoutCts.Token).ConfigureAwait(false);
             return new JudgeVerdict(judge.Name, verdict);
         }
         catch (OperationCanceledException)
         {
             return new JudgeVerdict(judge.Name, SemanticAcceptanceVerdict.Invalid(
-                $"Judge '{judge.Name}' timed out after {perJudgeTimeout.TotalSeconds:F0}s."));
+                $"Judge '{judge.Name}' timed out after {effectiveTimeout.TotalSeconds:F0}s."));
         }
         catch (Exception ex)
         {
