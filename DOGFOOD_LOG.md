@@ -1203,3 +1203,10 @@ Goal 5a353018: Add a SUBSCRIPTION-CLI semantic-acceptance judge so acceptance-ju
 
 - Operator gate: Developer: pass/992 — 275 Core + 717 Infrastructure, ALL GREEN (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - cross-file feature addition with clear spec and stable API to mirror - adequate for this level of reading + writing without needing extended reasoning.
+
+## 2026-06-16 - Add a one-step create-and-dispatch flag so an operator who already knows how ...
+
+Goal ec847d68: Add a one-step create-and-dispatch flag so an operator who already knows how a goal should run needn't issue a second.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- model fit: good - task was pure seam-reuse; no new dispatch logic, all branching follows existing patterns
