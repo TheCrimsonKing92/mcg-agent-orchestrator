@@ -1189,3 +1189,10 @@ Goal c632f84b: Speed up the acceptance gate by removing the REDUNDANT GRANULAR t
 
 - Operator gate: Developer: not-run (no dotnet test invoked; test assertions for "infrastructure tests"/"core tests" in GoalAcceptanceVerifierTests.cs and RepositoryChangeClassifierTests.cs exercise RepositoryTestImpactPlanner logic, not the manifest file; SemanticAcceptanceTests.cs uses "core tests" as fake test output text in SampleInputs, also unrelated to the manifest) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - overkill - single-file JSON edit with targeted grep verification - task required no reasoning beyond read, verify, delete two JSON objects, confirm valid JSON; Haiku would handle this.
+
+## 2026-06-16 - Re-enable test parallelization in the Infrastructure test suite to speed up t...
+
+Goal 9429cf4f: Re-enable test parallelization in the Infrastructure test suite to speed up the gate (currently ~2.5min serial for ~7.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 241b963). Acceptance passed.
+
+- Operator gate: Developer: pass — 712/712 across 3 consecutive parallel runs, ~75s execution per run (was ~2.5min serial) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - large mechanical refactoring with precise file edits and build/test verification - adequate for pattern-matching code transformation across many files.
