@@ -1331,3 +1331,10 @@ Goal 779f1a7b: Let goal briefs be supplied from a file so large briefs no longer
 
 - Operator gate: Developer: pass — 2 new tests green, 1061 total (275 Core + 786 Infrastructure), ALL GREEN (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped CLI parser extension with conditional file I/O - clear scope, no architectural ambiguity, single-pass implementation.
+
+## 2026-06-16 - Make goal-worktree removal robust so acceptance cleanup never needs manual in...
+
+Goal 8a2f1d4c: Make goal-worktree removal robust so acceptance cleanup never needs manual intervention. After a successful merge, ac.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 1986da1). Acceptance passed.
+
+- Operator gate: Developer: pass — 45/45 GoalWorktree tests green, 0 failures (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped infrastructure hardening, retry/idempotency logic + two new test cases - model handled the full read→reason→edit→verify cycle without needing escalation.
