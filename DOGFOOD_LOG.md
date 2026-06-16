@@ -1303,3 +1303,10 @@ Goal 0349baee: Harden the launcher build-lock reclaim to use process liveness, n
 
 - Operator gate: Developer: not-run (shell-only changes, no C# test surface; behavioral logic verified by trace) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell scripting + logic analysis - two small script edits with clear behavioral spec; no compilation or test infra needed.
+
+## 2026-06-16 - Make background dispatch self-healing so a hung worker wrapper no longer requ...
+
+Goal 0bbe5928: Make background dispatch self-healing so a hung worker wrapper no longer requires manual recovery. Two layers, both i.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 2592440f9a8d0c8c3d2252cdf39dff0bffa86137). Acceptance passed.
+
+- Operator gate: Developer: 773/773 green including both new tests (pipe-drain timeout + claude-cli hung-wrapper reap) and both formerly-failing regressions (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - async pipe drain + process-tree signaling, test-suite regression fix - well-scoped infrastructure change with clear discriminant (childPid null = worker exited)
