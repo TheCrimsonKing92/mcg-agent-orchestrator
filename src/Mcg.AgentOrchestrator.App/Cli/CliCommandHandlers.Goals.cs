@@ -213,7 +213,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "model-function-add":
-            CliArgumentParser.RequirePartCount(parts, 5, "model-function-add <purpose> <lane> <provider> <model> [name]");
+            CliArgumentParser.RequirePartCount(parts, 5, "model-function-add <purpose> <lane> <provider> <model> [name] [--subscription <worker-profile> [--subscription-model <alias>]]");
             AddModelFunctionBinding(context, parts);
             return false;
 
@@ -592,11 +592,17 @@ private static void AddModelFunctionBinding(CliExecutionContext context, IReadOn
     var model = parts[4];
     var name = parts.Count > 5 && !parts[5].StartsWith("--", StringComparison.Ordinal) ? parts[5] : null;
     var subscriptionMode = lane == ModelLane.Local ? SubscriptionMode.LocalBridge : SubscriptionMode.ApiKey;
+    var subscriptionProfileName = GetFlagValue(parts, "--subscription");
+    var subscriptionModelAlias = GetFlagValue(parts, "--subscription-model");
+    SubscriptionLaunchProfile? subscription = subscriptionProfileName is not null
+        ? new SubscriptionLaunchProfile(subscriptionProfileName, subscriptionModelAlias)
+        : null;
     var binding = new ModelFunctionBinding(
         purpose,
         lane,
         new ModelProfile(provider, model, ModelCapability.Text, subscriptionMode),
-        name);
+        name,
+        subscription);
 
     var path = context.Workspace.ModelFunctionCatalogPath;
     var bindings = ModelFunctionCatalogStore.Load(path).Bindings
@@ -1736,7 +1742,7 @@ private static void RunAdvisorySemanticAcceptance(
     }
 
     var modelFunctions = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
-    var baseJudges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers);
+    var baseJudges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers, context.WorkerProfiles);
     if (baseJudges.Count == 0)
     {
         return;

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -74,6 +76,133 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
     }
 }
 
+// Semantic judge that runs via the subscription CLI (claude-cli / codex-cli) rather than the paid
+// API. Builds the evidence prompt, writes it to a temp file, substitutes placeholders in the worker
+// profile's CommandTemplate (read-only sandbox, plan permission mode), runs PowerShell synchronously
+// capturing stdout, and parses the fenced JSON verdict. ADVISORY: CLI failures, timeouts, and parse
+// errors become invalid verdicts and never propagate to the merge gate.
+internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
+{
+    private readonly string _profileName;
+    private readonly string _modelAlias;
+    private readonly string? _reasoningEffort;
+    private readonly string _commandTemplate;
+    private readonly Func<string, string, CancellationToken, Task<string>> _runner;
+
+    public SubscriptionCliSemanticJudge(
+        WorkerProfileCatalog profiles,
+        string profileName,
+        string modelAlias,
+        string? reasoningEffort = null)
+        : this(profiles.GetRequired(profileName).CommandTemplate, profileName, modelAlias, reasoningEffort, RunCommandAsync)
+    {
+    }
+
+    internal SubscriptionCliSemanticJudge(
+        string commandTemplate,
+        string profileName,
+        string modelAlias,
+        string? reasoningEffort,
+        Func<string, string, CancellationToken, Task<string>> runner)
+    {
+        _commandTemplate = commandTemplate;
+        _profileName = profileName;
+        _modelAlias = modelAlias;
+        _reasoningEffort = reasoningEffort;
+        _runner = runner;
+    }
+
+    public string Name => $"sub:{_profileName}:{_modelAlias}";
+
+    public async Task<SemanticAcceptanceVerdict> JudgeAsync(
+        SemanticAcceptanceInputs inputs,
+        CancellationToken cancellationToken)
+    {
+        var prompt = SemanticAcceptancePlanner.BuildPrompt(SemanticAcceptancePlanner.BuildEvidenceContext(inputs));
+        var tempDir = Path.Combine(Path.GetTempPath(), $"mcg-judge-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var promptPath = Path.Combine(tempDir, "judge-prompt.md");
+        try
+        {
+            await File.WriteAllTextAsync(promptPath, prompt, cancellationToken).ConfigureAwait(false);
+            var command = SubstitutePlaceholders(_commandTemplate, promptPath, _modelAlias, _reasoningEffort, tempDir);
+            var stdout = await _runner(command, tempDir, cancellationToken).ConfigureAwait(false);
+            return SemanticAcceptancePlanner.Parse(stdout);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return SemanticAcceptanceVerdict.Invalid($"SubscriptionCliSemanticJudge '{_profileName}': {ex.Message}");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static string SubstitutePlaceholders(
+        string template,
+        string promptPath,
+        string modelAlias,
+        string? reasoningEffort,
+        string workingDirectory)
+    {
+        return template
+            .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
+            .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
+            .Replace("{subscriptionReasoningEffort}", Quote(reasoningEffort ?? string.Empty), StringComparison.OrdinalIgnoreCase)
+            .Replace("{sandboxMode}", Quote("read-only"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{permissionMode}", Quote("plan"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+
+    private static async Task<string> RunCommandAsync(
+        string command,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+        foreach (var arg in WorkerShell.BaseArguments())
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        startInfo.ArgumentList.Add(command);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start subscription CLI for semantic acceptance.");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        await stderrTask.ConfigureAwait(false);
+        return stdout.Trim();
+    }
+}
+
 // Decorator that runs a leaf judge once per changed file rather than once over the whole diff,
 // fixing the 6KB truncation blind spot for large changes. Falls back to whole-diff judging when
 // PerFileDiffs is empty (graceful degradation for callers that don't populate it).
@@ -141,24 +270,27 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
 
 internal static class SemanticAcceptanceEvaluator
 {
-    // Resolves the configured judge lanes from the orchestrator's model-function registry: one
-    // `ModelRegistrySemanticJudge` per `acceptance-judge` binding, deduped by provider/model so the
-    // same lane isn't judged twice. Returns empty when none is configured (semantic acceptance then
-    // stays dormant). Judges are model-function bindings, NOT worker agents — they never touch task
-    // routing or the SDLC role catalog.
+    // Resolves the configured judge lanes from the orchestrator's model-function registry: one judge
+    // per `acceptance-judge` binding, deduped so the same lane isn't judged twice. When a binding
+    // carries a SubscriptionLaunchProfile and a WorkerProfileCatalog is provided, builds a
+    // SubscriptionCliSemanticJudge; otherwise falls back to the API-based ModelRegistrySemanticJudge.
+    // Returns empty when none is configured (semantic acceptance stays dormant). Judges are model-
+    // function bindings, NOT worker agents — they never touch task routing or the SDLC role catalog.
     public static IReadOnlyList<ISemanticJudge> BuildJudges(
         ModelFunctionCatalog modelFunctions,
-        IModelProviderRegistry providers)
+        IModelProviderRegistry providers,
+        WorkerProfileCatalog? workerProfiles = null)
     {
         return modelFunctions
             .ForPurpose(ModelFunctionPurposes.AcceptanceJudge)
             .DistinctBy(
-                binding => $"{binding.Model.ProviderName}/{binding.Model.ModelName}",
+                binding => binding.Subscription is { } sub
+                    ? $"sub:{sub.WorkerProfileName}:{sub.ModelAlias ?? string.Empty}"
+                    : $"{binding.Model.ProviderName}/{binding.Model.ModelName}",
                 StringComparer.OrdinalIgnoreCase)
-            .Select(binding => (ISemanticJudge)new ModelRegistrySemanticJudge(
-                providers,
-                binding.Model.ProviderName,
-                binding.Model.ModelName))
+            .Select(binding => (ISemanticJudge)(binding.Subscription is { } sub && workerProfiles is not null
+                ? new SubscriptionCliSemanticJudge(workerProfiles, sub.WorkerProfileName, sub.ModelAlias ?? string.Empty, sub.ReasoningEffort)
+                : new ModelRegistrySemanticJudge(providers, binding.Model.ProviderName, binding.Model.ModelName)))
             .ToList();
     }
 

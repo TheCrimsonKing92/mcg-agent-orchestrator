@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SemanticAcceptanceTests
 {
@@ -260,6 +261,118 @@ public sealed class SemanticAcceptanceTests
         var leaf = new FakeJudge("ollama:qwen3:8b", _ => SemanticAcceptanceVerdict.Invalid("unused"));
         var judge = new RecursivePerFileSemanticJudge(leaf);
         Assert.Equal("recursive(ollama:qwen3:8b)", judge.Name);
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_parses_fenced_verdict_from_captured_stdout")]
+    public async Task SubscriptionCliJudgeParsesVerdictFromCapturedStdout()
+    {
+        var stdout = """
+            ```json
+            {"criteria_met": true, "confidence": "high", "reasons": ["subscription judge approved"], "unmet_criteria": []}
+            ```
+            """;
+        Task<string> FakeRunner(string command, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(stdout);
+
+        var judge = new SubscriptionCliSemanticJudge(
+            "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})",
+            "claude-cli",
+            "claude-sonnet-4-6",
+            null,
+            FakeRunner);
+
+        var verdict = await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+        Assert.Equal("high", verdict.Confidence);
+        Assert.Equal("sub:claude-cli:claude-sonnet-4-6", judge.Name);
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_returns_invalid_when_runner_throws")]
+    public async Task SubscriptionCliJudgeReturnsInvalidWhenRunnerThrows()
+    {
+        Task<string> ThrowingRunner(string command, string workingDirectory, CancellationToken ct) =>
+            throw new InvalidOperationException("CLI not found");
+
+        var judge = new SubscriptionCliSemanticJudge(
+            "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})",
+            "claude-cli",
+            "claude-sonnet-4-6",
+            null,
+            ThrowingRunner);
+
+        var verdict = await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.False(verdict.IsValid);
+        Assert.True(verdict.ValidationErrors.Count > 0);
+    }
+
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_picks_subscription_judge_when_binding_has_subscription")]
+    public void BuildJudgesPicksSubscriptionJudgeWhenBindingHasSubscription()
+    {
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        var catalog = new ModelFunctionCatalog(
+        [
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.AcceptanceJudge,
+                ModelLane.Capable,
+                new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6")),
+            JudgeBinding(ModelLane.Local, "Ollama", "qwen3:8b")
+        ]);
+
+        var judges = SemanticAcceptanceEvaluator.BuildJudges(catalog, providers, profiles);
+
+        Assert.Equal(2, judges.Count);
+        Assert.True(judges.Any(j => j.Name == "sub:claude-cli:claude-sonnet-4-6"));
+        Assert.True(judges.Any(j => j.Name == "ollama:qwen3:8b"));
+    }
+
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_dedupes_subscription_judges_by_profile_and_alias")]
+    public void BuildJudgesDedupsSubscriptionJudgesByProfileAndAlias()
+    {
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        var catalog = new ModelFunctionCatalog(
+        [
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.AcceptanceJudge,
+                ModelLane.Capable,
+                new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6")),
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.AcceptanceJudge,
+                ModelLane.Capable,
+                new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6"))
+        ]);
+
+        var judges = SemanticAcceptanceEvaluator.BuildJudges(catalog, providers, profiles);
+
+        Assert.Equal(1, judges.Count);
+        Assert.Equal("sub:claude-cli:claude-sonnet-4-6", judges[0].Name);
+    }
+
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_falls_back_to_api_judge_when_no_worker_profiles")]
+    public void BuildJudgesFallsBackToApiJudgeWhenNoWorkerProfiles()
+    {
+        var providers = new InMemoryModelProviderRegistry([]);
+        var catalog = new ModelFunctionCatalog(
+        [
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.AcceptanceJudge,
+                ModelLane.Capable,
+                new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6"))
+        ]);
+
+        // workerProfiles=null: subscription is set but no catalog — fall back to API judge
+        var judges = SemanticAcceptanceEvaluator.BuildJudges(catalog, providers);
+
+        Assert.Equal(1, judges.Count);
+        Assert.Equal("anthropic:claude-sonnet-4-6", judges[0].Name);
     }
 
     [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_confidence_is_lowest_among_valid_verdicts")]

@@ -20,7 +20,8 @@ public sealed record ModelFunctionBinding(
     string Purpose,
     ModelLane Lane,
     ModelProfile Model,
-    string? Name = null);
+    string? Name = null,
+    SubscriptionLaunchProfile? Subscription = null);
 
 public sealed record ModelFunctionCatalog(IReadOnlyList<ModelFunctionBinding> Bindings)
 {
