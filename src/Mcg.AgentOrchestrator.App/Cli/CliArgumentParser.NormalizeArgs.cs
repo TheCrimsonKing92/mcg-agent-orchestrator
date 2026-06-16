@@ -56,7 +56,8 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     }
 
     if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
+        command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
             ? [command, args[1], string.Join(' ', args.Skip(2))]

@@ -86,6 +86,19 @@ public sealed class BacklogStoreTests
         Assert.True(closed.Body.Contains("Superseded by new approach", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "BacklogStore_reopen_flips_done_back_to_open")]
+    public async Task ReopenFlipsDoneBackToOpen()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Reopen me");
+        await store.CloseAsync(item.Id);
+
+        var reopened = await store.ReopenAsync(item.Id);
+
+        Assert.Equal(BacklogItemStatus.Open, reopened.Status);
+        Assert.Equal(item.Id, reopened.Id);
+    }
+
     [Xunit.Fact(DisplayName = "BacklogStore_source_goal_id_roundtrips")]
     public async Task SourceGoalIdRoundtrips()
     {

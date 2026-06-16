@@ -162,6 +162,53 @@ public sealed class BacklogStore
         }
     }
 
+    public async Task<BacklogItem> ReopenAsync(
+        string id,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+        try
+        {
+            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+            await using (var cmd = conn.CreateCommand())
+            {
+                if (reason is null)
+                {
+                    cmd.CommandText = "UPDATE backlog SET status = 'Open', updated_at = $updated_at WHERE id = $id";
+                }
+                else
+                {
+                    cmd.CommandText = """
+                        UPDATE backlog
+                        SET status = 'Open',
+                            updated_at = $updated_at,
+                            body = CASE WHEN body = '' THEN $reason
+                                        ELSE body || char(10) || char(10) || 'Reopened: ' || $reason
+                                   END
+                        WHERE id = $id
+                        """;
+                    cmd.Parameters.AddWithValue("$reason", reason);
+                }
+                cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+                cmd.Parameters.AddWithValue("$id", id);
+                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                if (rows == 0)
+                    throw new InvalidOperationException($"No backlog item found with id '{id}'.");
+            }
+            var result = await LoadItemByIdAsync(conn, id, cancellationToken);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            return result!;
+        }
+        catch
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            throw;
+        }
+    }
+
     // Returns true if inserted, false if the item already existed (idempotent for import).
     public async Task<bool> UpsertAsync(BacklogItem item, CancellationToken cancellationToken = default)
     {

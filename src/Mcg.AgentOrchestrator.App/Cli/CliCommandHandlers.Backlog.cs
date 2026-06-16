@@ -69,6 +69,18 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             return false;
         }
 
+        case "backlog-reopen":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-reopen <id-prefix> [reason]");
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
+            var reason = parts.Count > 2 ? parts[2] : null;
+            var reopened = store.ReopenAsync(item.Id, reason).GetAwaiter().GetResult();
+            Console.WriteLine($"Reopened: [{reopened.Id}] {reopened.Title}");
+            return false;
+        }
+
         case "backlog-import":
         {
             var backlogMdPath = Path.Combine(context.Workspace.RootDirectory, "BACKLOG.md");
