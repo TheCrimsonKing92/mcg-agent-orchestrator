@@ -4520,6 +4520,54 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_commits_dogfood_entry_after_recording")]
+    public void CliAcceptanceCommitsDogfoodEntryAfterRecording()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.com");
+        RunGit(root, "config", "user.name", "CLI Tests");
+        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "-A");
+        RunGit(root, "commit", "-m", "Seed");
+
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Commit dogfood entry test", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.UtcNow));
+        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");
+        RunGit(worktree, "add", "-A");
+        RunGit(worktree, "commit", "-m", "Goal work");
+
+        var goalPrefix = goal.Id.Value[..8];
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--skip-verify", "--keep-workspace"],
+            kernel,
+            OrchestratorWorkspace.ForDirectory(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var statusOutput = RunGitOutput(root, "status", "--porcelain", "DOGFOOD_LOG.md");
+        Xunit.Assert.Equal(string.Empty, statusOutput.Trim());
+
+        var logOutput = RunGitOutput(root, "log", "--oneline", "-5");
+        Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
+    }
+
     private static string CaptureConsole(Action action)
     {
         var originalOut = Console.Out;

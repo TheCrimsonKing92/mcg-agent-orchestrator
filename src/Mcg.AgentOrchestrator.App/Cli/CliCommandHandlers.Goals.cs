@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -636,6 +637,57 @@ private static void AutoRecordDogfoodEntry(CliExecutionContext context)
     var text = DogfoodLogRenderer.Render(goal).Render();
     File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + text);
     Console.WriteLine($"Recorded DOGFOOD entry for goal {goal.Id.Value[..8]} to {logPath}.");
+    CommitDogfoodEntry(context.Workspace.ExecutionDirectory, goal.Id.Value[..8]);
+}
+
+private static void CommitDogfoodEntry(string executionDirectory, string goalPrefix)
+{
+    var add = RunGit(executionDirectory, "add", "DOGFOOD_LOG.md");
+    if (add.ExitCode != 0)
+    {
+        Console.WriteLine($"Dogfood commit skipped: git add failed ({add.Error}).");
+        return;
+    }
+
+    var diff = RunGit(executionDirectory, "diff", "--cached", "--quiet", "DOGFOOD_LOG.md");
+    if (diff.ExitCode == 0)
+    {
+        return;
+    }
+
+    var commit = RunGit(executionDirectory, "commit", "-m", $"Record dogfood entry for goal {goalPrefix}");
+    if (commit.ExitCode == 0)
+    {
+        Console.WriteLine($"Committed DOGFOOD_LOG.md for goal {goalPrefix}.");
+    }
+    else
+    {
+        Console.WriteLine($"Dogfood commit failed: {commit.Error}");
+    }
+}
+
+private static (int ExitCode, string Output, string Error) RunGit(string workingDirectory, params string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WorkingDirectory = workingDirectory
+    };
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start git process.");
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit(60000);
+    return (process.ExitCode, output.Trim(), error.Trim());
 }
 
 private static void HandleRecordGoal(CliExecutionContext context)
