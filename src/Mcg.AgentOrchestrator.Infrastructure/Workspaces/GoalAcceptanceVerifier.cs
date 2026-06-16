@@ -53,14 +53,85 @@ public sealed class GoalAcceptanceVerifier
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
         var checks = new List<AcceptanceCheckResult>();
         var retried = false;
-        foreach (var check in manifest.Checks)
+
+        // When the manifest has both a solution-wide dotnet-test check and granular
+        // per-project .csproj checks covered by it, run the solution once and synthesize
+        // results for the granular checks so the policy gate finds all required names
+        // without re-running the full test suite.
+        var solutionCheck = manifest.Checks.FirstOrDefault(c =>
+            c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+            (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
+
+        var deferredChecks = BuildDeferredChecks(solutionCheck, manifest.Checks, worktreePath);
+
+        if (deferredChecks.Count > 0)
         {
-            var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
-            retried |= checkResult.Retried;
-            checks.Add(checkResult.Result);
-            if (!checkResult.Result.Passed)
+            var deferredNames = deferredChecks.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+
+            var nonDotnetPassed = true;
+            foreach (var check in manifest.Checks.Where(c =>
+                !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                break;
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                retried |= checkResult.Retried;
+                checks.Add(checkResult.Result);
+                if (!checkResult.Result.Passed)
+                {
+                    nonDotnetPassed = false;
+                    break;
+                }
+            }
+
+            if (nonDotnetPassed)
+            {
+                var slnRun = await RunCheckAsync(solutionCheck!, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                retried |= slnRun.Retried;
+                checks.Add(slnRun.Result);
+
+                foreach (var deferred in deferredChecks)
+                {
+                    checks.Add(new AcceptanceCheckResult(
+                        deferred.Name,
+                        slnRun.Result.Passed,
+                        slnRun.Result.ExitCode,
+                        slnRun.Result.Passed ? null : slnRun.Result.OutputTail,
+                        slnRun.Result.ArtifactsPath,
+                        slnRun.Result.BrokerName,
+                        slnRun.Result.LeaseId,
+                        slnRun.Result.DurationMilliseconds,
+                        slnRun.Retried,
+                        $"covered by: {solutionCheck!.Name}"));
+                }
+
+                if (slnRun.Result.Passed)
+                {
+                    foreach (var check in manifest.Checks.Where(c =>
+                        c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                        !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
+                        !deferredNames.Contains(c.Name)))
+                    {
+                        var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                        retried |= checkResult.Retried;
+                        checks.Add(checkResult.Result);
+                        if (!checkResult.Result.Passed)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            foreach (var check in manifest.Checks)
+            {
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                retried |= checkResult.Retried;
+                checks.Add(checkResult.Result);
+                if (!checkResult.Result.Passed)
+                {
+                    break;
+                }
             }
         }
 
@@ -80,6 +151,44 @@ public sealed class GoalAcceptanceVerifier
             Retried: retried,
             ArtifactsPath: artifactsPath,
             Checks: checks);
+    }
+
+    private static List<AcceptanceManifestCheck> BuildDeferredChecks(
+        AcceptanceManifestCheck? solutionCheck,
+        IReadOnlyList<AcceptanceManifestCheck> allChecks,
+        string worktreePath)
+    {
+        if (solutionCheck is null)
+            return [];
+
+        string? slnContent = null;
+        if (!string.IsNullOrWhiteSpace(solutionCheck.Project) &&
+            solutionCheck.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
+        {
+            var slnPath = Path.Combine(worktreePath, solutionCheck.Project);
+            if (File.Exists(slnPath))
+                slnContent = File.ReadAllText(slnPath);
+        }
+
+        return allChecks
+            .Where(c =>
+                c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                !c.Name.Equals(solutionCheck.Name, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(c.Project) &&
+                c.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+                IsProjectInSolution(c.Project, solutionCheck.Project, slnContent))
+            .ToList();
+    }
+
+    private static bool IsProjectInSolution(string projectPath, string? solutionProject, string? slnContent)
+    {
+        if (string.IsNullOrWhiteSpace(solutionProject))
+            return true;
+
+        if (slnContent is null)
+            return true;
+
+        return slnContent.Contains(Path.GetFileName(projectPath), StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckAsync(
