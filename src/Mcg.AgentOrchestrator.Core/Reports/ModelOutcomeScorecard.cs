@@ -61,8 +61,13 @@ public static class ModelOutcomeScorecard
         string modelName,
         List<TaskSpec> recentTasks)
     {
+        var n = recentTasks.Count;
+        // Linear recency weights: index 0 (newest) gets weight n, index n-1 (oldest) gets 1.
         var pairs = recentTasks
-            .Select(task => (task, fit: ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task))))
+            .Select((task, i) => (
+                task,
+                fit: ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task)),
+                weight: n - i))
             .ToList();
 
         var completed = pairs.Count(p => p.task.Status == WorkTaskStatus.Completed);
@@ -72,8 +77,14 @@ public static class ModelOutcomeScorecard
         var underpowered = pairs.Count(p => p.fit?.Fit == "underpowered");
         var divergence = pairs.Count(p => p.fit?.Fit == "adequate" && p.task.Status == WorkTaskStatus.Failed);
 
+        var totalWeight = pairs.Sum(p => p.weight);
+        var weightedFailed = pairs.Where(p => p.task.Status == WorkTaskStatus.Failed).Sum(p => p.weight);
+        var weightedCompleted = pairs.Where(p => p.task.Status == WorkTaskStatus.Completed).Sum(p => p.weight);
+        var weightedUnderpowered = pairs.Where(p => p.fit?.Fit == "underpowered").Sum(p => p.weight);
+
         var (recommendation, reason) = BuildRecommendation(
-            recentTasks.Count, completed, failed, underpowered, divergence);
+            n, completed, failed, underpowered, divergence,
+            totalWeight, weightedFailed, weightedCompleted, weightedUnderpowered);
 
         return new ModelOutcomeRecord(
             providerName,
@@ -93,7 +104,11 @@ public static class ModelOutcomeScorecard
         int completed,
         int failed,
         int underpowered,
-        int divergence)
+        int divergence,
+        int totalWeight,
+        int weightedFailed,
+        int weightedCompleted,
+        int weightedUnderpowered)
     {
         if (total < MinSamplesForConfidence)
         {
@@ -101,7 +116,7 @@ public static class ModelOutcomeScorecard
                 $"Insufficient samples ({total}/{MinSamplesForConfidence} required) for a confident recommendation.");
         }
 
-        if (failed * 2 >= total)
+        if (weightedFailed * 2 >= totalWeight)
         {
             var divergenceNote = divergence > 0
                 ? $" {divergence} self-rated adequate dispatch(es) failed."
@@ -110,7 +125,7 @@ public static class ModelOutcomeScorecard
                 $"{failed}/{total} recent dispatches failed.{divergenceNote}");
         }
 
-        if (completed == total && underpowered == 0)
+        if (weightedCompleted == totalWeight && weightedUnderpowered == 0)
         {
             return (ModelOutcomeRecommendation.Prefer,
                 $"All {total} recent dispatches completed with no underpowered self-ratings.");
