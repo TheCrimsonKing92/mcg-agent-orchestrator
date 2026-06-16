@@ -9,7 +9,16 @@ APP_PROJECT="$ROOT/src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.cspro
 APP_DLL="$ROOT/src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 LOCK_DIR="$ROOT/.build-lock"
 
-# Acquire build lock — mkdir is atomic on POSIX; spin up to 30 s
+# Reclaim stale lock (left by a prior crashed invocation; trap doesn't fire on SIGKILL)
+if [ -d "$LOCK_DIR" ]; then
+    lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 9999999999)
+    now=$(date +%s)
+    if [ $((now - lock_mtime)) -gt 60 ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+fi
+
+# Acquire build lock -- mkdir is atomic on POSIX; spin up to 30 s
 LOCK_TRIES=0
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     LOCK_TRIES=$((LOCK_TRIES + 1))
@@ -21,7 +30,7 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
 done
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
-dotnet build "$APP_PROJECT" --nologo -v q
+dotnet build "$APP_PROJECT" --nologo -v q >/dev/null 2>&1
 
 rmdir "$LOCK_DIR" 2>/dev/null || true
 trap - EXIT
