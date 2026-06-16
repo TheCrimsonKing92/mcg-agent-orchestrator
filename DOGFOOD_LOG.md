@@ -1296,3 +1296,10 @@ Goal ebc15ae9: Fix a false-positive in the worker sandbox capability guard. Work
 
 - Operator gate: Developer: pass — Failed: 0, Passed: 4, Skipped: 0, Total: 4 (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted guard logic fix + test authoring - the change was a localized string-matching refinement; no architectural reasoning required.
+
+## 2026-06-16 - Harden the launcher build-lock reclaim to use process liveness, not just age ...
+
+Goal 0349baee: Harden the launcher build-lock reclaim to use process liveness, not just age (shell only, no C# changes). Goal c7ca34.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a9610cc). Acceptance passed.
+
+- Operator gate: Developer: not-run (shell-only changes, no C# test surface; behavioral logic verified by trace) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell scripting + logic analysis - two small script edits with clear behavioral spec; no compilation or test infra needed.
