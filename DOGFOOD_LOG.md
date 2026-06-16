@@ -1282,3 +1282,10 @@ Goal 779159c0: Fix a lost-update data-loss footgun in the SQLite state store (sr
 
 - Operator gate: Developer: pass — 754/754 Infrastructure tests green; 13 SQLite repo tests including 2 new regression tests (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - surgical data-loss fix with verification - scope was two files, required reading kernel aggregate to confirm no hard-removals exist, then deleting dead code paths.
+
+## 2026-06-16 - Make the JSON config stores write atomically and load corruption-safely, elim...
+
+Goal 0397cb10: Make the JSON config stores write atomically and load corruption-safely, eliminating the silent agent-catalog revert..... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5883fe1). Acceptance passed.
+
+- Operator gate: Developer: pass — 1042/1042 green; 13 new regression tests covering atomic write, .bak recovery, and corruption fallback across all three stores (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped file-IO hardening with regression tests - applied a well-defined atomic-write/bak-recovery pattern uniformly across three static store classes; no novel design decisions required.
