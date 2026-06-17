@@ -1387,3 +1387,10 @@ Goal d24ad5cc: Stop the acceptance-judge CLI lanes from timing out due to per-fi
 
 - Operator gate: Developer: pass — 32/32 SemanticAcceptance tests pass including both new-behavior tests (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted interface extension + test correction - single-file logic change with clear spec.
+
+## 2026-06-17 - Fix the acceptance-judge codex/spark timeout: the judge process runner never ...
+
+Goal 49044456: Fix the acceptance-judge codex/spark timeout: the judge process runner never closes the child's stdin, so `codex exec.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 667d578). Acceptance passed.
+
+- Operator gate: Developer: Passed - Failed: 0, Passed: 33, Skipped: 0, Total: 33 (32 pre-existing + 1 new) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted bug fix with test addition - root cause was clearly diagnosed, fix is 2-line change plus helper extraction, no architectural ambiguity.
