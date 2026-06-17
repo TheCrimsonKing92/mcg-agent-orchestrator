@@ -1380,3 +1380,10 @@ Goal 11a82ad6: Instrument acceptance-judge agreement so a future flip to a BLOCK
 
 - Operator gate: Developer: pass — 16 LoopHealth tests (all new + existing), 1080 total (277 Core + 803 Infrastructure), 0 failures (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature (new data types + calculations + tests in Core) - clean layering fit, no architectural ambiguity.
+
+## 2026-06-17 - Stop the acceptance-judge CLI lanes from timing out due to per-file fan-out
+
+Goal d24ad5cc: Stop the acceptance-judge CLI lanes from timing out due to per-file fan-out. Goal cd00dcb2 re-enabled per-file diff j.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 4383a65). Acceptance passed.
+
+- Operator gate: Developer: pass — 32/32 SemanticAcceptance tests pass including both new-behavior tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted interface extension + test correction - single-file logic change with clear spec.
