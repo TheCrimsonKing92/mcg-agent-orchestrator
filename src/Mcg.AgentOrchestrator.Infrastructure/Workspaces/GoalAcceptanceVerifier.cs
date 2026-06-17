@@ -51,6 +51,15 @@ public sealed class GoalAcceptanceVerifier
         await _runner(["dotnet", "build-server", "shutdown"], worktreePath, cancellationToken).ConfigureAwait(false);
 
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
+
+        // Inject any policy-required checks (derived from the change scope) that are not
+        // already present in the manifest, so the anti-drift gate never fires from a stale
+        // manifest without the operator needing to hand-edit acceptance-manifest.json.
+        var injected = BuildPolicyInjectedChecks(manifest.Checks, changedFiles);
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks = injected.Count == 0
+            ? manifest.Checks
+            : [.. manifest.Checks, .. injected];
+
         var checks = new List<AcceptanceCheckResult>();
         var retried = false;
 
@@ -58,18 +67,18 @@ public sealed class GoalAcceptanceVerifier
         // per-project .csproj checks covered by it, run the solution once and synthesize
         // results for the granular checks so the policy gate finds all required names
         // without re-running the full test suite.
-        var solutionCheck = manifest.Checks.FirstOrDefault(c =>
+        var solutionCheck = effectiveChecks.FirstOrDefault(c =>
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var deferredChecks = BuildDeferredChecks(solutionCheck, manifest.Checks, worktreePath);
+        var deferredChecks = BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath);
 
         if (deferredChecks.Count > 0)
         {
             var deferredNames = deferredChecks.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
 
             var nonDotnetPassed = true;
-            foreach (var check in manifest.Checks.Where(c =>
+            foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
                 var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
@@ -105,7 +114,7 @@ public sealed class GoalAcceptanceVerifier
 
                 if (slnRun.Result.Passed)
                 {
-                    foreach (var check in manifest.Checks.Where(c =>
+                    foreach (var check in effectiveChecks.Where(c =>
                         c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                         !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
                         !deferredNames.Contains(c.Name)))
@@ -123,7 +132,7 @@ public sealed class GoalAcceptanceVerifier
         }
         else
         {
-            foreach (var check in manifest.Checks)
+            foreach (var check in effectiveChecks)
             {
                 var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
@@ -178,6 +187,53 @@ public sealed class GoalAcceptanceVerifier
                 c.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
                 IsProjectInSolution(c.Project, solutionCheck.Project, slnContent))
             .ToList();
+    }
+
+    private static List<AcceptanceManifestCheck> BuildPolicyInjectedChecks(
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
+        IReadOnlyList<string>? changedFiles)
+    {
+        if (changedFiles is null || changedFiles.Count == 0)
+            return [];
+
+        var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        var coveredNames = manifestChecks
+            .Select(c => c.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var injected = new List<AcceptanceManifestCheck>();
+        var injectedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var check in plan.Checks.Where(c => c.Command.Count > 0))
+        {
+            if (coveredNames.Contains(check.Name))
+                continue;
+
+            var commandKey = $"dotnet-test:{check.CommandLine}";
+            if (!injectedKeys.Add(commandKey))
+                continue;
+
+            injected.Add(PolicyCheckToManifestCheck(check));
+        }
+
+        return injected;
+    }
+
+    private static AcceptanceManifestCheck PolicyCheckToManifestCheck(RepositoryTestImpactCheck check)
+    {
+        // Command format: ["dotnet", "test", <optional project>, ...args]
+        var remaining = check.Command.Skip(2).ToArray();
+        var project = remaining.Length > 0 && !remaining[0].StartsWith("-", StringComparison.Ordinal)
+            ? remaining[0]
+            : null;
+        var arguments = project is null ? remaining : remaining.Skip(1).ToArray();
+        return new AcceptanceManifestCheck
+        {
+            Name = check.Name,
+            Type = "dotnet-test",
+            Project = project,
+            Arguments = arguments
+        };
     }
 
     private static bool IsProjectInSolution(string projectPath, string? solutionProject, string? slnContent)

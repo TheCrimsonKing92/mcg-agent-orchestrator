@@ -1268,14 +1268,14 @@ public sealed class GoalWorktreeTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_evidence_blocks_missing_acceptance_checks")]
-    public void CliAcceptanceEvidenceBlocksMissingAcceptanceChecks()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_evidence_auto_injects_policy_required_checks_and_merges")]
+    public void CliAcceptanceEvidenceAutoInjectsPolicyRequiredChecksAndMerges()
     {
         var repo = CreateSeededRepository();
         try
         {
             var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Acceptance evidence missing checks test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            var goal = kernel.CreateGoal("Acceptance evidence auto-inject test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var task = goal.Tasks.Single();
             kernel.RecordTaskVerification(
@@ -1287,6 +1287,9 @@ public sealed class GoalWorktreeTests
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
             Directory.CreateDirectory(Path.Combine(worktreePath, "config"));
+            // Empty manifest: no explicit checks, but policy-required checks are auto-injected
+            // from the changed file scope (config/acceptance-manifest.json classifies as
+            // BuildSystem, triggering a full-suite requirement which gets auto-injected).
             File.WriteAllText(Path.Combine(worktreePath, "config", "acceptance-manifest.json"), "{\"checks\":[]}");
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Goal work");
@@ -1295,6 +1298,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
+            // Fake verifier always succeeds — simulates the auto-injected check passing.
             var fakeVerifier = new GoalAcceptanceVerifier(
                 (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
@@ -1304,12 +1308,12 @@ public sealed class GoalWorktreeTests
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
-            Assert.True(output.Contains("Acceptance evidence bundle: blocked", StringComparison.Ordinal));
-            Assert.True(output.Contains("acceptance-checks-missing", StringComparison.Ordinal));
-            Assert.True(output.Contains("acceptance-policy-check-missing", StringComparison.Ordinal));
-            Assert.True(output.Contains("missing - required", StringComparison.Ordinal));
-            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
-            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+            // Policy-required check was auto-injected and passed — no missing-check blocker.
+            Assert.True(output.Contains("Acceptance evidence bundle: passed", StringComparison.Ordinal));
+            Assert.False(output.Contains("acceptance-checks-missing", StringComparison.Ordinal));
+            Assert.False(output.Contains("acceptance-policy-check-missing", StringComparison.Ordinal));
+            // The merge succeeded: feature.txt is now in the main working tree.
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
         }
         finally
         {
