@@ -1429,3 +1429,10 @@ Goal 003d2850: Fix the flaky DispatchProcessHost grandchild-pipe test. In tests/
 
 - Operator gate: Developer: pass - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 12s (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted single-file test fix with no design decisions - straightforward file-handle race analysis and implementation.
+
+## 2026-06-17 - Fix a false-positive in the verification-policy compiler at src/Mcg
+
+Goal 73a73b1a: Fix a false-positive in the verification-policy compiler at src/Mcg.AgentOrchestrator.Core/Application/VerificationPo.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 058891a). Acceptance passed.
+
+- Operator gate: Developer: pass — 283/283 Core.Tests green; 7 VerificationPolicyCompiler-specific tests (6 new + 1 updated existing) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted predicate fix with test coverage - scoped change, well-specified behavior.
