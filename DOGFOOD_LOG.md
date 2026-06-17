@@ -1492,3 +1492,10 @@ Goal 50efb524: # Replace substring-based verification-gate routing with an expli
 
 - Operator gate: Developer: ALL GREEN — Core.Tests 298/298, Infrastructure.Tests 811/811 (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - structural refactor with enum introduction and routing replacement - well-defined scope with clear call sites, no architectural ambiguity.
+
+## 2026-06-17 - # Consolidate duplicated git-process runners into one shared GitCli helper  #...
+
+Goal bfe43df6: # Consolidate duplicated git-process runners into one shared GitCli helper  ## Problem The same `git` invocation plum.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
