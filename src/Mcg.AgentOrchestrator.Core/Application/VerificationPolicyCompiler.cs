@@ -40,6 +40,15 @@ public static class VerificationPolicyCompiler
         "ui flow"
     ];
 
+    private static readonly string[] FrontEndExtensions =
+    [
+        ".tsx",
+        ".ts",
+        ".css",
+        ".html",
+        ".vue"
+    ];
+
     public static VerificationPolicy Compile(
         AgentRole role,
         string goalObjective,
@@ -72,7 +81,7 @@ public static class VerificationPolicyCompiler
                 "Tester and Reviewer roles must inspect worker output, verification records, and blockers before trusting task status."));
         }
 
-        if (ContainsAny(text, BrowserSignals))
+        if (ContainsAny(text, BrowserSignals) && HasFrontEndAsset(files))
         {
             checks.Add(new VerificationPolicyCheck(
                 "dashboard browser smoke",
@@ -110,4 +119,13 @@ public static class VerificationPolicyCompiler
 
     private static bool ContainsAny(string text, IReadOnlyList<string> signals) =>
         signals.Any(signal => text.Contains(signal, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasFrontEndAsset(IReadOnlyList<string> files) =>
+        files.Any(file =>
+        {
+            var normalized = file.Replace('\\', '/');
+            return FrontEndExtensions.Any(ext => normalized.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                || normalized.StartsWith("src/Mcg.AgentOrchestrator.Dashboard/", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalized, "scripts/Run-DashboardBrowserScript.ps1", StringComparison.OrdinalIgnoreCase);
+        });
 }

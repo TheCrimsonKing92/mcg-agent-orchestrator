@@ -126,7 +126,10 @@ public sealed class RepositoryChangeClassifierTests
             "Verify dashboard auth policy.",
             "Run Playwright dashboard UI flow for auth policy rollback.",
             "Run focused tests and browser smoke.",
-            ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/AuthPolicy.cs"]);
+            [
+                "src/Mcg.AgentOrchestrator.App/Dashboard/Api/AuthPolicy.cs",
+                "src/Mcg.AgentOrchestrator.Dashboard/Components/AuthPolicy.tsx"
+            ]);
 
         Assert.False(docsPolicy.RequiresTests);
         Assert.False(docsPolicy.RequiresHumanReview);
