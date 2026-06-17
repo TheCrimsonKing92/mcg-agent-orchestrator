@@ -1513,3 +1513,10 @@ Goal 87d49eea: # Acceptance-criteria verification, increment 1a (ADVISORY): run 
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-17 - # Add a goals-prune verb to reap landed-but-unclosed goals  ## Problem Goals ...
+
+Goal b9282731: # Add a goals-prune verb to reap landed-but-unclosed goals  ## Problem Goals that landed (their work is merged to mai.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 9573de2). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — Core 307/307, Infrastructure 833/833 (includes 7 new GoalsPruneTests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file CLI feature with git integration and test coverage - correctly navigated the partial-class CLI handler pattern, adapted GoalWorktrees/GitCli helpers, and produced 7 passing tests matching the custom Assert framework.
