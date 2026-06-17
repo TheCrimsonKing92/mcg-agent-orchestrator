@@ -1394,3 +1394,10 @@ Goal 49044456: Fix the acceptance-judge codex/spark timeout: the judge process r
 
 - Operator gate: Developer: Passed - Failed: 0, Passed: 33, Skipped: 0, Total: 33 (32 pre-existing + 1 new) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted bug fix with test addition - root cause was clearly diagnosed, fix is 2-line change plus helper extraction, no architectural ambiguity.
+
+## 2026-06-17 - Make the launcher resilient when a long-running App instance (serve-dashboard...
+
+Goal 42315600: Make the launcher resilient when a long-running App instance (serve-dashboard) holds App.dll, instead of silently fai.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5d5313d). Acceptance passed.
+
+- Operator gate: Developer: not-run (shell-only changes; no test suite covers launcher scripts) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell scripting task - straightforward batch + bash logic, no C# involved; no reasoning needed beyond mechanics of cmd label jumps and bash error handling.
