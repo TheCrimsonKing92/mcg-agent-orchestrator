@@ -1359,3 +1359,10 @@ Goal 8ba3c661: Link goals to their source backlog item and auto-close that item 
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-17 - Spike: can the Claude Agent SDK drive a worker on the SUBSCRIPTION OAuth prof...
+
+Goal 6f486244: Spike: can the Claude Agent SDK drive a worker on the SUBSCRIPTION OAuth profile (no paid per-token API) from this .N.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a3b71f0). Acceptance passed.
+
+- Operator gate: Developer: not-run — doc-only deliverable, no code changed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - research/doc spike requiring SDK credential-chain analysis and event surface mapping; no implementation needed for STEP 1
