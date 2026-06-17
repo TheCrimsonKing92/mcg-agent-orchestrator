@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -559,12 +560,9 @@ internal static class OperatorInbox
 
     private static string Display(TaskAttentionKind kind) => kind switch
     {
-        TaskAttentionKind.FailedTask => "Failed task",
-        TaskAttentionKind.FailedVerification => "Failed verification",
+        // inbox-specific label for running dispatches
         TaskAttentionKind.RunningDispatch => "Running worker",
-        TaskAttentionKind.MissingVerification => "Missing verification",
-        TaskAttentionKind.PendingHumanInput => "Pending human input",
-        _ => kind.ToString()
+        _ => DashboardDisplayNames.Display(kind)
     };
 
     private static IReadOnlyList<OperatorInboxAcknowledgement> LoadAcknowledgements(OrchestratorWorkspace workspace)
