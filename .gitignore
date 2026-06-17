@@ -31,6 +31,7 @@ publish/
 **/.orchestrator-context/
 **/.orchestrator-demo/
 **/.orchestrator-prototype/
+**/.orchestrator-legacy-*/
 **/.scratch/
 .test-results/
 .build.out
