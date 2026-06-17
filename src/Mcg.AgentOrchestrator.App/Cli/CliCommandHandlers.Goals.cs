@@ -518,6 +518,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             Console.WriteLine($"  main-advanced: {landResult.MainAdvanced}");
             return landResult.MainAdvanced;
 
+        case "goals-prune":
+            return HandleGoalsPrune(context, parts);
+
         case "conduct":
             if (HasCliConfirmation(parts, "--loop"))
             {
@@ -1636,6 +1639,23 @@ private static bool HasGoalStopConfirmation(IReadOnlyList<string> parts) =>
 
 private static string RemoveFlag(string value, string flag) =>
     value.Replace(flag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+
+private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    {
+        throw new InvalidOperationException(
+            "goals-prune requires a git work tree; the execution directory is not inside a git repository.");
+    }
+
+    var confirm = HasCliConfirmation(parts, "--confirm-prune");
+    var plan = confirm
+        ? GoalsPrunePlanner.Apply(context.Kernel, context.Workspace.ExecutionDirectory)
+        : GoalsPrunePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory);
+
+    ConsoleViews.PrintGoalsPrunePlan(plan);
+    return plan.PrunedCount > 0;
+}
 
 private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {
