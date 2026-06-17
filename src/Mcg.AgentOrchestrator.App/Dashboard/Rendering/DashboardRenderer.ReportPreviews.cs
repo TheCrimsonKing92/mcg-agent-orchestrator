@@ -128,7 +128,7 @@ public static partial class DashboardRenderer
             html,
             "Verification to-do",
             $"{verificationWorklist.OpenCount} open item(s)",
-            verificationWorklist.Items.Take(2).Select(item => $"Task {GetTaskDisplayNumber(goal, item.TaskId)}: {Encode(TrimPreview(item.SuggestedAction))}").ToList(),
+            verificationWorklist.Items.Take(2).Select(item => $"Task {TaskDisplayNumber.Resolve(goal, item.TaskId)}: {Encode(TrimPreview(item.SuggestedAction))}").ToList(),
             $"/api/verification-worklist?goal={goalPrefix}",
             "Open verification JSON",
             "report-preview-card-wide");

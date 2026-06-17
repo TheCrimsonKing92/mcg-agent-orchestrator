@@ -1,4 +1,5 @@
 using System.Text;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 
@@ -66,7 +67,7 @@ public static partial class GoalTranscriptRenderer
         {
             foreach (var item in monitor.AttentionItems)
             {
-                var task = item.TaskId is null ? "goal" : $"task {GetTaskDisplayNumber(goal, item.TaskId)}";
+                var task = item.TaskId is null ? "goal" : $"task {TaskDisplayNumber.Resolve(goal, item.TaskId)}";
                 text.AppendLine($"- {Display(item.Kind)} ({task}): {OutputTextPreview.CreateTimeline(item.Message).Text}");
             }
         }
@@ -84,9 +85,9 @@ public static partial class GoalTranscriptRenderer
             {
                 var scope = item.TaskId is null
                     ? "goal"
-                    : $"task {GetTaskDisplayNumber(goal, item.TaskId)} [{Display(item.TaskStatus!.Value)}] {item.Role}";
+                    : $"task {TaskDisplayNumber.Resolve(goal, item.TaskId)} [{Display(item.TaskStatus!.Value)}] {item.Role}";
                 text.AppendLine($"- {item.RequestId.Value[..8]} ({scope}): {OutputTextPreview.CreateSummary(item.Question).Text}");
-                text.AppendLine($"  Suggested command: {BuildHumanInputSuggestedCommand(item.RequestId)}");
+                text.AppendLine($"  Suggested command: {ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId)}");
             }
         }
 
@@ -104,10 +105,10 @@ public static partial class GoalTranscriptRenderer
         {
             foreach (var blocker in acceptance.Blockers)
             {
-                int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
+                int? taskNumber = blocker.TaskId is null ? null : TaskDisplayNumber.Resolve(goal, blocker.TaskId);
                 var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
                 text.AppendLine($"- {Display(blocker.Kind)} ({scope}): {OutputTextPreview.CreateTimeline(blocker.Message).Text}");
-                text.AppendLine($"  Suggested command: {BuildAcceptanceSuggestedCommand(blocker, taskNumber)}");
+                text.AppendLine($"  Suggested command: {ConsoleViews.BuildAcceptanceSuggestedCommand(blocker, taskNumber)}");
             }
         }
 
@@ -145,7 +146,7 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine($"Pending human input: {evidence.PendingHumanInputCount}");
         foreach (var item in evidence.Tasks)
         {
-            text.AppendLine($"- Task {GetTaskDisplayNumber(goal, item.TaskId)} [{Display(item.LatestEvidence)}] {item.Role}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
+            text.AppendLine($"- Task {TaskDisplayNumber.Resolve(goal, item.TaskId)} [{Display(item.LatestEvidence)}] {item.Role}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
             if (!string.IsNullOrWhiteSpace(item.ModelFitNote))
             {
                 text.AppendLine($"  {OutputTextPreview.CreateTimeline(item.ModelFitNote).Text}");
@@ -160,7 +161,7 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine($"Blocked: {stages.BlockedStages}");
         foreach (var stage in stages.Stages)
         {
-            var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
+            var taskNumber = TaskDisplayNumber.Resolve(goal, stage.TaskId);
             text.AppendLine($"- Task {taskNumber} [{Display(stage.StageStatus)}] {stage.Stage}: {OutputTextPreview.CreateTimeline(stage.Message).Text}");
             text.AppendLine($"  Suggested command: {BuildStageSuggestedCommand(goal, stage, agents)}");
         }
@@ -170,7 +171,7 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine($"Satisfied: {verificationGate.IsSatisfied}");
         foreach (var gate in verificationGate.Tasks)
         {
-            text.AppendLine($"- Task {GetTaskDisplayNumber(goal, gate.TaskId)} [{Display(gate.GateStatus)}] {gate.Role}: {OutputTextPreview.CreateTimeline(gate.Message).Text}");
+            text.AppendLine($"- Task {TaskDisplayNumber.Resolve(goal, gate.TaskId)} [{Display(gate.GateStatus)}] {gate.Role}: {OutputTextPreview.CreateTimeline(gate.Message).Text}");
         }
 
         text.AppendLine();
@@ -184,9 +185,9 @@ public static partial class GoalTranscriptRenderer
         {
             foreach (var item in verificationWorklist.Items)
             {
-                var taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
+                var taskNumber = TaskDisplayNumber.Resolve(goal, item.TaskId);
                 text.AppendLine($"- Task {taskNumber} [{Display(item.GateStatus)}] {item.Role}: {OutputTextPreview.CreateTimeline(item.SuggestedAction).Text}");
-                text.AppendLine($"  Suggested command: {BuildVerificationSuggestedCommand(taskNumber, item.GateStatus)}");
+                text.AppendLine($"  Suggested command: {ConsoleViews.BuildVerificationSuggestedCommand(taskNumber, item.GateStatus)}");
             }
         }
 
@@ -201,7 +202,7 @@ public static partial class GoalTranscriptRenderer
         text.AppendLine("## Goal Activity Log");
         foreach (var evt in goal.Timeline.OrderBy(evt => evt.OccurredAt))
         {
-            var task = evt.TaskId is null ? "goal" : $"task {GetTaskDisplayNumber(goal, evt.TaskId)}";
+            var task = evt.TaskId is null ? "goal" : $"task {TaskDisplayNumber.Resolve(goal, evt.TaskId)}";
             text.AppendLine($"- {evt.OccurredAt:u} {Display(evt.Kind)} ({task}): {OutputTextPreview.CreateTimeline(evt.Message).Text}");
         }
 

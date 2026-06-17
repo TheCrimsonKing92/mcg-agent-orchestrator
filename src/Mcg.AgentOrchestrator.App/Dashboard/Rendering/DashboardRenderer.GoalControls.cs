@@ -132,7 +132,7 @@ public static partial class DashboardRenderer
         var task = request.TaskId is null
             ? null
             : goal.Tasks.FirstOrDefault(candidate => candidate.Id == request.TaskId);
-        var scope = task is null ? "Goal" : $"Task {GetTaskDisplayNumber(goal, task.Id)} &middot; {task.RequiredRole}";
+        var scope = task is null ? "Goal" : $"Task {TaskDisplayNumber.Resolve(goal, task.Id)} &middot; {task.RequiredRole}";
 
         html.AppendLine($"<form id=\"{formAnchor}\" class=\"answer-form\" data-action=\"/api/input/{requestPrefix}/answer\">");
         html.AppendLine($"<div class=\"meta\">Pending decision &middot; {scope} &middot; requested {Encode(request.RequestedAt.ToString("u"))}</div>");
@@ -152,7 +152,7 @@ public static partial class DashboardRenderer
         }
         else
         {
-            var taskNumber = GetTaskDisplayNumber(goal, task.Id);
+            var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
             var taskPrefix = $"/api/goals/{goalPrefix}/tasks/{taskNumber}";
             html.AppendLine($"<div><strong>Status</strong> {Encode(Display(task.Status))}</div>");
             html.AppendLine($"<div><strong>Description</strong> {Encode(OutputTextPreview.CreateSummary(task.Description).Text)}</div>");
@@ -234,7 +234,7 @@ public static partial class DashboardRenderer
         DashboardRenderOptions options)
     {
         var goalPrefix = Encode(goal.Id.Value[..8]);
-        var taskNumber = GetTaskDisplayNumber(goal, task.Id);
+        var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         var prefix = $"/api/goals/{goalPrefix}/tasks/{taskNumber}";
         var html = new StringBuilder();
         html.AppendLine("<div class=\"task-action-card\">");
