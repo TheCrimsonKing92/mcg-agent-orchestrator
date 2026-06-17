@@ -34,6 +34,16 @@ public sealed class GoalAcceptanceVerifier
 
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
 
+    private static readonly Regex TestAttrPattern = new(
+        @"^\[(?:Fact|Theory|Xunit\.Fact\()",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex TautologyPattern = new(
+        @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
+
     private readonly Func<string[], string, CancellationToken, Task<CommandResult>> _runner;
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
@@ -158,6 +168,12 @@ public sealed class GoalAcceptanceVerifier
         {
             var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result with { Advisory = true });
+        }
+
+        var testFileChanges = changedFiles?.Where(IsTestFile).ToArray();
+        if (testFileChanges is { Length: > 0 })
+        {
+            checks.Add(await RunTestTamperCheckAsync(testFileChanges, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
@@ -496,6 +512,120 @@ public sealed class GoalAcceptanceVerifier
         return forbidden.Length == 0
             ? new AcceptanceCheckResult("forbidden changed paths", true, 0, null)
             : new AcceptanceCheckResult("forbidden changed paths", false, 1, string.Join(Environment.NewLine, forbidden));
+    }
+
+    private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
+        string[] testFiles,
+        string worktreePath,
+        CancellationToken cancellationToken)
+    {
+        const string CheckName = "test tamper guard";
+
+        var diffArgs = DiffBaseArgs.Concat(testFiles).ToArray();
+
+        var result = await _runner(diffArgs, worktreePath, cancellationToken).ConfigureAwait(false);
+
+        if (result.ExitCode != 0)
+            return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "diff unavailable");
+
+        var signals = AnalyzeTestFileDiff(result.Output);
+
+        if (signals.Count == 0)
+            return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "no test degradation detected");
+
+        return new AcceptanceCheckResult(
+            CheckName, false, 1,
+            string.Join(Environment.NewLine, signals),
+            Advisory: true,
+            ResultSummary: $"{signals.Count} test degradation signal(s)");
+    }
+
+    private static bool IsTestFile(string path) =>
+        path.Contains("Tests", StringComparison.OrdinalIgnoreCase);
+
+    private static List<string> AnalyzeTestFileDiff(string diff)
+    {
+        var signals = new List<string>();
+        string? currentFile = null;
+        string? pendingFile = null;
+        int assertRemoved = 0, assertAdded = 0;
+        int testAttrRemoved = 0, testAttrAdded = 0;
+        var tautologies = new List<string>();
+
+        void FlushFile()
+        {
+            if (currentFile is null) return;
+            var fileSignals = new List<string>();
+
+            var netAssert = assertRemoved - assertAdded;
+            if (netAssert > 0)
+                fileSignals.Add($"net -{netAssert} assertion(s) removed");
+
+            var netTestAttr = testAttrRemoved - testAttrAdded;
+            if (netTestAttr > 0)
+                fileSignals.Add($"{netTestAttr} test method(s) removed");
+
+            foreach (var t in tautologies)
+                fileSignals.Add($"tautology assertion added: {t}");
+
+            if (fileSignals.Count > 0)
+                signals.Add($"{currentFile}: {string.Join("; ", fileSignals)}");
+        }
+
+        void StartFile(string filePath)
+        {
+            FlushFile();
+            currentFile = filePath;
+            assertRemoved = assertAdded = testAttrRemoved = testAttrAdded = 0;
+            tautologies.Clear();
+        }
+
+        foreach (var rawLine in diff.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+
+            if (line.StartsWith("--- a/", StringComparison.Ordinal))
+            {
+                pendingFile = line[6..];
+            }
+            else if (line.StartsWith("+++ b/", StringComparison.Ordinal))
+            {
+                StartFile(line[6..]);
+                pendingFile = null;
+            }
+            else if (line.StartsWith("+++ /dev/null", StringComparison.Ordinal) && pendingFile is not null)
+            {
+                StartFile(pendingFile);
+                pendingFile = null;
+            }
+            else if (line.Length > 1 && line[0] is '-' or '+' &&
+                     !line.StartsWith("--- ", StringComparison.Ordinal) &&
+                     !line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                var content = line[1..];
+                var trimmed = content.TrimStart();
+
+                if (line[0] == '-')
+                {
+                    if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
+                        assertRemoved++;
+                    if (TestAttrPattern.IsMatch(trimmed))
+                        testAttrRemoved++;
+                }
+                else
+                {
+                    if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
+                        assertAdded++;
+                    if (TestAttrPattern.IsMatch(trimmed))
+                        testAttrAdded++;
+                    if (TautologyPattern.IsMatch(content))
+                        tautologies.Add(trimmed.Length > 80 ? trimmed[..80] + "..." : trimmed);
+                }
+            }
+        }
+
+        FlushFile();
+        return signals;
     }
 
     private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check)
