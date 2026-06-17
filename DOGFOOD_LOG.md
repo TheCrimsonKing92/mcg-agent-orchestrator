@@ -1408,3 +1408,10 @@ Goal 2231d0f5: Make the legacy-workspace consolidation also migrate CONFIG files
 
 - Operator gate: Developer: pass — 13 WorkspaceConsolidator tests (9 existing + 4 new), full suite 1085/1085 green (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped file edit + test authoring with clear domain constraints - right size for the task.
+
+## 2026-06-17 - Reorganize the README into a Fundamentals/Advanced split (docs only) to match...
+
+Goal 8d287a9b: Reorganize the README into a Fundamentals/Advanced split (docs only) to match the collapsed CLI. The CLI now centers .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 61acdfa). Acceptance passed.
+
+- Operator gate: Developer: not-run (docs-only change; no tests apply) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - docs restructuring with CLI source cross-check - reading two source files to verify six verb names before writing kept the docs accurate; task required no generation or inference beyond writing.
