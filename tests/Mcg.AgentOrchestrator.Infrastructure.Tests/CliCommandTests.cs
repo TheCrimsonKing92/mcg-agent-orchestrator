@@ -4409,6 +4409,94 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_creates_item_with_file_content")]
+    public async Task CliBacklogAddBodyFileCreatesItemWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var bodyContent = "Add file-backed backlog body support.\n\nMulti-line item body that would overflow an inline CLI argument.";
+        var bodyPath = Path.Combine(root, "body.md");
+        File.WriteAllText(bodyPath, bodyContent, System.Text.Encoding.UTF8);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-add", "File-backed item", "--body-file", bodyPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = Xunit.Assert.Single(await store.ListAsync(includeAll: true));
+        Xunit.Assert.Equal("File-backed item", item.Title);
+        Xunit.Assert.Equal(bodyContent, item.Body);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_missing_gives_clear_error")]
+    public async Task CliBacklogAddBodyFileMissingGivesClearError()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var missingPath = Path.Combine(root, "does-not-exist.md");
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-add", "File-backed item", "--body-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("--body-file not found", ex.Message);
+        Xunit.Assert.Contains(missingPath, ex.Message);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        Xunit.Assert.Empty(await store.ListAsync(includeAll: true));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_close_reason_file_closes_item_with_file_content")]
+    public async Task CliBacklogCloseReasonFileClosesItemWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var reasonContent = "Resolved by the file-backed backlog close path.\n\nIncludes detail that would overflow inline command text.";
+        var reasonPath = Path.Combine(root, "reason.md");
+        File.WriteAllText(reasonPath, reasonContent, System.Text.Encoding.UTF8);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Close from file", "Original body");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-close", item.Id[..8], "--reason-file", reasonPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var closed = await store.GetByExactIdAsync(item.Id);
+        Xunit.Assert.NotNull(closed);
+        Xunit.Assert.Equal(BacklogItemStatus.Done, closed!.Status);
+        Xunit.Assert.Contains("Original body", closed.Body);
+        Xunit.Assert.Contains(reasonContent, closed.Body);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_simple_goal_brief_file_missing_gives_clear_error")]
     public void CliSimpleGoalBriefFileMissingGivesClearError()
     {

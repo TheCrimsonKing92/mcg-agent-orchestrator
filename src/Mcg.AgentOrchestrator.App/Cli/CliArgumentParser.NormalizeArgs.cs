@@ -55,9 +55,17 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             : args;
     }
 
-    if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeBacklogTextCommandWithFileFlag(args, "--body-file");
+    }
+
+    if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeBacklogTextCommandWithFileFlag(args, "--reason-file");
+    }
+
+    if (command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
             ? [command, args[1], string.Join(' ', args.Skip(2))]
@@ -166,6 +174,29 @@ private static IReadOnlyList<string> NormalizeAgentArgs(string[] args)
     if (flagIndex > 4)
     {
         parts.Add(string.Join(' ', args.Skip(4).Take(flagIndex - 4)));
+    }
+
+    parts.AddRange(args.Skip(flagIndex));
+    return parts;
+}
+
+private static IReadOnlyList<string> NormalizeBacklogTextCommandWithFileFlag(string[] args, string fileFlag)
+{
+    if (args.Length < 3)
+    {
+        return args;
+    }
+
+    var flagIndex = Array.FindIndex(args, 2, arg => arg.Equals(fileFlag, StringComparison.OrdinalIgnoreCase));
+    if (flagIndex < 0)
+    {
+        return [args[0], args[1], string.Join(' ', args.Skip(2))];
+    }
+
+    var parts = new List<string> { args[0], args[1] };
+    if (flagIndex > 2)
+    {
+        parts.Add(string.Join(' ', args.Skip(2).Take(flagIndex - 2)));
     }
 
     parts.AddRange(args.Skip(flagIndex));

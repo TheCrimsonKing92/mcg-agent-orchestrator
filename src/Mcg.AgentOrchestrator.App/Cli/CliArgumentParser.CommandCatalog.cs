@@ -97,7 +97,9 @@ private static bool IsSimpleCommand(string command)
         command.Equals("land", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-list", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-show", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-import", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase);
 }

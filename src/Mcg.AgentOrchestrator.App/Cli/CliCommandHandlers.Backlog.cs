@@ -27,9 +27,9 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-add":
         {
-            CliArgumentParser.RequirePartCount(parts, 2, "backlog-add <title> [body]");
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-add <title> [body] | backlog-add <title> --body-file <path>");
             var title = parts[1];
-            var body = parts.Count > 2 ? parts[2] : "";
+            var body = ResolveBacklogTextFile(parts, "--body-file", inlineIndex: 2, defaultValue: "") ?? "";
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = store.AddAsync(title, body).GetAwaiter().GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
@@ -59,11 +59,11 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-close":
         {
-            CliArgumentParser.RequirePartCount(parts, 2, "backlog-close <id-prefix> [reason]");
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>");
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
-            var reason = parts.Count > 2 ? parts[2] : null;
+            var reason = ResolveBacklogTextFile(parts, "--reason-file", inlineIndex: 2, defaultValue: null);
             var closed = store.CloseAsync(item.Id, reason).GetAwaiter().GetResult();
             Console.WriteLine($"Closed: [{closed.Id}] {closed.Title}");
             return false;
@@ -106,6 +106,23 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         default:
             return null;
     }
+}
+
+private static string? ResolveBacklogTextFile(IReadOnlyList<string> parts, string flag, int inlineIndex, string? defaultValue)
+{
+    if (parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase)))
+    {
+        var path = GetFlagValue(parts, flag)
+            ?? throw new ArgumentException($"{flag} requires <path>.");
+        if (!File.Exists(path))
+        {
+            throw new InvalidOperationException($"{flag} not found: {path}");
+        }
+
+        return File.ReadAllText(path, System.Text.Encoding.UTF8);
+    }
+
+    return parts.Count > inlineIndex ? parts[inlineIndex] : defaultValue;
 }
 
 private static (int added, int skipped) ImportBacklogMd(string path, BacklogStore store)
