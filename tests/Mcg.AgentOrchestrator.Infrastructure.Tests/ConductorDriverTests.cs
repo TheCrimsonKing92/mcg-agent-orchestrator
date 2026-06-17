@@ -37,12 +37,16 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
     }
 
+    private static GoalWorktreeRebaseResult DefaultRebaseSuccess() =>
+        new(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "Already fast-forwardable", [], null);
+
     private static ConductorDriver MakeDriver(
         Func<Goal, GoalLifecycleFacts>? getFacts = null,
         Func<int>? getRunningCount = null,
         Func<Goal, string>? createWorkspace = null,
-        Func<Goal, bool>? dispatchAndStart = null,
+        Func<Goal, string?>? dispatchAndStart = null,
         Func<Goal, bool>? runAcceptance = null,
+        Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
         Action<Goal>? record = null,
         Action<Goal>? cleanup = null,
@@ -53,8 +57,9 @@ public sealed class ConductorDriverTests
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
             createWorkspace ?? (_ => "/tmp/workspace"),
-            dispatchAndStart ?? (_ => true),
+            dispatchAndStart ?? (_ => null),
             runAcceptance ?? (_ => true),
+            rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
             land ?? (g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed")),
             record ?? (_ => { }),
             cleanup ?? (_ => { }),
@@ -93,7 +98,7 @@ public sealed class ConductorDriverTests
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getRunningCount: () => policy.MaxConcurrentPaidWorkers, // at cap
-            dispatchAndStart: _ => { dispatchCalled = true; return true; });
+            dispatchAndStart: _ => { dispatchCalled = true; return null; });
 
         var result = driver.AdvanceOnce(goal, policy);
 
@@ -110,7 +115,7 @@ public sealed class ConductorDriverTests
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getRunningCount: () => 0,
-            dispatchAndStart: _ => { dispatchCalled = true; return true; });
+            dispatchAndStart: _ => { dispatchCalled = true; return null; });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
@@ -419,5 +424,103 @@ public sealed class ConductorDriverTests
         Assert.Equal(goal.Id.Value, result.GoalId);
         Assert.Equal(goal.Id.Value[..8], result.GoalPrefix);
         Assert.Equal("Conservative", result.PolicyName);
+    }
+
+    // ── Pre-landing rebase (Defect 1 fix) ────────────────────────────────
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_disjoint_advance_rebase_lands_without_escalation")]
+    public void ConductorDriverVerifiedDisjointAdvanceRebaseLandsWithoutEscalation()
+    {
+        // Goal branch behind an advanced-but-disjoint main: rebase succeeds, landing proceeds.
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var landCalled = false;
+        var escalated = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ => true,
+            classifyRisk: _ => ChangeRiskTier.Broad,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.Rebased, "goal/test", "Rebased onto main", [], null),
+            land: g => { landCalled = true; return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"); },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(landCalled);
+        Assert.False(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_rebase_conflict_escalates_with_conflict_reason")]
+    public void ConductorDriverVerifiedRebaseConflictEscalatesWithConflictReason()
+    {
+        // Genuine overlapping-hunk conflict: rebase returns Conflict → escalate, land is never called.
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var landCalled = false;
+        string? escalationReason = null;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ => true,
+            classifyRisk: _ => ChangeRiskTier.Broad,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.Conflict, "goal/test",
+                "Rebase found conflicts", ["src/Foo.cs"], null),
+            land: g => { landCalled = true; return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"); },
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(landCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Escalated)result.Outcome).State);
+        Assert.True(escalationReason is not null);
+        Assert.Contains(escalationReason!, v => v.Contains("conflict", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(escalationReason!, v => v.Contains("src/Foo.cs", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ── Dispatch-start reason clarity (Defect 2 fix) ─────────────────────
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_empty_batch_escalation_names_batch_reason")]
+    public void ConductorDriverWorkspaceReadyEmptyBatchEscalationNamesBatchReason()
+    {
+        var (_, goal) = SimpleGoal();
+        string? escalationReason = null;
+        const string emptyBatchReason = "No tasks in ready batch; goal may have no assigned or ready tasks";
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => 0,
+            dispatchAndStart: _ => emptyBatchReason,
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Equal(emptyBatchReason, escalationReason);
+        Assert.Contains(escalationReason!, v => v.Contains("batch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_failure_escalation_names_spawn_reason")]
+    public void ConductorDriverWorkspaceReadySpawnFailureEscalationNamesSpawnReason()
+    {
+        var (_, goal) = SimpleGoal();
+        string? escalationReason = null;
+        const string spawnFailReason = "Dispatched 1 task(s) but no processes started (spawn failed)";
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => 0,
+            dispatchAndStart: _ => spawnFailReason,
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Equal(spawnFailReason, escalationReason);
+        Assert.Contains(escalationReason!, v => v.Contains("spawn", StringComparison.OrdinalIgnoreCase));
     }
 }

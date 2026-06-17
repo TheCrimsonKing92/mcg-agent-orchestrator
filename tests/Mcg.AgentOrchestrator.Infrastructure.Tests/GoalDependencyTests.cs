@@ -106,8 +106,9 @@ public sealed class GoalDependencyTests
             getFacts: _ => GoalLifecycleFacts.None,
             getRunningPaidWorkerCount: () => 0,
             createWorkspace: g => { workspacesCreated.Add(g.Id.Value); return "/tmp/ws"; },
-            dispatchAndStart: _ => true,
+            dispatchAndStart: _ => null,
             runAcceptanceVerification: _ => true,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
             cleanup: _ => { },
@@ -168,8 +169,9 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: _ => true,
+            dispatchAndStart: _ => null,
             runAcceptanceVerification: _ => true,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g =>
             {
                 if (g.Id == a.Id) aMerged = true;
@@ -215,8 +217,9 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: g => g.Id != a.Id, // A fails to dispatch → escalated
+            dispatchAndStart: g => g.Id == a.Id ? "Dispatch failed for A" : null, // A fails → escalated
             runAcceptanceVerification: _ => true,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
             cleanup: _ => { },

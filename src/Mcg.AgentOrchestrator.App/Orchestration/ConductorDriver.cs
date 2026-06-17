@@ -10,8 +10,9 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
-    private readonly Func<Goal, bool> _dispatchAndStart;
+    private readonly Func<Goal, string?> _dispatchAndStart;
     private readonly Func<Goal, bool> _runAcceptanceVerification;
+    private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, LandingResult> _land;
     private readonly Action<Goal> _record;
     private readonly Action<Goal> _cleanup;
@@ -55,13 +56,17 @@ internal sealed class ConductorDriver
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
             var result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
-            var started = result.Processes.Tasks.Count > 0;
-            if (started)
+            if (result.Processes.Tasks.Count > 0)
+            {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
                     $"Dispatched {result.Dispatches.Count} tasks, started {result.Processes.Tasks.Count} processes.");
-            else
-                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", "No tasks dispatched.");
-            return started;
+                return null;
+            }
+            var reason = result.Dispatches.Count == 0
+                ? "No tasks in ready batch; goal may have no assigned or ready tasks"
+                : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
+            return reason;
         };
 
         _runAcceptanceVerification = goal =>
@@ -79,6 +84,8 @@ internal sealed class ConductorDriver
                     $"Acceptance failed (exit {verification.ExitCode}).");
             return verification.Passed;
         };
+
+        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
 
         _land = goal =>
         {
@@ -138,8 +145,9 @@ internal sealed class ConductorDriver
         Func<Goal, GoalLifecycleFacts> getFacts,
         Func<int> getRunningPaidWorkerCount,
         Func<Goal, string> createWorkspace,
-        Func<Goal, bool> dispatchAndStart,
+        Func<Goal, string?> dispatchAndStart,
         Func<Goal, bool> runAcceptanceVerification,
+        Func<Goal, GoalWorktreeRebaseResult> rebaseOntoMain,
         Func<Goal, LandingResult> land,
         Action<Goal> record,
         Action<Goal> cleanup,
@@ -151,6 +159,7 @@ internal sealed class ConductorDriver
         _createWorkspace = createWorkspace;
         _dispatchAndStart = dispatchAndStart;
         _runAcceptanceVerification = runAcceptanceVerification;
+        _rebaseOntoMain = rebaseOntoMain;
         _land = land;
         _record = record;
         _cleanup = cleanup;
@@ -224,11 +233,10 @@ internal sealed class ConductorDriver
                     $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
-        var started = _dispatchAndStart(goal);
-        if (!started)
+        var failureReason = _dispatchAndStart(goal);
+        if (failureReason is not null)
         {
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady,
-                "Dispatch failed to start any tasks; inspect readiness");
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady, failureReason);
         }
 
         return MakeResult(goal.Id.Value, goalPrefix, policy,
@@ -257,7 +265,18 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 3: land via integration branch.
+        // Gate 3: rebase goal branch onto current main before integration merge.
+        // Without this, any main advance (even disjoint) fails the integration fast-forward.
+        var rebase = _rebaseOntoMain(goal);
+        if (!rebase.UpdatedBranch)
+        {
+            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
+                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
+                : $"pre-landing rebase failed: {rebase.Message}";
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+        }
+
+        // Gate 4: land via integration branch.
         var landResult = _land(goal);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
