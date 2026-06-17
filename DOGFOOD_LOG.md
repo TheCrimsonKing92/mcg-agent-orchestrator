@@ -1373,3 +1373,10 @@ Goal cd00dcb2: Re-enable recursive per-file diff judging for acceptance judges, 
 
 - Operator gate: Developer: pass — 32 SemanticAcceptance tests pass; full suite 1076/1076 green (ALL GREEN from Invoke-TestSummary) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped C# implementation + test fix in a well-structured codebase - no complex inference needed, just precise edits and build-test verification.
+
+## 2026-06-17 - Instrument acceptance-judge agreement so a future flip to a BLOCKING semantic...
+
+Goal 11a82ad6: Instrument acceptance-judge agreement so a future flip to a BLOCKING semantic gate can be earned with data, not faith.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 32556a2). Acceptance passed.
+
+- Operator gate: Developer: pass — 16 LoopHealth tests (all new + existing), 1080 total (277 Core + 803 Infrastructure), 0 failures (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature (new data types + calculations + tests in Core) - clean layering fit, no architectural ambiguity.
