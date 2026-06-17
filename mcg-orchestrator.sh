@@ -9,6 +9,14 @@ APP_PROJECT="$ROOT/src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.cspro
 APP_DLL="$ROOT/src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 LOCK_DIR="$ROOT/.build-lock"
 
+# Up-to-date check -- if App.dll exists and is newer than all source files, skip build entirely.
+if [ -f "$APP_DLL" ]; then
+    stale=$(find "$ROOT/src" \( -name "*.cs" -o -name "*.csproj" -o -name "*.props" \) -newer "$APP_DLL" -print -quit 2>/dev/null)
+    if [ -z "$stale" ]; then
+        exec dotnet "$APP_DLL" "$@"
+    fi
+fi
+
 # Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 # If owner.pid exists and the owner process is alive, do NOT reclaim.
 # If owner.pid is missing or unreadable, fall back to a generous 300-s age threshold.
@@ -45,7 +53,21 @@ done
 echo $$ > "$LOCK_DIR/owner.pid"
 trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
 
-dotnet build "$APP_PROJECT" --nologo -v q >/dev/null 2>&1
+BUILD_LOG=$(mktemp)
+dotnet build "$APP_PROJECT" --nologo -v q >"$BUILD_LOG" 2>&1 || {
+    BUILD_EXIT=$?
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    trap - EXIT
+    if grep -qiE "(CS2012|MSB3021|cannot open.*for writing|process cannot access|being used by another process)" "$BUILD_LOG" 2>/dev/null; then
+        echo "ERROR: build failed: App.dll is locked by a running orchestrator instance (serve-dashboard?); stop it and retry" >&2
+    else
+        cat "$BUILD_LOG" >&2
+        echo "ERROR: dotnet build failed" >&2
+    fi
+    rm -f "$BUILD_LOG"
+    exit $BUILD_EXIT
+}
+rm -f "$BUILD_LOG"
 
 rm -rf "$LOCK_DIR" 2>/dev/null || true
 trap - EXIT
