@@ -1352,3 +1352,10 @@ Goal 267f98b6: Fix the acceptance-judge timeout at its root: the judge's CLI pro
 
 - Operator gate: Developer: ALL GREEN — 1065/1065 pass; new drain-timeout test takes exactly 12s, confirming grandchild holds pipe until drain CancelAfter fires and kills the tree (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted bug fix (single method, bounded scope) with an integration test that spawns real processes to verify handle-inheritance behavior - reasoning depth matched the task.
+
+## 2026-06-17 - Link goals to their source backlog item and auto-close that item when the goa...
+
+Goal 8ba3c661: Link goals to their source backlog item and auto-close that item when the goal lands — the first coupled piece of the.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
