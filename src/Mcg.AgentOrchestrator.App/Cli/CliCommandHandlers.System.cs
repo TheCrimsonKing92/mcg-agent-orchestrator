@@ -229,12 +229,17 @@ internal static partial class CliCommandHandlers
             {
                 var channelType = parts.Count > 2 ? parts[2].ToLowerInvariant() : null;
                 if (string.IsNullOrWhiteSpace(channelType))
-                    throw new ArgumentException("Usage: operator-channel set discord [--forum-channel-id <id>] [--dashboard-url <url>]");
+                    throw new ArgumentException("Usage: operator-channel set discord [--forum-channel-id <id>] [--dashboard-url <url>] [--operator-user-id <id>]... [--operator-user-ids <id1,id2,...>]");
                 var forumChannelId = GetFlagValue(parts, "--forum-channel-id");
                 var dashboardUrl = GetFlagValue(parts, "--dashboard-url");
-                var catalog = new OperatorChannelCatalog(channelType, dashboardUrl, forumChannelId);
+                var userIdList = new List<string>(GetFlagValues(parts, "--operator-user-id"));
+                var csvIds = GetFlagValue(parts, "--operator-user-ids");
+                if (!string.IsNullOrWhiteSpace(csvIds))
+                    userIdList.AddRange(csvIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                IReadOnlyList<string>? operatorUserIds = userIdList.Count > 0 ? userIdList : null;
+                var catalog = new OperatorChannelCatalog(channelType, dashboardUrl, forumChannelId, operatorUserIds);
                 OperatorChannelStore.Save(context.Workspace.OperatorChannelPath, catalog);
-                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"}");
+                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"} operatorUserIds={operatorUserIds?.Count ?? 0}");
                 Console.WriteLine("Note: bot token (MCGO_DISCORD_BOT_TOKEN) is read from env at startup and is not stored.");
                 return false;
             }
@@ -247,10 +252,23 @@ internal static partial class CliCommandHandlers
                 Console.WriteLine($"  dashboardUrl: {catalog.DashboardBaseUrl ?? "(none)"}");
                 Console.WriteLine($"  bot token: {(string.IsNullOrWhiteSpace(botToken) ? "not set" : "set (MCGO_DISCORD_BOT_TOKEN)")}");
                 Console.WriteLine($"  active channel: {context.Channel.ChannelType}");
+                var userIds = catalog.OperatorUserIds;
+                if (userIds is { Count: > 0 })
+                    Console.WriteLine($"  operatorUserIds ({userIds.Count}): {string.Join(", ", userIds)}");
+                else
+                    Console.WriteLine("  operatorUserIds: (none)");
+                return false;
+            }
+            case "test":
+            {
+                var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
+                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var channel = OperatorChannelFactory.Create(catalog, botToken, context.Workspace.OrchestratorDirectory);
+                OperatorChannelFactory.SendTestEscalationAsync(channel, Console.Out).GetAwaiter().GetResult();
                 return false;
             }
             default:
-                throw new ArgumentException($"Unknown operator-channel sub-command '{sub}'. Usage: operator-channel set|show");
+                throw new ArgumentException($"Unknown operator-channel sub-command '{sub}'. Usage: operator-channel set|show|test");
         }
     }
 

@@ -1420,6 +1420,17 @@ private static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
     return null;
 }
 
+private static IReadOnlyList<string> GetFlagValues(IReadOnlyList<string> parts, string flag)
+{
+    var results = new List<string>();
+    for (var i = 1; i < parts.Count - 1; i++)
+    {
+        if (parts[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            results.Add(parts[i + 1]);
+    }
+    return results;
+}
+
 private static List<string> RemoveFlagWithValue(IReadOnlyList<string> parts, string flag)
 {
     var result = new List<string>(parts.Count);

@@ -483,6 +483,64 @@ public sealed class OperatorChannelTests
         Assert.False(restored.IsNull);
     }
 
+    [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_catalog_with_forum_channel_id_X_and_user_ids_A_B")]
+    public void OperatorChannelStoreRoundtripsCatalogWithForumChannelIdXAndUserIdsAB()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "operator-channel.json");
+        var catalog = new OperatorChannelCatalog("discord", null, "X", ["A", "B"]);
+
+        OperatorChannelStore.Save(path, catalog);
+        var restored = OperatorChannelStore.Load(path);
+
+        Assert.Equal("X", restored.ForumChannelId);
+        Assert.Equal(2, restored.OperatorUserIds?.Count ?? 0);
+        Assert.True(restored.OperatorUserIds!.Contains("A"));
+        Assert.True(restored.OperatorUserIds!.Contains("B"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelCatalog_three_user_ids_from_csv_A_B_C")]
+    public void OperatorChannelCatalogThreeUserIdsFromCsvABC()
+    {
+        var csv = "A,B,C";
+        var userIds = (IReadOnlyList<string>)csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var catalog = new OperatorChannelCatalog("discord", null, null, userIds);
+
+        Assert.Equal(3, catalog.OperatorUserIds?.Count ?? 0);
+        Assert.True(catalog.OperatorUserIds!.Contains("A"));
+        Assert.True(catalog.OperatorUserIds!.Contains("B"));
+        Assert.True(catalog.OperatorUserIds!.Contains("C"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_null_channel_prints_guidance_and_does_not_throw")]
+    public async Task OperatorChannelFactorySendTestEscalationNullChannelPrintsGuidanceAndDoesNotThrow()
+    {
+        var channel = NullOperatorChannel.Instance;
+        var output = new StringWriter();
+
+        await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
+
+        var text = output.ToString();
+        Assert.Contains(text, s => s.Contains("not configured"));
+        Assert.Contains(text, s => s.Contains("MCGO_DISCORD_BOT_TOKEN"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_configured_channel_calls_send_once_with_safe_button")]
+    public async Task OperatorChannelFactorySendTestEscalationConfiguredChannelCallsSendOnceWithSafeButton()
+    {
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 100UL);
+        var catalog = new OperatorChannelCatalog("discord", null, "42");
+        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
+        var output = new StringWriter();
+
+        await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
+
+        Assert.Equal(1, fakeApi.SentMessages.Count);
+        var buttons = fakeApi.SentMessages[0].Buttons;
+        Assert.Equal(1, buttons.Count);
+        Assert.False(buttons[0].CustomId.StartsWith("mcgo-confirm|", StringComparison.Ordinal));
+    }
+
     // ---- Escalation path: SendEscalationAsync called on RecordLandingEscalation ----
 
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_calls_channel_send_when_configured")]

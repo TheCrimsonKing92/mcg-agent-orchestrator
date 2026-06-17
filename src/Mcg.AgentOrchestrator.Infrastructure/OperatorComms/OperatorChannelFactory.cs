@@ -41,6 +41,31 @@ public static class OperatorChannelFactory
             .GetAwaiter().GetResult();
     }
 
+    public static async Task SendTestEscalationAsync(IOperatorChannel channel, TextWriter output)
+    {
+        if (channel is NullOperatorChannel)
+        {
+            await output.WriteLineAsync("operator-channel test: channel not configured or bot token (MCGO_DISCORD_BOT_TOKEN) missing.");
+            await output.WriteLineAsync("  To configure: operator-channel set discord --forum-channel-id <id> --operator-user-id <id> [--dashboard-url <url>]");
+            await output.WriteLineAsync("  To set token: export MCGO_DISCORD_BOT_TOKEN=<token>");
+            return;
+        }
+
+        var testEscalation = new OperatorEscalation(
+            $"test-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
+            "test-goal-id",
+            "testgoal",
+            "OperatorChannelTest",
+            "[Test] Operator channel verification",
+            "This is a test escalation. If you see this in Discord, the outbound channel is working correctly.",
+            "Sent from: operator-channel test",
+            [new OperatorEscalationAction("Check Status (safe)", "doctor", RequiresConfirm: false)],
+            null);
+
+        await channel.SendEscalationAsync(testEscalation);
+        await output.WriteLineAsync($"Test escalation sent via {channel.ChannelType}. Check the Discord forum channel for the new thread.");
+    }
+
     private static bool IsDiscordConfigured(OperatorChannelCatalog catalog, string? botToken, out ulong forumChannelId)
     {
         forumChannelId = 0;
