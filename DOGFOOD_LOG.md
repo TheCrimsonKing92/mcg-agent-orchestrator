@@ -1338,3 +1338,10 @@ Goal 8a2f1d4c: Make goal-worktree removal robust so acceptance cleanup never nee
 
 - Operator gate: Developer: pass — 45/45 GoalWorktree tests green, 0 failures (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped infrastructure hardening, retry/idempotency logic + two new test cases - model handled the full read→reason→edit→verify cycle without needing escalation.
+
+## 2026-06-17 - Complete the worktree-removal hardening so the FIRST removal attempt succeeds...
+
+Goal 741b2c9a: Complete the worktree-removal hardening so the FIRST removal attempt succeeds even when a build handle is held. Goal .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a820a40). Acceptance passed.
+
+- Operator gate: Developer: pass — 789 Infrastructure tests green including the new test (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped C# file edit with injection pattern and test - clear implementation, no architectural uncertainty.
