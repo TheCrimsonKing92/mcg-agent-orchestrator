@@ -45,7 +45,6 @@ public sealed record GoalWorktreeRemoveResult(
 public static class GoalWorktrees
 {
     public const string DirectoryName = ".orchestrator-worktrees";
-    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan InitialDeleteRetryDelay = TimeSpan.FromMilliseconds(100);
     private const int DeleteRetryAttempts = 6;
     private static readonly string[] LockHolderCandidates =
@@ -83,8 +82,8 @@ public static class GoalWorktrees
         var path = WorktreePath(executionDirectory, goalId);
         var branch = BranchName(goalId);
         var result = BranchExists(executionDirectory, branch)
-            ? RunGit(executionDirectory, "worktree", "add", path, branch)
-            : RunGit(executionDirectory, "worktree", "add", path, "-b", branch);
+            ? GitCli.Run(executionDirectory, "worktree", "add", path, branch)
+            : GitCli.Run(executionDirectory, "worktree", "add", path, "-b", branch);
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException($"Failed to create goal workspace at '{path}': {result.Error}");
@@ -112,7 +111,7 @@ public static class GoalWorktrees
 
         if (hasRegisteredWorktree)
         {
-            var removal = RunGit(executionDirectory, "worktree", "remove", path);
+            var removal = GitCli.Run(executionDirectory, "worktree", "remove", path);
             if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path))
             {
                 throw new InvalidOperationException(
@@ -123,7 +122,7 @@ public static class GoalWorktrees
         {
             // Worktree already unregistered; prune any stale tracking entries left by a prior
             // partial removal so git's internal state is consistent before we finish cleanup.
-            RunGit(executionDirectory, "worktree", "prune");
+            GitCli.Run(executionDirectory, "worktree", "prune");
         }
 
         if (Directory.Exists(path))
@@ -151,7 +150,7 @@ public static class GoalWorktrees
             return new GoalWorktreeRemoveResult("Removed workspace.", null, [], null);
         }
 
-        var branchRemoval = RunGit(executionDirectory, "branch", "-d", branch);
+        var branchRemoval = GitCli.Run(executionDirectory, "branch", "-d", branch);
         _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         return branchRemoval.ExitCode == 0
             ? new GoalWorktreeRemoveResult($"Removed workspace and merged branch {branch}.", null, [], null)
@@ -171,12 +170,12 @@ public static class GoalWorktrees
         }
 
         var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
-        var result = RunGit(worktree, "diff", "--name-only", $"{baseBranch}...HEAD");
+        var result = GitCli.Run(worktree, "diff", "--name-only", $"{baseBranch}...HEAD");
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output);
     }
 
     /// <summary>
-    /// True when the goal worktree has no uncommitted changes (git status --short is empty).
+    /// True when the goal worktree has no uncommitted changes (git status --porcelain is empty).
     /// </summary>
     public static bool IsWorktreeClean(string executionDirectory, GoalId goalId)
     {
@@ -186,8 +185,7 @@ public static class GoalWorktrees
             return false;
         }
 
-        var result = RunGit(worktree, "status", "--short");
-        return result.ExitCode == 0 && string.IsNullOrWhiteSpace(result.Output);
+        return !GitCli.IsWorktreeDirty(worktree);
     }
 
     public static string? TryGetBranchDiff(string executionDirectory, GoalId goalId)
@@ -198,8 +196,8 @@ public static class GoalWorktrees
             return null;
         }
 
-        var statResult = RunGit(worktreePath, "diff", "--stat", "main...HEAD");
-        var patchResult = RunGit(worktreePath, "diff", "main...HEAD");
+        var statResult = GitCli.Run(worktreePath, "diff", "--stat", "main...HEAD");
+        var patchResult = GitCli.Run(worktreePath, "diff", "main...HEAD");
 
         if (statResult.ExitCode != 0 && patchResult.ExitCode != 0)
         {
@@ -225,7 +223,7 @@ public static class GoalWorktrees
             return null;
         }
 
-        var merge = RunGit(executionDirectory, "merge", "--ff-only", branch);
+        var merge = GitCli.Run(executionDirectory, "merge", "--ff-only", branch);
         if (merge.ExitCode == 0)
         {
             return new GoalWorktreeMergeResult(
@@ -269,8 +267,7 @@ public static class GoalWorktrees
                 $"workspace create {Prefix(goalId)}");
         }
 
-        var status = RunGit(worktreePath, "status", "--porcelain");
-        if (status.ExitCode != 0 || !string.IsNullOrWhiteSpace(status.Output))
+        if (GitCli.IsWorktreeDirty(worktreePath))
         {
             return new GoalWorktreeRebaseResult(
                 GoalWorktreeRebaseStatus.DirtyWorktree,
@@ -280,7 +277,7 @@ public static class GoalWorktrees
                 $"goal-recovery {Prefix(goalId)}");
         }
 
-        if (RunGit(executionDirectory, "merge-base", "--is-ancestor", "HEAD", branch).ExitCode == 0)
+        if (GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", branch).ExitCode == 0)
         {
             return new GoalWorktreeRebaseResult(
                 GoalWorktreeRebaseStatus.AlreadyFastForwardable,
@@ -290,7 +287,7 @@ public static class GoalWorktrees
                 $"acceptance {Prefix(goalId)}");
         }
 
-        var rebase = RunGit(worktreePath, "rebase", baseBranch);
+        var rebase = GitCli.Run(worktreePath, "rebase", baseBranch);
         if (rebase.ExitCode == 0)
         {
             return new GoalWorktreeRebaseResult(
@@ -302,7 +299,7 @@ public static class GoalWorktrees
         }
 
         var conflictFiles = GetConflictFiles(worktreePath);
-        _ = RunGit(worktreePath, "rebase", "--abort");
+        _ = GitCli.Run(worktreePath, "rebase", "--abort");
         if (conflictFiles.Length > 0)
         {
             return new GoalWorktreeRebaseResult(
@@ -332,19 +329,19 @@ public static class GoalWorktrees
 
     private static bool BranchExists(string executionDirectory, string branch)
     {
-        return RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
+        return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
     }
 
     private static string? GetCurrentBranchName(string executionDirectory)
     {
-        var result = RunGit(executionDirectory, "branch", "--show-current");
+        var result = GitCli.Run(executionDirectory, "branch", "--show-current");
         var branch = result.Output.Trim();
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(branch) ? branch : null;
     }
 
     private static string[] GetConflictFiles(string worktreePath)
     {
-        var result = RunGit(worktreePath, "diff", "--name-only", "--diff-filter=U");
+        var result = GitCli.Run(worktreePath, "diff", "--name-only", "--diff-filter=U");
         if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
         {
             return [];
@@ -359,7 +356,7 @@ public static class GoalWorktrees
 
     private static bool IsRegisteredWorktree(string executionDirectory, string path)
     {
-        var result = RunGit(executionDirectory, "worktree", "list", "--porcelain");
+        var result = GitCli.Run(executionDirectory, "worktree", "list", "--porcelain");
         if (result.ExitCode != 0)
         {
             return false;
@@ -385,7 +382,7 @@ public static class GoalWorktrees
     /// </summary>
     public static bool IsGitWorkTree(string executionDirectory)
     {
-        var result = RunGit(executionDirectory, "rev-parse", "--is-inside-work-tree");
+        var result = GitCli.Run(executionDirectory, "rev-parse", "--is-inside-work-tree");
         return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -558,35 +555,4 @@ public static class GoalWorktrees
         return result;
     }
 
-    private static GitResult RunGit(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git process.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit((int)GitTimeout.TotalMilliseconds))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} timed out after {GitTimeout.TotalSeconds}s.");
-        }
-
-        return new GitResult(process.ExitCode, output, error.Trim());
-    }
-
-    private sealed record GitResult(int ExitCode, string Output, string Error);
 }

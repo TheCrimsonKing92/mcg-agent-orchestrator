@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -67,7 +66,6 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         var changedFiles = Array.Empty<string>();
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
         var diffStat = "not available";
-        var dirtyOutput = string.Empty;
 
         if (worktreePath is null)
         {
@@ -80,8 +78,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         }
         else
         {
-            dirtyOutput = RunGit(worktreePath, "status", "--porcelain");
-            if (!string.IsNullOrWhiteSpace(dirtyOutput))
+            if (GitCli.IsWorktreeDirty(worktreePath))
             {
                 AddBlocker(
                     blockers,
@@ -94,7 +91,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             var diffSpec = BuildDiffSpec(worktreePath);
             changedFiles = GetChangedFiles(worktreePath);
             changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
-            diffStat = RunGit(worktreePath, "diff", "--stat", diffSpec);
+            diffStat = GitCli.Run(worktreePath, "diff", "--stat", diffSpec).Output.Trim();
             if (string.IsNullOrWhiteSpace(diffStat))
             {
                 diffStat = changedFiles.Length == 0 ? "no branch diff" : "diff stat unavailable";
@@ -324,13 +321,13 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     public static string[] GetChangedFiles(string workingDirectory) =>
-        SplitLines(RunGit(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)));
+        SplitLines(GitCli.Run(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)).Output.Trim());
 
     // Bounded unified diff of the goal branch against its base, for feeding an advisory semantic
     // judge. Truncated so a large change cannot blow the judge's context/cost budget.
     public static string GetDiffExcerpt(string workingDirectory, int maxChars = 6000)
     {
-        var diff = RunGit(workingDirectory, "diff", BuildDiffSpec(workingDirectory));
+        var diff = GitCli.Run(workingDirectory, "diff", BuildDiffSpec(workingDirectory)).Output.Trim();
         return diff.Length <= maxChars
             ? diff
             : diff[..maxChars] + $"{Environment.NewLine}...(diff truncated at {maxChars} chars)";
@@ -346,7 +343,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         var result = new List<(string File, string Diff)>();
         foreach (var file in GetChangedFiles(workingDirectory))
         {
-            var diff = RunGit(workingDirectory, "diff", diffSpec, "--", file);
+            var diff = GitCli.Run(workingDirectory, "diff", diffSpec, "--", file).Output.Trim();
             if (string.IsNullOrWhiteSpace(diff))
             {
                 continue;
@@ -363,74 +360,18 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
 
     private static string BuildDiffSpec(string workingDirectory)
     {
-        if (GitSucceeds(workingDirectory, "rev-parse", "--verify", "main"))
+        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "main").Succeeded)
         {
             return "main...HEAD";
         }
 
-        if (GitSucceeds(workingDirectory, "rev-parse", "--verify", "master"))
+        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "master").Succeeded)
         {
             return "master...HEAD";
         }
 
-        return GitSucceeds(workingDirectory, "rev-parse", "--verify", "HEAD~1")
+        return GitCli.Run(workingDirectory, "rev-parse", "--verify", "HEAD~1").Succeeded
             ? "HEAD~1...HEAD"
             : "HEAD";
-    }
-
-    private static bool GitSucceeds(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo);
-        if (process is null)
-        {
-            return false;
-        }
-
-        _ = process.StandardOutput.ReadToEnd();
-        _ = process.StandardError.ReadToEnd();
-        return process.WaitForExit(10000) && process.ExitCode == 0;
-    }
-
-    private static string RunGit(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-
-        return process.ExitCode == 0
-            ? output.Trim()
-            : error.Trim();
     }
 }

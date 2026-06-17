@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -16,7 +15,6 @@ internal static class LandingExecutor
 {
     public const string IntegrationBranchName = "integration";
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";
-    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(60);
 
     public static LandingResult Execute(
         AgentOrchestratorKernel kernel,
@@ -40,7 +38,7 @@ internal static class LandingExecutor
         // Remove any leftover temp worktree from a prior interrupted run.
         if (IsRegisteredWorktree(executionDirectory, tempPath))
         {
-            RunGit(executionDirectory, "worktree", "remove", "--force", tempPath);
+            GitCli.Run(executionDirectory, "worktree", "remove", "--force", tempPath);
         }
 
         bool mergeSucceeded;
@@ -52,7 +50,7 @@ internal static class LandingExecutor
         {
             if (IsRegisteredWorktree(executionDirectory, tempPath))
             {
-                RunGit(executionDirectory, "worktree", "remove", "--force", tempPath);
+                GitCli.Run(executionDirectory, "worktree", "remove", "--force", tempPath);
             }
         }
 
@@ -76,7 +74,7 @@ internal static class LandingExecutor
 
         if (decision is LandingDecision.Promote)
         {
-            var merge = RunGit(executionDirectory, "merge", "--ff-only", IntegrationBranchName);
+            var merge = GitCli.Run(executionDirectory, "merge", "--ff-only", IntegrationBranchName);
             if (merge.ExitCode != 0)
             {
                 var unexpectedReason = $"integration->main fast-forward failed: {merge.Error}";
@@ -103,7 +101,7 @@ internal static class LandingExecutor
             return;
         }
 
-        var result = RunGit(executionDirectory, "branch", IntegrationBranchName, "main");
+        var result = GitCli.Run(executionDirectory, "branch", IntegrationBranchName, "main");
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -116,31 +114,31 @@ internal static class LandingExecutor
         string tempPath,
         string goalBranch)
     {
-        var add = RunGit(executionDirectory, "worktree", "add", tempPath, IntegrationBranchName);
+        var add = GitCli.Run(executionDirectory, "worktree", "add", tempPath, IntegrationBranchName);
         if (add.ExitCode != 0)
         {
             throw new InvalidOperationException(
                 $"Failed to create integration worktree at '{tempPath}': {add.Error}");
         }
 
-        var merge = RunGit(tempPath, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
+        var merge = GitCli.Run(tempPath, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
         return merge.ExitCode == 0;
     }
 
     private static bool IsIntegrationFastForwardableIntoMain(string executionDirectory)
     {
         // Exits 0 if main is an ancestor of integration — fast-forward from main to integration tip is possible.
-        return RunGit(executionDirectory, "merge-base", "--is-ancestor", "main", IntegrationBranchName).ExitCode == 0;
+        return GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "main", IntegrationBranchName).ExitCode == 0;
     }
 
     private static bool BranchExists(string executionDirectory, string branch)
     {
-        return RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
+        return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
     }
 
     private static bool IsRegisteredWorktree(string executionDirectory, string path)
     {
-        var result = RunGit(executionDirectory, "worktree", "list", "--porcelain");
+        var result = GitCli.Run(executionDirectory, "worktree", "list", "--porcelain");
         if (result.ExitCode != 0)
         {
             return false;
@@ -156,7 +154,7 @@ internal static class LandingExecutor
 
     private static string[] GetChangedFiles(string executionDirectory, string goalBranch)
     {
-        var result = RunGit(executionDirectory, "diff", "--name-only", $"main...{goalBranch}");
+        var result = GitCli.Run(executionDirectory, "diff", "--name-only", $"main...{goalBranch}");
         if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
         {
             return [];
@@ -172,34 +170,4 @@ internal static class LandingExecutor
         return goal.Tasks.Sum(t => t.VerificationHistory.Count(v => !v.Succeeded));
     }
 
-    private static GitResult RunGit(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git process.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit((int)GitTimeout.TotalMilliseconds))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} timed out.");
-        }
-
-        return new GitResult(process.ExitCode, output.Trim(), error.Trim());
-    }
-
-    private sealed record GitResult(int ExitCode, string Output, string Error);
 }

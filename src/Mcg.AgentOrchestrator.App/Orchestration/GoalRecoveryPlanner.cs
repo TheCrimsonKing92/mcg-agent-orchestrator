@@ -235,116 +235,33 @@ internal static class GoalRecoveryPlanner
 
     private static bool? TryIsWorktreeDirty(string worktree)
     {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = worktree
-            };
-            startInfo.ArgumentList.Add("status");
-            startInfo.ArgumentList.Add("--porcelain");
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            return process.WaitForExit(10000) && process.ExitCode == 0
-                ? !string.IsNullOrWhiteSpace(output)
-                : null;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
+        var result = GitCli.Run(worktree, "status", "--porcelain");
+        return result.ExitCode == 0 ? !string.IsNullOrWhiteSpace(result.Output) : null;
     }
 
     private static string[] TryGetChangedFiles(string worktree)
     {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = worktree
-            };
-            startInfo.ArgumentList.Add("diff");
-            startInfo.ArgumentList.Add("--name-only");
-            startInfo.ArgumentList.Add(BuildDiffSpec(worktree));
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return [];
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            return process.WaitForExit(10000) && process.ExitCode == 0
-                ? output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                : [];
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
-        {
-            return [];
-        }
+        var result = GitCli.Run(worktree, "diff", "--name-only", BuildDiffSpec(worktree));
+        return result.ExitCode == 0
+            ? result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [];
     }
 
     private static string BuildDiffSpec(string workingDirectory)
     {
-        if (GitSucceeds(workingDirectory, "rev-parse", "--verify", "main"))
+        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "main").Succeeded)
         {
             return "main...HEAD";
         }
 
-        if (GitSucceeds(workingDirectory, "rev-parse", "--verify", "master"))
+        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "master").Succeeded)
         {
             return "master...HEAD";
         }
 
-        return GitSucceeds(workingDirectory, "rev-parse", "--verify", "HEAD~1")
+        return GitCli.Run(workingDirectory, "rev-parse", "--verify", "HEAD~1").Succeeded
             ? "HEAD~1...HEAD"
             : "HEAD";
-    }
-
-    private static bool GitSucceeds(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo);
-        if (process is null)
-        {
-            return false;
-        }
-
-        _ = process.StandardOutput.ReadToEnd();
-        _ = process.StandardError.ReadToEnd();
-        return process.WaitForExit(10000) && process.ExitCode == 0;
     }
 
 }

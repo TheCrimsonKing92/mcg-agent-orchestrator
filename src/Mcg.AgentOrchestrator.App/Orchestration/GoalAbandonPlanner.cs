@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -195,36 +194,5 @@ internal static class GoalAbandonPlanner
     private static bool IsTerminal(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
-    private static bool TryIsWorktreeDirty(string worktree)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = worktree
-            };
-            startInfo.ArgumentList.Add("status");
-            startInfo.ArgumentList.Add("--porcelain");
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return true;
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            process.WaitForExit(30000);
-            return process.ExitCode != 0 || !string.IsNullOrWhiteSpace(output);
-        }
-        catch
-        {
-            return true;
-        }
-    }
+    private static bool TryIsWorktreeDirty(string worktree) => GitCli.IsWorktreeDirty(worktree);
 }

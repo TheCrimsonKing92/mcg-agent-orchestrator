@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -207,37 +206,6 @@ internal static class GoalArtifactRetentionPlanner
             null);
     }
 
-    private static bool BranchExists(string executionDirectory, string branch)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = executionDirectory
-            };
-            startInfo.ArgumentList.Add("rev-parse");
-            startInfo.ArgumentList.Add("--verify");
-            startInfo.ArgumentList.Add("--quiet");
-            startInfo.ArgumentList.Add($"refs/heads/{branch}");
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return false;
-            }
-
-            _ = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            return process.WaitForExit(10000) && process.ExitCode == 0;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
-        {
-            return false;
-        }
-    }
+    private static bool BranchExists(string executionDirectory, string branch) =>
+        GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").Succeeded;
 }

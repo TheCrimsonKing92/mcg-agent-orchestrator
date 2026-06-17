@@ -11,7 +11,6 @@ public sealed class BackgroundDispatchRunner
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
-    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
@@ -370,17 +369,17 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var branch = RunGit(workingDirectory, "branch", "--show-current");
+        var branch = GitCli.Run(workingDirectory, "branch", "--show-current");
         var expectedBranch = GoalWorktrees.BranchName(goalId);
         if (branch.ExitCode != 0 || !string.Equals(branch.Output.Trim(), expectedBranch, StringComparison.Ordinal))
         {
             return false;
         }
 
-        var head = RunGit(workingDirectory, "rev-parse", "--short", "HEAD");
-        var status = RunGit(workingDirectory, "status", "--short");
-        var dispatch = RunGit(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
-        var changedPaths = RunGit(workingDirectory, "log", "--name-only", "--format=", $"--since={dispatchedAt:O}");
+        var head = GitCli.Run(workingDirectory, "rev-parse", "--short", "HEAD");
+        var status = GitCli.Run(workingDirectory, "status", "--short");
+        var dispatch = GitCli.Run(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
+        var changedPaths = GitCli.Run(workingDirectory, "log", "--name-only", "--format=", $"--since={dispatchedAt:O}");
         var commitsAfterDispatch = 0;
         if (dispatch.ExitCode == 0)
         {
@@ -403,7 +402,7 @@ public sealed class BackgroundDispatchRunner
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput),
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
-            FormatStatusShort(new GitResult(status.ExitCode, filteredStatusOutput)),
+            FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
             commitsAfterDispatch,
             pathsChangedAfterDispatch);
         return true;
@@ -472,7 +471,7 @@ public sealed class BackgroundDispatchRunner
         return string.Join(" | ", entries);
     }
 
-    private static string FormatStatusShort(GitResult status)
+    private static string FormatStatusShort(GitCli.GitResult status)
     {
         if (status.ExitCode != 0)
         {
@@ -996,39 +995,6 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static GitResult RunGit(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo);
-        if (process is null)
-        {
-            return new GitResult(1, string.Empty);
-        }
-
-        var output = process.StandardOutput.ReadToEnd();
-        if (!process.WaitForExit((int)GitTimeout.TotalMilliseconds))
-        {
-            process.Kill(entireProcessTree: true);
-            return new GitResult(1, string.Empty);
-        }
-
-        return new GitResult(process.ExitCode, output);
-    }
-
     // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
     // to this Infrastructure assembly in every run context (the App output dir in production; the
     // test output dir in tests, which reference the App project), so resolve it from the base dir.
@@ -1036,13 +1002,11 @@ public sealed class BackgroundDispatchRunner
     {
         return Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
     }
+
     private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
     {
         return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
     }
-
-
-    private sealed record GitResult(int ExitCode, string Output);
 
     private sealed record DispatchHeartbeat(
         int ProcessId,
