@@ -132,6 +132,9 @@ internal static partial class CliCommandHandlers
                 return false;
             }
 
+            case "operator-channel":
+                return HandleOperatorChannelCommand(parts, context);
+
             case "monitor-goal":
                 GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
                 return false;
@@ -214,6 +217,40 @@ internal static partial class CliCommandHandlers
 
             default:
                 return null;
+        }
+    }
+
+    private static bool? HandleOperatorChannelCommand(IReadOnlyList<string> parts, CliExecutionContext context)
+    {
+        var sub = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
+        switch (sub)
+        {
+            case "set":
+            {
+                var channelType = parts.Count > 2 ? parts[2].ToLowerInvariant() : null;
+                if (string.IsNullOrWhiteSpace(channelType))
+                    throw new ArgumentException("Usage: operator-channel set discord [--forum-channel-id <id>] [--dashboard-url <url>]");
+                var forumChannelId = GetFlagValue(parts, "--forum-channel-id");
+                var dashboardUrl = GetFlagValue(parts, "--dashboard-url");
+                var catalog = new OperatorChannelCatalog(channelType, dashboardUrl, forumChannelId);
+                OperatorChannelStore.Save(context.Workspace.OperatorChannelPath, catalog);
+                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"}");
+                Console.WriteLine("Note: bot token (MCGO_DISCORD_BOT_TOKEN) is read from env at startup and is not stored.");
+                return false;
+            }
+            case "show":
+            {
+                var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
+                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                Console.WriteLine($"Operator channel: type={catalog.ChannelType}");
+                Console.WriteLine($"  forumChannelId: {catalog.ForumChannelId ?? "(none)"}");
+                Console.WriteLine($"  dashboardUrl: {catalog.DashboardBaseUrl ?? "(none)"}");
+                Console.WriteLine($"  bot token: {(string.IsNullOrWhiteSpace(botToken) ? "not set" : "set (MCGO_DISCORD_BOT_TOKEN)")}");
+                Console.WriteLine($"  active channel: {context.Channel.ChannelType}");
+                return false;
+            }
+            default:
+                throw new ArgumentException($"Unknown operator-channel sub-command '{sub}'. Usage: operator-channel set|show");
         }
     }
 

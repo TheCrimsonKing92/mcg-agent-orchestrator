@@ -405,13 +405,39 @@ internal static class OperatorInbox
         OrchestratorWorkspace workspace,
         Goal goal,
         string reason,
-        string integrationBranch)
+        string integrationBranch,
+        IOperatorChannel? channel = null)
     {
         var existing = LoadLandingEscalations(workspace)
             .Where(e => !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
             .ToList();
         existing.Add(new LandingEscalationRecord(goal.Id.Value, reason, integrationBranch, DateTimeOffset.UtcNow));
         SaveLandingEscalations(workspace, existing);
+
+        if (channel is null or NullOperatorChannel)
+            return;
+
+        var goalPrefix = goal.Id.Value[..8];
+        var sourceKey = $"landing-escalation:{goal.Id.Value}:{reason}";
+        var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
+        var escalation = new OperatorEscalation(
+            itemId,
+            goal.Id.Value,
+            goalPrefix,
+            "LandingEscalation",
+            $"Landing parked on {integrationBranch}",
+            reason,
+            $"escalated at {DateTimeOffset.UtcNow:u}; branch={integrationBranch}",
+            [new OperatorEscalationAction("Promote to Main", $"land {goalPrefix}", RequiresConfirm: true)],
+            null);
+        try
+        {
+            channel.SendEscalationAsync(escalation).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best-effort: inbox JSON write already succeeded.
+        }
     }
 
     private static void AddLandingEscalationItems(

@@ -81,6 +81,8 @@ internal sealed record OrchestratorWorkspace(
 
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 
+    public string OperatorChannelPath => Path.Combine(OrchestratorDirectory, "operator-channel.json");
+
     public string DashboardUrlFilePath => Path.Combine(OrchestratorDirectory, ".dashboard-url");
 
     // Append-only advisory log of semantic-acceptance verdicts (one JSON object per line), kept in

@@ -39,6 +39,17 @@ var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
+var operatorBotToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+IOperatorChannel operatorChannel;
+try
+{
+    operatorChannel = OperatorChannelFactory.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
+}
+catch
+{
+    operatorChannel = NullOperatorChannel.Instance;
+}
 
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
 {
@@ -64,7 +75,7 @@ if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
         return 0;
     }
     catch (Exception ex)
@@ -166,7 +177,7 @@ while (true)
 
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
     }
     catch (Exception ex)
     {

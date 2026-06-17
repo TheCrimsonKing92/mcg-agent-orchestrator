@@ -12,9 +12,10 @@ public static bool ExecuteCommand(
     ref IReadOnlyList<AgentDefinition> agents,
     IModelProviderRegistry providers,
     ref WorkerProfileCatalog workerProfiles,
-    ref Goal? currentGoal)
+    ref Goal? currentGoal,
+    IOperatorChannel? channel = null)
 {
-    var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles, currentGoal);
+    var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles, currentGoal, channel);
     var changed = CliCommandHandlers.Execute(parts, context);
     agents = context.Agents;
     workerProfiles = context.WorkerProfiles;

@@ -27,7 +27,8 @@ internal sealed class ConductorDriver
         OrchestratorWorkspace workspace,
         GoalAcceptanceVerifier acceptanceVerifier,
         IReadOnlyList<AgentDefinition> agents,
-        WorkerProfileCatalog profiles)
+        WorkerProfileCatalog profiles,
+        IOperatorChannel? channel = null)
     {
         var dir = workspace.ExecutionDirectory;
 
@@ -102,7 +103,7 @@ internal sealed class ConductorDriver
         _land = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:land", "Landing goal via integration branch.");
-            var result = LandingExecutor.Execute(kernel, goal, workspace);
+            var result = LandingExecutor.Execute(kernel, goal, workspace, channel);
             if (result.MainAdvanced)
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else
@@ -131,7 +132,7 @@ internal sealed class ConductorDriver
         };
 
         _writeEscalation = (goal, state, reason) =>
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}");
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}", channel);
 
         _classifyChangeRisk = goal =>
         {

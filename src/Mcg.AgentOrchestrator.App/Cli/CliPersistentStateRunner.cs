@@ -12,7 +12,8 @@ internal static class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
     {
         if (IsMetadataOnlyListing(args))
         {
@@ -23,7 +24,7 @@ internal static class CliPersistentStateRunner
 
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         var nextAgents = agents;
@@ -46,7 +47,8 @@ internal static class CliPersistentStateRunner
                         ref commandAgents,
                         providers,
                         ref commandProfiles,
-                        ref commandGoal);
+                        ref commandGoal,
+                        channel);
 
                     nextAgents = commandAgents;
                     nextWorkerProfiles = commandProfiles;
@@ -81,6 +83,7 @@ internal static class CliPersistentStateRunner
             "simple-hosted-dashboard" or
             "open-dashboard" or
             "monitor-goal" or
+            "operator-channel" or
             "state-rollback" => false,
             _ => true
         };
@@ -93,7 +96,8 @@ internal static class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -104,7 +108,8 @@ internal static class CliPersistentStateRunner
             ref agents,
             providers,
             ref workerProfiles,
-            ref currentGoal);
+            ref currentGoal,
+            channel);
 
         if (shouldSave)
         {

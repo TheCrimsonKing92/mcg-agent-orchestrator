@@ -511,7 +511,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "land":
             CliArgumentParser.RequirePartCount(parts, 2, "land <goal-id-prefix>");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var landResult = LandingExecutor.Execute(context.Kernel, context.CurrentGoal, context.Workspace);
+            var landResult = LandingExecutor.Execute(context.Kernel, context.CurrentGoal, context.Workspace, context.Channel);
             Console.WriteLine($"Land {landResult.GoalPrefix}: {landResult.Message}");
             Console.WriteLine($"  decision: {(landResult.Decision is LandingDecision.Promote ? "Promote" : $"Escalate({((LandingDecision.Escalate)landResult.Decision).Reason})")}");
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");
@@ -568,7 +568,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Workspace,
                     context.AcceptanceVerifier,
                     context.Agents,
-                    context.WorkerProfiles);
+                    context.WorkerProfiles,
+                    context.Channel);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 var loopSummary = new ConductorBatchLoop().Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
@@ -590,7 +591,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace,
                 context.AcceptanceVerifier,
                 context.Agents,
-                context.WorkerProfiles);
+                context.WorkerProfiles,
+                context.Channel);
             var conductResult = conductDriver.AdvanceOnce(context.CurrentGoal, conductPolicy);
             Console.WriteLine($"Conduct {conductResult.GoalPrefix} [{conductResult.PolicyName}]: {conductResult.Outcome switch {
                 ConductorAdvanceOutcome.Executed e => $"executed from {e.FromState} — {e.Description}",

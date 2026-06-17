@@ -9,7 +9,8 @@ internal sealed class CliExecutionContext(
     IModelProviderRegistry providers,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog workerProfiles,
-    Goal? currentGoal)
+    Goal? currentGoal,
+    IOperatorChannel? channel = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -30,4 +31,6 @@ public WorkerProfileCatalog WorkerProfiles { get; set; } = workerProfiles;
 public Goal? CurrentGoal { get; set; } = currentGoal;
 
 public GoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new();
+
+public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
 }
