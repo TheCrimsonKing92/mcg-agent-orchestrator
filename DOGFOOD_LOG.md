@@ -1345,3 +1345,10 @@ Goal 741b2c9a: Complete the worktree-removal hardening so the FIRST removal atte
 
 - Operator gate: Developer: pass — 789 Infrastructure tests green including the new test (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped C# file edit with injection pattern and test - clear implementation, no architectural uncertainty.
+
+## 2026-06-17 - Fix the acceptance-judge timeout at its root: the judge's CLI process runner ...
+
+Goal 267f98b6: Fix the acceptance-judge timeout at its root: the judge's CLI process runner hangs on the stdout pipe after the CLI e.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 13da2ae). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 1065/1065 pass; new drain-timeout test takes exactly 12s, confirming grandchild holds pipe until drain CancelAfter fires and kills the tree (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted bug fix (single method, bounded scope) with an integration test that spawns real processes to verify handle-inheritance behavior - reasoning depth matched the task.
