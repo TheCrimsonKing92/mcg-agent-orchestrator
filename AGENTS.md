@@ -52,6 +52,14 @@ Before adding a member, field, case, or flag, think about the system ontology �
 - **Constraints are load-bearing; do not trade them for convenience.** The deterministic gates, subscription-budget-first posture, and evidence-over-narrative spine are invariants of this system. New work composes WITH them (e.g. an LLM judgment lands ADVISORY, never inside a deterministic gate; fan-out goes on free/cheap lanes, never the paid CLI). If a feature seems to require breaking one, that is a design signal to rethink the placement, not a license.
 - **Put behavior where its data and invariant already live.** Prefer extending an existing seam that owns the concept over threading a parallel path; reuse the deterministic signal that already exists (e.g. select among parallel model outputs by an existing validator, not a model self-rating). Match the surrounding idiom.
 
+## Diagnosis Discipline — empirics over theorizing
+
+Reproduce before you theorize. When something fails — especially an external CLI, model, or tool — run the smallest command that reproduces the behavior before concluding a cause or declaring it unfixable. Do not build a verdict on documentation, web reports, or aggregate stats alone.
+
+- **The reproducing command beats the plausible story.** A web search said `gpt-5.3-codex-spark` was "exec-restricted on ChatGPT accounts" and the outcome scorecard rated it Avoid (0 completed / 2 failed); both were misleading. A single ~17-second `codex exec --model gpt-5.3-codex-spark ... </dev/null` proved spark works fine and isolated the real bug: the judge runner never closed the child's stdin, so codex blocked forever on "Reading additional input from stdin…" → 180s timeout. One empirical test turned "unsalvageable" into a two-line fix (`RedirectStandardInput=true` + `StandardInput.Close()`).
+- **If you catch yourself stacking hypotheses** (cross-block, version drift, platform restriction) without having run the thing, stop and run it. Layered speculation is a smell.
+- **Aggregate stats flag WHERE to look, not the diagnosis.** Scorecards and pass-rates point at a suspect; confirm the mechanism with a direct test before acting on it. A model rated "Avoid" may just be mis-invoked.
+
 ## Dashboard / Dogfood Boundary
 
 For ordinary implementation or debugging, inspect and edit source directly.
