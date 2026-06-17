@@ -68,7 +68,9 @@ internal sealed class ConductorBatchLoop
             _sweep(kernel);
 
             var eligible = kernel.Goals
-                .Where(g => !excludedGoals.Contains(g.Id.Value))
+                .Where(g => !excludedGoals.Contains(g.Id.Value)
+                    && g.Status is not GoalStatus.Cancelled
+                    && g.Status is not GoalStatus.Superseded)
                 .ToArray();
 
             if (eligible.Length == 0)
@@ -114,7 +116,22 @@ internal sealed class ConductorBatchLoop
                     continue;
                 }
 
-                var result = driver.AdvanceOnce(goal, policy);
+                ConductorAdvanceResult result;
+                try
+                {
+                    result = driver.AdvanceOnce(goal, policy);
+                }
+                catch (Exception ex)
+                {
+                    var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
+                    EmitProgress($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}", tickLines);
+                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
+                    kernel.RecordGoalPolicyDecision(goal.Id, msg);
+                    escalatedGoals.Add(goal.Id.Value);
+                    excludedGoals.Add(goal.Id.Value);
+                    tickEscalated++;
+                    continue;
+                }
 
                 // Auto-retry transient acceptance verification failures (up to maxVerifyRetries re-verifications)
                 if (result.WasEscalated && IsTransientVerificationFailure(result))

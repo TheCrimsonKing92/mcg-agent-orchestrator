@@ -475,6 +475,70 @@ public sealed class ConductorBatchLoopTests
         Assert.True(lines.Any(l => l.StartsWith("GOAL ", StringComparison.Ordinal)));
     }
 
+    // ── Fault isolation: a throwing goal is escalated, others still advance ─
+
+    [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_ThrowingGoalEscalated_HealthyGoalStillAdvanced")]
+    public void BatchLoop_FaultIsolation_ThrowingGoalEscalated_HealthyGoalStillAdvanced()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var faultyGoal  = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "faulty goal");
+        var healthyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "healthy goal");
+
+        var advancedGoalIds = new List<string>();
+        var driver = MakeDriver(
+            getFacts: g =>
+            {
+                if (g.Id == faultyGoal.Id)
+                    throw new InvalidOperationException("Assigned agent 'missing-agent' was not found.");
+                return new GoalLifecycleFacts(WorkspaceExists: true);
+            },
+            dispatchAndStart: g =>
+            {
+                advancedGoalIds.Add(g.Id.Value);
+                return true;
+            });
+
+        var stopFile = NoStopPath();
+        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile, maxIterations: 1);
+
+        // Faulty goal must be counted escalated and excluded
+        Assert.Equal(1, summary.Escalated);
+        // Healthy goal must have been advanced
+        Assert.True(advancedGoalIds.Contains(healthyGoal.Id.Value));
+        // Loop must complete (not throw)
+        Assert.Equal(1, summary.Ticks);
+    }
+
+    // ── Terminal-goal skip: Cancelled/Superseded goals not in eligible set ─
+
+    [Xunit.Fact(DisplayName = "BatchLoop_TerminalGoals_CancelledExcludedFromEligible")]
+    public void BatchLoop_TerminalGoals_CancelledExcludedFromEligible()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var cancelledGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cancelled goal");
+        var activeGoal    = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active goal");
+
+        kernel.CancelGoal(cancelledGoal.Id, "test cancel");
+
+        var advancedGoalIds = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                advancedGoalIds.Add(g.Id.Value);
+                return true;
+            });
+
+        var stopFile = NoStopPath();
+        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile, maxIterations: 1);
+
+        // Cancelled goal must not appear in the advanced set and must not generate escalations
+        Assert.False(advancedGoalIds.Contains(cancelledGoal.Id.Value));
+        Assert.Equal(0, summary.Escalated);
+        // Active goal must have been advanced
+        Assert.True(advancedGoalIds.Contains(activeGoal.Id.Value));
+    }
+
     // ── Duration cap: loop exits when max-duration is reached ────────────
 
     [Xunit.Fact(DisplayName = "MaxDuration_ParameterAcceptedAndLoopExitsCleanly")]
