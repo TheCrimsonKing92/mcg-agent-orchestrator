@@ -1,5 +1,16 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+public enum VerificationGateReason
+{
+    Passed,
+    NotReady,
+    MissingVerification,
+    VerificationFailed,
+    OutputTokenLimit,
+    DirtyUsefulRecovery,
+    DirtyUnverifiedRecovery
+}
+
 public sealed record GoalVerificationGate(
     GoalId GoalId,
     string Objective,
@@ -13,7 +24,8 @@ public sealed record TaskVerificationGate(
     string Description,
     WorkTaskStatus TaskStatus,
     VerificationGateStatus GateStatus,
-    string Message);
+    string Message,
+    VerificationGateReason Reason);
 
 public sealed record GoalVerificationWorklist(
     GoalId GoalId,

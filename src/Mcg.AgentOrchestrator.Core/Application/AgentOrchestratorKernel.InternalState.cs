@@ -31,16 +31,21 @@ public sealed partial class AgentOrchestratorKernel
     {
         if (task.LastVerification is { Succeeded: false })
         {
-            var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
+            var isDirty = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+            var message = isDirty
                 ? BuildDirtyDispatchRecoveryMessage(recovery)
                 : $"Latest verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}";
+            var reason = isDirty
+                ? (recovery.HasUsefulVerification ? VerificationGateReason.DirtyUsefulRecovery : VerificationGateReason.DirtyUnverifiedRecovery)
+                : VerificationGateReason.VerificationFailed;
             return new TaskVerificationGate(
                 task.Id,
                 task.RequiredRole,
                 task.Description,
                 task.Status,
                 VerificationGateStatus.FailedVerification,
-                message);
+                message,
+                reason);
         }
 
         if (HasOutputTokenLimitHit(task.LastExecution))
@@ -51,7 +56,8 @@ public sealed partial class AgentOrchestratorKernel
                 task.Description,
                 task.Status,
                 VerificationGateStatus.FailedVerification,
-                $"Model output may be truncated at {task.LastExecution!.MaxOutputTokens} token(s); retry with narrower scope or stronger model before accepting this gate.");
+                $"Model output may be truncated at {task.LastExecution!.MaxOutputTokens} token(s); retry with narrower scope or stronger model before accepting this gate.",
+                VerificationGateReason.OutputTokenLimit);
         }
 
         if (task.Status != WorkTaskStatus.Completed)
@@ -62,7 +68,8 @@ public sealed partial class AgentOrchestratorKernel
                 task.Description,
                 task.Status,
                 VerificationGateStatus.NotReady,
-                $"Task status is {task.Status}; complete the task before accepting this gate.");
+                $"Task status is {task.Status}; complete the task before accepting this gate.",
+                VerificationGateReason.NotReady);
         }
 
         if (task.LastVerification is null)
@@ -73,7 +80,8 @@ public sealed partial class AgentOrchestratorKernel
                 task.Description,
                 task.Status,
                 VerificationGateStatus.MissingVerification,
-                "Task is completed but has no verification evidence.");
+                "Task is completed but has no verification evidence.",
+                VerificationGateReason.MissingVerification);
         }
 
         return new TaskVerificationGate(
@@ -82,7 +90,8 @@ public sealed partial class AgentOrchestratorKernel
             task.Description,
             task.Status,
             VerificationGateStatus.Passed,
-            $"Verified by {task.LastVerification.Command} at {task.LastVerification.CompletedAt:u}.");
+            $"Verified by {task.LastVerification.Command} at {task.LastVerification.CompletedAt:u}.",
+            VerificationGateReason.Passed);
     }
 
     private static bool HasOutputTokenLimitHit(TaskExecutionRecord? execution)
@@ -90,30 +99,18 @@ public sealed partial class AgentOrchestratorKernel
         return OutputTokenLimit.IsHit(execution);
     }
 
-    private static string BuildVerificationSuggestedAction(TaskVerificationGate gate)
+    internal static string BuildVerificationSuggestedAction(TaskVerificationGate gate)
     {
-        if (IsOutputTokenLimitGate(gate))
+        return gate.Reason switch
         {
-            return "Retry with narrower scope or a stronger model, rerun verification, and record model fit if this was subscription/API work.";
-        }
-
-        if (gate.Message.Contains("dirty-useful dispatch recovery needed", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Inspect the dirty diff, rerun verification, commit the worker changes explicitly, then record manual verification.";
-        }
-
-        if (gate.Message.Contains("dirty-unverified dispatch recovery needed", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Inspect the dirty diff, run focused verification before committing, then record manual verification.";
-        }
-
-        return BuildVerificationSuggestedAction(gate.GateStatus);
-    }
-
-    private static bool IsOutputTokenLimitGate(TaskVerificationGate gate)
-    {
-        return gate.GateStatus == VerificationGateStatus.FailedVerification &&
-            gate.Message.StartsWith("Model output may be truncated", StringComparison.Ordinal);
+            VerificationGateReason.OutputTokenLimit =>
+                "Retry with narrower scope or a stronger model, rerun verification, and record model fit if this was subscription/API work.",
+            VerificationGateReason.DirtyUsefulRecovery =>
+                "Inspect the dirty diff, rerun verification, commit the worker changes explicitly, then record manual verification.",
+            VerificationGateReason.DirtyUnverifiedRecovery =>
+                "Inspect the dirty diff, run focused verification before committing, then record manual verification.",
+            _ => BuildVerificationSuggestedAction(gate.GateStatus)
+        };
     }
 
     private static string BuildVerificationSuggestedAction(VerificationGateStatus status)
