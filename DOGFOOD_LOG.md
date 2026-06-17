@@ -1478,3 +1478,17 @@ Goal 57cc83fb: # Remove triplicated suggested-command builders in the dashboard 
 
 - Operator gate: Developer: pass — Core.Tests 285/285, Infrastructure.Tests 809/809, ALL GREEN (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - mechanical deduplication across 6 partial-class files - task required careful cross-file call-site tracking but no novel reasoning.
+
+## 2026-06-17 - # Make conduct --loop resilient: one bad goal must not abort the whole batch,...
+
+Goal addcab18: # Make conduct --loop resilient: one bad goal must not abort the whole batch, and skip terminal goals  ## Problem (ob.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit b4744c7). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 285/285 Core.Tests, 811/811 Infrastructure.Tests (including 2 new tests passing) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted code + behavioral analysis - needed careful lifecycle reasoning (GoalStatus.Completed vs GoalLifecycleState.Verified) to avoid incorrectly filtering goals that still require conductor advancement.
+
+## 2026-06-17 - # Replace substring-based verification-gate routing with an explicit reason d...
+
+Goal 50efb524: # Replace substring-based verification-gate routing with an explicit reason discriminator  ## Problem `TaskVerificati.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit c7540f7). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — Core.Tests 298/298, Infrastructure.Tests 811/811 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - structural refactor with enum introduction and routing replacement - well-defined scope with clear call sites, no architectural ambiguity.
