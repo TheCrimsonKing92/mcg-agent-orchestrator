@@ -29,24 +29,14 @@ public static class VerificationPolicyCompiler
         "token"
     ];
 
-    private static readonly string[] BrowserSignals =
-    [
-        "browser",
-        "dashboard ui",
-        "e2e",
-        "end-to-end",
-        "playwright",
-        "screenshot",
-        "ui flow"
-    ];
-
     private static readonly string[] FrontEndExtensions =
     [
         ".tsx",
         ".ts",
         ".css",
         ".html",
-        ".vue"
+        ".vue",
+        ".js"
     ];
 
     public static VerificationPolicy Compile(
@@ -81,14 +71,14 @@ public static class VerificationPolicyCompiler
                 "Tester and Reviewer roles must inspect worker output, verification records, and blockers before trusting task status."));
         }
 
-        if (ContainsAny(text, BrowserSignals) && HasFrontEndAsset(files))
+        if (HasFrontEndAsset(files))
         {
             checks.Add(new VerificationPolicyCheck(
                 "dashboard browser smoke",
                 "browser-smoke",
                 true,
                 ".\\scripts\\Run-DashboardBrowserScript.ps1",
-                "Task text references dashboard UI, browser automation, screenshots, or end-to-end smoke coverage."));
+                "Changed files include front-end assets."));
         }
 
         if (ContainsAny(text, HumanReviewSignals) ||
@@ -126,6 +116,7 @@ public static class VerificationPolicyCompiler
             var normalized = file.Replace('\\', '/');
             return FrontEndExtensions.Any(ext => normalized.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                 || normalized.StartsWith("src/Mcg.AgentOrchestrator.Dashboard/", StringComparison.OrdinalIgnoreCase)
+                || normalized.StartsWith("wwwroot/", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(normalized, "scripts/Run-DashboardBrowserScript.ps1", StringComparison.OrdinalIgnoreCase);
         });
 }
