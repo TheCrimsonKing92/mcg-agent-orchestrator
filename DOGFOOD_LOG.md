@@ -1555,3 +1555,10 @@ Goal 7e81dad3: # Discord INBOUND via gateway: make button taps resolve escalatio
 
 - Operator gate: Developer: pass — 867 Infrastructure tests (incl. 11 new DiscordGatewayTests), 308 Core tests (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file feature addition with tests - the task required understanding existing patterns, adding new infrastructure components with clean seams, and writing parity tests; sonnet handled this well without needing more capability.
+
+## 2026-06-17 - # Host the Discord gateway listener + bind the decision applier (make inbound...
+
+Goal 6ec7e93c: # Host the Discord gateway listener + bind the decision applier (make inbound actually run)  ## Context The Discord i.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - app-layer wiring with existing static patterns - no design ambiguity; all extension points were clear from existing code.
