@@ -90,13 +90,41 @@ public sealed class DispatchProcessHostTests
             while (!File.Exists(exitCodePath) && DateTimeOffset.UtcNow < deadline)
                 Thread.Sleep(200);
 
+            // Kill the process tree (including any grandchildren that inherited pipe handles)
+            // and wait for the host to fully exit before reading exit.txt. This removes the
+            // file-handle race where a lingering grandchild holds an inherited handle while
+            // we read. FileShare.ReadWrite + retry in ReadExitCodeWithRetry covers any
+            // remaining window.
+            try { hostProcess.Kill(entireProcessTree: true); } catch { }
+            try { hostProcess.WaitForExit(5000); } catch { }
+
             Assert.True(File.Exists(exitCodePath));
-            Assert.Equal("0", File.ReadAllText(exitCodePath));
+            Assert.Equal("0", ReadExitCodeWithRetry(exitCodePath));
         }
         finally
         {
             try { hostProcess?.Kill(entireProcessTree: true); } catch { }
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
+    }
+
+    private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)
+    {
+        Exception? last = null;
+        for (int i = 0; i < attempts; i++)
+        {
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var sr = new StreamReader(fs);
+                return sr.ReadToEnd();
+            }
+            catch (IOException ex)
+            {
+                last = ex;
+                if (i < attempts - 1) Thread.Sleep(delayMs);
+            }
+        }
+        throw last!;
     }
 }
