@@ -50,19 +50,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     public void PrintDirtyDispatchRecoveryIncludesGitInspectStageCommitAndVerifyManualWorkflow()
     {
         const int taskNumber = 7;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            ConsoleViews.PrintDirtyDispatchRecovery(taskNumber, DirtyUnverifiedRecovery);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintDirtyDispatchRecovery(taskNumber, DirtyUnverifiedRecovery));
         Assert.Contains(output, text => text.Contains("C:\\worktrees\\goal-abc", StringComparison.Ordinal));
         Assert.Contains(output, text => text.Contains("status --short", StringComparison.Ordinal));
         Assert.Contains(output, text => text.Contains("add -A", StringComparison.Ordinal));

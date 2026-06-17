@@ -83,10 +83,10 @@ public sealed class ChaosGateTests
         Assert.False(result.Checks!.Any(c => c.Name == "forbidden changed paths" && !c.Passed));
     }
 
-    // ── Gate 3a: Missing WORKER_RESULT → contract validator ─────────────────
+    // ── Gate 3a: Missing WORKER_RESULT → advisory pass (git evidence carries substance) ─
 
-    [Xunit.Fact(DisplayName = "ChaosGate3a_missing_worker_result_block_triggers_contract_validator")]
-    public void Gate3a_MissingWorkerResultBlock_TriggersContractValidator()
+    [Xunit.Fact(DisplayName = "ChaosGate3a_missing_worker_result_block_passes_advisory_when_git_evidence_present")]
+    public void Gate3a_MissingWorkerResultBlock_PassesAdvisoryWhenGitEvidencePresent()
     {
         var root = CreateSeededRepo();
         var (kernel, goal, task, _) = CreateChaosDispatch(
@@ -98,16 +98,17 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+        // WORKER_RESULT is advisory. A relevant committed change on a clean worktree carries the
+        // substance, so a missing block no longer fails the dispatch. The git gates (Gate1/4/5)
+        // still catch no-change / dirty / noise-only worktrees regardless of the block.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Gate 3b: Malformed WORKER_RESULT (missing skills field) ─────────────
 
-    [Xunit.Fact(DisplayName = "ChaosGate3b_malformed_worker_result_missing_field_triggers_contract_validator")]
-    public void Gate3b_MalformedWorkerResultMissingField_TriggersContractValidator()
+    [Xunit.Fact(DisplayName = "ChaosGate3b_malformed_worker_result_missing_field_passes_advisory")]
+    public void Gate3b_MalformedWorkerResultMissingField_PassesAdvisory()
     {
         var root = CreateSeededRepo();
         const string malformed =
@@ -128,10 +129,10 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
+        // Field shape is advisory: an odd/partial block (here missing skills) no longer fails the
+        // dispatch when git shows a relevant committed change on a clean worktree.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Gate 4: Dirty worktree at completion ─────────────────────────────────
@@ -183,10 +184,10 @@ public sealed class ChaosGateTests
             text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     }
 
-    // ── Gate 6: False 'tests passed' claim with no run ──────────────────────
+    // ── Gate 6: tests not run at dispatch → advisory pass (acceptance enforces tests) ─
 
-    [Xunit.Fact(DisplayName = "ChaosGate6_false_tests_passed_claim_without_run_is_rejected")]
-    public void Gate6_FalseTestsPassedClaimWithoutRun_IsRejected()
+    [Xunit.Fact(DisplayName = "ChaosGate6_tests_not_run_at_dispatch_passes_advisory_acceptance_enforces_tests")]
+    public void Gate6_TestsNotRunAtDispatch_PassesAdvisory_AcceptanceEnforcesTests()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Mcg.AgentOrchestrator.Core/Application/Feature.cs";
@@ -199,10 +200,11 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("missing required verification policy test evidence", StringComparison.Ordinal));
+        // Test evidence is no longer taken from the worker's self-report at dispatch time; the
+        // actual test run is enforced by the acceptance gate (GoalAcceptanceVerifier). A relevant
+        // committed change on a clean worktree is sufficient to complete the dispatch.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Gate 7a: Missing local skill blocks preflight ────────────────────────
@@ -291,10 +293,10 @@ public sealed class ChaosGateTests
         Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
-    // ── Leniency: commit absent from history still fails ────────────────────
+    // ── Leniency: fabricated commit SHA passes when a real relevant commit exists ─
 
-    [Xunit.Fact(DisplayName = "Leniency_CommitAbsentFromHistory_still_fails")]
-    public void Leniency_CommitAbsentFromHistory_StillFails()
+    [Xunit.Fact(DisplayName = "Leniency_FabricatedCommitSha_passes_advisory_when_real_commit_present")]
+    public void Leniency_FabricatedCommitSha_PassesAdvisoryWhenRealCommitPresent()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Feature.cs";
@@ -308,11 +310,11 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        // "deadbeef" is not in history — must still fail.
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("is not reachable from git head", StringComparison.Ordinal));
+        // The worker reported a fabricated commit ("deadbeef"), but git shows a real relevant
+        // commit on a clean worktree. The self-reported commit is advisory and no longer
+        // cross-checked, so git ground truth completes the dispatch.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Leniency: WORKER_RESULT in committed file passes ────────────────────
@@ -401,16 +403,17 @@ public sealed class ChaosGateTests
 
     // ── Regression: no WORKER_RESULT anywhere (no stdout block, no file) ────
 
-    [Xunit.Fact(DisplayName = "Leniency_NoWorkerResultAnywhere_still_fails")]
-    public void Leniency_NoWorkerResultAnywhere_StillFails()
+    [Xunit.Fact(DisplayName = "Leniency_NoWorkerResultAndNoChange_still_fails_on_git_gate")]
+    public void Leniency_NoWorkerResultAndNoChange_StillFailsOnGitGate()
     {
-        // Same as Gate 3a but re-asserted with the new file-fallback path active.
+        // Advisory WORKER_RESULT cannot be exploited by omitting the block: with no block AND no
+        // relevant committed change, the git no-change gate (not the contract) fails the dispatch.
         var root = CreateSeededRepo();
         var (kernel, goal, task, _) = CreateChaosDispatch(
             root, AgentRole.Developer,
             "Done. Files written.",
             string.Empty,
-            mutateWorktree: wt => CommitSourceFile(wt, "src/Feature.cs", "// feature"));
+            mutateWorktree: null);
 
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -418,7 +421,7 @@ public sealed class ChaosGateTests
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+            text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     }
 
     // ── Leniency: blockers: none followed by informational notes ────────────
@@ -461,10 +464,10 @@ public sealed class ChaosGateTests
         Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
-    // ── Regression: real blockers with non-none value still fail ────────────
+    // ── Leniency: reported blockers are advisory; committed work passes ──────
 
-    [Xunit.Fact(DisplayName = "Leniency_RealBlockers_still_fail")]
-    public void Leniency_RealBlockers_StillFail()
+    [Xunit.Fact(DisplayName = "Leniency_ReportedBlockers_passes_advisory_when_work_committed")]
+    public void Leniency_ReportedBlockers_PassesAdvisoryWhenWorkCommitted()
     {
         var root = CreateSeededRepo();
         const string relPath = "src/Feature.cs";
@@ -477,10 +480,335 @@ public sealed class ChaosGateTests
         new BackgroundDispatchRunner(isStillRunning: _ => false)
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("reported blockers despite successful process exit", StringComparison.Ordinal));
+        // The blockers field is advisory and no longer gates the dispatch. The relevant committed
+        // change on a clean worktree is the substance; the blocker note remains in the recorded
+        // verification output for the operator/scorecard.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: missing END_WORKER_RESULT parses to EOF ───────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_MissingEndMarker_treatsEofAsTerminator_and_passes")]
+    public void Leniency_MissingEndMarker_TreatsEofAsTerminator()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+
+        // Build a WORKER_RESULT block WITHOUT the END_WORKER_RESULT terminator
+        var blockWithoutEnd = WorkerResultBlock(relPath, "dotnet build", "Passed")
+            .Replace("\n            END_WORKER_RESULT\n", "\n", StringComparison.Ordinal)
+            .Replace("\r\nEND_WORKER_RESULT\r\n", "\r\n", StringComparison.Ordinal)
+            .Replace("END_WORKER_RESULT", "", StringComparison.Ordinal)
+            .TrimEnd();
+
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer, blockWithoutEnd, string.Empty,
+            mutateWorktree: wt => CommitSourceFile(wt, relPath, "// feature"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        // Parser must tolerate missing END_WORKER_RESULT and treat EOF as terminator
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: markdown-decorated opener and field names pass ────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedOpenerAndFields_passes")]
+    public void Leniency_MarkdownDecoratedOpenerAndFields_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,   // stdout filled in below after commit
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(
+            Path.Combine(logs, $"{AgentRole.Developer}.out.log"),
+            MarkdownWorkerResultBlock(relPath, "dotnet build", "Passed", commit: commit));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: ## WORKER_RESULT heading-style opener ─────────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownHeadingOpener_passes")]
+    public void Leniency_MarkdownHeadingOpener_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        // Use a markdown heading "## WORKER_RESULT:" as the opener
+        var block = $"""
+            ## WORKER_RESULT:
+            files: {relPath}
+            commands: dotnet build
+            tests: Passed
+            commit: {commit}
+            blockers: none
+            model_fit: adequate
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            END_WORKER_RESULT
+            """;
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(Path.Combine(logs, $"{AgentRole.Developer}.out.log"), block);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: markdown-decorated committed file passes ───────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedCommittedFile_passes")]
+    public void Leniency_MarkdownDecoratedCommittedFile_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            "Work complete. See WORKER_RESULT.md for result details.",
+            string.Empty,
+            mutateWorktree: wt =>
+            {
+                CommitSourceFile(wt, relPath, "// feature");
+                var commit = ReadGit(wt, ["rev-parse", "--short", "HEAD"]);
+                // Committed file has markdown-decorated WORKER_RESULT block.
+                var block = MarkdownWorkerResultBlock(relPath, "dotnet build", "Passed", commit: commit);
+                File.WriteAllText(Path.Combine(wt, "WORKER_RESULT.md"), block);
+                RunGit(wt, ["add", "-A"], CommittedAt.AddSeconds(5));
+                RunGit(wt, ["commit", "-m", "Add WORKER_RESULT.md"], CommittedAt.AddSeconds(5));
+            });
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: stdout parse failure (not missing block) also tries committed file ─
+
+    [Xunit.Fact(DisplayName = "Leniency_AnyStdoutFormatFailureFallsBackToCommittedFile_passes")]
+    public void Leniency_AnyStdoutFormatFailureFallsBackToCommittedFile_Passes()
+    {
+        // Stdout has a block opener but is missing the 'skills' field (format failure).
+        // Committed file has the complete canonical block.
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        // Stdout: block with 'skills' field omitted → parse fails with "missing field(s)"
+        var incompleteBlock = $"""
+            WORKER_RESULT:
+            files: {relPath}
+            commands: dotnet build
+            tests: Passed
+            commit: {commit}
+            blockers: none
+            model_fit: adequate
+            confidence: high
+            END_WORKER_RESULT
+            """;
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(Path.Combine(logs, $"{AgentRole.Developer}.out.log"), incompleteBlock);
+
+        // Committed file: complete canonical block
+        var completeBlock = WorkerResultBlock(relPath, "dotnet build", "Passed", commit: commit);
+        File.WriteAllText(Path.Combine(worktree, "WORKER_RESULT.md"), completeBlock);
+        RunGit(worktree, ["add", "-A"], CommittedAt.AddSeconds(5));
+        RunGit(worktree, ["commit", "-m", "Add WORKER_RESULT.md"], CommittedAt.AddSeconds(5));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: field scan (no opener anywhere) ────────────────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_FieldScanNoOpener_passes")]
+    public void Leniency_FieldScanNoOpener_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        // Output has all required fields but NO 'WORKER_RESULT:' opener.
+        var noOpenerOutput = $"""
+            Implementation complete. All tests pass.
+
+            files: {relPath}
+            commands: dotnet build
+            tests: Passed
+            commit: {commit}
+            blockers: none
+            model_fit: adequate
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            """;
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(Path.Combine(logs, $"{AgentRole.Developer}.out.log"), noOpenerOutput);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: markdown blockers: none with note passes ──────────────────
+
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownBlockersNoneWithNotes_passes")]
+    public void Leniency_MarkdownBlockersNoneWithNotes_Passes()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        // Markdown-decorated key + 'none - ...' value
+        var block = MarkdownWorkerResultBlock(
+            relPath, "dotnet build", "Passed",
+            commit: commit,
+            blockers: "none - no edge cases outstanding");
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(Path.Combine(logs, $"{AgentRole.Developer}.out.log"), block);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: markdown format with reported blockers passes (advisory) ───
+
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedReportedBlockers_passes_advisory")]
+    public void Leniency_MarkdownDecoratedReportedBlockers_PassesAdvisory()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        var block = MarkdownWorkerResultBlock(
+            relPath, "dotnet build", "Passed",
+            commit: commit,
+            blockers: "API rate limit hit; retry after 1h");
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(Path.Combine(logs, $"{AgentRole.Developer}.out.log"), block);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        // Markdown-decorated block with a reported blocker: blockers is advisory, so the relevant
+        // committed change on a clean worktree completes the dispatch.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // ── Leniency: markdown format with missing skills passes (advisory) ──────
+
+    [Xunit.Fact(DisplayName = "Leniency_MarkdownDecoratedMissingSkills_passes_advisory")]
+    public void Leniency_MarkdownDecoratedMissingSkills_PassesAdvisory()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            string.Empty,
+            string.Empty,
+            mutateWorktree: null);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        CommitSourceFile(worktree, relPath, "// feature");
+        var commit = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+
+        // Markdown block with all fields EXCEPT skills
+        var block = $"""
+            **WORKER_RESULT**:
+            **files**: {relPath}
+            **commands**: dotnet build
+            **tests**: Passed
+            **commit**: {commit}
+            **blockers**: none
+            **model_fit**: adequate
+            **confidence**: high
+            END_WORKER_RESULT
+            """;
+
+        var logs = Path.Combine(root, "logs");
+        File.WriteAllText(Path.Combine(logs, $"{AgentRole.Developer}.out.log"), block);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        // Skills is advisory; its absence no longer gates the dispatch when git shows a relevant
+        // committed change on a clean worktree.
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
     // ── Shared setup helpers ─────────────────────────────────────────────────
@@ -643,6 +971,34 @@ public sealed class ChaosGateTests
             model_fit: {modelFit}
             skills: {skills}
             confidence: {confidence}
+            END_WORKER_RESULT
+            """;
+    }
+
+    /// <summary>
+    /// Produces a WORKER_RESULT block with markdown decoration on the opener and all field keys,
+    /// simulating the format that workers using markdown output styles produce.
+    /// </summary>
+    private static string MarkdownWorkerResultBlock(
+        string files,
+        string commands,
+        string tests,
+        string commit     = "{commit}",
+        string blockers   = "none",
+        string modelFit   = "OpenAI/gpt-5.5 - adequate - chaos test fixture",
+        string skills     = "dotnet-windows-build-hygiene",
+        string confidence = "high")
+    {
+        return $"""
+            **WORKER_RESULT**:
+            **files**: {files}
+            **commands**: {commands}
+            **tests**: {tests}
+            **commit**: {commit}
+            **blockers**: {blockers}
+            **model_fit**: {modelFit}
+            **skills**: {skills}
+            **confidence**: {confidence}
             END_WORKER_RESULT
             """;
     }

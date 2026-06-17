@@ -62,7 +62,7 @@ public static class WorkerSandboxCapabilityPlanner
                 "Task appears to target a SKILL.md file; include the exact .agents/skills path and use a full-permission profile if this is intentional.");
         }
 
-        if (text.Contains(".git", StringComparison.Ordinal))
+        if (ContainsGitDirectoryReference(text))
         {
             return new WorkerSandboxCapabilityResult(
                 false,
@@ -71,6 +71,22 @@ public static class WorkerSandboxCapabilityPlanner
         }
 
         return null;
+    }
+
+    // Matches ".git" only when it is a directory path segment (.git/ or .git\) or a
+    // whole-word reference (not followed by a letter/digit). This avoids false-positives
+    // on legitimate filenames such as .gitignore and .gitattributes.
+    private static bool ContainsGitDirectoryReference(string text)
+    {
+        var idx = 0;
+        while ((idx = text.IndexOf(".git", idx, StringComparison.Ordinal)) >= 0)
+        {
+            var after = idx + 4;
+            if (after >= text.Length || !char.IsLetterOrDigit(text[after]))
+                return true;
+            idx = after;
+        }
+        return false;
     }
 
     private static bool CanWriteRepoScopedSkillTarget(string commandTemplate)

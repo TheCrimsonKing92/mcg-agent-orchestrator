@@ -50,6 +50,11 @@ public static class GoalWorktrees
     private const int DeleteRetryAttempts = 6;
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
+    private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
+
+    // Injectable for testing: called best-effort before directory deletion to release any
+    // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
+    internal static Action<string> BuildServerShutdown = DefaultBuildServerShutdown;
 
     public static string BranchName(GoalId goalId) => $"goal/{Prefix(goalId)}";
 
@@ -100,7 +105,7 @@ public static class GoalWorktrees
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
-            throw new InvalidOperationException($"Goal '{Prefix(goalId)}' has no workspace to remove.");
+            return new GoalWorktreeRemoveResult("Workspace already clean; nothing to remove.", null, [], null);
         }
 
         var wasAlreadyUnregistered = !hasRegisteredWorktree;
@@ -113,6 +118,17 @@ public static class GoalWorktrees
                 throw new InvalidOperationException(
                     $"Failed to remove goal workspace '{path}': {removal.Error} Commit or discard its changes, or remove it manually with: git worktree remove --force \"{path}\"");
             }
+        }
+        else
+        {
+            // Worktree already unregistered; prune any stale tracking entries left by a prior
+            // partial removal so git's internal state is consistent before we finish cleanup.
+            RunGit(executionDirectory, "worktree", "prune");
+        }
+
+        if (Directory.Exists(path))
+        {
+            BuildServerShutdown(path);
         }
 
         if (Directory.Exists(path) && !DeleteDirectoryWithRetry(path))
@@ -140,6 +156,38 @@ public static class GoalWorktrees
         return branchRemoval.ExitCode == 0
             ? new GoalWorktreeRemoveResult($"Removed workspace and merged branch {branch}.", null, [], null)
             : new GoalWorktreeRemoveResult($"Removed workspace; branch {branch} kept because it has unmerged commits.", null, [], null);
+    }
+
+    /// <summary>
+    /// True when the goal worktree has committed changes against the base/main branch (work to
+    /// accept), comparing the goal branch tip to its merge-base with the current branch.
+    /// </summary>
+    public static bool HasChangesAgainstMain(string executionDirectory, GoalId goalId)
+    {
+        var worktree = TryResolve(executionDirectory, goalId);
+        if (worktree is null)
+        {
+            return false;
+        }
+
+        var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+        var result = RunGit(worktree, "diff", "--name-only", $"{baseBranch}...HEAD");
+        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output);
+    }
+
+    /// <summary>
+    /// True when the goal worktree has no uncommitted changes (git status --short is empty).
+    /// </summary>
+    public static bool IsWorktreeClean(string executionDirectory, GoalId goalId)
+    {
+        var worktree = TryResolve(executionDirectory, goalId);
+        if (worktree is null)
+        {
+            return false;
+        }
+
+        var result = RunGit(worktree, "status", "--short");
+        return result.ExitCode == 0 && string.IsNullOrWhiteSpace(result.Output);
     }
 
     public static string? TryGetBranchDiff(string executionDirectory, GoalId goalId)
@@ -330,13 +378,23 @@ public static class GoalWorktrees
         return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
-    private static void RequireGitWorkTree(string executionDirectory)
+    /// <summary>
+    /// Returns true when <paramref name="executionDirectory"/> is inside a git work tree.
+    /// Lets callers decide whether deterministic worktree chorekeeping is possible before
+    /// attempting it (e.g. dispatch auto-create falls back to the execution directory otherwise).
+    /// </summary>
+    public static bool IsGitWorkTree(string executionDirectory)
     {
         var result = RunGit(executionDirectory, "rev-parse", "--is-inside-work-tree");
-        if (result.ExitCode != 0 || !result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+        return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void RequireGitWorkTree(string executionDirectory)
+    {
+        if (!IsGitWorkTree(executionDirectory))
         {
             throw new InvalidOperationException(
-                $"Goal workspaces require '{executionDirectory}' to be inside a git work tree: {result.Error}");
+                $"Goal workspaces require '{executionDirectory}' to be inside a git work tree.");
         }
     }
 
@@ -375,6 +433,35 @@ public static class GoalWorktrees
         return ex is IOException or UnauthorizedAccessException;
     }
 
+    private static void DefaultBuildServerShutdown(string worktreePath)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = worktreePath
+            };
+            startInfo.ArgumentList.Add("build-server");
+            startInfo.ArgumentList.Add("shutdown");
+
+            using var process = Process.Start(startInfo);
+            if (process is null) return;
+            if (!process.WaitForExit((int)BuildServerShutdownTimeout.TotalMilliseconds))
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Best-effort; ignore all failures so removal always proceeds.
+        }
+    }
+
     private static List<WorktreeLockHolder> FindLockHolders(string path)
     {
         var normalizedPath = NormalizePath(path);
@@ -403,7 +490,7 @@ public static class GoalWorktrees
             return [];
         }
 
-        var commandLines = TryGetProcessCommandLines(processesByPid.Keys);
+        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
         var holders = new List<WorktreeLockHolder>();
 
         foreach (var (pid, name) in processesByPid)
@@ -429,48 +516,6 @@ public static class GoalWorktrees
     {
         return string.Equals(processName, "VBCSCompiler", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(processName, "MSBuild", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static Dictionary<int, string> TryGetProcessCommandLines(IEnumerable<int> pids)
-    {
-        try
-        {
-            var pidList = pids.ToList();
-            if (pidList.Count == 0)
-            {
-                return [];
-            }
-
-            var filter = string.Join(" OR ", pidList.Select(pid => $"ProcessId={pid}"));
-            var psi = new ProcessStartInfo
-            {
-                FileName = "wmic",
-                Arguments = $"process where \"({filter})\" get ProcessId,CommandLine /format:list",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return [];
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            if (!process.WaitForExit(3000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                return [];
-            }
-
-            return ParseWmicListOutput(output);
-        }
-        catch
-        {
-            return [];
-        }
     }
 
     internal static Dictionary<int, string> ParseWmicListOutput(string output)

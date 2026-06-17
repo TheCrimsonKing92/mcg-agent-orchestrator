@@ -1,8 +1,13 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+// Every AgentRole is an SDLC worker that executes a tracked goal Task via dispatch. Orchestrator-
+// INTERNAL model uses (the acceptance judge, future samplers/summarizers/oracles) are NOT roles —
+// they are ModelFunctionBinding entries (see ModelFunctions.cs), so this enum stays exhaustive and
+// catalog/health/seeder code can rely on "one agent per role" again.
 public enum AgentRole
 {
     Planner,
+    Ideation,
     Researcher,
     Developer,
     Tester,

@@ -15,6 +15,8 @@ public static class OrchestratorStateStore
     private static readonly TimeSpan InterprocessLockTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan InterprocessLockRetryDelay = TimeSpan.FromMilliseconds(50);
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
+    private static readonly JsonSerializerOptions _transactionJournalJsonOptions = new() { Converters = { new JsonStringEnumConverter() } };
 
     public static AgentOrchestratorKernel Load(string path)
     {
@@ -138,14 +140,14 @@ public static class OrchestratorStateStore
                 At = DateTimeOffset.UtcNow,
                 Detail = detail
             },
-            TransactionJournalJsonOptions());
+            _transactionJournalJsonOptions);
         await File.AppendAllTextAsync(statePath + TransactionJournalExtension, entry + Environment.NewLine, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task SaveWithoutExclusiveAccessAsync(string path, AgentOrchestratorKernel kernel, CancellationToken cancellationToken)
     {
         EnsureParentDirectory(path);
-        var json = JsonSerializer.Serialize(kernel.ExportSnapshot(), JsonOptions());
+        var json = JsonSerializer.Serialize(kernel.ExportSnapshot(), _jsonOptions);
         await AtomicWriteAsync(path, json, cancellationToken);
     }
 
@@ -341,27 +343,11 @@ public static class OrchestratorStateStore
     private static async Task<AgentOrchestratorKernel> LoadSnapshotFileAsync(string path, CancellationToken cancellationToken)
     {
         var json = await File.ReadAllTextAsync(path, cancellationToken);
-        var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json, JsonOptions())
+        var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json, _jsonOptions)
             ?? new OrchestratorSnapshot([], []);
         return AgentOrchestratorKernel.FromSnapshot(snapshot);
     }
 
-    private static JsonSerializerOptions JsonOptions()
-    {
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = true
-        };
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
-    }
-
-    private static JsonSerializerOptions TransactionJournalJsonOptions()
-    {
-        var options = new JsonSerializerOptions();
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
-    }
 }
 
 public sealed record OrchestratorStateRollbackResult(
@@ -376,6 +362,11 @@ public interface IOrchestratorStateRepository
     Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
 
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
+
+    // Cheap, hydration-free goal listing for read-only surfaces (the `goals` command, prefix
+    // resolution). The SQLite backend reads the indexed metadata columns directly; the file
+    // backend projects from a full load (no perf win, kept correct so the interface stays honest).
+    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 }
 
 public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
@@ -406,6 +397,20 @@ public sealed class FileOrchestratorStateRepository : ITransactionalOrchestrator
     public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
         return OrchestratorStateStore.SaveAsync(_path, kernel, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
+    {
+        var kernel = await OrchestratorStateStore.LoadAsync(_path, cancellationToken);
+        return kernel.Goals
+            .Select(goal => (goal, at: goal.Timeline.LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue))
+            .OrderByDescending(item => item.at)
+            .Select(item => new GoalSummary(
+                item.goal.Id.Value,
+                item.goal.Status.ToString(),
+                item.goal.Objective,
+                item.at.ToString("O")))
+            .ToList();
     }
 
     public Task<T> TransactAsync<T>(

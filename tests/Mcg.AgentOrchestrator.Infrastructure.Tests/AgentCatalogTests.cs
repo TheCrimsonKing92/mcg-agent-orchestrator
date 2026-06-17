@@ -11,7 +11,7 @@ public sealed class AgentCatalogTests
 {
     var catalog = AgentCatalog.Default();
 
-    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal(6, catalog.Agents.Count);
 
     foreach (var role in Enum.GetValues<AgentRole>())
     {
@@ -54,7 +54,7 @@ public sealed class AgentCatalogTests
 {
     var catalog = AgentCatalog.AnthropicDefault();
 
-    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal(6, catalog.Agents.Count);
 
     foreach (var role in Enum.GetValues<AgentRole>())
     {
@@ -80,7 +80,7 @@ public sealed class AgentCatalogTests
 
     var catalog = AgentCatalog.Default().UpsertRole(replacement);
 
-    Assert.Equal(5, catalog.Agents.Count);
+    Assert.Equal(6, catalog.Agents.Count);
     Assert.Equal("Anthropic developer", catalog.GetRequired(AgentRole.Developer).Name);
     Assert.Equal("claude-test", catalog.GetRequired(AgentRole.Developer).Model.ModelName);
 }
@@ -102,7 +102,7 @@ public sealed class AgentCatalogTests
     catalog = catalog.AddOrReplaceById(replacement);
 
     var developers = catalog.Agents.Where(agent => agent.Role == AgentRole.Developer).ToList();
-    Assert.Equal(6, catalog.Agents.Count);
+    Assert.Equal(7, catalog.Agents.Count);
     Assert.Equal("openai-developer", developers[0].Id.Value);
     Assert.Equal("anthropic-developer-claude", developers[1].Id.Value);
     Assert.Equal("Anthropic fallback developer", developers[1].Name);
@@ -191,6 +191,49 @@ public sealed class AgentCatalogTests
     Assert.Equal("custom-subscription", anthropic.Subscription!.ReasoningEffort);
     Assert.True(ollama.Model.MaxOutputTokens is null);
     Assert.True(ollama.Model.ReasoningEffort is null);
+}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_save_leaves_no_tmp_file")]
+    public void AgentCatalogStoreSaveLeavesNoTmpFile()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+
+    AgentCatalogStore.Save(path, AgentCatalog.Default());
+
+    Assert.False(File.Exists(path + ".tmp"));
+    Assert.True(File.Exists(path));
+}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_corrupt_file_recovers_from_bak")]
+    public void AgentCatalogStoreCorruptFileRecoversFromBak()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var firstCatalog = AgentCatalog.Default().UpsertRole(new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-bak-model", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey)));
+
+    // First save writes path; second save moves path → .bak and writes new content to path
+    AgentCatalogStore.Save(path, firstCatalog);
+    AgentCatalogStore.Save(path, AgentCatalog.Default());
+    File.WriteAllText(path, "{{corrupt}}");
+
+    var recovered = AgentCatalogStore.Load(path);
+
+    Assert.Equal("gpt-bak-model", recovered.GetRequired(AgentRole.Developer).Model.ModelName);
+}
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_corrupt_file_without_bak_falls_back_to_defaults")]
+    public void AgentCatalogStoreCorruptFileWithoutBakFallsBackToDefaults()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    File.WriteAllText(path, "{{corrupt}}");
+
+    var catalog = AgentCatalogStore.Load(path);
+
+    Assert.Equal("OpenAI", catalog.GetRequired(AgentRole.Developer).Model.ProviderName);
+    Assert.Equal("gpt-5.4-mini", catalog.GetRequired(AgentRole.Developer).Model.ModelName);
 }
     [Xunit.Fact(DisplayName = "AgentCatalogStore_load_repairs_stale_openai_codex_subscription_default")]
     public void AgentCatalogStoreLoadRepairsStaleOpenAiCodexSubscriptionDefault()

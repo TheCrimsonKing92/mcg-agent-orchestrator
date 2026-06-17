@@ -20,29 +20,30 @@ private static bool? TryExecuteFundamentalsAlias(string command, IReadOnlyList<s
     }
 }
 
-// accept [goal-id] [--skip-verify] [--autonomy <policy>]
-// Delegates to acceptance logic then workspace cleanup.
+// accept [goal-id] [--skip-verify] [--keep-workspace] [--autonomy <policy>]
+// Delegates to acceptance logic then deterministic workspace cleanup (shared with `acceptance`).
 private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionContext context)
 {
     var policy = ResolveCliAutonomyPolicy(parts);
     var skipVerify = HasCliConfirmation(parts, "--skip-verify");
-    var goalPart = GetOptionalArgument(parts, "--skip-verify");
+    var keepWorkspace = HasCliConfirmation(parts, "--keep-workspace");
+    var noRecord = HasCliConfirmation(parts, "--no-record");
+    var goalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
     context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPart);
     EnsurePolicyAllows(context, context.CurrentGoal, policy, AutonomyAction.Acceptance, "accept");
+    AutoVerifyFromGitEvidence(context, context.CurrentGoal);
     ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
-    var merged = RunAcceptanceWorkspaceMerge(context, skipVerify);
-    if (!merged)
+    if (!RunAcceptanceWorkspaceMerge(context, skipVerify))
     {
         return false;
     }
 
-    if (!TryEnsurePolicyAllows(context, context.CurrentGoal, policy, AutonomyAction.WorkspaceCleanup, "accept workspace remove", out _))
+    if (!noRecord)
     {
-        Console.WriteLine($"Workspace cleanup skipped by policy: workspace remove {context.CurrentGoal.Id.Value[..8]}");
-        return true;
+        AutoRecordDogfoodEntry(context);
     }
 
-    PrintWorkspaceRemoveResult(GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id));
+    CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, policy, keepWorkspace);
     return true;
 }
 

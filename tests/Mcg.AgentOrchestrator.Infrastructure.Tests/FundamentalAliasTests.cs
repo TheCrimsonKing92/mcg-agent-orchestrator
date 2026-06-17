@@ -524,20 +524,4 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.Equal("8544c918", parts[1]);
     }
 
-    private static string CaptureConsole(Action action)
-    {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            action();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        return writer.ToString();
-    }
 }

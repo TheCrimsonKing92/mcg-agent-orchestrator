@@ -9,7 +9,9 @@ public sealed record GoalSnapshot(
     string Objective,
     GoalStatus Status,
     IReadOnlyList<TaskSnapshot> Tasks,
-    IReadOnlyList<ProgressEventSnapshot> Timeline);
+    IReadOnlyList<ProgressEventSnapshot> Timeline,
+    IReadOnlyList<string>? DependsOn = null,
+    string? SourceBacklogItemId = null);
 
 public sealed record TaskSnapshot(
     string Id,

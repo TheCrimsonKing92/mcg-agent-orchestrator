@@ -41,7 +41,10 @@ private static bool IsSimpleCommand(string command)
         command.Equals("run-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("lifecycle-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goal-depends", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("goal-plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("plan", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("ideate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("intent-template", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("delegate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -51,6 +54,8 @@ private static bool IsSimpleCommand(string command)
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("agents", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("agent-add", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("model-functions", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("model-function-add", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("timeline", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("task-timeline", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("worker-profiles", StringComparison.OrdinalIgnoreCase) ||
@@ -90,6 +95,12 @@ private static bool IsSimpleCommand(string command)
         command.Equals("accept", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("config", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("land", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("conduct", StringComparison.OrdinalIgnoreCase);
+        command.Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-list", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-show", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-import", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase);
 }
 }

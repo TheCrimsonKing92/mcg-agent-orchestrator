@@ -326,6 +326,41 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
     public static string[] GetChangedFiles(string workingDirectory) =>
         SplitLines(RunGit(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)));
 
+    // Bounded unified diff of the goal branch against its base, for feeding an advisory semantic
+    // judge. Truncated so a large change cannot blow the judge's context/cost budget.
+    public static string GetDiffExcerpt(string workingDirectory, int maxChars = 6000)
+    {
+        var diff = RunGit(workingDirectory, "diff", BuildDiffSpec(workingDirectory));
+        return diff.Length <= maxChars
+            ? diff
+            : diff[..maxChars] + $"{Environment.NewLine}...(diff truncated at {maxChars} chars)";
+    }
+
+    // Per-file diffs for the recursive judge: each changed file gets its own bounded diff so no
+    // file's changes are hidden behind the whole-diff truncation boundary.
+    public static IReadOnlyList<(string File, string Diff)> GetPerFileDiffs(
+        string workingDirectory,
+        int perFileMaxChars = 4000)
+    {
+        var diffSpec = BuildDiffSpec(workingDirectory);
+        var result = new List<(string File, string Diff)>();
+        foreach (var file in GetChangedFiles(workingDirectory))
+        {
+            var diff = RunGit(workingDirectory, "diff", diffSpec, "--", file);
+            if (string.IsNullOrWhiteSpace(diff))
+            {
+                continue;
+            }
+
+            var truncated = diff.Length <= perFileMaxChars
+                ? diff
+                : diff[..perFileMaxChars] + $"{Environment.NewLine}...(per-file diff truncated at {perFileMaxChars} chars)";
+            result.Add((file, truncated));
+        }
+
+        return result;
+    }
+
     private static string BuildDiffSpec(string workingDirectory)
     {
         if (GitSucceeds(workingDirectory, "rev-parse", "--verify", "main"))

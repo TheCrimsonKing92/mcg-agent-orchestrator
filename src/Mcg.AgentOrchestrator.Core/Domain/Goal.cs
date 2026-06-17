@@ -4,6 +4,7 @@ public sealed class Goal
 {
     private readonly List<TaskSpec> _tasks;
     private readonly List<ProgressEvent> _timeline = [];
+    private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
     {
@@ -20,15 +21,23 @@ public sealed class Goal
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
 
+    public string? SourceBacklogItemId { get; private set; }
+
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
 
     public IReadOnlyList<ProgressEvent> Timeline => _timeline;
 
+    public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
+
     internal void SetStatus(GoalStatus status) => Status = status;
+
+    internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
 
     internal void AddTask(TaskSpec task) => _tasks.Add(task);
+
+    internal void AddDependency(GoalId dependencyId) => _dependsOn.Add(dependencyId);
 
     internal GoalSnapshot ToSnapshot()
     {
@@ -42,7 +51,9 @@ public sealed class Goal
                 evt.TaskId?.Value,
                 evt.Kind,
                 evt.Message,
-                evt.OccurredAt)).ToList());
+                evt.OccurredAt)).ToList(),
+            _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
+            SourceBacklogItemId);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -59,6 +70,14 @@ public sealed class Goal
                 evt.Message,
                 evt.OccurredAt));
         }
+
+        foreach (var depId in snapshot.DependsOn ?? [])
+        {
+            goal.AddDependency(new GoalId(depId));
+        }
+
+        if (snapshot.SourceBacklogItemId is not null)
+            goal.SetSourceBacklogItemId(snapshot.SourceBacklogItemId);
 
         return goal;
     }

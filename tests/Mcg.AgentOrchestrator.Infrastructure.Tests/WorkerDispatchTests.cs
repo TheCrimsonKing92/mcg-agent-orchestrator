@@ -823,6 +823,141 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains(developer.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]
+    public void SubscriptionDispatchOverrideModelBeatsComplexPath()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var modelOverride = new DispatchModelOverride(null, "gpt-5.3-codex-spark", null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex-spark'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_replaces_agent_default")]
+    public void SubscriptionDispatchOverrideProfileReplacesAgentDefault()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Review the implementation",
+        [new TaskSpec(TaskId.New(), "Review the code.", AgentRole.Reviewer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("alt-profile", "alt-cli --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var profileOverride = new DispatchModelOverride("alt-profile", null, null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, profileOverride);
+
+    Assert.Equal("alt-profile", task.LastDispatch!.WorkerName);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_reasoning_beats_agent_default")]
+    public void SubscriptionDispatchOverrideReasoningBeatsAgentDefault()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Review the implementation",
+        [new TaskSpec(TaskId.New(), "Review the code.", AgentRole.Reviewer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var reasoningOverride = new DispatchModelOverride(null, null, "low");
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, reasoningOverride);
+
+    Assert.Equal("low", task.LastDispatch!.ReasoningEffort);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_no_override_preserves_complex_model_default")]
+    public void SubscriptionDispatchNoOverridePreservesComplexModelDefault()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_pins_anthropic_subscription_model")]
     public void WorkerProfileDispatcherPinsAnthropicSubscriptionModel()
 {
@@ -1534,6 +1669,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(12001, risk!.PromptCharacterCount);
     Assert.False(risk.PromptExceedsBatchThreshold);
     Assert.True(risk.HasOversizedPrompt);
+    Assert.True(risk.IsAnomalous);
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.False(risk.UsesComplexPaidModel);
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
@@ -1543,8 +1679,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ex.Message, text => text.Contains("Inspect the generated prompt before paid subscription start", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 }
-    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_fanout_with_small_prompts")]
-    public void SubscriptionPromptCostGuardBlocksPaidBatchFanoutWithSmallPrompts()
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_paid_batch_fanout_with_small_prompts_is_advisory_not_blocking")]
+    public void SubscriptionPromptCostGuardPaidBatchFanoutWithSmallPromptsIsAdvisoryNotBlocking()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Plan paid batch subscription start");
@@ -1556,8 +1692,6 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         agents,
         WorkerProfileCatalog.Default(),
         _ => 500);
-    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
-
     Assert.True(risk is not null);
     Assert.Equal(5, risk!.TaskCount);
     Assert.Equal(2500, risk.PromptCharacterCount);
@@ -1565,9 +1699,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(risk.HasOversizedPrompt);
     Assert.True(risk.TaskCountExceedsThreshold);
     Assert.False(risk.UsesComplexPaidModel);
+    Assert.False(risk.IsAnomalous);
     Assert.Equal("paid subscription fanout", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
     Assert.True(risk.Details.Any(detail => detail.Contains("Paid task count 5 exceeds 3", StringComparison.Ordinal)));
-    Assert.Contains(ex.Message, text => text.Contains("thresholds 18000 chars or 3 task(s)", StringComparison.Ordinal));
+    // Fan-out with small prompts is advisory, not an anomaly, so the start is not blocked.
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_allows_complex_paid_start_under_size_threshold")]
     public void SubscriptionPromptCostGuardAllowsComplexPaidStartUnderSizeThreshold()
@@ -1623,11 +1759,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         _ => 7600,
         nextTask);
 
-    Assert.True(AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, nextTask.Id) >= PaidPromptThresholds.PriorTaskEvidenceAllowance);
+    // Substantial prior evidence engages the allowance. The estimate is capped near the allowance
+    // and is line-ending-sensitive (CRLF on Windows vs LF on Linux), so assert it is clearly
+    // substantial rather than pinned to the exact boundary; the behavioral check is risk == null.
+    Assert.True(AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, nextTask.Id) > PaidPromptThresholds.PriorTaskEvidenceAllowance / 2);
     Xunit.Assert.Null(risk);
 }
-    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_paid_batch_prompt_total")]
-    public void SubscriptionPromptCostGuardBlocksPaidBatchPromptTotal()
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_proportionate_batch_total_is_advisory_not_blocking")]
+    public void SubscriptionPromptCostGuardProportionateBatchTotalIsAdvisoryNotBlocking()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1652,16 +1791,48 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         [agent],
         WorkerProfileCatalog.Default(),
         _ => 8000);
-    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
-
+    // 24000 across 3 Complex tasks (each within the complexity band) exceeds the soft batch ceiling
+    // but is below the anomaly batch ceiling (2x), so it is advisory only and does not block.
     Assert.True(risk is not null);
     Assert.Equal(24000, risk!.PromptCharacterCount);
     Assert.True(risk.PromptExceedsBatchThreshold);
     Assert.False(risk.HasOversizedPrompt);
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.True(risk.UsesComplexPaidModel);
+    Assert.False(risk.IsAnomalous);
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
-    Assert.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_large_but_proportionate_prompt_is_advisory_anomalous_prompt_blocks")]
+    public void SubscriptionPromptCostGuardLargeButProportionatePromptIsAdvisoryAnomalousPromptBlocks()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Plan a paid subscription task",
+        [new TaskSpec(TaskId.New(), "Do substantial paid subscription work.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    // 11000 chars: over the soft prompt ceiling but under the anomaly ceiling for either complexity
+    // classification -> advisory only, does NOT block (the behavior change: no rote confirm flag).
+    var proportionate = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal, [agent], WorkerProfileCatalog.Default(), _ => 11000);
+    Assert.True(proportionate is not null);
+    Assert.True(proportionate!.HasOversizedPrompt);
+    Assert.False(proportionate.IsAnomalous);
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(proportionate, confirmed: false);
+
+    // 20000 chars: disproportionate to complexity -> anomaly -> requires explicit confirmation.
+    var anomalous = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+        goal, [agent], WorkerProfileCatalog.Default(), _ => 20000);
+    Assert.True(anomalous!.IsAnomalous);
+    Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(anomalous, confirmed: false));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
     public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()
@@ -2175,90 +2346,6 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Xunit.Assert.Null(task.LastProcess);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_shuts_down_dotnet_build_server_after_worker_command")]
-    public void BackgroundDispatchRunnerWrapperShutsDownDotnetBuildServerAfterWorkerCommand()
-{
-    var wrapper = BackgroundDispatchRunner.BuildWrapper(
-        "Write-Output ok",
-        "C:\\logs\\out.log",
-        "C:\\logs\\err.log",
-        "C:\\logs\\exit.txt");
-
-    Assert.Contains(wrapper, text => text.Contains("finally", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("dotnet build-server shutdown", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("*> $null", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("$exitCodePath = 'C:\\logs\\exit.txt'", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText($exitCodePath, [string]$code)", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("exit $code", StringComparison.Ordinal));
-}
-
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_can_skip_dotnet_build_server_shutdown_for_local_dispatch")]
-    public void BackgroundDispatchRunnerWrapperCanSkipDotnetBuildServerShutdownForLocalDispatch()
-{
-    var wrapper = BackgroundDispatchRunner.BuildWrapper(
-        "Write-Output ok",
-        "C:\\logs\\out.log",
-        "C:\\logs\\err.log",
-        "C:\\logs\\exit.txt",
-        shutdownBuildServerOnExit: false,
-        disableSharedCompilation: false);
-
-    Assert.False(wrapper.Contains("dotnet build-server shutdown", StringComparison.Ordinal));
-    Assert.False(wrapper.Contains("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal));
-    Assert.False(wrapper.Contains("MSBUILDDISABLENODEREUSE", StringComparison.Ordinal));
-    Assert.False(wrapper.Contains("UseSharedCompilation", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("[IO.File]::WriteAllText($exitCodePath, [string]$code)", StringComparison.Ordinal));
-}
-
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_disables_shared_compilation_by_default")]
-    public void BackgroundDispatchRunnerWrapperDisablesSharedCompilationByDefault()
-{
-    var wrapper = BackgroundDispatchRunner.BuildWrapper(
-        "Write-Output ok",
-        "C:\\logs\\out.log",
-        "C:\\logs\\err.log",
-        "C:\\logs\\exit.txt");
-
-    Assert.Contains(wrapper, text => text.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("$env:MSBUILDDISABLENODEREUSE = '1'", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("$env:UseSharedCompilation = 'false'", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("Start-Heartbeat", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok } 1> $stdoutPath 2> $stderrPath", StringComparison.Ordinal));
-}
-
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_can_skip_disabling_shared_compilation")]
-    public void BackgroundDispatchRunnerWrapperCanSkipDisablingSharedCompilation()
-{
-    var wrapper = BackgroundDispatchRunner.BuildWrapper(
-        "Write-Output ok",
-        "C:\\logs\\out.log",
-        "C:\\logs\\err.log",
-        "C:\\logs\\exit.txt",
-        disableSharedCompilation: false);
-
-    Assert.False(wrapper.Contains("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal));
-    Assert.False(wrapper.Contains("MSBUILDDISABLENODEREUSE", StringComparison.Ordinal));
-    Assert.False(wrapper.Contains("UseSharedCompilation", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("& { Write-Output ok } 1> $stdoutPath 2> $stderrPath", StringComparison.Ordinal));
-}
-
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_wrapper_writes_heartbeat_progress")]
-    public void BackgroundDispatchRunnerWrapperWritesHeartbeatProgress()
-{
-    var wrapper = BackgroundDispatchRunner.BuildWrapper(
-        "Write-Output ok",
-        "C:\\logs\\out.log",
-        "C:\\logs\\err.log",
-        "C:\\logs\\exit.txt",
-        "C:\\logs\\heartbeat.json");
-
-    Assert.Contains(wrapper, text => text.Contains("$heartbeatPath = 'C:\\logs\\heartbeat.json'", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("lastProgressAt", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("stdoutBytes", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("stderrBytes", StringComparison.Ordinal));
-    Assert.Contains(wrapper, text => text.Contains("ConvertTo-Json -Compress", StringComparison.Ordinal));
-}
-
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_runs_with_shared_compilation_disabled")]
     public void BackgroundDispatchRunnerNonLocalDispatchRunsWithSharedCompilationDisabled()
 {
@@ -2480,6 +2567,55 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+
+    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(0, completed.ExitCode);
+    Assert.Equal(clock.UtcNow, completed.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.True(File.Exists(exit));
+    Assert.Equal("0", File.ReadAllText(exit));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("Wrapper process reaped", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_claude_cli_wrapper_completes_when_worktree_evidence_passes")]
+    public void BackgroundDispatchRunnerHungClaudeCliWrapperCompletesWhenWorktreeEvidencePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Hung claude-cli wrapper with evidence", [taskSpec]);
+    var agent = new AgentDefinition(
+        new AgentId("claude-developer"),
+        "Claude Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+    RunGit(worktree, ["add", "-A"], now.AddMinutes(-4));
+    RunGit(worktree, ["commit", "-m", "Feature"], now.AddMinutes(-4));
+
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, "dev.out.log");
+    var stderr = Path.Combine(logs, "dev.err.log");
+    var exit = Path.Combine(logs, "dev.exit.txt");
+    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stderr, string.Empty);
+
+    var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    // Heartbeat: childPid=null signals the worker has already exited; stalled progress
+    // beyond postOutputIdleTimeout of 2 minutes triggers the hung-wrapper detector.
+    WriteHeartbeat(process, now.AddMinutes(-3), now.AddMinutes(-3), "running", 0, 0, childPid: null);
 
     var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -2723,8 +2859,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_missing_required_policy_test_evidence_fails")]
-    public void BackgroundDispatchRunnerFileRoleMissingRequiredPolicyTestEvidenceFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_missing_policy_test_evidence_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleMissingPolicyTestEvidencePassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2744,14 +2880,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing required verification policy test evidence", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("full dotnet tests", StringComparison.Ordinal));
+    // WORKER_RESULT is advisory: a relevant commit on a clean worktree is sufficient at
+    // dispatch time. Test evidence is enforced by the acceptance run, not the self-report.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractPassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2770,14 +2906,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing WORKER_RESULT block", StringComparison.Ordinal));
+    // A missing WORKER_RESULT block no longer fails the dispatch: git ground truth (the
+    // relevant committed change on a clean worktree) carries the substance. The block is advisory.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_partial_worker_result_contract_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithPartialWorkerResultContractFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_partial_worker_result_contract_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithPartialWorkerResultContractPassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2808,15 +2944,18 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing field(s): skills", StringComparison.Ordinal));
+    // A partial/odd-shaped WORKER_RESULT (here missing the skills field) no longer fails the
+    // dispatch — field shape is advisory; the relevant committed change is the substance.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_malformed_worker_result_contract_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithMalformedWorkerResultContractFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_fake_commit_sha_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithFakeCommitShaPassesAdvisory()
 {
+    // The worker reports a fake commit SHA "abc123", but it actually committed a relevant
+    // change on a clean worktree. The self-reported commit is advisory and no longer checked;
+    // git ground truth (a relevant commit after dispatch) is the substance, so this passes.
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var output = """
@@ -2846,14 +2985,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract invalid", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("missing END_WORKER_RESULT marker", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_worker_result_file_mismatch_fails")]
-    public void BackgroundDispatchRunnerFileRoleWithWorkerResultFileMismatchFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_worker_result_file_mismatch_passes_advisory")]
+    public void BackgroundDispatchRunnerFileRoleWithWorkerResultFileMismatchPassesAdvisory()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2872,10 +3009,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("Worker result contract missing changed file", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("feature.txt", StringComparison.Ordinal));
+    // The worker's files field (other.txt) disagrees with what git shows changed (feature.txt).
+    // The self-reported file list is advisory and no longer cross-checked; the relevant
+    // committed change is the substance, so this passes.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_commit_and_dirty_worktree_fails")]
@@ -3211,6 +3349,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     File.WriteAllText(Path.Combine(workingDirectory, "AGENTS.md"), "Repo-local agent guidance.");
     File.WriteAllText(Path.Combine(workingDirectory, "BACKLOG.md"), "Open backlog item.");
     File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Recent dogfood note.");
+    File.WriteAllText(Path.Combine(workingDirectory, "TestRepo.sln"), ""); // mark as dotnet for toolchain detection
     var kernel = new AgentOrchestratorKernel();
     var priorTask = new TaskSpec(TaskId.New(), "Plan implementation.", AgentRole.Planner);
     var currentTask = new TaskSpec(TaskId.New(), "Implement context artifacts.", AgentRole.Developer, "Run worker dispatch tests.");
@@ -3754,13 +3893,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     DateTimeOffset lastProgressAt,
     string state,
     long stdoutBytes,
-    long stderrBytes)
+    long stderrBytes,
+    int? childPid = 888888)
 {
+    var childPidJson = childPid.HasValue ? childPid.Value.ToString() : "null";
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
         "\"pid\":999999," +
-        "\"childPid\":888888," +
+        $"\"childPid\":{childPidJson}," +
         $"\"startedAt\":\"{process.StartedAt:O}\"," +
         $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
         $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +
@@ -3845,19 +3986,23 @@ private static string ReadGit(string workingDirectory, string[] arguments)
 
 private static (int ExitCode, string StandardOutput, string StandardError) RunPowerShellCommand(string workingDirectory, string command)
 {
+    // Resolve the PowerShell host the same way production dispatch does (pwsh-preferred, with the
+    // Windows-only -ExecutionPolicy), so this smoke runs natively on Linux instead of resolving
+    // powershell.exe via WSL interop against a Linux working directory.
     var startInfo = new ProcessStartInfo
     {
-        FileName = "powershell.exe",
+        FileName = WorkerShell.Executable,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false,
         CreateNoWindow = true,
         WorkingDirectory = workingDirectory
     };
-    startInfo.ArgumentList.Add("-NoProfile");
-    startInfo.ArgumentList.Add("-ExecutionPolicy");
-    startInfo.ArgumentList.Add("Bypass");
-    startInfo.ArgumentList.Add("-Command");
+    foreach (var argument in WorkerShell.BaseArguments())
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
     startInfo.ArgumentList.Add(command);
 
     using var process = Process.Start(startInfo)

@@ -6,6 +6,15 @@ internal static class SdlcRolePromptRequirements
     {
         return role switch
         {
+            AgentRole.Ideation =>
+            [
+                "## Ideation Requirements",
+                "- Ground every proposed idea in the provided evidence context; cite the specific source (e.g. \"loop-health shows 9% rework\" or \"3 escalations about X\").",
+                "- Rank ideas by expected value: highest value and lowest effort improvements first.",
+                "- Include scope, value, effort, and risk fields for each idea.",
+                "- Do not propose hand-wavy ideas without cited evidence; every rationale must tie to an observable metric or named source.",
+                "- Do not modify repository files; ideation output is a ranked proposal list only."
+            ],
             AgentRole.Planner =>
             [
                 "## Planner Requirements",
@@ -82,6 +91,13 @@ internal static class SdlcRolePromptRequirements
     {
         return role switch
         {
+            AgentRole.Ideation =>
+            [
+                "## Ideation Requirements",
+                "- Ground every idea in provided evidence; cite source with specifics (e.g. \"loop-health shows 9% rework\").",
+                "- Rank by value, include scope/value/effort/risk; reject hand-wavy ideas with no evidence citation.",
+                "- Do not modify repository files; output is a ranked proposal list only."
+            ],
             AgentRole.Planner =>
             [
                 "## Planner Requirements",

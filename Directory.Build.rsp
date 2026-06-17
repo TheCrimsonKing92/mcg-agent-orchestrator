@@ -1,0 +1,6 @@
+# Disable MSBuild node reuse repo-wide. Reused build worker nodes linger after a build holding
+# obj/*.dll (notably Core.dll), which causes the recurring CS2012 "file in use" build-lock that
+# `dotnet build-server shutdown` does not reliably clear. This applies to every MSBuild-based
+# dotnet build/test/run/pack/publish in this tree. Pairs with UseSharedCompilation=false
+# (Directory.Build.props) which disables the Roslyn compiler server (VBCSCompiler).
+-nodeReuse:false

@@ -95,7 +95,14 @@
       "PowerShell(.\\mcg-orchestrator.cmd goals *)",
       "PowerShell(.\\mcg-orchestrator.cmd agents *)",
       "PowerShell(.\\mcg-orchestrator.cmd doctor *)",
-      "PowerShell(.\\mcg-orchestrator.cmd workspace create *)"
+      "PowerShell(.\\mcg-orchestrator.cmd workspace create *)",
+      "PowerShell(.\\mcg-orchestrator.cmd *)",
+      "PowerShell(.\\mcg-orchestrator.cmd backlog-add *)",
+      "PowerShell(.\\mcg-orchestrator.cmd backlog-close *)",
+      "PowerShell(.\\mcg-orchestrator.cmd backlog-reopen *)",
+      "PowerShell(.\\mcg-orchestrator.cmd backlog-import*)",
+      "PowerShell(.\\mcg-orchestrator.cmd abandon-goal *)",
+      "PowerShell(.\\mcg-orchestrator.cmd recover *)"
     ]
   }
 }

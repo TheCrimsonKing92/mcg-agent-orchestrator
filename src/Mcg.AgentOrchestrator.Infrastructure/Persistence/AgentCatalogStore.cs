@@ -61,6 +61,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(
         [
             new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
+            new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
             new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
             new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
             new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
@@ -82,6 +83,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(
         [
             new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-ideation"), "Anthropic ideation", AgentRole.Ideation, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
             new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
             new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
             new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
@@ -100,6 +102,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         return new AgentCatalog(
         [
             new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
+            new(new AgentId("ollama-ideation"), "Ollama ideation", AgentRole.Ideation, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
             new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
             new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
             new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
@@ -110,6 +113,8 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
 public static class AgentCatalogStore
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
+
     public static AgentCatalog Load(string path, AgentCatalog? fallback = null)
     {
         var defaultCatalog = fallback ?? AgentCatalog.Default();
@@ -119,21 +124,47 @@ public static class AgentCatalogStore
             return NormalizePaidProviderCaps(defaultCatalog);
         }
 
-        var catalog = JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), JsonOptions());
-        return NormalizePaidProviderCaps(catalog is null || catalog.Agents.Count == 0 ? defaultCatalog : catalog);
+        var catalog = TryDeserialize(path);
+        if (catalog is not null && catalog.Agents.Count > 0)
+        {
+            return NormalizePaidProviderCaps(catalog);
+        }
+
+        var bak = path + ".bak";
+        if (File.Exists(bak))
+        {
+            Console.Error.WriteLine($"[AgentCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty; recovering from backup.");
+            var bakCatalog = TryDeserialize(bak);
+            if (bakCatalog is not null && bakCatalog.Agents.Count > 0)
+            {
+                return NormalizePaidProviderCaps(bakCatalog);
+            }
+            Console.Error.WriteLine("[AgentCatalogStore] WARNING: backup is also corrupt; falling back to built-in defaults.");
+        }
+        else
+        {
+            Console.Error.WriteLine($"[AgentCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty and no backup exists; falling back to built-in defaults.");
+        }
+
+        return NormalizePaidProviderCaps(defaultCatalog);
     }
 
     public static void Save(string path, AgentCatalog catalog)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(catalog, JsonOptions()));
+        var tmp = path + ".tmp";
+        var bak = path + ".bak";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, _jsonOptions));
+        if (File.Exists(path))
+            File.Replace(tmp, path, bak);
+        else
+            File.Move(tmp, path);
     }
 
-    private static JsonSerializerOptions JsonOptions()
+    private static AgentCatalog? TryDeserialize(string path)
     {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
+        try { return JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), _jsonOptions); }
+        catch { return null; }
     }
 
     private static AgentCatalog NormalizePaidProviderCaps(AgentCatalog catalog)

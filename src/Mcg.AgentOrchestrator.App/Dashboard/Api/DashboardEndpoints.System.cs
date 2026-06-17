@@ -247,14 +247,18 @@ internal static partial class DashboardEndpoints
 
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = Mcg.AgentOrchestrator.Infrastructure.WorkerShell.Executable,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = services.Workspace.ExecutionDirectory
         };
         startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+        }
+
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(runnerPath);
 

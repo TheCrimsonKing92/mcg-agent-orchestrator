@@ -527,6 +527,31 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
     Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputReceived && evt.TaskId == task.Id);
 }
+    [Xunit.Fact(DisplayName = "SourceBacklogItemId_roundtrips_through_snapshot")]
+    public void SourceBacklogItemIdRoundtripsThoughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Add a feature from backlog", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, "my-backlog-item-slug");
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), new FakeClock());
+        var restoredGoal = restored.GetGoal(goal.Id);
+
+        Assert.Equal("my-backlog-item-slug", restoredGoal.SourceBacklogItemId);
+    }
+
+    [Xunit.Fact(DisplayName = "SourceBacklogItemId_null_when_not_set_roundtrips_through_snapshot")]
+    public void SourceBacklogItemIdNullRoundtripsThoughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        kernel.CreateGoal("Plain goal", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), new FakeClock());
+        var restoredGoal = restored.Goals.Single();
+
+        Assert.True(restoredGoal.SourceBacklogItemId is null);
+    }
+
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_timeline_and_pending_input")]
     public void SnapshotRoundtripPreservesTimelineAndPendingInput()
 {

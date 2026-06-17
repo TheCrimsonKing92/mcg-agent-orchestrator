@@ -175,19 +175,19 @@ public static class DotnetBuildEnvironmentManager
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var stream = new FileStream(
-                environment.ExecutionLockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.ReadWrite);
             try
             {
-                stream.Lock(0, 1);
-                return stream;
+                // Holding the file open exclusively IS the lease lock — cross-platform, unlike
+                // FileStream.Lock (unsupported on macOS, CA1416). A competing holder fails the
+                // exclusive open with IOException, so we retry until the timeout.
+                return new FileStream(
+                    environment.ExecutionLockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
             }
             catch (IOException)
             {
-                stream.Dispose();
                 if (DateTimeOffset.UtcNow >= timeoutAt)
                 {
                     throw new IOException($"Timed out waiting for build lease execution lock: {environment.ExecutionLockPath}");

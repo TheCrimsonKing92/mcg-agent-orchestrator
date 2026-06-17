@@ -285,6 +285,265 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Contains(result.OutputTail!, text => text.Contains("bin/Debug/generated.dll", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_defers_granular_csproj_checks_to_solution_wide_run")]
+    public async Task GoalAcceptanceVerifierDefersGranularCsprojChecksToSolutionWideRun()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Infra.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "full dotnet tests", "type": "dotnet-test", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, calls.Count);
+        Assert.True(calls[1].SequenceEqual(["git", "diff", "--check"]));
+        AssertIsolatedTestCommand(calls[2]);
+        Assert.False(calls[2].Any(a => a.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(4, result.Checks!.Count);
+
+        var fullCheck = result.Checks.Single(c => c.Name == "full dotnet tests");
+        Assert.True(fullCheck.Passed);
+        Assert.True(fullCheck.ResultSummary?.Contains("Passed:", StringComparison.Ordinal) == true);
+
+        var coreCheck = result.Checks.Single(c => c.Name == "core tests");
+        Assert.True(coreCheck.Passed);
+        Assert.Equal("covered by: full dotnet tests", coreCheck.ResultSummary);
+        Assert.Equal(fullCheck.ArtifactsPath, coreCheck.ArtifactsPath);
+        Assert.Equal(fullCheck.LeaseId, coreCheck.LeaseId);
+
+        var infraCheck = result.Checks.Single(c => c.Name == "infrastructure tests");
+        Assert.True(infraCheck.Passed);
+        Assert.Equal("covered by: full dotnet tests", infraCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_solution_run_marks_deferred_checks_failed")]
+    public async Task GoalAcceptanceVerifierFailingSolutionRunMarksDeferredChecksFailed()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Infra.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "full dotnet tests", "type": "dotnet-test", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(1, "Failed! - Failed: 2, Passed: 3, Skipped: 0, Total: 5.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        Assert.False(result.Passed);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(3, calls.Count);
+        Assert.Equal(4, result.Checks!.Count);
+
+        var fullCheck = result.Checks.Single(c => c.Name == "full dotnet tests");
+        Assert.False(fullCheck.Passed);
+
+        var coreCheck = result.Checks.Single(c => c.Name == "core tests");
+        Assert.False(coreCheck.Passed);
+        Assert.Equal(1, coreCheck.ExitCode);
+        Assert.Equal("covered by: full dotnet tests", coreCheck.ResultSummary);
+        Assert.Equal(fullCheck.OutputTail, coreCheck.OutputTail);
+
+        var infraCheck = result.Checks.Single(c => c.Name == "infrastructure tests");
+        Assert.False(infraCheck.Passed);
+        Assert.Equal("covered by: full dotnet tests", infraCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_defers_sln_project_check_using_sln_file_content")]
+    public async Task GoalAcceptanceVerifierDefersSlnProjectCheckUsingSlnFileContent()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "extra tests", "type": "dotnet-test", "project": "tests/NotInSolution.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "full dotnet tests", "type": "dotnet-test", "project": "Fake.sln", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "Fake.sln"),
+            "Project(\"{FAE04EC0}\") = \"Core.Tests\", \"tests/Core.Tests.csproj\", \"{GUID}\"\nEndProject\n");
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3."),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        Assert.True(result.Passed);
+        // shutdown + sln run + extra tests (not in solution)
+        Assert.Equal(3, calls.Count);
+        Assert.Equal(3, result.Checks!.Count);
+
+        Assert.True(result.Checks.Single(c => c.Name == "full dotnet tests").Passed);
+        Assert.Equal("covered by: full dotnet tests",
+            result.Checks.Single(c => c.Name == "core tests").ResultSummary);
+        // "extra tests" ran for real (not synthesized), so ResultSummary is from actual output
+        Assert.False(result.Checks.Single(c => c.Name == "extra tests").ResultSummary
+            ?.StartsWith("covered by:", StringComparison.Ordinal) == true);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_injects_policy_required_checks_missing_from_manifest")]
+    public async Task GoalAcceptanceVerifierInjectsPolicyRequiredChecksMissingFromManifest()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),                                        // build-server shutdown
+            new(0, ""),                                        // git diff --check
+            new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5."),  // core tests
+            new(0, "Passed! - Failed: 0, Passed: 10, Skipped: 0, Total: 10.") // infrastructure tests
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        // Core source file → impact plan requires "core tests" + "infrastructure tests"
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(4, calls.Count);
+        Assert.True(calls[1].SequenceEqual(["git", "diff", "--check"]));
+        Assert.Equal("dotnet", calls[2][0]);
+        Assert.Equal("test", calls[2][1]);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+        Assert.Equal("dotnet", calls[3][0]);
+        Assert.Equal("test", calls[3][1]);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[3][2]);
+        Assert.Equal(3, result.Checks!.Count);
+        Assert.Equal("whitespace", result.Checks[0].Name);
+        Assert.True(result.Checks.Any(c => c.Name == "core tests" && c.Passed));
+        Assert.True(result.Checks.Any(c => c.Name == "infrastructure tests" && c.Passed));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dedupes_policy_injection_against_equivalent_manifest_check")]
+    public async Task GoalAcceptanceVerifierDedupesPolicyInjectionAgainstEquivalentManifestCheck()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),                                                          // build-server shutdown
+            new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5."),   // core tests (manifest)
+            new(0, "Passed! - Failed: 0, Passed: 10, Skipped: 0, Total: 10.")  // infrastructure tests (injected)
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        // Touching core source → impact plan produces "core tests" (already in manifest) + "infrastructure tests" (injected)
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, calls.Count);
+        // "core tests" runs exactly once (not duplicated by injection)
+        Assert.Equal(1, result.Checks!.Count(c => c.Name == "core tests"));
+        Assert.Equal(1, result.Checks!.Count(c => c.Name == "infrastructure tests"));
+        Assert.True(result.Checks.All(c => c.Passed));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_injected_policy_check_blocks_merge")]
+    public async Task GoalAcceptanceVerifierFailingInjectedPolicyCheckBlocksMerge()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),                                                            // build-server shutdown
+            new(1, "Failed! - Failed: 2, Passed: 3, Skipped: 0, Total: 5.")       // core tests (injected, fails)
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        // Core source file → impact plan requires "core tests", which gets injected and fails
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
+
+        Assert.False(result.Passed);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, calls.Count);
+        // "core tests" ran (injected) and failed; "infrastructure tests" was not reached
+        Assert.True(result.Checks!.Any(c => c.Name == "core tests" && !c.Passed));
+        Assert.False(result.Checks.Any(c => c.Name == "infrastructure tests"));
+    }
+
     private static void AssertIsolatedTestCommand(string[] args)
     {
         Assert.Equal("dotnet", args[0]);

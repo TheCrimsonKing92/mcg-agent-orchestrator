@@ -14,6 +14,13 @@ internal static class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
+        if (IsMetadataOnlyListing(args))
+        {
+            var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+            ConsoleViews.PrintGoals(summaries);
+            return false;
+        }
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
@@ -54,6 +61,14 @@ internal static class CliPersistentStateRunner
         workerProfiles = nextWorkerProfiles;
         currentGoal = nextCurrentGoal;
         return changed;
+    }
+
+    // Read-only goal listing: served from indexed metadata (no whole-store hydration, no save, no
+    // auto-reconcile sweep). Only the bare `goals` command qualifies — any extra args fall through
+    // to the normal transactional path so future `goals <filter>` forms keep working.
+    internal static bool IsMetadataOnlyListing(IReadOnlyList<string> args)
+    {
+        return args.Count == 1 && args[0].Equals("goals", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldRunInStateTransaction(string command)

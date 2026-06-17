@@ -101,6 +101,16 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
     }
 
+    if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitBacklogTextCommandWithFileFlag(command, remainder, "--body-file");
+    }
+
+    if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitBacklogTextCommandWithFileFlag(command, remainder, "--reason-file");
+    }
+
     if (command.Equals("goal", StringComparison.OrdinalIgnoreCase))
     {
         return SplitObjectiveCommandWithFlags(command, remainder);
@@ -150,7 +160,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("simple-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, remainder];
+        return SplitObjectiveCommandWithFlags(command, remainder);
     }
 
     if (command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -210,6 +220,34 @@ private static bool LooksLikePositionalGoalTask(string first, string second)
     return !first.StartsWith("--", StringComparison.Ordinal) &&
         (!int.TryParse(first, out _) || first.Length >= 8) &&
         int.TryParse(second, out _);
+}
+
+private static IReadOnlyList<string> SplitBacklogTextCommandWithFileFlag(string command, string remainder, string fileFlag)
+{
+    var targetEnd = remainder.IndexOf(' ');
+    if (targetEnd < 0)
+    {
+        return [command, remainder];
+    }
+
+    var target = remainder[..targetEnd];
+    var rest = remainder[(targetEnd + 1)..].Trim();
+    var flagIndex = rest.IndexOf($" {fileFlag}", StringComparison.OrdinalIgnoreCase);
+    if (flagIndex < 0 && rest.StartsWith(fileFlag, StringComparison.OrdinalIgnoreCase))
+    {
+        flagIndex = 0;
+    }
+
+    if (flagIndex < 0)
+    {
+        return [command, target, rest];
+    }
+
+    var inlineText = rest[..flagIndex].Trim();
+    var flags = rest[flagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    return string.IsNullOrWhiteSpace(inlineText)
+        ? [command, target, .. flags]
+        : [command, target, inlineText, .. flags];
 }
 
 private static IReadOnlyList<string> SplitObjectiveCommandWithFlags(string command, string remainder)

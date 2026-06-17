@@ -43,6 +43,7 @@ internal static partial class DashboardEndpoints
         context.Response.ContentType = "text/event-stream; charset=utf-8";
 
         var sinceEventId = ParseMonitoringSinceEventId(context.Request);
+        var sinceTickSeq = 0L;
         var nextSnapshotAt = DateTimeOffset.MinValue;
         while (!context.RequestAborted.IsCancellationRequested)
         {
@@ -68,6 +69,29 @@ internal static partial class DashboardEndpoints
                     DashboardMonitoringEvents.FormatEventId(evt.Id),
                     context.RequestAborted);
                 sinceEventId = evt.Id;
+            }
+
+            foreach (var tick in ConductorEventBus.GetSince(sinceTickSeq))
+            {
+                await DashboardMonitoringEvents.WriteServerSentEventAsync(
+                    context.Response.Body,
+                    DashboardMonitoringEvents.ConductorTickEventName,
+                    tick,
+                    id: null,
+                    context.RequestAborted);
+                sinceTickSeq = tick.Seq;
+                if (tick.ProgressLines is { Count: > 0 })
+                {
+                    foreach (var line in tick.ProgressLines)
+                    {
+                        await DashboardMonitoringEvents.WriteServerSentEventAsync(
+                            context.Response.Body,
+                            DashboardMonitoringEvents.ConductorProgressEventName,
+                            new { line },
+                            id: null,
+                            context.RequestAborted);
+                    }
+                }
             }
 
             await DashboardMonitoringEvents.WriteKeepAliveAsync(context.Response.Body, context.RequestAborted);

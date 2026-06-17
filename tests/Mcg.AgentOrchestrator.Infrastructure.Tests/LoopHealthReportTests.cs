@@ -176,6 +176,187 @@ public sealed class LoopHealthReportTests
         Assert.Equal(0.0, report.OperatorPromptsPerGoal);
         Assert.Equal(0.0, report.ReworkRetryRate);
         Assert.True(report.MedianTimeToAcceptanceHours is null);
+        Assert.Equal(0, report.JudgeVerdictDistributions.Count);
+        Assert.Equal(0.0, report.InterJudgeAgreementRate);
+        Assert.Equal(0.0, report.FalseBlockRate);
+        Assert.Equal(0.0, report.FalsePassRate);
+    }
+
+    // --- Semantic-acceptance judge agreement tests ---
+
+    [Xunit.Fact(DisplayName = "LoopHealth_judge_verdict_distribution_counts_met_not_met_and_no_verdict_per_judge")]
+    public void LoopHealthJudgeVerdictDistributionCountsMetNotMetAndNoVerdictPerJudge()
+    {
+        var receipts = new[]
+        {
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow,
+                "goal-1",
+                Consensus: true,
+                Judges:
+                [
+                    new SemanticJudgeReceiptEntry("judge-a", Valid: true,  CriteriaMet: true),
+                    new SemanticJudgeReceiptEntry("judge-b", Valid: false, CriteriaMet: false)
+                ]),
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow,
+                "goal-2",
+                Consensus: false,
+                Judges:
+                [
+                    new SemanticJudgeReceiptEntry("judge-a", Valid: true,  CriteriaMet: false)
+                ])
+        };
+
+        var report = LoopHealthReport.Build([], [], receipts: receipts);
+
+        var a = report.JudgeVerdictDistributions.Single(d => d.JudgeName == "judge-a");
+        var b = report.JudgeVerdictDistributions.Single(d => d.JudgeName == "judge-b");
+
+        Assert.Equal(1, a.MetCount);
+        Assert.Equal(1, a.NotMetCount);
+        Assert.Equal(0, a.NoVerdictCount);
+
+        Assert.Equal(0, b.MetCount);
+        Assert.Equal(0, b.NotMetCount);
+        Assert.Equal(1, b.NoVerdictCount);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealth_inter_judge_agreement_rate_is_fraction_of_receipts_where_all_valid_judges_agree")]
+    public void LoopHealthInterJudgeAgreementRateIsFractionOfReceiptsWhereAllValidJudgesAgree()
+    {
+        var receipts = new[]
+        {
+            // Both judges agree: MET
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, "g1", Consensus: true,
+                Judges:
+                [
+                    new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: true),
+                    new SemanticJudgeReceiptEntry("b", Valid: true, CriteriaMet: true)
+                ]),
+            // Judges disagree: a=MET, b=NOT-MET
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, "g2", Consensus: null,
+                Judges:
+                [
+                    new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: true),
+                    new SemanticJudgeReceiptEntry("b", Valid: true, CriteriaMet: false)
+                ]),
+            // Only one valid judge — excluded from denominator
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, "g3", Consensus: false,
+                Judges:
+                [
+                    new SemanticJudgeReceiptEntry("a", Valid: true,  CriteriaMet: false),
+                    new SemanticJudgeReceiptEntry("b", Valid: false, CriteriaMet: false)
+                ])
+        };
+
+        var report = LoopHealthReport.Build([], [], receipts: receipts);
+
+        // 2 receipts with 2+ valid judges; 1 agrees → 0.5
+        Assert.True(Math.Abs(report.InterJudgeAgreementRate - 0.5) < 0.01);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealth_inter_judge_agreement_rate_is_zero_when_no_receipt_has_multiple_valid_judges")]
+    public void LoopHealthInterJudgeAgreementRateIsZeroWhenNoReceiptHasMultipleValidJudges()
+    {
+        var receipts = new[]
+        {
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, "g1", Consensus: true,
+                Judges: [new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: true)])
+        };
+
+        var report = LoopHealthReport.Build([], [], receipts: receipts);
+
+        Assert.Equal(0.0, report.InterJudgeAgreementRate);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealth_false_block_rate_counts_consensus_not_met_for_completed_goals")]
+    public void LoopHealthFalseBlockRateCountsConsensusNotMetForCompletedGoals()
+    {
+        var kernel = new AgentOrchestratorKernel();
+
+        var completedGoal = kernel.CreateGoal("Completed goal", [MakeTask()]);
+        kernel.ActivateGoal(completedGoal.Id, DefaultAgents);
+        RecordCompletedDispatch(kernel, completedGoal, completedGoal.Tasks[0], "Anthropic", "claude-sonnet-4-6");
+
+        var cancelledGoal = kernel.CreateGoal("Cancelled goal", [MakeTask()]);
+        kernel.ActivateGoal(cancelledGoal.Id, DefaultAgents);
+        kernel.CancelGoal(cancelledGoal.Id, "Abandoned by operator.");
+
+        // consensus=false for the completed goal → false-block
+        // consensus=false for the cancelled goal → not a false-block
+        var receipts = new[]
+        {
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, completedGoal.Id.Value, Consensus: false,
+                Judges: [new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: false)]),
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, cancelledGoal.Id.Value, Consensus: false,
+                Judges: [new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: false)])
+        };
+
+        var report = LoopHealthReport.Build(kernel.Goals, kernel.HumanInputRequests, receipts: receipts);
+
+        // 1 false-block out of 2 terminal receipts
+        Assert.True(Math.Abs(report.FalseBlockRate - 0.5) < 0.01);
+        Assert.Equal(0.0, report.FalsePassRate);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealth_false_pass_rate_counts_consensus_met_for_failed_or_cancelled_goals")]
+    public void LoopHealthFalsePassRateCountsConsensusMetForFailedOrCancelledGoals()
+    {
+        var kernel = new AgentOrchestratorKernel();
+
+        var completedGoal = kernel.CreateGoal("Completed goal", [MakeTask()]);
+        kernel.ActivateGoal(completedGoal.Id, DefaultAgents);
+        RecordCompletedDispatch(kernel, completedGoal, completedGoal.Tasks[0], "Anthropic", "claude-sonnet-4-6");
+
+        var cancelledGoal = kernel.CreateGoal("Cancelled goal", [MakeTask()]);
+        kernel.ActivateGoal(cancelledGoal.Id, DefaultAgents);
+        kernel.CancelGoal(cancelledGoal.Id, "Abandoned by operator.");
+
+        // consensus=true for completed → true positive (no error)
+        // consensus=true for cancelled → false-pass
+        var receipts = new[]
+        {
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, completedGoal.Id.Value, Consensus: true,
+                Judges: [new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: true)]),
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, cancelledGoal.Id.Value, Consensus: true,
+                Judges: [new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: true)])
+        };
+
+        var report = LoopHealthReport.Build(kernel.Goals, kernel.HumanInputRequests, receipts: receipts);
+
+        // 1 false-pass out of 2 terminal receipts
+        Assert.Equal(0.0, report.FalseBlockRate);
+        Assert.True(Math.Abs(report.FalsePassRate - 0.5) < 0.01);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealth_active_goals_excluded_from_false_block_and_false_pass_denominator")]
+    public void LoopHealthActiveGoalsExcludedFromFalseBlockAndFalsePassDenominator()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var activeGoal = kernel.CreateGoal("Active goal", [MakeTask()]);
+        kernel.ActivateGoal(activeGoal.Id, DefaultAgents);
+
+        var receipts = new[]
+        {
+            new SemanticAcceptanceReceipt(
+                DateTimeOffset.UtcNow, activeGoal.Id.Value, Consensus: false,
+                Judges: [new SemanticJudgeReceiptEntry("a", Valid: true, CriteriaMet: false)])
+        };
+
+        var report = LoopHealthReport.Build(kernel.Goals, kernel.HumanInputRequests, receipts: receipts);
+
+        // Active goal is not terminal; denominator = 0 → both rates are 0.0
+        Assert.Equal(0.0, report.FalseBlockRate);
+        Assert.Equal(0.0, report.FalsePassRate);
     }
 
     // Builds the canonical three-goal fixture.

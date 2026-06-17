@@ -175,6 +175,68 @@ public sealed class WorkerProfileTests
     Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--permission-mode {permissionMode}", StringComparison.Ordinal));
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(restored.GetRequired("claude-cli").CommandTemplate).IsPatchCapable);
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_save_leaves_no_tmp_file")]
+    public void WorkerProfileStoreSaveLeavesNoTmpFile()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+
+    WorkerProfileStore.Save(path, WorkerProfileCatalog.Default());
+
+    Assert.False(File.Exists(path + ".tmp"));
+    Assert.True(File.Exists(path));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_corrupt_file_recovers_from_bak")]
+    public void WorkerProfileStoreCorruptFileRecoversFromBak()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var firstCatalog = new WorkerProfileCatalog([new WorkerProfile("bak-agent", "bak-agent-cli {promptPath}")]);
+
+    // First save writes path; second save moves path → .bak and writes new content
+    WorkerProfileStore.Save(path, firstCatalog);
+    WorkerProfileStore.Save(path, WorkerProfileCatalog.Default());
+    File.WriteAllText(path, "{{corrupt}}");
+
+    var recovered = WorkerProfileStore.Load(path);
+
+    Assert.Equal("bak-agent-cli {promptPath}", recovered.GetRequired("bak-agent").CommandTemplate);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_corrupt_file_without_bak_falls_back_to_defaults")]
+    public void WorkerProfileStoreCorruptFileWithoutBakFallsBackToDefaults()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    File.WriteAllText(path, "{{corrupt}}");
+
+    var catalog = WorkerProfileStore.Load(path);
+
+    Assert.Contains(catalog.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_required_corrupt_file_recovers_from_bak")]
+    public void WorkerProfileStoreLoadRequiredCorruptFileRecoversFromBak()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var firstCatalog = new WorkerProfileCatalog([new WorkerProfile("bak-agent", "bak-agent-cli {promptPath}")]);
+
+    WorkerProfileStore.Save(path, firstCatalog);
+    WorkerProfileStore.Save(path, new WorkerProfileCatalog([new WorkerProfile("other", "other-cli {promptPath}")]));
+    File.WriteAllText(path, "{{corrupt}}");
+
+    var recovered = WorkerProfileStore.LoadRequired(path);
+
+    Assert.Equal("bak-agent-cli {promptPath}", recovered.GetRequired("bak-agent").CommandTemplate);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_required_corrupt_without_bak_throws")]
+    public void WorkerProfileStoreLoadRequiredCorruptWithoutBakThrows()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    File.WriteAllText(path, "{{corrupt}}");
+
+    Assert.Throws<InvalidDataException>(() => WorkerProfileStore.LoadRequired(path));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_required_rejects_missing_or_empty_files")]
     public void WorkerProfileStoreLoadRequiredRejectsMissingOrEmptyFiles()
 {

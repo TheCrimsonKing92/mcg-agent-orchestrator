@@ -2,48 +2,7 @@
 
 Windows-oriented agent orchestrator for software development goals.
 
-This repository currently contains the first tested orchestration kernel:
-
-- Create a software development goal.
-- Decompose it into standard SDLC tasks.
-- Add custom role-scoped tasks to an existing goal.
-- Attach role-specific verification plans to tasks before work starts.
-- Delegate tasks to role-matched agents.
-- Retry delegation for pending tasks when agent availability changes.
-- Configure role-to-model agent assignments without editing code.
-- Track status and timeline events.
-- Pause a goal/task for human input.
-- Resume work when human input is submitted.
-- Let model-backed agents and local worker CLIs request human input by emitting a `HUMAN_INPUT:` directive.
-- Represent OpenAI, Anthropic, and Ollama models through provider-agnostic model profiles.
-- Validate OpenAI and Anthropic HTTP adapter request/response behavior without network access.
-- Persist local orchestration state in `.orchestrator/state.json`.
-- Run an assigned task through the task's assigned model provider.
-- Use offline scripted providers by default, or live OpenAI/Anthropic/Ollama HTTP providers when available.
-- Smoke-test live OpenAI/Anthropic/Ollama connectivity explicitly, optionally recording the result as task verification evidence.
-- Map assigned OpenAI and Anthropic agents to default local subscription worker profiles (`codex-cli` and `claude-cli`) when CLI bridges are available.
-- Dispatch task instructions to a named worker for auditable human or agent follow-through.
-- Prepare dispatches for all assigned tasks from one worker profile.
-- Execute the latest dispatch for a task in the foreground and capture its result.
-- Start the latest dispatch in a background process and refresh it later to collect logs and exit status.
-- Start or refresh all running dispatches as a batch for parallel local worker execution, including ready/skipped task reasons.
-- Inspect captured stdout, stderr, and exit-code logs from background dispatches.
-- Cancel a running background dispatch and persist the cancellation state.
-- Record local verification command results on a task, including exit code, stdout, stderr, and timestamp.
-- Retain verification history per task while still showing the latest verification in summaries.
-- Monitor task counts and attention items across a goal.
-- Report verification gates, a goal acceptance summary, a goal evidence summary, SDLC stage readiness, and a focused verification worklist before accepting a goal as complete.
-- Report a focused human input worklist for pending operator questions.
-- Generate role-specific task briefs for local worker or coding-agent CLIs.
-- Dispatch configurable worker command templates using generated prompt files.
-- Store reusable worker command profiles under `.orchestrator/workers.json`.
-- Store reusable agent role/model assignments under `.orchestrator/agents.json`.
-- Validate model-provider credentials, agent/provider configuration, and worker command availability with a setup doctor.
-- Export a static HTML dashboard for a lightweight visual monitoring surface with next-action suggestions.
-- Launch the hosted dashboard in a browser for a Windows-friendly operator surface.
-- Export a Markdown transcript for handoff, review, and audit.
-
-The core deliberately does not automate browser sessions or consumer chat subscriptions. Existing subscriptions can be used through approved local CLI bridges such as the default Codex CLI and Claude CLI worker profiles.
+This repository contains the orchestration kernel: create a goal, decompose it into SDLC tasks, delegate each task to a role-matched agent, monitor dispatch and verification, and accept the result into `main`. The core deliberately does not automate browser sessions or consumer chat subscriptions. Existing subscriptions can be used through approved local CLI bridges such as the default Codex CLI and Claude CLI worker profiles.
 
 ## Projects
 
@@ -66,7 +25,7 @@ dotnet run --no-build --project tests\Mcg.AgentOrchestrator.Infrastructure.Tests
 dotnet run --no-build --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -c Release -- prototype
 ```
 
-## Windows Usage
+## Windows Setup
 
 From a checkout, use the launcher when you do not want to repeat the project path:
 
@@ -74,7 +33,6 @@ From a checkout, use the launcher when you do not want to repeat the project pat
 mcg-orchestrator.cmd doctor
 mcg-orchestrator.cmd goal "Build feature X"
 mcg-orchestrator.cmd open-dashboard http://localhost:5087/ --refresh 5
-mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5
 ```
 
 To publish a local Windows executable:
@@ -86,6 +44,96 @@ To publish a local Windows executable:
 
 The default publish is framework-dependent and single-file for `win-x64`. Add `-SelfContained` when you need a larger build that does not rely on a locally installed .NET runtime.
 
+---
+
+# FUNDAMENTALS
+
+The CLI centers on six alias verbs. All other verbs are covered in [ADVANCED](#advanced).
+
+## Core Loop
+
+```text
+simple-goal "Build feature X"          # create a single-Developer goal
+  (or: goal "Build feature X" --simple)
+  (or: goal --brief-file brief.md)
+subscription-dispatch 1                # prepare dispatch for the first task
+start-dispatch 1 --confirm-dispatch-start
+refresh-dispatch 1                     # collect result once the worker exits
+accept                                 # merge to main when all tasks pass
+```
+
+Use `next` at any point to see the prioritized recommended next command for where the goal stands. Use `next --full` for a complete inspection view.
+
+## `next` / `next --full`
+
+```text
+next [goal-id]
+next [goal-id] --full
+```
+
+`next` prints prioritized recommended follow-up commands covering pending human input, failed tasks, failed verification, running dispatches, missing verification, assigned work, and pending tasks.
+
+`next --full` expands the view with the full goal inspection: status, monitor, readiness preflight, evidence summary, stage readiness, verification gates, verification and human-input worklists, subscription plan, model outcomes, loop health, failure triage, recovery plan, supervisor plan, and operator inbox.
+
+## `goal`
+
+```text
+goal <objective>
+goal --brief-file <path>
+goal <objective> --simple
+goal --brief-file <path> --simple
+```
+
+`goal <objective>` creates a five-role goal (Planner → Researcher → Developer → Tester → Reviewer) and activates it for delegation. Pass `--brief-file <path>` to read the objective from a file instead of the command line — useful for long multi-line briefs.
+
+Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`). `simple-goal <objective>` and `simple-goal --brief-file <path>` are the direct single-task forms.
+
+## `accept`
+
+```text
+accept [goal-id] [--skip-verify] [--keep-workspace] [--autonomy <policy>]
+```
+
+Runs the goal acceptance check, fast-forwards the goal branch into `main`, auto-records a dogfood log entry, and removes the goal worktree. Stops before any gate that has not passed. Add `--skip-verify` only when deliberately bypassing the verification check, `--keep-workspace` to skip worktree removal, and `--autonomy` to override the default policy.
+
+## `stop`
+
+```text
+stop <goal-id-prefix> <reason> --as cancel|park|rollback|abandon|supersede
+```
+
+Stops a goal using the named disposal mode:
+
+- `cancel` — mark the goal stopped
+- `supersede` — mark the goal stopped with replacement implied
+- `park` — pause the goal for later resumption
+- `rollback` — revert the goal branch to its pre-work state
+- `abandon` — remove all goal artifacts including the worktree
+
+## `config`
+
+```text
+config agents
+config profiles
+config policy
+config doctor
+```
+
+Displays read-only configuration state. `agents` lists role-to-model assignments; `profiles` lists saved worker command templates; `policy` lists autonomy policy presets; `doctor` runs the setup health check (equivalent to the standalone `doctor` verb).
+
+## `dashboard`
+
+```text
+dashboard [path] [--refresh seconds]
+dashboard --mode local|hosted|read-only [url] [--refresh seconds]
+```
+
+Without `--mode`, writes a static HTML dashboard to `.orchestrator/dashboard.html` (or the specified path). Add `--refresh 10` to embed a browser auto-refresh interval. With `--mode local` or `--mode hosted`, hosts the live interactive dashboard on a local HTTP endpoint. Use `--mode read-only` for a browsable read-only view. See [Dashboard & SSE Monitoring](#dashboard--sse-monitoring) for the full hosted dashboard, browser scripting, and JSON API endpoints.
+
+---
+
+# ADVANCED
+
 ## Interactive Console
 
 ```powershell
@@ -93,7 +141,31 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 .\mcg-orchestrator.cmd
 ```
 
-Commands:
+The same verbs run as one-shot CLI commands:
+
+```powershell
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- goal "Build feature X"
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- doctor
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- provider-smoke openai --confirm-paid-smoke 4
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dashboard
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- serve-dashboard http://localhost:5087/ --refresh 5
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- open-dashboard
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agents
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Reviewer OpenAI gpt-5.2 "OpenAI reviewer"
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- status
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- next
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch 3
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatch 3 --confirm-dispatch-start
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatch 3
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- accept
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- tasks status Assigned role Developer
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- brief 3
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verify 4 "dotnet --version"
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verify-manual 4 passed "Manual smoke looked correct"
+dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- pending
+```
+
+## Full Verb Surface
 
 ```text
 doctor
@@ -159,81 +231,26 @@ progress <task-number> <running|completed|failed|cancelled> <message>
 ask <task-number> <question>
 ask-goal <question>
 answer <request-id> <answer>
+model-functions
+model-function-add <purpose> <lane> <provider> <model> [name]
+accept [goal-id] [--skip-verify] [--keep-workspace] [--autonomy <policy>]
+stop <goal-id-prefix> <reason> --as cancel|park|rollback|abandon|supersede
+config <agents|profiles|policy|doctor>
+conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]
 exit
-```
-
-The same commands can be run as one-shot CLI commands:
-
-```powershell
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- goal "Build feature X"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- doctor
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- provider-smoke openai --confirm-paid-smoke 4
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- prototype-ui http://localhost:5087/ --refresh 5
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dashboard
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dashboard .orchestrator\dashboard.html --refresh 10
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- serve-dashboard http://localhost:5087/ --refresh 5
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- open-dashboard
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- transcript
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agents
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Reviewer OpenAI gpt-5.2 "OpenAI reviewer"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- status
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- monitor
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- acceptance
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- evidence
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- stages
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- gates
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verify-needed
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- input-needed
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- next
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-plan
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- advance
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- advance-subscription --confirm-subscription-advance
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- delegate
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- ask-goal "Which repository should this goal target?"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- tasks status Assigned role Developer
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- tasks evidence failed-verification
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- tasks event TaskDispatchRecorded
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- add-task Developer "Implement retry handling"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verification-plan 3 "Run dotnet build and focused tests before acceptance"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- task-timeline 6
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- brief 3
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- run 3 --confirm-paid-api-run
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- api-run 3 --confirm-paid-api-run
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- retry 3 "Retry after failed verification"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dispatch 3 local "dotnet --version"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-profiles
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-profile echo-title "Write-Output {title}"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-profile-check echo-title
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-profile-export .orchestrator\workers.backup.json
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-profile-import .orchestrator\workers.backup.json merge
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- worker-dispatch 3 local "Write-Output {promptPath}"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- profile-dispatch 3 echo-title
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- profile-dispatch-ready local-echo
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch 3
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- subscription-dispatch-ready
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-subscription-ready --confirm-batch-start --confirm-large-paid-subscription-start
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- execute-dispatch 3 --confirm-dispatch-start --confirm-large-paid-subscription-start
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatch 3 --confirm-dispatch-start
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- start-dispatches --confirm-batch-start
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatch 3
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- refresh-dispatches
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- logs 3 all
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- cancel-dispatch 3
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verify 4 "dotnet --version"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verify-manual 4 passed "Manual smoke looked correct"
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- verifications 4
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- pending
 ```
 
 `task` accepts either a display number or a task id prefix. `tasks` lists the current goal's tasks and can filter by `status`, `role`, task `id` prefix, evidence kind, and timeline event kind. Evidence kinds include `none`, `execution`, `dispatch`, `process`, `running-process`, `completed-process`, `verification`, `passed-verification`, and `failed-verification`. Timeline event kinds match `ProgressKind` names such as `TaskDispatchRecorded` or `TaskVerificationRecorded`. `add-task` appends a custom task to the current goal and delegates it immediately when a matching available agent role exists. Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. `verification-plan <task-number>` prints the current task plan; add plan text to update the pre-work verification checklist included in task details, prompts, transcripts, and the dashboard. Use `task-timeline` to inspect only the events for one task.
 
-`next` prints prioritized recommended follow-up commands for pending human input, failed tasks, failed verification, running dispatches, missing verification, assigned work, and pending tasks. `advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task; add `--confirm-subscription-advance` when deliberately using that path, and add `--confirm-large-paid-subscription-start` when the selected paid subscription prompt is large enough to require explicit cost confirmation. `delegate` reruns role-based assignment for pending tasks.
+`advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task; add `--confirm-subscription-advance` when deliberately using that path, and add `--confirm-large-paid-subscription-start` when the selected paid subscription prompt is large enough to require explicit cost confirmation. `delegate` reruns role-based assignment for pending tasks.
 
 `retry <task-number> <message>` reopens a failed, cancelled, or rework-needed task. The message is required so clearing execution or verification evidence has an explicit rework reason. Retry preserves prior execution and verification history, clears the latest verification gate, and moves assigned tasks back to `Assigned` so they can be run or dispatched again. Running tasks must be refreshed or cancelled before retrying, and tasks waiting for human input must be answered first.
 
 `acceptance` reports whether the goal is accepted, how many task gates have passed, pending human input count, open verification count, and concrete blockers with suggested commands. `evidence` rolls up execution, dispatch, process, verification, and pending-human-input evidence across every task so the goal can be audited from one command. `stages` maps each SDLC task to a readiness state such as `ReadyToRun`, `InProgress`, `NeedsVerification`, `VerificationFailed`, or `Verified`, with the next command for that stage. `gates` reports whether each task is accepted for completion. `verify-needed` lists only open verification work and prints a suggested command for each task that is not ready, missing verification, or has failed verification. A task gate passes only when the task is completed and its latest verification succeeded. A goal is marked `Completed` only after every task gate passes.
 
 `ask <task-number> <question>` opens a task-scoped human input request. `ask-goal <question>` opens a goal-scoped request when the orchestrator needs clarification that is not tied to one task. `input-needed` lists only pending human input for the current or selected goal, including task context when available, and prints the `answer <request-id> <answer>` command for each open request. `pending` keeps the broader all-goals pending-input view. Model-backed agents, foreground dispatches, and refreshed background dispatches can request operator input by emitting a line that starts with `HUMAN_INPUT:` followed by the exact question; the task and goal pause until the request is answered.
+
+## Dispatch Internals
 
 `dispatch` records work intent and marks the task running. `execute-dispatch <task-number> --confirm-dispatch-start` runs the latest dispatch command synchronously from the recorded working directory, records stdout/stderr/exit code, and marks the task completed on exit code `0` or failed otherwise, unless stdout or stderr includes `HUMAN_INPUT:` and pauses the task for operator input. Add `--confirm-large-paid-subscription-start` when the recorded paid subscription dispatch has a large prompt.
 
@@ -272,8 +289,7 @@ $env:ANTHROPIC_API_KEY = "<api-key>"
 $env:ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ```
 
-The OpenAI adapter calls the Responses API. The Anthropic adapter calls the Messages API.
-Both adapters are covered by offline fake-HTTP tests for request shape, authentication headers, response parsing, and HTTP error handling.
+The OpenAI adapter calls the Responses API. The Anthropic adapter calls the Messages API. Both adapters are covered by offline fake-HTTP tests for request shape, authentication headers, response parsing, and HTTP error handling.
 
 ### Ollama (Local Models)
 
@@ -308,7 +324,11 @@ Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to
 
 `doctor` does not make network calls. Use `provider-smoke` when you want to prove live model connectivity.
 
-## Monitoring
+## Semantic Acceptance Judges / Model Functions
+
+`model-functions` lists the orchestrator's internal model function bindings — models the orchestrator invokes for its own functions such as acceptance judges, not worker agents assigned to goal tasks. `model-function-add <purpose> <lane> <provider> <model> [name]` registers a new binding. Unlike agent role assignments, model functions use an open `purpose` string and are stored under `.orchestrator/model-functions.json`. They compose with deterministic gates — LLM judgment results land advisory and never replace a deterministic acceptance gate.
+
+## Dashboard & SSE Monitoring
 
 `monitor [goal-id]` reports task status counts, pending human input, last timeline event time, and attention items for:
 
@@ -351,7 +371,7 @@ For a full Windows build/test cycle while the dashboard is running, use the coor
 
 The helper consumes `/api/system/build-test-cleanup`, stops only exact dashboard PIDs listed by the dashboard plan, runs `dotnet build` and `dotnet test` sequentially, restarts `prototype-ui`, and waits for `/health`.
 
-The dashboard host also exposes local JSON endpoints for scripted monitoring and future UI surfaces:
+The dashboard host exposes local JSON endpoints for scripted monitoring and future UI surfaces:
 
 - `/health`
 - `/api/health` or `/api/doctor`

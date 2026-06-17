@@ -100,13 +100,8 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        try
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
-
             var tenantChanged = CliCommandDispatcher.ExecuteCommand(
                 ["tenant"],
                 kernel,
@@ -126,13 +121,7 @@ public sealed class CliCommandTests
 
             Xunit.Assert.False(tenantChanged);
             Xunit.Assert.False(architectureChanged);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.Contains("Tenant: acme", output);
         Xunit.Assert.Contains("Tenant scoped: True", output);
         Xunit.Assert.Contains(Path.Combine(".orchestrator", "tenants", "acme", "state.json"), output);
@@ -212,7 +201,7 @@ public sealed class CliCommandTests
             "gpt-5.3-codex",
             "medium",
             TaskComplexity.Complex,
-            12001));
+            20000));
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
         var command = ConsoleViews.BuildSuggestedCommand(goal, action);
@@ -350,20 +339,7 @@ public sealed class CliCommandTests
             "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
             string.Empty,
             DateTimeOffset.UtcNow));
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]));
         Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
         Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try local Ollama/qwen3:8b via agent configuration before paid API run.", output);
     }
@@ -446,13 +422,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["backlog-intake", "dashboard operator inbox"],
                 kernel,
@@ -461,13 +433,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Empty(kernel.Goals);
@@ -498,13 +464,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["backlog-intake", "build/test broker", "--create-simple-goal"],
                 kernel,
@@ -513,11 +475,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        });
 
         Xunit.Assert.True(changed);
         Xunit.Assert.NotNull(currentGoal);
@@ -525,7 +483,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Single(currentGoal!.Tasks);
         Xunit.Assert.Contains("Backlog slice: Add deterministic build/test broker", currentGoal.Objective);
         Xunit.Assert.Contains("scripts/Invoke-IsolatedDotnet.ps1", currentGoal.Objective);
-        Xunit.Assert.Contains("Created simple goal from backlog slice.", writer.ToString());
+        Xunit.Assert.Contains("Created simple goal from backlog slice.", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_plan_prints_dependency_graph_without_mutating_state")]
@@ -539,13 +497,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal-plan"],
                 kernel,
@@ -554,13 +508,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Empty(kernel.Goals);
@@ -584,13 +532,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal", "Update docs/usage.md to explain goal objective planning"],
                 kernel,
@@ -599,13 +543,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.True(changed);
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Single(kernel.Goals);
@@ -671,13 +609,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["intent-template", "feature", "Add dashboard action recommendations"],
                 kernel,
@@ -686,13 +620,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Empty(kernel.Goals);
@@ -715,13 +643,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["intent-template", "dashboard", "Expose failure triage in the goal page", "--create-simple-goal"],
                 kernel,
@@ -730,11 +654,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        });
 
         Xunit.Assert.True(changed);
         Xunit.Assert.NotNull(currentGoal);
@@ -744,7 +664,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Request: Expose failure triage in the goal page", currentGoal.Objective);
         Xunit.Assert.Contains("Expose the same state through API DTOs before relying on rendered HTML.", currentGoal.Objective);
         Xunit.Assert.Contains("Run focused dashboard rendering/API tests.", currentGoal.Objective);
-        Xunit.Assert.Contains("Created simple goal from intent template.", writer.ToString());
+        Xunit.Assert.Contains("Created simple goal from intent template.", output);
     }
 
     [Xunit.Fact(DisplayName = "GoalDependencyPlanner_compiles_stable_graph_and_batches_independent_scopes")]
@@ -813,13 +733,9 @@ public sealed class CliCommandTests
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal-plan", "--create-simple-goals"],
                 kernel,
@@ -828,18 +744,14 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        });
 
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(3, kernel.Goals.Count);
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.DoesNotContain(kernel.Goals, goal => goal.Objective.Contains("Explicit dependencies:", StringComparison.Ordinal));
         Xunit.Assert.All(kernel.Goals, goal => Xunit.Assert.Single(goal.Tasks));
-        Xunit.Assert.Contains("Created simple goal", writer.ToString());
+        Xunit.Assert.Contains("Created simple goal", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_recovery_reports_stale_process_and_resume_commands")]
@@ -860,13 +772,9 @@ public sealed class CliCommandTests
             goal.Id,
             task.Id,
             new TaskProcessRecord(999999, "codex exec prompt.md", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        bool changed;
-        try
+        bool changed = false;
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             changed = CliCommandDispatcher.ExecuteCommand(
                 ["goal-recovery"],
                 kernel,
@@ -875,13 +783,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        });
         Xunit.Assert.False(changed);
         Xunit.Assert.Contains("Goal recovery", output);
         Xunit.Assert.Contains("recorded process pid=999999 is not alive", output);
@@ -962,27 +864,14 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Worker reported done.");
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        try
-        {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
         Xunit.Assert.Contains("task completed without verification evidence", output);
         Xunit.Assert.Contains("command: verify 1 <command>", output);
     }
@@ -1748,26 +1637,14 @@ public sealed class CliCommandTests
         RunGit(worktree, "add", "-A");
         RunGit(worktree, "commit", "-m", "Shared infrastructure change");
 
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
         Xunit.Assert.Contains("Change classification:", output);
         Xunit.Assert.Contains("broad=True", output);
         Xunit.Assert.Contains("shared infrastructure changed", output);
@@ -1812,26 +1689,14 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         GoalOperationJournal.Begin(root, goal, "acceptance", "acceptance started before interruption");
 
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
         Xunit.Assert.Contains("Operation journal:", output);
         Xunit.Assert.Contains("Interrupted operations:", output);
         Xunit.Assert.Contains("acceptance", output);
@@ -1854,27 +1719,22 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
         MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
+        string output;
         try
         {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
+            output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["goal-recovery", goal.Id.Value[..8]],
                 kernel,
                 workspace,
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal));
         }
         finally
         {
-            Console.SetOut(originalOut);
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
         }
-
-        var output = writer.ToString();
         Xunit.Assert.Contains("Build lease: goal-", output);
         Xunit.Assert.Contains("canCleanup=True", output);
         Xunit.Assert.Contains("goal build lease is orphaned", output);
@@ -1907,27 +1767,24 @@ public sealed class CliCommandTests
             ref currentGoal));
         Xunit.Assert.Contains("--confirm-build-lease-cleanup", blocked.Message);
 
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
+        string leaseOutput;
         try
         {
-            Console.SetOut(writer);
-            CliCommandDispatcher.ExecuteCommand(
+            leaseOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["build-lease-cleanup", goal.Id.Value[..8], "--confirm-build-lease-cleanup"],
                 kernel,
                 workspace,
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal));
         }
         finally
         {
-            Console.SetOut(originalOut);
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
         }
 
-        Xunit.Assert.Contains("Deleted orphaned build lease", writer.ToString());
+        Xunit.Assert.Contains("Deleted orphaned build lease", leaseOutput);
         Xunit.Assert.False(Directory.Exists(environment.RootPath));
     }
 
@@ -2106,6 +1963,101 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(latestGoal.Tasks.Single().LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_goal_flag_targets_named_goal_over_current")]
+    public void CliSubscriptionDispatchGoalFlagTargetsNamedGoalOverCurrent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var olderGoal = kernel.CreateGoal(
+            "Keep older worker reachable",
+            [new TaskSpec(TaskId.New(), "Do older work", AgentRole.Developer)]);
+        var latestGoal = kernel.CreateGoal(
+            "Do newer work",
+            [new TaskSpec(TaskId.New(), "Do newer work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = latestGoal;
+        kernel.ActivateGoal(olderGoal.Id, agents);
+        kernel.ActivateGoal(latestGoal.Id, agents);
+        var olderWorktreePath = GoalWorktrees.WorktreePath(root, olderGoal.Id);
+        Directory.CreateDirectory(olderWorktreePath);
+        File.WriteAllText(Path.Combine(olderWorktreePath, ".git"), "gitdir: ..");
+        var olderGoalPrefix = olderGoal.Id.Value[..8];
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1", "--goal", olderGoalPrefix],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(olderGoal.Id, currentGoal!.Id);
+        Xunit.Assert.NotNull(olderGoal.Tasks.Single().LastDispatch);
+        Xunit.Assert.Null(latestGoal.Tasks.Single().LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_already_verified_task_throws_with_goal_context")]
+    public void CliSubscriptionDispatchAlreadyVerifiedTaskThrowsWithGoalContext()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Target goal",
+            [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id,
+            new TaskVerificationRecord("check", root, 0, "passed", "", DateTimeOffset.UtcNow));
+
+        InvalidOperationException? ex = null;
+        try
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["subscription-dispatch", "1"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+        catch (InvalidOperationException caught)
+        {
+            ex = caught;
+        }
+
+        Xunit.Assert.NotNull(ex);
+        Xunit.Assert.Contains(goal.Id.Value[..8], ex!.Message);
+        Xunit.Assert.Contains("task 1", ex.Message);
+        Xunit.Assert.Contains("passing verification", ex.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_logs_stream_arg_is_not_misinterpreted_as_goal_prefix")]
     public void CliLogsStreamArgIsNotMisinterpretedAsGoalPrefix()
     {
@@ -2167,22 +2119,11 @@ public sealed class CliCommandTests
 """);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-        using var writer = new StringWriter();
-        var originalOut = Console.Out;
-
-        try
+        var output = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             ConsoleViews.PrintTask(goal, task);
             ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
-
+        });
         Xunit.Assert.Contains("heartbeat: available state=running pid=777 child_pid=888", output);
         Xunit.Assert.Contains($"heartbeat path: {BackgroundDispatchRunner.GetHeartbeatPath(process)}", output);
         Xunit.Assert.Contains("log bytes: stdout=123 stderr=45", output);
@@ -2726,12 +2667,9 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var task = goal.Tasks.Single();
 
-        using var writer = new StringWriter();
-        var originalOut = Console.Out;
-        bool dispatched;
-        try
+        bool dispatched = false;
+        var dispatchOutput = CaptureConsole(() =>
         {
-            Console.SetOut(writer);
             dispatched = CliCommandDispatcher.ExecuteCommand(
                 ["profile-dispatch", "1", "codex-cli"],
                 kernel,
@@ -2740,13 +2678,7 @@ public sealed class CliCommandTests
                 providers,
                 ref profiles,
                 ref currentGoal);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var dispatchOutput = writer.ToString();
+        });
         var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
 
         Xunit.Assert.True(dispatched);
@@ -2884,20 +2816,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.DoesNotContain("Ready start risk:", output);
         Xunit.Assert.DoesNotContain("--confirm-large-paid-subscription-start", output);
         Xunit.Assert.Contains("gpt-5.5", output);
@@ -2923,20 +2842,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 8500);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("estPrompt=8500chars", output);
         Xunit.Assert.Contains("budget=9000chars headroom=500chars", output);
     }
@@ -2960,20 +2866,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 1200);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("route: Selected", output);
         Xunit.Assert.Contains("reason: role=Developer", output);
         Xunit.Assert.Contains("reason: provider=OpenAI", output);
@@ -2999,20 +2892,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 9100);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("estPrompt=9100chars", output);
         Xunit.Assert.Contains("budget=8000chars over=1100chars", output);
     }
@@ -3045,20 +2925,7 @@ public sealed class CliCommandTests
             [agent],
             WorkerProfileCatalog.Default(),
             task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-
-            ConsoleViews.PrintSubscriptionPlan(plan);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
-        var output = writer.ToString();
+        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("prior fit 1: overkill 1", output);
         Xunit.Assert.Contains("shapes copy-only change", output);
         Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", output);
@@ -3749,7 +3616,7 @@ public sealed class CliCommandTests
             ref currentGoal);
 
         var developer = agents.Single(agent => agent.Role == AgentRole.Developer);
-        Xunit.Assert.Equal(5, agents.Count);
+        Xunit.Assert.Equal(6, agents.Count);
         Xunit.Assert.Equal("anthropic-developer", developer.Id.Value);
         Xunit.Assert.Equal("Anthropic", developer.Model.ProviderName);
     }
@@ -3787,7 +3654,7 @@ public sealed class CliCommandTests
             .Where(agent => agent.Role == AgentRole.Developer)
             .ToList();
 
-        Xunit.Assert.Equal(6, agents.Count);
+        Xunit.Assert.Equal(7, agents.Count);
         Xunit.Assert.Equal("openai-developer", developers[0].Id.Value);
         Xunit.Assert.Equal("anthropic-developer-claude-fallback", developers[1].Id.Value);
         Xunit.Assert.Equal("Claude fallback", developers[1].Name);
@@ -4321,6 +4188,32 @@ public sealed class CliCommandTests
         """);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_bare_goals_to_metadata_only_listing")]
+    public void RunnerRoutesBareGoalsToMetadataOnlyListing()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsMetadataOnlyListing(["goals"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsMetadataOnlyListing(["GOALS"]));
+        // Anything beyond the bare verb must fall through to the normal (hydrating) path.
+        Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing(["goals", "extra"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing(["next"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing([]));
+    }
+
+    [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
+    public void PrintGoalsRendersMetadataSummaries()
+    {
+        IReadOnlyList<GoalSummary> summaries =
+        [
+            new GoalSummary("0123456789abcdef0123456789abcdef", "Active", "Build the widget", "2026-06-15T00:00:00.0000000+00:00"),
+            new GoalSummary("fedcba98", "Completed", "Ship the gadget", "2026-06-14T00:00:00.0000000+00:00")
+        ];
+
+        var output = CaptureConsole(() => ConsoleViews.PrintGoals(summaries));
+
+        Xunit.Assert.Contains("01234567 Active: Build the widget", output);
+        Xunit.Assert.Contains("fedcba98 Completed: Ship the gadget", output);
+    }
+
     private static void MakeLeaseOwnerStale(string metadataPath)
     {
         var text = File.ReadAllText(metadataPath);
@@ -4330,21 +4223,434 @@ public sealed class CliCommandTests
             StringComparison.Ordinal));
     }
 
-    private static string CaptureConsole(Action action)
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
+    public void CliSubscriptionDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("One-step subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
         try
         {
-            Console.SetOut(writer);
-            action();
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["subscription-dispatch", "1", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.NotNull(task.LastDispatch);
+            Xunit.Assert.NotNull(task.LastProcess);
         }
         finally
         {
-            Console.SetOut(originalOut);
+            if (task.LastProcess is { IsRunning: true })
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
         }
+    }
 
-        return writer.ToString();
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_without_confirm_dispatch_start_only_prepares")]
+    public void CliSubscriptionDispatchWithoutConfirmDispatchStartOnlyPrepares()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Prepare-only subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_with_dispatch_creates_goal_and_launches_worker")]
+    public void CliSimpleGoalWithDispatchCreatesGoalAndLaunchesWorker()
+    {
+        var root = CreateTempDirectory();
+        // Fake a git worktree at root so WorkerSandboxCapabilityPlanner passes the .git existence
+        // check when no goal worktree has been created yet (EnsureGoalWorkspaceForDispatch is a
+        // no-op outside a real git repo, so the working directory falls back to root).
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: fake");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        try
+        {
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["simple-goal", "Implement src/Test.cs with tests coverage", "--dispatch", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Single(kernel.Goals);
+            Xunit.Assert.NotNull(currentGoal);
+            var task = currentGoal!.Tasks.Single();
+            Xunit.Assert.NotNull(task.LastDispatch);
+            Xunit.Assert.NotNull(task.LastProcess);
+        }
+        finally
+        {
+            var goal = kernel.Goals.FirstOrDefault();
+            if (goal is not null)
+            {
+                var task = goal.Tasks.SingleOrDefault();
+                if (task?.LastProcess is { IsRunning: true })
+                    new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_without_dispatch_only_creates_goal")]
+    public void CliSimpleGoalWithoutDispatchOnlyCreatesGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Inspect docs/usage.md and summarize"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Null(currentGoal!.Tasks.Single().LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_brief_file_creates_goal_with_file_content")]
+    public void CliSimpleGoalBriefFileCreatesGoalWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Implement src/Mcg.AgentOrchestrator.App/Cli/CliArgumentParser.NormalizeArgs.cs with --brief-file flag support and tests coverage.\n\nMulti-line brief content that would overflow an inline CLI argument.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "--brief-file", briefPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_creates_item_with_file_content")]
+    public async Task CliBacklogAddBodyFileCreatesItemWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var bodyContent = "Add file-backed backlog body support.\n\nMulti-line item body that would overflow an inline CLI argument.";
+        var bodyPath = Path.Combine(root, "body.md");
+        File.WriteAllText(bodyPath, bodyContent, System.Text.Encoding.UTF8);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-add", "File-backed item", "--body-file", bodyPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = Xunit.Assert.Single(await store.ListAsync(includeAll: true));
+        Xunit.Assert.Equal("File-backed item", item.Title);
+        Xunit.Assert.Equal(bodyContent, item.Body);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_missing_gives_clear_error")]
+    public async Task CliBacklogAddBodyFileMissingGivesClearError()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var missingPath = Path.Combine(root, "does-not-exist.md");
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-add", "File-backed item", "--body-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("--body-file not found", ex.Message);
+        Xunit.Assert.Contains(missingPath, ex.Message);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        Xunit.Assert.Empty(await store.ListAsync(includeAll: true));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_close_reason_file_closes_item_with_file_content")]
+    public async Task CliBacklogCloseReasonFileClosesItemWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var reasonContent = "Resolved by the file-backed backlog close path.\n\nIncludes detail that would overflow inline command text.";
+        var reasonPath = Path.Combine(root, "reason.md");
+        File.WriteAllText(reasonPath, reasonContent, System.Text.Encoding.UTF8);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Close from file", "Original body");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-close", item.Id[..8], "--reason-file", reasonPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var closed = await store.GetByExactIdAsync(item.Id);
+        Xunit.Assert.NotNull(closed);
+        Xunit.Assert.Equal(BacklogItemStatus.Done, closed!.Status);
+        Xunit.Assert.Contains("Original body", closed.Body);
+        Xunit.Assert.Contains(reasonContent, closed.Body);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_brief_file_missing_gives_clear_error")]
+    public void CliSimpleGoalBriefFileMissingGivesClearError()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var missingPath = Path.Combine(root, "does-not-exist.md");
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "--brief-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("--brief-file not found", ex.Message);
+        Xunit.Assert.Contains(missingPath, ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
+    public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("One-step profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Start-Sleep -Seconds 60")]);
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        try
+        {
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["profile-dispatch", "1", "codex-cli", "--confirm-dispatch-start"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.NotNull(task.LastDispatch);
+            Xunit.Assert.NotNull(task.LastProcess);
+        }
+        finally
+        {
+            if (task.LastProcess is { IsRunning: true })
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_profile_dispatch_without_confirm_dispatch_start_only_prepares")]
+    public void CliProfileDispatchWithoutConfirmDispatchStartOnlyPrepares()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Prepare-only profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Write-Output ok")]);
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        var task = goal.Tasks.Single();
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["profile-dispatch", "1", "codex-cli"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_commits_dogfood_entry_after_recording")]
+    public void CliAcceptanceCommitsDogfoodEntryAfterRecording()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.com");
+        RunGit(root, "config", "user.name", "CLI Tests");
+        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "-A");
+        RunGit(root, "commit", "-m", "Seed");
+
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Commit dogfood entry test", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.UtcNow));
+        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");
+        RunGit(worktree, "add", "-A");
+        RunGit(worktree, "commit", "-m", "Goal work");
+
+        var goalPrefix = goal.Id.Value[..8];
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--skip-verify", "--keep-workspace"],
+            kernel,
+            OrchestratorWorkspace.ForDirectory(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var statusOutput = RunGitOutput(root, "status", "--porcelain", "DOGFOOD_LOG.md");
+        Xunit.Assert.Equal(string.Empty, statusOutput.Trim());
+
+        var logOutput = RunGitOutput(root, "log", "--oneline", "-5");
+        Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
     }
 
     private static AgentDefinition SubscriptionPlanner(string id, string name) => new(

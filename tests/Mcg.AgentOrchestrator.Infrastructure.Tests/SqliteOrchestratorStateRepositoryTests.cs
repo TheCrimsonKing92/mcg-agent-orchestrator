@@ -88,26 +88,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(changingUpdatedAt2 >= stableUpdatedAt1);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_removes_deleted_goal_rows")]
-    public async Task RemovesDeletedGoalRows()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_stale_kernel_save_does_not_delete_goal_not_in_snapshot")]
+    public async Task StaleKernelSaveDoesNotDeleteGoalNotInSnapshot()
     {
         var db = TempDb();
         var repo = new SqliteOrchestratorStateRepository(db);
-        var kernel = new AgentOrchestratorKernel();
-        kernel.CreateGoal("Goal to keep");
-        kernel.CreateGoal("Goal to remove");
-        await repo.SaveAsync(kernel);
 
-        var kernelWithOne = new AgentOrchestratorKernel();
-        kernelWithOne.CreateGoal("Goal to keep");
-        await repo.SaveAsync(kernelWithOne);
+        // Establish two goals in the store.
+        var kernelFull = new AgentOrchestratorKernel();
+        var goalA = kernelFull.CreateGoal("Goal A");
+        kernelFull.CreateGoal("Goal B");
+        await repo.SaveAsync(kernelFull);
+
+        // Save a fresh kernel that only knows about Goal A — simulates a stale or partially-hydrated
+        // kernel (e.g. loaded before Goal B was created). Must NOT delete Goal B.
+        var kernelStale = new AgentOrchestratorKernel();
+        kernelStale.CreateGoal(goalA.Id, "Goal A");
+        await repo.SaveAsync(kernelStale);
 
         var restored = await repo.LoadAsync();
-        Assert.Equal(1, restored.Goals.Count);
-        Assert.Equal("Goal to keep", restored.Goals.Single().Objective);
+        Assert.Equal(2, restored.Goals.Count);
+        Assert.True(restored.Goals.Any(g => g.Objective == "Goal A"));
+        Assert.True(restored.Goals.Any(g => g.Objective == "Goal B"));
 
         var listing = await repo.ListGoalMetadataAsync();
-        Assert.Equal(1, listing.Count);
+        Assert.Equal(2, listing.Count);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_transaction_rollback_on_failing_mutation")]
@@ -241,6 +246,81 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(1, restored.HumanInputRequests.Count);
         Assert.Equal("What should I do?", restored.HumanInputRequests.Single().Question);
         Assert.Equal(goal.Id, restored.HumanInputRequests.Single().GoalId);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]
+    public async Task HumanInputUpsertUpdatesExistingRow()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Goal needing input");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which option?");
+        await repo.SaveAsync(kernel);
+
+        // Answer it and re-save: the incremental upsert must UPDATE the existing row, not duplicate it.
+        kernel.SubmitHumanInput(request.Id, "Option A");
+        await repo.SaveAsync(kernel);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(1, restored.HumanInputRequests.Count);
+        var restoredRequest = restored.HumanInputRequests.Single();
+        Assert.True(restoredRequest.IsCompleted);
+        Assert.Equal("Option A", restoredRequest.Answer);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_stale_kernel_save_does_not_delete_human_input_request_not_in_snapshot")]
+    public async Task StaleKernelSaveDoesNotDeleteHumanInputRequestNotInSnapshot()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+
+        // Establish a goal with a pending human input request in the store.
+        var kernelWith = new AgentOrchestratorKernel();
+        var goal = kernelWith.CreateGoal("Goal needing input");
+        kernelWith.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernelWith.RequestHumanInput(goal.Id, task.Id, "Which option?");
+        await repo.SaveAsync(kernelWith);
+
+        // Save a stale kernel that does not contain the human input request.
+        // Must NOT delete the existing request row.
+        var kernelStale = new AgentOrchestratorKernel();
+        kernelStale.CreateGoal(goal.Id, "Goal needing input");
+        await repo.SaveAsync(kernelStale);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(1, restored.HumanInputRequests.Count);
+        Assert.Equal("Which option?", restored.HumanInputRequests.Single().Question);
+    }
+
+    [Xunit.Fact(DisplayName = "FileOrchestratorStateRepository_lists_goal_metadata")]
+    public async Task FileRepositoryListsGoalMetadata()
+    {
+        var dir = CreateTempDirectory();
+        var path = Path.Combine(dir, "state.json");
+        var repo = new FileOrchestratorStateRepository(path);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("First goal");
+        kernel.CreateGoal("Second goal");
+        await repo.SaveAsync(kernel);
+
+        var listing = await repo.ListGoalMetadataAsync();
+
+        Assert.Equal(2, listing.Count);
+        Assert.True(listing.Any(m => m.Objective == "First goal"));
+        Assert.True(listing.Any(m => m.Objective == "Second goal"));
+        Assert.True(listing.All(m => m.Status == GoalStatus.Draft.ToString()));
     }
 
     private static string TempDb()

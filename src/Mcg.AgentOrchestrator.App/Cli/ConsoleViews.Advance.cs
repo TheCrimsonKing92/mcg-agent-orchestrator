@@ -69,7 +69,7 @@ public static string BuildSuggestedCommand(
     return item.Kind switch
     {
         NextActionKind.ExecuteRecordedDispatch =>
-            SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is not null
+            SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is { IsAnomalous: true }
                 ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
                 : command,
         NextActionKind.FixFailedVerification when DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery) =>

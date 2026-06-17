@@ -4,6 +4,55 @@ Entry convention: keep entries short and record only durable product signal. For
 
 Older entries are rotated to `docs/DOGFOOD_LOG-2026-06.md`. When this file grows past roughly 500 lines, move all but the most recent entries to a dated archive under `docs/`.
 
+## 2026-06-15 - Validated cross-platform on real Linux (WSL): 952/952, fixed the 4 Linux-isms
+
+Stood up a real Linux validation env (WSL2 Ubuntu + .NET 10 SDK + pwsh, repo cloned to ext4) and ran the suite on Linux. First run: build clean, 948/952 (4 failures) — confirming the platform-neutralization PRODUCTION code (pwsh resolver, native DispatchProcessHost, FileShare.None lock, wmic→/proc helper) all works on Linux; the 4 failures were Windows assumptions in TESTS. Fixed all 4 (all test-only): (1-2) `GoalWorktrees_remove_*` asserted Windows mandatory-lock semantics (open handle blocks dir delete) — branched on `OperatingSystem.IsWindows()`: Windows asserts leftover/lock-holder/resume, POSIX asserts removal completes (open files unlink fine). (3) `SubscriptionPromptCostGuard_applies_prior_evidence_allowance` pinned a CRLF-vs-LF-sensitive char count to the exact 2000 allowance boundary (`Environment.NewLine` is 1 char shorter on Linux, and the estimate is capped near the allowance) — relaxed the precondition to `> allowance/2` (the behavioral `Assert.Null(risk)` is the real check). (4) the `RunPowerShellCommand` TEST helper hardcoded `powershell.exe` → on WSL that resolved via interop to Windows PowerShell against a Linux CWD, so the inline `git add/commit` left `.agents/` untracked; switched it to the `WorkerShell` resolver (pwsh on Linux) like production.
+- Result: **Linux 952/952 green** (Core 273 + Infrastructure 679), Windows still 952. The platform-neutralization arc is now genuinely cross-platform-validated, not just Windows-asserted. Also validated pwsh-on-Windows: installing pwsh flips the resolver and the dispatch integration test passes under PowerShell Core.
+- WSL env persists for future Linux checks (`git pull && dotnet test` in ~/mcg-agent-orchestrator); setup recorded in the linux-validation-wsl memory.
+- Model fit: Claude Opus dogfood session - adequate - real cross-platform validation + 4 test-portability fixes; landed through acceptance.
+
+## 2026-06-15 - Build hygiene (kill the CS2012 build-lock at the source) + cross-platform process introspection
+
+Two related fixes (goal ae16b2d2, landed via acceptance). (1) NODE REUSE: added `Directory.Build.rsp` with `-nodeReuse:false` so MSBuild worker nodes don't linger after a build holding `obj/*.dll` — the recurring CS2012 "file in use" build-lock that `dotnet build-server shutdown` did NOT reliably clear (it targets the Roslyn/VBCSCompiler server, not MSBuild nodes). Pairs with the `UseSharedCompilation=false` from the CS2012 work. Confirmed live this session: after clearing pre-existing stale nodes, the next build ran with node-reuse off, left no lingering node, and the following build was lock-free. (2) CROSS-PLATFORM `wmic`: replaced the duplicated `wmic` command-line plumbing (in `BackgroundDispatchRunner.TryGetBuildDaemonCommandLines` and `GoalWorktrees.TryGetProcessCommandLines`) with one `ProcessCommandLines.Read` helper — `wmic` on Windows, `/proc/<pid>/cmdline` on Linux. This fixes the latent Linux over-reap (the old code treated a null command line as "reapable", so on Linux where wmic is absent it would have killed every build daemon); now command lines resolve on Linux too, so the worktree-path filter works. `ParseWmicListOutput` (tested) retained and reused by the helper.
+- Full suite green (Core 273 + Infrastructure 679). Completes the platform-neutralization arc (part 1 resolver/lock/launcher, part 2 native dispatch host, this = build hygiene + wmic). Remaining filed long pole: auditing the test suite for Linux-cleanliness.
+- Model fit: Claude Opus dogfood session - adequate - build-config + cross-platform helper consolidation; landed through acceptance.
+
+## 2026-06-15 - Platform-neutralize the runtime, part 2: native C# dispatch host replaces the PowerShell wrapper
+
+Rewrote the detached dispatch launcher (goal c675bc32, landed via acceptance). The old `BuildWrapper` generated a ~40-line PowerShell script (string-concatenated, an injection/maintenance hazard); replaced with a native `DispatchProcessHost` run as a hidden `__dispatch-run <paramsFile>` subcommand of the App. The host sets the build env, launches the worker command through the resolved PowerShell host (`WorkerShell`, part 1), raw-streams stdout/stderr to the log files, writes the periodic heartbeat (same camelCase JSON schema the reader expects), and always records the exit code in a `finally`. `StartLatestDispatch` now writes a params JSON and launches `dotnet exec <App.dll> __dispatch-run` detached — resolving `App.dll` from `AppContext.BaseDirectory` (a sibling of the Infrastructure assembly in production AND in tests, which reference the App). Removed `BuildWrapper` + the now-dead `Quote`/`HeartbeatInterval` and the 5 PowerShell-string wrapper unit tests.
+- VALIDATION: the in-suite integration test (`...NonLocalDispatchRunsWithSharedCompilationDisabled`) already exercises the host end-to-end (real launch → command via shell with env set → redirect → heartbeat → exit → reconcile) and stays green. Plus a LIVE SMOKE: a real claude-sonnet-4-6 subscription dispatch through the new host created+committed SMOKE.md, wrote a valid heartbeat (camelCase schema), and reconciled clean with NO override — confirming the real `claude ... -p (Get-Content -Raw '...')` command survives the params-JSON round-trip + ArgumentList path. Smoke goal abandoned/branch discarded after.
+- Full suite green (Core 273 + Infrastructure 679; −5 obsolete wrapper tests, +1 host params test, +2 WorkerShell from part 1).
+- DEFERRED (filed): make the `wmic` process-command-line enrichment cross-platform (`/proc` on Linux) so daemon-reaping doesn't over-kill there — kept out of this landing to keep the core-path rewrite clean; wmic already degrades to empty off Windows. Bigger long pole remains auditing the TEST SUITE for Linux-cleanliness.
+- Model fit: Claude Opus dogfood session - adequate - core dispatch-path rewrite validated by integration test + a live subscription smoke; landed through acceptance.
+
+## 2026-06-15 - Platform-neutralize the runtime, part 1: PowerShell-host resolver + cross-platform build lock + bash launcher
+
+First, safe pass at making the runtime cross-platform without breaking this Windows box (goal dc038de2, landed via acceptance). Measured the real coupling first: only ~9 runtime Windowsisms, most already cross-platform (`Process.GetProcessesByName`) or guarded (`CreateNewProcessGroup`). Landed: (1) `WorkerShell` resolver — prefers cross-platform `pwsh`, falls back to `powershell.exe` on Windows (this machine has only Windows PowerShell 5.1, so behavior here is byte-identical); wired into `BackgroundDispatchRunner` dispatch launch and the dashboard build/test runner, with `-ExecutionPolicy Bypass` now Windows-only. (2) `DotnetBuildEnvironmentManager` build-lease lock swapped from `FileStream.Lock` (CA1416, unsupported on macOS) to an exclusive `FileShare.None` open — cross-platform. (3) `mcg-orchestrator.sh` launcher mirroring the `.cmd`. Full suite green (Core 273 + Infrastructure 683, +2 WorkerShell tests).
+- DEFERRED to part 2 (own focused change + live dispatch smoke, since it's the core launch path): rewrite the detached PowerShell wrapper (`BuildWrapper`) as a native C# dispatch host (env/redirect/heartbeat in C#, command run via the resolved shell) and make the `wmic` process-command-line enrichment cross-platform (`/proc` on Linux) so daemon-reaping doesn't over-kill there. The bigger long pole is auditing the TEST SUITE for Linux-cleanliness.
+- Also filed: a ranked partial-state-hydration design (investigated via subagent) folded into the SQLite follow-ons item — #1 metadata-only listing/resolve, #2 lazy single-goal hydration (with the orphan-delete data-loss trap flagged), #3 incremental human_input_requests, #4 cross-goal subset hydration.
+- Model fit: Claude Opus dogfood session - adequate - cross-platform refactor across 5 files + 2 ideation subagents (CS2012 already landed; state-hydration filed); landed through acceptance.
+
+## 2026-06-14 - Acceptance owns verify+record+rebase; one `recover` unblocks stuck goals (more chorekeeping out of operator hands)
+
+Pushed four more operator chores into the deterministic acceptance/recovery path (goal 64e1e42f, dogfooded + landed via acceptance). (1) **Auto-verify from git ground truth**: `acceptance`/`accept` now derive task verification from a clean worktree + committed changes against main (`GoalWorktrees.HasChangesAgainstMain`/`IsWorktreeClean`) instead of requiring a manual `verify-manual`; the acceptance suite + evidence bundle stay the authoritative gates (no-change/dirty/failed-suite still block). (2) **Auto-record**: a successful merge appends a `DogfoodLogRenderer` entry to DOGFOOD_LOG.md (`--no-record` opts out). (3) **Auto-rebase**: when the goal branch is behind main, `RunAcceptanceWorkspaceMerge` rebases onto main via `TryRebaseOntoMain` then ff-merges instead of punting to the operator (conflict → escalate). (4) **`recover <goal> <note>`**: one command owns the memorized unblock dances — answers open human-input requests, normalizes stuck/orphaned tasks to Failed so `RetryTask` accepts them, and retries them dispatchable, all with one note.
+- Scope note: the 5th idea (derive acceptance required checks from the verification policy) is FILED not built — the anti-drift SAFETY already exists (`GoalAcceptanceEvidenceBundle` blocks on `acceptance-policy-check-missing`); only auto-RUNNING the policy-derived check remains, an invasive core-gate change best done on its own. CS2012 was root-caused by an ideation subagent (recurrence is on the operator's raw-shell path none of the prior fixes cover) and filed with a ranked durable-fix proposal.
+- Operator gate: full suite green (Core 273 + Infrastructure 680, +6 tests). Landed via the orchestrator's own acceptance gate (which now also auto-removed its workspace from the prior landing).
+- Model fit: Claude Opus dogfood session - adequate - four CLI/acceptance automation features + ideation subagent; landed through acceptance.
+
+## 2026-06-14 - Deterministic processes own workspace chorekeeping (create on dispatch, remove on acceptance)
+
+Pushed workspace create/delete ownership out of the operator's hands into the deterministic CLI steps that need it (goal f9e8b7f1, dogfooded + landed via acceptance — the acceptance run auto-removed its own workspace, proving the feature live). Two changes: (1) plain `acceptance` now owns post-merge cleanup via a shared `CleanupGoalWorkspaceAfterMerge` helper (policy-gated on SupervisedAuto's AllowsWorkspaceCleanup, journaled, with a `--keep-workspace` opt-out); the `accept` alias now delegates to the same helper instead of duplicating it. (2) dispatch (`subscription-dispatch[-ready]`, `profile-dispatch[-ready]`) auto-creates the goal worktree via a new `EnsureGoalWorkspaceForDispatch` (idempotent; skips when not in a git work tree, so non-git test dirs keep the old execution-directory fallback), removing the manual `workspace create` step and the silent ResolveExecutionDirectory→repo-root footgun. Added `GoalWorktrees.IsGitWorkTree` (RequireGitWorkTree now delegates to it).
+- Context: the autonomous `ConductorDriver`/lifecycle already owned create+delete end-to-end; this closes the gap on the manual/`acceptance` operator path (the exact chore done by hand landing the prior two goals).
+- Operator gate: full suite green (Core 273 + Infrastructure 674, +3 tests: acceptance removes workspace, --keep-workspace retains it, dispatch auto-creates). One RunGoalService process-spawn test flaked under load and passed in isolation + on re-run.
+- Model fit: Claude Opus dogfood session - adequate - CLI chorekeeping consolidation across 5 files; landed through the orchestrator's own acceptance gate which auto-cleaned its workspace.
+
+## 2026-06-14 - WORKER_RESULT made advisory: dispatch substance from git ground-truth (ends the format whack-a-mole)
+
+Closed the URGENT backlog item by dogfooding the fix through the orchestrator's own acceptance gate (goal 3908a098). Removed the dispatch-time WORKER_RESULT contract gate in `BackgroundDispatchRunner` so a dispatch's pass/fail is decided ONLY by git ground truth (relevant commit after dispatch + clean worktree, already enforced just above it) and the acceptance test run — never by the worker's self-reported field shape. Dropped all self-report hard-fails (commit-match, files-match, tests-echo, model_fit, skills, blockers, missing-block) and removed ~150 lines of now-dead contract helpers. WORKER_RESULT is now purely advisory; the model-fit note is still extracted for the scorecard via `ModelFitEvidence`. This ends the recurring false-fails (8 verify-manual overrides last session; 7+ distinct schema deviations including the alien `task_id`/`committed_files` schema that parser leniency could never anticipate).
+- Red-team coverage preserved: the git-substance ChaosGates (1 no-change, 2 forbidden-path, 4 dirty, 5 noise-only, 7 preflight) still fire; the ~9 format-shape chaos tests + 5 WorkerDispatchTests that pinned the old field-shape hard-fails were rewritten to assert the advisory model (deviation + relevant commit on a clean worktree → passes), plus a new test proving no-block + no-change still fails on the git gate.
+- Operator gate: full suite green (Core 273 + Infrastructure 671), landed via orchestrator `acceptance` (ff-merge to main).
+- Model fit: Claude Opus dogfood session - adequate - safety-gate redesign reconciling the backlog spec against pinned red-team tests; gate surgery done by hand, landed through the orchestrator's own acceptance gate.
+
 ## 2026-06-13 - CLI collapsed to six fundamentals (dogfooded end-to-end) + state-bloat surfaced
 
 Dispatched the #6 backlog item through the orchestrator (Claude Sonnet, goal 8544c918). The worker added six fundamental operator verbs as thin aliases over existing handlers - `next` (now prints a copy-pasteable `Run: <command>`), `goal` (--simple/--from-backlog/--run), `accept` (acceptance+merge+cleanup), `stop` (--as cancel|park|rollback|abandon|supersede), `config` (agents|profiles|policy|doctor), `dashboard` (--mode) - plus a Program.cs help-banner reorg into Fundamentals/Advanced and 18 new tests, every existing verb untouched. Landed via git merge (clean auto-merge, docs unaffected) as `d9c8368`; independently verified 710 green (Core 214 + Infrastructure 496).
@@ -964,3 +1013,454 @@ Dogfooded via goal 63fb8eb9 (Claude Sonnet, exit 0 - landed FULLY CLEAN, no over
 - Operator gate: acceptance passed; reviewed the diff carefully as a safety-gate change. The 4 new ChaosGateTests regression-assert the real gates (absent commit, real dirty source, no-WORKER_RESULT-anywhere, real blockers) STILL fire - so the hardening narrows false-positives without opening false-negatives.
 - Evidence note: this is the prerequisite for trustworthy unattended autonomy - an autonomous loop over the OLD flaky gate would have spuriously escalated/stalled on good work. Done deliberately BEFORE enabling the batch loop (operator chose this sequencing).
 - Model fit: Claude Sonnet - adequate - precise safety-gate change with strong regression coverage.
+
+
+## 2026-06-14 - Add a concise 'Autonomous conductor' section to README
+
+Goal b06d235b: Add a concise 'Autonomous conductor' section to README.md documenting: the conductor lifecycle and the 'conduct <goal.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+## 2026-06-14 - Conductor `conduct --once` validated live end-to-end
+
+Before enabling the unattended loop (operator chose: harden -> validate -> loop), drove a real DocsOnly goal (b06d235b, "Autonomous Conductor" README section) through the conductor one transition at a time with `conduct <goal> --once`. The conductor (Conservative policy) executed: Created->workspace created; WorkspaceReady->subscription dispatch started (spawned worker 86c0a576); held on Running; reconciled the finished worker; Verified->LANDED ("Promoted: goal/b06d235b integrated via integration into main"); Merged->recorded to dogfood log; Recorded->workspace cleaned up; done (CleanedUp). The README section is on main via the conductor's own integration merge e09d5fe - autonomous promote-to-main, no human merge step.
+
+- Operator gate: the conductor CORRECTLY escalated a contract false-fail mid-run (worker's WORKER_RESULT was missing the END_WORKER_RESULT marker -> reconciled to Failed -> conductor escalated "operator action required" instead of proceeding). Operator confirmed the docs work was correct (README +49 DocsOnly, committed eea25f1), overrode via verify-manual, and the conductor completed the happy path. The auto-recorded dogfood entry shows "(no receipt)" - the known limitation for verify-manual-overridden goals.
+- Evidence note: this is precisely why (b) sequencing mattered - the live run surfaced that the WORKER_RESULT contract is still format-brittle (END_ marker), so the BATCH LOOP must auto-retry contract-format false-fails rather than escalate them, else autonomy would page the human on good work. Filed to BACKLOG as the loop's hard requirement.
+- Net: the conductor drives a goal end-to-end autonomously and its safety escalation works; remaining gap before unattended operation is auto-retry of format false-fails.
+
+## 2026-06-14 - Conductor BATCH LOOP landed (conductor feature-complete)
+
+Dogfooded via goal 94264bd5 (Claude Sonnet, exit 0 - landed CLEAN, no override; worker emitted a well-formed WORKER_RESULT to stdout), merge fast-forward, 891 tests (273 core + 618 infra). `conduct --loop` is the self-driving control loop on top of AdvanceOnce: per tick it sweeps (auto-reconcile), advances every eligible goal one transition, excludes done/escalated, and breaks when nothing advances. AUTO-RETRY re-verifies (re-runs acceptance up to 2x) ONLY the transient "Acceptance verification failed" escalation - the precise fix the live validation proved necessary - while genuine failures/policy/landing escalations go straight to the operator-inbox (never silent-retry). Kill-switch via a `.conduct-stop` file (finishes the tick, no new dispatches, leaves in-flight workers). END_WORKER_RESULT-marker tolerance added to BOTH parsers (the exact format-fail the dry-run hit).
+
+- Operator gate: acceptance passed (infra 618, worker contract present); reviewed the loop carefully (autonomy keystone): escalated goals are excluded/await-human, auto-retry is narrowly scoped to the transient acceptance flake, kill-switch + progress-guard prevent runaway/spin. Filed two refinements for true unattended operation: the loop exits on all-held (needs a --watch poll mode or scheduled re-invocation) and observability is console+journal (add SSE push).
+- Net: THE CONDUCTOR IS FEATURE-COMPLETE - foundation + driver + batch loop + Discord pager + contract hardening, all landed and green. The operator role is now internalized as a deterministic state machine; building it is done. Turning on unattended autonomy remains a deliberate Director step (wire Discord, pick policy, choose --watch/scheduled cadence).
+- Model fit: Claude Sonnet - adequate - the loop composes AdvanceOnce; DI made it cleanly testable (194 loop tests).
+
+## 2026-06-14 - Goal-dependency edges (b) + generalize-beyond-.NET (c), concurrent
+
+Two disjoint goals run concurrently (Miles: "couldn't you work on some of c concurrently?"). (1) GOAL-DEPENDENCY EDGES (2140e46a, merge 71940f0): Goal.DependsOn persisted + cycle/self validation (DFS) + ConductorBatchLoop dependency gate (hold while a dep is incomplete; exclude a dependent of an escalated dep; advance when all deps terminal) + goal-depends CLI; 7 tests. The deterministic DAG substrate the Planner will target. (2) GENERALIZE-BEYOND-.NET (5f88085a, merge fd128a3): TargetToolchainDetector drives source-survey extensions + verification/broker commands + planner build-tool inference off detected toolchain (go.mod/package.json/.sln/pyproject); .NET behavior preserved; 233 detection tests. Combined main green 273 core + 642 infra = 915.
+
+- Operator gate: both landed via acceptance (after operator verify-manual overrides - see below); chose disjoint seams (goal-model/conductor vs source-survey/brokers) so they merged clean. Removed a stray committed WORKER_RESULT.md from the generalize branch before merge (kept main clean).
+- KEY FINDING (now the #1 autonomy blocker, filed URGENT): the WORKER_RESULT contract false-failed BOTH dispatches on format alone (deps: markdown **WORKER_RESULT**; generalize: prose-in-stdout + non-conforming committed file) - the 5th and 6th format false-fails this session. The aed48ef hardening patched several variants but workers keep deviating. The parser needs a fundamental leniency overhaul (scan for fields ignoring markdown/envelope/location, require only a minimal viable receipt) before unattended autonomy is viable - today the conductor would escalate good work nearly every dispatch.
+- Model fit: Claude Sonnet x2 - adequate - both correct on operator review; both deviated only on WORKER_RESULT formatting.
+
+## 2026-06-14 - WORKER_RESULT parser robustness + Planner (concurrent); full org chart complete
+
+Two concurrent disjoint goals. (1) WORKER_RESULT ROBUSTNESS (57962d38, merge 796a6b6): extracted a shared format-lenient WorkerResultParser (markdown-tolerant opener/end/keys, missing-END tolerance, no-opener field scan with a commit+files+tests minimum) used by both parsers; SUBSTANCE checks stay strict in the callers; 326 ChaosGateTests assert the real gates still fire. (2) PLANNER (1b29382d, merge 1a2de8d): `plan <direction> [--confirm-plan]` dispatches a planner-worker to decompose direction into a fenced-JSON DAG, validates (cycle/self/unknown-ref), previews, and on confirm materializes goals wired with dependency edges for conduct --loop. Combined main green: 273 core + 658 infra = 931.
+
+- Operator gate: WORKER_RESULT robustness landed clean (no override); then the Planner - the very next dispatch - reconciled CLEAN with NO override, the first immediate proof the format false-fails are fixed (6 overrides earlier this session; 0 after the parser landed). Both via acceptance.
+- Milestone: the full autonomous-org architecture now exists end-to-end - Director (human) -> Planner (LLM decomposition, supervised) -> Conductor (deterministic loop: drive lifecycle, land integration->main-or-escalate) -> Workers (LLM) -> Gates (acceptance/provenance/chaos). conduct --once validated to main earlier; the parser fix removes the last thing that made unattended operation escalate good work.
+- Remaining for hands-off autonomy: wire Discord live + into loop escalations; --watch continuous mode + SSE push; batch-loop auto-retry of transient (non-format) verification failures.
+- Model fit: Claude Sonnet x2 - adequate; the WorkerResultParser is a clean shared extraction, the Planner reuses GoalObjectivePlanner + the DependsOn model.
+
+## 2026-06-15 - Conductor --watch continuous mode + SSE, and the Ideation role/mode
+
+Two more landed. (1) --watch + SSE (d1a79b76, merge bdc1820): conduct --loop --watch poll-sleeps (30s, 5s kill-switch polling) and re-ticks through worker runs until the backlog is drained or .conduct-stop fires - the continuous mode needed for hands-off operation; plus a ConductorEventBus/TickPusher pushing each tick to the dashboard SSE stream. One-shot --loop preserved. (2) IDEATION role/mode (877da224, merge b998ec2): ideate command + Ideator role; IdeationProposalPlanner gathers evidence (loop-health+backlog+dogfood), dispatches an ideation worker, and enforces evidence-citation on every proposed idea; --append-backlog feeds the backlog. This is the front of the org chart - the system can now propose its own improvements. Combined main green: 273 core + 672 infra = 945.
+
+- Operator gate: --watch landed clean (no override). Ideation false-failed at reconcile on the 7th WORKER_RESULT format variant (worker used a task_id/goal_id/status/committed_files schema instead of files:/commit:/tests:) - the format-lenient parser handles decoration/markers/location but not unrecognized field NAMES. Overrode (work verified: evidence-citation enforcement, 242 tests, clean commit) and acceptance re-verified (core 273, infra 668).
+- KEY DECISION (filed URGENT): stop chasing WORKER_RESULT format variants. The fundamental fix is to derive the substance receipt from GIT GROUND-TRUTH (commit reachable + files changed) + the acceptance run, and treat the worker's self-report as advisory. That permanently ends the recurring false-fails (8 verify-manual overrides this session) blocking unattended autonomy.
+- With --watch + the lenient parser, conduct --loop --watch can now drain the backlog unattended (escalations to operator-inbox/console; Discord deferred per operator).
+- Model fit: Claude Sonnet x2 - adequate; --watch is a clean ConductorBatchLoop extension, ideation mirrors the Planner with citation enforcement.
+
+
+## 2026-06-15 - Fix recurring CS2012/VBCSCompiler build lock at its source
+
+Goal a4408410: Fix recurring CS2012/VBCSCompiler build lock at its source. (1) In the existing root Directory.Build.props PropertyGr.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 7ce2a5f). Acceptance passed.
+
+- Operator gate: Developer: pass ΓÇö 273 Core.Tests + 681 Infrastructure.Tests = 954 total, 0 failed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted multi-file edit with unit test addition - clear spec, bounded scope, no ambiguity required.
+
+## 2026-06-15 - Platform-neutralize the runtime: resolve PowerShell host (pwsh-preferred, pow...
+
+Goal dc038de2: Platform-neutralize the runtime: resolve PowerShell host (pwsh-preferred, powershell.exe fallback) for dispatch and d.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Platform-neutralize part 2: replace the detached PowerShell dispatch wrapper ...
+
+Goal c675bc32: Platform-neutralize part 2: replace the detached PowerShell dispatch wrapper with a native C# DispatchProcessHost (en.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Build hygiene + cross-platform process introspection: disable MSBuild node re...
+
+Goal ae16b2d2: Build hygiene + cross-platform process introspection: disable MSBuild node reuse repo-wide via Directory.Build.rsp to.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Make the test suite Linux-clean: branch the GoalWorktrees lock-holder tests o...
+
+Goal 8a5ad09f: Make the test suite Linux-clean: branch the GoalWorktrees lock-holder tests on OS (POSIX unlinks open files), use the.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Make the large-paid subscription cost gate anomaly-aware: block only on promp...
+
+Goal 0de5f77b: Make the large-paid subscription cost gate anomaly-aware: block only on prompts disproportionate to task complexity (.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Reconcile stale docs after the CS2012 root-cause fix and the anomaly cost-gat...
+
+Goal 87867f5f: Reconcile stale docs after the CS2012 root-cause fix and the anomaly cost-gate change: update AGENTS.md operator-cycl.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - SQLite hydration increment 1: add cheap metadata-only goal listing (ListGoalM...
+
+Goal cb62d4e7: SQLite hydration increment 1: add cheap metadata-only goal listing (ListGoalMetadataAsync on the repository interface.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Semantic acceptance increment 1 (advisory, local judge): add a pure SemanticA...
+
+Goal c8716bd3: Semantic acceptance increment 1 (advisory, local judge): add a pure SemanticAcceptancePlanner (evidence context + pro.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Semantic acceptance increment 2: config-driven multi-lane parallel judging
+
+Goal 96ae86bc: Semantic acceptance increment 2: config-driven multi-lane parallel judging. Add an opt-in AgentRole.Judge (never task.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Generalize the domain taxonomy: stop modeling orchestrator-internal model use...
+
+Goal 04d0070f: Generalize the domain taxonomy: stop modeling orchestrator-internal model uses as AgentRole. Revert AgentRole.Judge (.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-15 - Add best-of-N sampling to the planner DAG decomposition so one stochastic sam...
+
+Goal 534fedb2: Add best-of-N sampling to the planner DAG decomposition so one stochastic sample cannot yield an invalid DAG. The 'pl.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 7d39b18). Acceptance passed.
+
+- Operator gate: Developer: 972/972 pass (273 Core + 699 Infrastructure); 11/11 GoalDagPlan tests green including 3 new BestOfN tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature addition with unit tests - bounded change across 3 files, deterministic selection logic, parallel Task.WhenAll wiring; no overengineering needed.
+
+## 2026-06-16 - Implement recursive per-file diff judging for semantic acceptance (RLM survey...
+
+Goal a6ae7030: Implement recursive per-file diff judging for semantic acceptance (RLM survey #3), behind the existing ISemanticJudge.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 4a6cb18). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 273/273 Core.Tests + 704/704 Infrastructure.Tests (977 total) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file C# decorator implementation with async parallel aggregation - scoped change, no ambiguity in design, fits comfortably in context.
+
+## 2026-06-16 - Add a one-step dispatch-and-start option so a certain operator needn't run tw...
+
+Goal a46d77ec: Add a one-step dispatch-and-start option so a certain operator needn't run two commands. Today 'subscription-dispatch.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit ea936a8). Acceptance passed.
+
+- Operator gate: Developer: pass/976 — 273 Core + 703 Infrastructure, ALL GREEN (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - CLI handler refactor + targeted test addition - task was well-scoped and evidence was directly locatable in source; no planning overhead needed.
+
+## 2026-06-16 - Make 'acceptance' commit its own DOGFOOD_LOG
+
+Goal 5189d2a9: Make 'acceptance' commit its own DOGFOOD_LOG.md record so dogfood entries don't accumulate uncommitted on main. In sr.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 1ebc63d). Acceptance passed.
+
+- Operator gate: Developer: pass — 982/982 green; new test Cli_acceptance_commits_dogfood_entry_after_recording passed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted feature addition with git process pattern reuse - task is well-scoped file editing with clear acceptance criteria; Sonnet handled it cleanly.
+
+## 2026-06-16 - Add recency/time decay to ModelOutcomeScorecard so recent outcomes count more...
+
+Goal be05acb8: Add recency/time decay to ModelOutcomeScorecard so recent outcomes count more than old ones. Today src/Mcg.AgentOrche.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit cc3d204). Acceptance passed.
+
+- Operator gate: Developer: Core.Tests 275/275 passed (273 pre-existing + 2 new); Infrastructure ModelOutcomeScorecard 5/5 passed (no regressions) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - pure logic + test change on a small, well-bounded file - no infra or UI work needed
+
+## 2026-06-16 - Add best-of-N sampling to 'ideate', mirroring the best-of-N planner just land...
+
+Goal c0b3cd76: Add best-of-N sampling to 'ideate', mirroring the best-of-N planner just landed (GoalDagDecompositionPlanner.SelectBe.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 09737d4). Acceptance passed.
+
+- Operator gate: Developer: pass — 987 total, 0 failed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file C# edit with unit tests - pattern was clear from the existing `HandlePlan`/`GoalDagDecompositionPlanner.SelectBestOfN` implementation, no architectural ambiguity.
+
+## 2026-06-16 - Speed up the acceptance gate by removing the REDUNDANT GRANULAR test checks, ...
+
+Goal c632f84b: Speed up the acceptance gate by removing the REDUNDANT GRANULAR test checks, keeping the solution-level one. config/a.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 422baf0). Acceptance passed.
+
+- Operator gate: Developer: not-run (no dotnet test invoked; test assertions for "infrastructure tests"/"core tests" in GoalAcceptanceVerifierTests.cs and RepositoryChangeClassifierTests.cs exercise RepositoryTestImpactPlanner logic, not the manifest file; SemanticAcceptanceTests.cs uses "core tests" as fake test output text in SampleInputs, also unrelated to the manifest) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - overkill - single-file JSON edit with targeted grep verification - task required no reasoning beyond read, verify, delete two JSON objects, confirm valid JSON; Haiku would handle this.
+
+## 2026-06-16 - Re-enable test parallelization in the Infrastructure test suite to speed up t...
+
+Goal 9429cf4f: Re-enable test parallelization in the Infrastructure test suite to speed up the gate (currently ~2.5min serial for ~7.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 241b963). Acceptance passed.
+
+- Operator gate: Developer: pass — 712/712 across 3 consecutive parallel runs, ~75s execution per run (was ~2.5min serial) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - large mechanical refactoring with precise file edits and build/test verification - adequate for pattern-matching code transformation across many files.
+
+## 2026-06-16 - Add a SUBSCRIPTION-CLI semantic-acceptance judge so acceptance-judge lanes ca...
+
+Goal 5a353018: Add a SUBSCRIPTION-CLI semantic-acceptance judge so acceptance-judge lanes can run via the claude-cli/codex-cli SUBSC.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit ecfb465). Acceptance passed.
+
+- Operator gate: Developer: pass/992 — 275 Core + 717 Infrastructure, ALL GREEN (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - cross-file feature addition with clear spec and stable API to mirror - adequate for this level of reading + writing without needing extended reasoning.
+
+## 2026-06-16 - Add a one-step create-and-dispatch flag so an operator who already knows how ...
+
+Goal ec847d68: Add a one-step create-and-dispatch flag so an operator who already knows how a goal should run needn't issue a second.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- model fit: good - task was pure seam-reuse; no new dispatch logic, all branching follows existing patterns
+
+## 2026-06-16 - Fix the codex/spark semantic-acceptance judge lane that returns 'no verdict'
+
+Goal 6c9da183: Fix the codex/spark semantic-acceptance judge lane that returns 'no verdict'. ROOT CAUSE (diagnosed): SubscriptionCli.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5d0d585). Acceptance passed.
+
+- Operator gate: Developer: PASS — 997/997 green (24 SemanticAcceptance tests including 3 new) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped two-file bug fix with targeted tests - root cause pre-diagnosed, changes mechanical.
+
+## 2026-06-16 - Correct the subscription-CLI semantic-acceptance judge to reason at HIGH effo...
+
+Goal dfbb5f16: Correct the subscription-CLI semantic-acceptance judge to reason at HIGH effort (judging is reasoning-heavy), and mak.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - mechanical three-file fix with clear test evidence - no ambiguity in scope.
+
+## 2026-06-16 - Speed up acceptance to a SINGLE test run WITHOUT changing which checks the po...
+
+Goal f843345c: Speed up acceptance to a SINGLE test run WITHOUT changing which checks the policy gate sees. DO NOT modify config/acc.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 0df7124). Acceptance passed.
+
+- Operator gate: Developer: pass — 1000/1000 green; 3 new tests added (deferred pass, deferred fail, sln-file-reading path) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - bounded algorithmic change in a single method with clear test-driven acceptance criteria - the implementation is self-contained and the verification is deterministic.
+
+## 2026-06-16 - Fix the subscription-CLI semantic-acceptance judge lanes timing out
+
+Goal 0308f6dd: Fix the subscription-CLI semantic-acceptance judge lanes timing out. The RecursivePerFileSemanticJudge (src/Mcg.Agent.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted interface extension + logic guard in internal types with clear existing conventions - task shape was straightforward, well within sonnet's scope.
+
+## 2026-06-16 - Move the backlog from markdown to a STRUCTURED STORE as source-of-truth, with...
+
+Goal cf5df54d: Move the backlog from markdown to a STRUCTURED STORE as source-of-truth, with a generated markdown VIEW (decision rec.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 7f427f5). Acceptance passed.
+
+- Operator gate: Developer: 17 new BacklogStore tests pass; full suite 1022/1022 green (no regressions) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - medium-scope multi-file feature - straightforward pattern replication; well within model capability.
+
+## 2026-06-16 - Enable SAFE PARALLEL dispatch by removing the per-invocation App rebuild from...
+
+Goal 3174f2c4: Enable SAFE PARALLEL dispatch by removing the per-invocation App rebuild from the orchestrator launcher. Today mcg-or.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a75ccabc5d3d1a28901da99136d28f8480bc4292). Acceptance passed.
+
+- Operator gate: Developer: not-run (launchers not in test suite per brief); manual verification: single CMD invocation exit 0; second CMD invocation (no-op build 1.38s) exit 0; two concurrent Start-Process cmd.exe invocations both exit 0 with no CS2012; bash single invocation exit 0; two concurrent bash invocations both succeed (MSB3026 copy retry warning on /mnt/c DrvFs, which is MSBuild's own retry — not CS2012; not a factor on Linux ext4); lock dir cleaned up after all runs (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell script locking with cross-platform edge cases - model navigated `timeout`/`choice` stdin redirection failures, CRLF encoding, and DrvFs vs ext4 lock semantics without needing a larger model.
+
+## 2026-06-16 - Conduct --loop --watch live progress stream + dashboard SSE (state-recovery landing)
+
+Goal 57030f8b: Add a long-running --watch mode to conduct --loop with a live progress stream and dashboard SSE. Developer task via Anthropic/claude-sonnet-4-6 (commit 2cdf38e). LANDED VIA STATE-RECOVERY: the worker completed the full implementation but hit the Claude session limit at the commit step, and during the concurrent-dispatch chaos the goal record was lost from the kernel (`subscription-dispatch 57030f8b` reported "goal not found" despite a live worktree/branch/logs). Operator recovered: committed the worker's uncommitted worktree edits, rebased onto main, verified, ff-merged. The code is the worker's; only the commit/verify/merge chorekeeping was manual because the lost goal record blocked `acceptance`.
+
+- Operator gate: full suite green (Core 275, Infrastructure 752, 0 failures) on the rebased worktree.
+- Feature: `conduct --loop --watch [--poll-seconds N]` sleeps when all goals are held, honors `.conduct-stop`, supports a max-duration cap; emits one flushed compact progress line per event; adds a `text/event-stream` SSE endpoint; 6 new ConductorBatchLoop tests (watch-sleep, injectable sleep, stop-from-sleep, progress emission, tick summary, max-duration).
+- Reliability findings filed in the new backlog store: subscription-dispatch `--goal` mis-targeting (resolves to latest goal), silent no-op dispatch (exit 0, no worker), kernel↔worktree goal-record divergence, judge CLI-lane 180s timeouts on large diffs.
+
+## 2026-06-16 - Dispatch reliability: --goal targeting fix + richer dispatch errors (state-recovery landing)
+
+Goal f2deaac8: Fix `subscription-dispatch --goal` mis-targeting (resolved to the latest goal instead of the named one) and surface no-op/already-verified dispatches with goal context instead of a silent exit 0. Developer task via Anthropic/claude-sonnet-4-6 (commit 4531884). LANDED VIA STATE-RECOVERY (again): the worker completed the work AND committed it, but the dispatch wrapper then HUNG on teardown/reconcile (no heartbeat ever written, worker process gone, dispatch host pid 24760 stuck — likely claude-CLI stdio not closing). Operator stopped the hung dispatch, killed the orphan host, verified, ff-merged. Changes: CliCommandHandlers.Workers.cs +115/-28, CliCommandTests.cs +95 (new tests for --goal selection over a newer goal, and descriptive error on already-verified dispatch).
+
+- Operator gate: full suite green (Core 275, Infrastructure 754, 0 failures).
+- CRITICAL finding (not yet fixed): the dispatch wrapper can hang AFTER the worker finishes+commits — no heartbeat, no auto-reconcile, command never returns. This (plus the session-limit case) makes manual worktree recovery the norm rather than the exception; the Claude Agent SDK worker harness is the real fix.
+- More friction surfaced this round: a stale `.build-lock` bricked the launcher until manually cleared (goal A territory); the entire agent catalog reverted to Ollama/ApiOnly (manual Developer restore); the `.git`-internals sandbox guard false-trips on any brief mentioning `.gitignore` (`WorkerSandboxCapabilityPlanner.cs:65` does `text.Contains(".git")`).
+
+## 2026-06-16 - Launcher hardening: stale-lock recovery + silent build + .build-lock gitignored
+
+Goal c7ca347f: Harden the launcher scripts. Developer task via Anthropic/claude-sonnet-4-6 (commit 54e92a8). This dispatch did NOT hang (clean exit 0) — the teardown hang is intermittent. Changes: `.gitignore` +`.build-lock`; mcg-orchestrator.cmd + .sh add stale-lock reclaim (remove the lock dir if its mtime is >60s old, i.e. left by a crashed prior invocation) and suppress build output (`>nul`/`>/dev/null`) with exit-code propagation.
+
+- Operator gate: full suite green (Core 275, Infrastructure 754); plus LIVE launcher smoke (not in the test suite): a normal command exits 0 with zero CA-warning lines, and a manually-backdated stale `.build-lock` is reclaimed and the command runs. Fixes the three issues this session repeatedly hit (lock brick, warning spam, nonzero exit on read commands).
+- Residual follow-up: reclaim is mtime-only (>60s), not PID-liveness as the brief also asked — a slow cold build (>60s) could be false-reclaimed by a concurrent invocation. Net-positive over today's permanent-brick-on-crash; PID-liveness hardening filed.
+
+## 2026-06-16 - Fix a lost-update data-loss footgun in the SQLite state store (src/Mcg
+
+Goal 779159c0: Fix a lost-update data-loss footgun in the SQLite state store (src/Mcg.AgentOrchestrator.Infrastructure/Persistence/S.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 4d03ce9). Acceptance passed.
+
+- Operator gate: Developer: pass — 754/754 Infrastructure tests green; 13 SQLite repo tests including 2 new regression tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - surgical data-loss fix with verification - scope was two files, required reading kernel aggregate to confirm no hard-removals exist, then deleting dead code paths.
+
+## 2026-06-16 - Make the JSON config stores write atomically and load corruption-safely, elim...
+
+Goal 0397cb10: Make the JSON config stores write atomically and load corruption-safely, eliminating the silent agent-catalog revert..... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5883fe1). Acceptance passed.
+
+- Operator gate: Developer: pass — 1042/1042 green; 13 new regression tests covering atomic write, .bak recovery, and corruption fallback across all three stores (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped file-IO hardening with regression tests - applied a well-defined atomic-write/bak-recovery pattern uniformly across three static store classes; no novel design decisions required.
+
+## 2026-06-16 - Fix a false-positive in the worker sandbox capability guard
+
+Goal ebc15ae9: Fix a false-positive in the worker sandbox capability guard. WorkerSandboxCapabilityPlanner (src/Mcg.AgentOrchestrato.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit aea0562). Acceptance passed.
+
+- Operator gate: Developer: pass — Failed: 0, Passed: 4, Skipped: 0, Total: 4 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted guard logic fix + test authoring - the change was a localized string-matching refinement; no architectural reasoning required.
+
+## 2026-06-16 - Harden the launcher build-lock reclaim to use process liveness, not just age ...
+
+Goal 0349baee: Harden the launcher build-lock reclaim to use process liveness, not just age (shell only, no C# changes). Goal c7ca34.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a9610cc). Acceptance passed.
+
+- Operator gate: Developer: not-run (shell-only changes, no C# test surface; behavioral logic verified by trace) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell scripting + logic analysis - two small script edits with clear behavioral spec; no compilation or test infra needed.
+
+## 2026-06-16 - Make background dispatch self-healing so a hung worker wrapper no longer requ...
+
+Goal 0bbe5928: Make background dispatch self-healing so a hung worker wrapper no longer requires manual recovery. Two layers, both i.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 2592440f9a8d0c8c3d2252cdf39dff0bffa86137). Acceptance passed.
+
+- Operator gate: Developer: 773/773 green including both new tests (pipe-drain timeout + claude-cli hung-wrapper reap) and both formerly-failing regressions (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - async pipe drain + process-tree signaling, test-suite regression fix - well-scoped infrastructure change with clear discriminant (childPid null = worker exited)
+
+## 2026-06-16 - Add a backlog-reopen CLI verb, the inverse of backlog-close, to the SQLite-ba...
+
+Goal 4bdddea9: Add a backlog-reopen CLI verb, the inverse of backlog-close, to the SQLite-backed backlog store. (1) Add a method to .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 49e0e72). Acceptance passed.
+
+- Operator gate: Developer: pass — 18/18 BacklogStore tests passed (17 pre-existing + 1 new BacklogStore_reopen_flips_done_back_to_open) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped CRUD extension - clear mirror pattern with no architectural ambiguity.
+
+## 2026-06-16 - Fix the orchestrator workspace so its
+
+Goal fb00a150: Fix the orchestrator workspace so its .orchestrator state directory is anchored to a deterministic repository root in.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 631b44a). Acceptance passed.
+
+- Operator gate: Developer: pass — 1058/1058 (275 Core + 783 Infrastructure including 10 new WorkspaceConsolidatorTests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file C# implementation with file system path resolution, SQLite state merging, and test writing - handled all parts without needing more capability.
+
+## 2026-06-16 - Let goal briefs be supplied from a file so large briefs no longer overflow th...
+
+Goal 779f1a7b: Let goal briefs be supplied from a file so large briefs no longer overflow the CLI parser or trip permission limits. .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a6a7256). Acceptance passed.
+
+- Operator gate: Developer: pass — 2 new tests green, 1061 total (275 Core + 786 Infrastructure), ALL GREEN (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped CLI parser extension with conditional file I/O - clear scope, no architectural ambiguity, single-pass implementation.
+
+## 2026-06-16 - Make goal-worktree removal robust so acceptance cleanup never needs manual in...
+
+Goal 8a2f1d4c: Make goal-worktree removal robust so acceptance cleanup never needs manual intervention. After a successful merge, ac.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 1986da1). Acceptance passed.
+
+- Operator gate: Developer: pass — 45/45 GoalWorktree tests green, 0 failures (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped infrastructure hardening, retry/idempotency logic + two new test cases - model handled the full read→reason→edit→verify cycle without needing escalation.
+
+## 2026-06-17 - Complete the worktree-removal hardening so the FIRST removal attempt succeeds...
+
+Goal 741b2c9a: Complete the worktree-removal hardening so the FIRST removal attempt succeeds even when a build handle is held. Goal .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a820a40). Acceptance passed.
+
+- Operator gate: Developer: pass — 789 Infrastructure tests green including the new test (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped C# file edit with injection pattern and test - clear implementation, no architectural uncertainty.
+
+## 2026-06-17 - Fix the acceptance-judge timeout at its root: the judge's CLI process runner ...
+
+Goal 267f98b6: Fix the acceptance-judge timeout at its root: the judge's CLI process runner hangs on the stdout pipe after the CLI e.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 13da2ae). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 1065/1065 pass; new drain-timeout test takes exactly 12s, confirming grandchild holds pipe until drain CancelAfter fires and kills the tree (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted bug fix (single method, bounded scope) with an integration test that spawns real processes to verify handle-inheritance behavior - reasoning depth matched the task.
+
+## 2026-06-17 - Link goals to their source backlog item and auto-close that item when the goa...
+
+Goal 8ba3c661: Link goals to their source backlog item and auto-close that item when the goal lands — the first coupled piece of the.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-17 - Spike: can the Claude Agent SDK drive a worker on the SUBSCRIPTION OAuth prof...
+
+Goal 6f486244: Spike: can the Claude Agent SDK drive a worker on the SUBSCRIPTION OAuth profile (no paid per-token API) from this .N.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a3b71f0). Acceptance passed.
+
+- Operator gate: Developer: not-run — doc-only deliverable, no code changed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - research/doc spike requiring SDK credential-chain analysis and event surface mapping; no implementation needed for STEP 1
+
+## 2026-06-17 - Re-enable recursive per-file diff judging for acceptance judges, now that the...
+
+Goal cd00dcb2: Re-enable recursive per-file diff judging for acceptance judges, now that the judge runner no longer hangs (goal 267f.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5fa3e9a). Acceptance passed.
+
+- Operator gate: Developer: pass — 32 SemanticAcceptance tests pass; full suite 1076/1076 green (ALL GREEN from Invoke-TestSummary) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped C# implementation + test fix in a well-structured codebase - no complex inference needed, just precise edits and build-test verification.
+
+## 2026-06-17 - Instrument acceptance-judge agreement so a future flip to a BLOCKING semantic...
+
+Goal 11a82ad6: Instrument acceptance-judge agreement so a future flip to a BLOCKING semantic gate can be earned with data, not faith.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 32556a2). Acceptance passed.
+
+- Operator gate: Developer: pass — 16 LoopHealth tests (all new + existing), 1080 total (277 Core + 803 Infrastructure), 0 failures (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped feature (new data types + calculations + tests in Core) - clean layering fit, no architectural ambiguity.
+
+## 2026-06-17 - Stop the acceptance-judge CLI lanes from timing out due to per-file fan-out
+
+Goal d24ad5cc: Stop the acceptance-judge CLI lanes from timing out due to per-file fan-out. Goal cd00dcb2 re-enabled per-file diff j.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 4383a65). Acceptance passed.
+
+- Operator gate: Developer: pass — 32/32 SemanticAcceptance tests pass including both new-behavior tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted interface extension + test correction - single-file logic change with clear spec.
+
+## 2026-06-17 - Fix the acceptance-judge codex/spark timeout: the judge process runner never ...
+
+Goal 49044456: Fix the acceptance-judge codex/spark timeout: the judge process runner never closes the child's stdin, so `codex exec.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 667d578). Acceptance passed.
+
+- Operator gate: Developer: Passed - Failed: 0, Passed: 33, Skipped: 0, Total: 33 (32 pre-existing + 1 new) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted bug fix with test addition - root cause was clearly diagnosed, fix is 2-line change plus helper extraction, no architectural ambiguity.
+
+## 2026-06-17 - Make the launcher resilient when a long-running App instance (serve-dashboard...
+
+Goal 42315600: Make the launcher resilient when a long-running App instance (serve-dashboard) holds App.dll, instead of silently fai.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5d5313d). Acceptance passed.
+
+- Operator gate: Developer: not-run (shell-only changes; no test suite covers launcher scripts) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell scripting task - straightforward batch + bash logic, no C# involved; no reasoning needed beyond mechanics of cmd label jumps and bash error handling.
+
+## 2026-06-17 - Make the legacy-workspace consolidation also migrate CONFIG files, not just g...
+
+Goal 2231d0f5: Make the legacy-workspace consolidation also migrate CONFIG files, not just goals — so the acceptance-judge registry .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 062a4b0). Acceptance passed.
+
+- Operator gate: Developer: pass — 13 WorkspaceConsolidator tests (9 existing + 4 new), full suite 1085/1085 green (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped file edit + test authoring with clear domain constraints - right size for the task.
+
+## 2026-06-17 - Reorganize the README into a Fundamentals/Advanced split (docs only) to match...
+
+Goal 8d287a9b: Reorganize the README into a Fundamentals/Advanced split (docs only) to match the collapsed CLI. The CLI now centers .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 61acdfa). Acceptance passed.
+
+- Operator gate: Developer: not-run (docs-only change; no tests apply) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - docs restructuring with CLI source cross-check - reading two source files to verify six verb names before writing kept the docs accurate; task required no generation or inference beyond writing.
+
+## 2026-06-17 - Remove the now-unnecessary one-time legacy-workspace migration code
+
+Goal df7d1260: Remove the now-unnecessary one-time legacy-workspace migration code. The workspace state issue is fixed: Orchestrator.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 640f21f). Acceptance passed.
+
+- Operator gate: Developer: pass — 277/277 Core.Tests + 799/799 Infrastructure.Tests (ALL GREEN) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped deletion with namespace resolution wrinkle - task was targeted dead-code removal; the only non-trivial step was discovering `OrchestratorWorkspace` lives in `App.Orchestration` not `Infrastructure`, caught immediately by the build.
+
+## 2026-06-17 - Fix the flaky DispatchProcessHost grandchild-pipe test
+
+Goal 003d2850: Fix the flaky DispatchProcessHost grandchild-pipe test. In tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DispatchP.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 8b0a7f5). Acceptance passed.
+
+- Operator gate: Developer: pass - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 12s (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted single-file test fix with no design decisions - straightforward file-handle race analysis and implementation.
+
+## 2026-06-17 - Fix a false-positive in the verification-policy compiler at src/Mcg
+
+Goal 73a73b1a: Fix a false-positive in the verification-policy compiler at src/Mcg.AgentOrchestrator.Core/Application/VerificationPo.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 058891a). Acceptance passed.
+
+- Operator gate: Developer: pass — 283/283 Core.Tests green; 7 VerificationPolicyCompiler-specific tests (6 new + 1 updated existing) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted predicate fix with test coverage - scoped change, well-specified behavior.
+
+## 2026-06-17 - Add --body-file (and --reason-file) options to the backlog CLI verbs, mirrori...
+
+Goal 72389a42: Add --body-file (and --reason-file) options to the backlog CLI verbs, mirroring the existing --brief-file on simple-g.... Developer task via OpenAI/gpt-5.5 (exit 0, commit 0238c687189f737f970613bb8043b36f5d0d1e7f). Acceptance passed.
+
+- Operator gate: Developer: pass - 3/3 focused backlog file-option tests (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped CLI/parser/test change - enough context and code-editing accuracy for a small .NET change.
+
+## 2026-06-17 - Auto-run verification-policy-required acceptance checks so required coverage ...
+
+Goal a42592f4: Auto-run verification-policy-required acceptance checks so required coverage runs WITHOUT hand-editing config/accepta.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 918f60cc66ce5582ae273abba64b55fcc90767a8). Acceptance passed.
+
+- Operator gate: Developer: pass — 808/808 Infrastructure + 277/277 Core (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - moderate implementation + integration analysis - required understanding policy/manifest/verifier interaction and classifying dedup edge cases; adequate for the scope.
+
+## 2026-06-17 - Add a per-dispatch model override to subscription-dispatch so one goal can ru...
+
+Goal c30e4f3b: Add a per-dispatch model override to subscription-dispatch so one goal can run through a chosen model (e.g. gpt-5.3-c.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 9d48c94). Acceptance passed.
+
+- Operator gate: Developer: pass/1092 green (283 Core + 809 Infrastructure), 4 new override tests all pass (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file C# feature threading a record through 3 layers + tests - right size for this kind of structured implementation task.
+
+## 2026-06-17 - Complete the verification-policy smoke-check scope fix from goal 73a73b1a
+
+Goal 167378ec: Complete the verification-policy smoke-check scope fix from goal 73a73b1a. That change set the smoke check in src/Mcg.... Developer task via Anthropic/gpt-5.3-codex-spark (exit 0, commit f89f972). Acceptance passed.
+
+- Operator gate: Developer: pass — `8 passed, 0 failed` (exit 0)
+- Model fit: Anthropic/gpt-5.3-codex-spark - adequate - deterministic, scoped, two-file C# rule correction with focused behavioral tests - exactly matched task shape.

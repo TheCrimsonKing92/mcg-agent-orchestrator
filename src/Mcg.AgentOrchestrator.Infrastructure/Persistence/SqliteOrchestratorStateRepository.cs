@@ -185,19 +185,6 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         var snapshot = kernel.ExportSnapshot();
         var updatedAt = DateTimeOffset.UtcNow.ToString("O");
 
-        var existingIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        await using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText = "SELECT id FROM goals";
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-                existingIds.Add(reader.GetString(0));
-        }
-
-        var currentIds = snapshot.Goals
-            .Select(g => g.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         foreach (var goal in snapshot.Goals)
         {
             var json = JsonSerializer.Serialize(goal, SerializerOptions);
@@ -221,15 +208,6 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        foreach (var id in existingIds.Where(id => !currentIds.Contains(id)))
-        {
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "DELETE FROM goals WHERE id = $id";
-            cmd.Parameters.AddWithValue("$id", id);
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await RunNonQueryAsync(conn, "DELETE FROM human_input_requests", cancellationToken);
         foreach (var request in snapshot.HumanInputRequests)
         {
             var json = JsonSerializer.Serialize(request, SerializerOptions);
@@ -237,6 +215,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             cmd.CommandText = """
                 INSERT INTO human_input_requests (id, goal_id, snapshot_json)
                 VALUES ($id, $goal_id, $json)
+                ON CONFLICT(id) DO UPDATE SET
+                    goal_id       = excluded.goal_id,
+                    snapshot_json = excluded.snapshot_json
                 """;
             cmd.Parameters.AddWithValue("$id", request.Id);
             cmd.Parameters.AddWithValue("$goal_id", request.GoalId);

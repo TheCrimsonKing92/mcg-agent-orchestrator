@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -24,8 +26,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
             {
-                CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --simple");
-                var simpleAliasParts = new List<string> { "simple-goal", parts[1] };
+                var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple");
+                var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
+                foreach (var flag in parts.Skip(2).Where(p =>
+                    p.StartsWith("--", StringComparison.Ordinal) &&
+                    !p.Equals("--simple", StringComparison.OrdinalIgnoreCase) &&
+                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)))
+                    simpleAliasParts.Add(flag);
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
             }
             // --from-backlog: delegate to backlog-intake (objective used as heading filter)
@@ -42,32 +49,42 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --run: create 5-role goal then delegate to run-goal
             if (HasCliConfirmation(parts, "--run"))
             {
-                CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> --run --confirm-batch-start");
-                var runObjective = parts[1];
+                var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run");
                 var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, runObjective);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                runParts.AddRange(parts.Skip(2).Where(p => !p.Equals("--run", StringComparison.OrdinalIgnoreCase)));
+                runParts.AddRange(parts.Skip(2).Where(p =>
+                    !p.Equals("--run", StringComparison.OrdinalIgnoreCase) &&
+                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)));
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
-            CliArgumentParser.RequirePartCount(parts, 2, "goal <objective> [--simple] [--from-backlog] [--run]");
-            var goalObjectivePlan = GoalObjectivePlanner.Build(parts[1], simple: false);
+            var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
+            var goalObjectivePlan = GoalObjectivePlanner.Build(goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, parts[1]);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
         case "simple-goal":
-            CliArgumentParser.RequirePartCount(parts, 2, "simple-goal <objective>");
-            var simpleObjectivePlan = GoalObjectivePlanner.Build(parts[1], simple: true);
+            var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path>");
+            var simpleObjectivePlan = GoalObjectivePlanner.Build(simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, parts[1]);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, simpleObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
+            if (HasCliConfirmation(parts, "--dispatch"))
+            {
+                EnsureCliConfirmation(
+                    parts,
+                    "--confirm-dispatch-start",
+                    "simple-goal --dispatch requires --confirm-dispatch-start as the certainty signal.");
+                var dispatchParts = new List<string> { "subscription-dispatch", "1", "--confirm-dispatch-start" };
+                TryExecuteWorkerCommand("subscription-dispatch", dispatchParts, context);
+            }
             return true;
 
         case "lifecycle-simple-goal":
@@ -78,8 +95,26 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             HandleLifecycleGoal(context, parts, simple: false);
             return true;
 
+        case "goal-depends":
+        {
+            CliArgumentParser.RequirePartCount(parts, 4, "goal-depends <goal-prefix> --on <dependency-prefix>");
+            var dependentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var onPrefix = GetFlagValue(parts, "--on")
+                ?? throw new ArgumentException("goal-depends requires --on <dependency-prefix>");
+            var dependencyGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, onPrefix);
+            context.Kernel.SetGoalDependency(dependentGoal.Id, dependencyGoal.Id);
+            Console.WriteLine($"Dependency set: {dependentGoal.Id.Value[..8]} depends on {dependencyGoal.Id.Value[..8]}");
+            return true;
+        }
+
         case "goal-plan":
             return HandleGoalPlan(context, parts);
+
+        case "plan":
+            return HandlePlan(context, parts);
+
+        case "ideate":
+            return HandleIdeate(context, parts);
 
         case "intent-template":
             return HandleOperatorIntentTemplate(context, parts);
@@ -188,6 +223,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintAgents(context.Agents);
             return false;
 
+        case "model-functions":
+            ConsoleViews.PrintModelFunctions(ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath));
+            return false;
+
+        case "model-function-add":
+            CliArgumentParser.RequirePartCount(parts, 5, "model-function-add <purpose> <lane> <provider> <model> [name] [--subscription <worker-profile> [--subscription-model <alias>] [--subscription-reasoning <effort>]]");
+            AddModelFunctionBinding(context, parts);
+            return false;
+
         case "status":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             ConsoleViews.PrintGoal(context.CurrentGoal);
@@ -225,6 +269,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             HandleRecordGoal(context);
             return false;
+
+        case "recover":
+            return HandleRecover(context, parts);
 
         case "failure-triage":
             var triagePolicy = ResolveCliAutonomyPolicy(parts);
@@ -297,11 +344,24 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "acceptance":
             var acceptancePolicy = ResolveCliAutonomyPolicy(parts);
             var skipVerify = HasCliConfirmation(parts, "--skip-verify");
-            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify");
+            var keepWorkspace = HasCliConfirmation(parts, "--keep-workspace");
+            var noRecord = HasCliConfirmation(parts, "--no-record");
+            var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
+            AutoVerifyFromGitEvidence(context, context.CurrentGoal);
             ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
-            RunAcceptanceWorkspaceMerge(context, skipVerify);
+            if (RunAcceptanceWorkspaceMerge(context, skipVerify))
+            {
+                if (!noRecord)
+                {
+                    AutoRecordDogfoodEntry(context);
+                }
+
+                AutoCloseSourceBacklogItem(context.CurrentGoal, context.Workspace.BacklogStorePath);
+                CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
+            }
+
             return false;
 
         case "workspace":
@@ -460,6 +520,60 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return landResult.MainAdvanced;
 
         case "conduct":
+            if (HasCliConfirmation(parts, "--loop"))
+            {
+                var loopPolicyName = GetFlagValue(parts, "--policy");
+                var loopPolicy = loopPolicyName is null
+                    ? ConductorAutonomyPolicy.Default
+                    : ConductorAutonomyPolicy.All.FirstOrDefault(
+                        p => p.Name.Equals(loopPolicyName, StringComparison.OrdinalIgnoreCase))
+                      ?? throw new InvalidOperationException(
+                        $"Unknown conductor policy '{loopPolicyName}'. Valid: {string.Join(", ", ConductorAutonomyPolicy.All.Select(p => p.Name))}");
+                int? loopMaxIter = null;
+                if (GetFlagValue(parts, "--max-iterations") is { } miStr)
+                    loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
+
+                // --watch: sleep instead of exiting when all goals are held, enabling continuous unattended operation.
+                // Accepts --poll-seconds N (preferred) or legacy --watch-interval N.
+                TimeSpan? watchInterval = null;
+                if (HasCliConfirmation(parts, "--watch"))
+                {
+                    var intervalSec = GetFlagValue(parts, "--poll-seconds") ?? GetFlagValue(parts, "--watch-interval");
+                    var seconds = intervalSec is not null
+                        ? int.Parse(intervalSec, System.Globalization.CultureInfo.InvariantCulture)
+                        : ConductorBatchLoop.DefaultWatchIntervalSeconds;
+                    watchInterval = TimeSpan.FromSeconds(seconds);
+                    Console.WriteLine($"[conduct --loop --watch] Watch mode active; will sleep {seconds}s between ticks when all goals are held.");
+                }
+
+                // --max-duration N: stop after N seconds of wall-clock time (independent of --max-iterations).
+                TimeSpan? maxDuration = null;
+                if (GetFlagValue(parts, "--max-duration") is { } mdStr)
+                    maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
+
+                // SSE push: discover dashboard URL and build onTick callback.
+                Action<BatchTickSummary>? onTick = null;
+                var dashboardUrl = GetFlagValue(parts, "--dashboard-url")
+                    ?? ConductorTickPusher.TryReadDashboardUrl(context.Workspace.DashboardUrlFilePath);
+                if (dashboardUrl is not null)
+                {
+                    Console.WriteLine($"[conduct --loop] Dashboard SSE push enabled: {dashboardUrl}");
+                    onTick = ConductorTickPusher.CreateCallback(dashboardUrl);
+                }
+
+                var loopDriver = new ConductorDriver(
+                    context.Kernel,
+                    context.Workspace,
+                    context.AcceptanceVerifier,
+                    context.Agents,
+                    context.WorkerProfiles);
+                var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                var loopSummary = new ConductorBatchLoop().Run(
+                    context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
+                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration);
+                Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
+                return loopSummary.Escalated == 0;
+            }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var conductPolicyName = GetFlagValue(parts, "--policy");
@@ -490,6 +604,42 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
     }
 }
 
+// Adds/replaces an orchestrator-internal model-function binding (e.g. an acceptance-judge lane).
+// Distinct from agents: these are models the orchestrator invokes for its own functions, not workers.
+private static void AddModelFunctionBinding(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var purpose = parts[1];
+    var lane = CliArgumentParser.ParseModelLane(parts[2]);
+    var provider = parts[3];
+    var model = parts[4];
+    var name = parts.Count > 5 && !parts[5].StartsWith("--", StringComparison.Ordinal) ? parts[5] : null;
+    var subscriptionMode = lane == ModelLane.Local ? SubscriptionMode.LocalBridge : SubscriptionMode.ApiKey;
+    var subscriptionProfileName = GetFlagValue(parts, "--subscription");
+    var subscriptionModelAlias = GetFlagValue(parts, "--subscription-model");
+    var subscriptionReasoning = GetFlagValue(parts, "--subscription-reasoning");
+    SubscriptionLaunchProfile? subscription = subscriptionProfileName is not null
+        ? new SubscriptionLaunchProfile(subscriptionProfileName, subscriptionModelAlias, subscriptionReasoning)
+        : null;
+    var binding = new ModelFunctionBinding(
+        purpose,
+        lane,
+        new ModelProfile(provider, model, ModelCapability.Text, subscriptionMode),
+        name,
+        subscription);
+
+    var path = context.Workspace.ModelFunctionCatalogPath;
+    var bindings = ModelFunctionCatalogStore.Load(path).Bindings
+        .Where(existing => !(string.Equals(existing.Purpose, purpose, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.Model.ProviderName, provider, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.Model.ModelName, model, StringComparison.OrdinalIgnoreCase)))
+        .Append(binding)
+        .ToList();
+
+    var catalog = new ModelFunctionCatalog(bindings);
+    ModelFunctionCatalogStore.Save(path, catalog);
+    ConsoleViews.PrintModelFunctions(catalog);
+}
+
 private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> parts)
 {
     var agentName = parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal) ? parts[4] : null;
@@ -500,6 +650,88 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
         SubscriptionModelAlias: subscriptionModel,
         ComplexProviderName: complexModelName is null ? null : parts[2],
         ComplexModelName: complexModelName));
+}
+
+// Deterministic recording: acceptance auto-appends a DOGFOOD_LOG entry rendered from the goal's
+// receipts, so a landed goal is journaled without the operator hand-writing prose. --no-record opts out.
+private static void AutoRecordDogfoodEntry(CliExecutionContext context)
+{
+    var goal = context.CurrentGoal!;
+    var logPath = Path.Combine(context.Workspace.ExecutionDirectory, "DOGFOOD_LOG.md");
+    if (!File.Exists(logPath))
+    {
+        return;
+    }
+
+    var text = DogfoodLogRenderer.Render(goal).Render();
+    File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + text);
+    Console.WriteLine($"Recorded DOGFOOD entry for goal {goal.Id.Value[..8]} to {logPath}.");
+    CommitDogfoodEntry(context.Workspace.ExecutionDirectory, goal.Id.Value[..8]);
+}
+
+// Closes the linked backlog item (if any) when a goal lands. Idempotent: already-closed or
+// absent items are a safe no-op. Swallows all store exceptions so acceptance never fails here.
+internal static bool AutoCloseSourceBacklogItem(Goal? goal, string backlogStorePath)
+{
+    if (goal?.SourceBacklogItemId is null)
+        return false;
+
+    var store = new BacklogStore(backlogStorePath);
+    var closed = store.TryCloseByIdAsync(goal.SourceBacklogItemId, $"Goal {goal.Id.Value[..8]} landed.").GetAwaiter().GetResult();
+    Console.WriteLine(closed
+        ? $"Closed backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]} landed)."
+        : $"Backlog item {goal.SourceBacklogItemId} already closed or not found (no-op).");
+    return closed;
+}
+
+private static void CommitDogfoodEntry(string executionDirectory, string goalPrefix)
+{
+    var add = RunGit(executionDirectory, "add", "DOGFOOD_LOG.md");
+    if (add.ExitCode != 0)
+    {
+        Console.WriteLine($"Dogfood commit skipped: git add failed ({add.Error}).");
+        return;
+    }
+
+    var diff = RunGit(executionDirectory, "diff", "--cached", "--quiet", "DOGFOOD_LOG.md");
+    if (diff.ExitCode == 0)
+    {
+        return;
+    }
+
+    var commit = RunGit(executionDirectory, "commit", "-m", $"Record dogfood entry for goal {goalPrefix}");
+    if (commit.ExitCode == 0)
+    {
+        Console.WriteLine($"Committed DOGFOOD_LOG.md for goal {goalPrefix}.");
+    }
+    else
+    {
+        Console.WriteLine($"Dogfood commit failed: {commit.Error}");
+    }
+}
+
+private static (int ExitCode, string Output, string Error) RunGit(string workingDirectory, params string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WorkingDirectory = workingDirectory
+    };
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start git process.");
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit(60000);
+    return (process.ExitCode, output.Trim(), error.Trim());
 }
 
 private static void HandleRecordGoal(CliExecutionContext context)
@@ -635,6 +867,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance passed and merge completed.");
+    AutoCloseSourceBacklogItem(goal, context.Workspace.BacklogStorePath);
     if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, $"{commandName} workspace cleanup", out var cleanupPolicyError))
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", cleanupPolicyError);
@@ -942,9 +1175,29 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     var item = plan.Items.Single();
+    var backlogItemId = BacklogStore.SlugId(item.Heading);
+
+    // Skip intake if the item is already Done in the backlog store.
+    if (!string.IsNullOrEmpty(backlogItemId))
+    {
+        var store = new BacklogStore(context.Workspace.BacklogStorePath);
+        var existing = store.GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult();
+        if (existing is { Status: BacklogItemStatus.Done })
+        {
+            Console.WriteLine($"Backlog item '{item.Heading}' is already Done; no goal created.");
+            return false;
+        }
+    }
+
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective)
         : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, item.SuggestedObjective);
+
+    if (!string.IsNullOrEmpty(backlogItemId))
+    {
+        context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, backlogItemId);
+    }
+
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
@@ -1057,6 +1310,118 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
             : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
     }
+
+    return true;
+}
+
+private const int IdeationSampleCount = 3;
+
+private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var appendBacklog = HasCliConfirmation(parts, "--append-backlog");
+
+    Console.WriteLine("Gathering evidence context...");
+    var evidenceContext = IdeationProposalPlanner.BuildEvidenceContext(context.Kernel, context.Workspace);
+
+    // Use Ideation role when a matching agent is configured; fall back to Planner for LLM-reasoning lane.
+    var ideationRole = context.Agents.Any(a => a.Status == AgentStatus.Available && a.Role == AgentRole.Ideation)
+        ? AgentRole.Ideation
+        : AgentRole.Planner;
+
+    var prompt = IdeationProposalPlanner.BuildPrompt(evidenceContext);
+    Console.WriteLine($"Running ideation worker ({IdeationSampleCount} samples)...");
+    var sampleTasks = Enumerable.Range(0, IdeationSampleCount).Select(_ =>
+    {
+        var sampleKernel = new AgentOrchestratorKernel();
+        var sampleTaskSpec = new TaskSpec(
+            TaskId.New(),
+            prompt,
+            ideationRole,
+            "Output only a fenced JSON array of ranked idea objects with title, rationale, scope, value, effort, and risk fields.");
+        var sampleGoal = sampleKernel.CreateGoal("Propose improvement ideas", [sampleTaskSpec]);
+        sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
+        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers);
+        return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
+            .ContinueWith(__ => IdeationProposalPlanner.Parse(
+                sampleTaskSpec.LastExecution?.Output ?? string.Empty),
+                TaskScheduler.Default);
+    }).ToArray();
+
+    var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
+    var plan = IdeationProposalPlanner.SelectBestOfN(candidates);
+    ConsoleViews.PrintIdeationPlan(plan);
+
+    if (appendBacklog && plan.IsValid && plan.Ideas.Count > 0)
+    {
+        var backlogPath = Path.Combine(context.Workspace.ExecutionDirectory, "BACKLOG.md");
+        if (!File.Exists(backlogPath))
+            throw new InvalidOperationException($"BACKLOG.md not found at {backlogPath}; cannot append ideas.");
+        var entries = string.Concat(plan.Ideas.Select(IdeationProposalPlanner.FormatBacklogEntry));
+        File.AppendAllText(backlogPath, entries);
+        Console.WriteLine($"Appended {plan.Ideas.Count} idea(s) to BACKLOG.md.");
+    }
+    else if (appendBacklog && !plan.IsValid)
+    {
+        throw new InvalidOperationException(
+            $"ideate --append-backlog blocked: plan has {plan.ValidationErrors.Count} validation error(s). Fix hand-wavy ideas before appending.");
+    }
+
+    return plan.IsValid;
+}
+
+private const int PlanSampleCount = 3;
+
+private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    CliArgumentParser.RequirePartCount(parts, 2, "plan <direction> [--confirm-plan]");
+    var direction = parts[1];
+    var confirmPlan = HasCliConfirmation(parts, "--confirm-plan");
+
+    var objPlan = GoalObjectivePlanner.Build(direction, simple: true);
+    GoalObjectivePlanner.ThrowIfBlocked(objPlan);
+    ConsoleViews.PrintGoalObjectivePlan(objPlan);
+
+    Console.WriteLine($"Running planner decomposition ({PlanSampleCount} samples)...");
+    var sampleTasks = Enumerable.Range(0, PlanSampleCount).Select(_ =>
+    {
+        var sampleKernel = new AgentOrchestratorKernel();
+        var sampleTaskSpec = new TaskSpec(
+            TaskId.New(),
+            GoalDagDecompositionPlanner.BuildPrompt(direction),
+            AgentRole.Planner,
+            "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
+        var sampleGoal = sampleKernel.CreateGoal(direction, [sampleTaskSpec]);
+        sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
+        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers);
+        return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
+            .ContinueWith(__ => GoalDagDecompositionPlanner.Parse(
+                direction, sampleTaskSpec.LastExecution?.Output ?? string.Empty),
+                TaskScheduler.Default);
+    }).ToArray();
+
+    var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
+    var dagPlan = GoalDagDecompositionPlanner.SelectBestOfN(candidates);
+    ConsoleViews.PrintGoalDagPlan(dagPlan);
+
+    if (!confirmPlan)
+        return false;
+
+    if (!dagPlan.IsValid)
+        throw new InvalidOperationException(
+            $"Plan has {dagPlan.ValidationErrors.Count} validation error(s); inspect the preview and fix the direction before confirming.");
+
+    var goalIds = new Dictionary<string, GoalId>(StringComparer.OrdinalIgnoreCase);
+    foreach (var node in dagPlan.Nodes)
+    {
+        context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            context.Kernel, context.Agents, node.Objective);
+        goalIds[node.Id] = context.CurrentGoal.Id;
+        Console.WriteLine($"Created goal {context.CurrentGoal.Id.Value[..8]} for plan node {node.Id}.");
+    }
+
+    foreach (var node in dagPlan.Nodes)
+        foreach (var depId in node.DependsOn)
+            context.Kernel.SetGoalDependency(goalIds[node.Id], goalIds[depId]);
 
     return true;
 }
@@ -1197,8 +1562,27 @@ private static bool IsCliValueFlag(string part)
 {
     return part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
-        part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase);
+        part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--subscription", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--subscription-model", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--subscription-reasoning", StringComparison.OrdinalIgnoreCase);
+}
+
+private static string ResolveBriefObjective(IReadOnlyList<string> parts, string usage)
+{
+    var briefFilePath = GetFlagValue(parts, "--brief-file");
+    if (briefFilePath is not null)
+    {
+        if (!File.Exists(briefFilePath))
+        {
+            throw new InvalidOperationException($"--brief-file not found: {briefFilePath}");
+        }
+        return File.ReadAllText(briefFilePath, System.Text.Encoding.UTF8);
+    }
+    CliArgumentParser.RequirePartCount(parts, 2, usage);
+    return parts[1];
 }
 
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)
@@ -1384,8 +1768,26 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
     }
 
+    // Advisory only (does not gate the merge): ask a local judge whether the diff actually
+    // accomplishes the objective, beyond passing tests. Records a receipt for the eventual
+    // local-vs-subscription comparison and blocking flip. Any failure is swallowed.
+    RunAdvisorySemanticAcceptance(context, goal, worktreePath, verification);
+
     var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
     var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+    if (merge is { FastForwarded: false })
+    {
+        // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
+        // onto main and retry the ff instead of punting the merge to the operator. A rebase
+        // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
+        var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+        Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
+        if (rebase.UpdatedBranch)
+        {
+            merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+        }
+    }
+
     if (merge is not null)
     {
         Console.WriteLine($"Workspace merge: {FormatWorkspaceMerge(merge)}");
@@ -1398,6 +1800,307 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     return true;
+}
+
+// Advisory semantic-acceptance pass: the configured judge lanes decide whether the diff actually
+// accomplishes the objective (not merely that tests pass), recorded as a receipt. ADVISORY — it
+// never changes the merge outcome and swallows every failure. Dormant unless one or more Judge-role
+// agents are configured (one per lane: free-local / cheap-API / capable), so acceptance is
+// unchanged on machines/tenants without any. Judges run in parallel; their agreement is the signal
+// for whether a cheaper lane suffices before the eventual blocking flip.
+private static void RunAdvisorySemanticAcceptance(
+    CliExecutionContext context,
+    Goal goal,
+    string? worktreePath,
+    AcceptanceVerificationResult? verification)
+{
+    if (worktreePath is null)
+    {
+        return;
+    }
+
+    var modelFunctions = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
+    var baseJudges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers, context.WorkerProfiles);
+    if (baseJudges.Count == 0)
+    {
+        return;
+    }
+
+    try
+    {
+        var criteria = goal.Tasks
+            .Select(task => task.VerificationPlan)
+            .Where(plan => !string.IsNullOrWhiteSpace(plan))
+            .Select(plan => plan!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var testSummary = verification?.Checks is { Count: > 0 } checks
+            ? string.Join(Environment.NewLine, checks
+                .Where(check => !string.IsNullOrWhiteSpace(check.ResultSummary))
+                .Select(check => $"{check.Name}: {check.ResultSummary}"))
+            : null;
+
+        var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath);
+        var inputs = new SemanticAcceptanceInputs(
+            goal.Objective,
+            criteria,
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
+            GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
+            testSummary,
+            perFileDiffs);
+
+        var judges = baseJudges
+            .Select(j => (ISemanticJudge)new RecursivePerFileSemanticJudge(j))
+            .ToList();
+
+        var report = SemanticAcceptanceEvaluator
+            .EvaluateAsync(judges, inputs, TimeSpan.FromSeconds(90))
+            .GetAwaiter()
+            .GetResult();
+
+        PrintSemanticAcceptanceReport(report);
+        AppendSemanticAcceptanceReceipt(context, goal, report);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Semantic acceptance (advisory): skipped after error: {ex.Message}");
+    }
+}
+
+private static void PrintSemanticAcceptanceReport(SemanticAcceptanceReport report)
+{
+    Console.WriteLine("Semantic acceptance (advisory — does not gate the merge):");
+    foreach (var entry in report.Verdicts)
+    {
+        var verdict = entry.Verdict;
+        if (!verdict.IsValid)
+        {
+            Console.WriteLine($"  {entry.Judge}: no verdict ({string.Join("; ", verdict.ValidationErrors)})");
+            continue;
+        }
+
+        var summary = verdict.CriteriaMet ? "criteria MET" : "criteria NOT met";
+        Console.WriteLine($"  {entry.Judge}: {summary} (confidence {verdict.Confidence})");
+        foreach (var reason in verdict.Reasons.Take(3))
+        {
+            Console.WriteLine($"    - {reason}");
+        }
+
+        foreach (var unmet in verdict.UnmetCriteria)
+        {
+            Console.WriteLine($"    unmet: {unmet}");
+        }
+    }
+}
+
+private static void AppendSemanticAcceptanceReceipt(
+    CliExecutionContext context,
+    Goal goal,
+    SemanticAcceptanceReport report)
+{
+    var receipt = new
+    {
+        at = DateTimeOffset.UtcNow,
+        goalId = goal.Id.Value,
+        objective = goal.Objective,
+        consensus = report.Consensus,
+        judges = report.Verdicts.Select(entry => new
+        {
+            judge = entry.Judge,
+            valid = entry.Verdict.IsValid,
+            criteriaMet = entry.Verdict.CriteriaMet,
+            confidence = entry.Verdict.Confidence,
+            reasons = entry.Verdict.Reasons,
+            unmetCriteria = entry.Verdict.UnmetCriteria,
+            errors = entry.Verdict.ValidationErrors
+        })
+    };
+
+    var path = context.Workspace.SemanticAcceptanceLogPath;
+    var directory = Path.GetDirectoryName(path);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.AppendAllText(path, JsonSerializer.Serialize(receipt) + Environment.NewLine);
+}
+
+// Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the
+// operator used to memorize. It answers any open human-input requests (which `SubmitHumanInput`
+// flips to Running), normalizes stuck/orphaned tasks to Failed so `RetryTask` accepts them, then
+// retries them back to a dispatchable state — all with the single operator note. Genuinely running
+// tasks (a live process) are left alone.
+private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    if (parts.Count < 3)
+    {
+        throw new ArgumentException("Usage: recover <goal-prefix> <note>");
+    }
+
+    var policy = ResolveCliAutonomyPolicy(parts);
+    context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+    var goal = context.CurrentGoal;
+    var note = parts[2];
+    EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
+
+    var actions = 0;
+    foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
+    {
+        context.Kernel.SubmitHumanInput(request.Id, note);
+        Console.WriteLine($"recover: answered human-input request {request.Id.Value[..8]}.");
+        actions++;
+    }
+
+    foreach (var task in goal.Tasks)
+    {
+        if (task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled ||
+            task.LastProcess is { IsRunning: true })
+        {
+            continue;
+        }
+
+        var stuck = task.Status is WorkTaskStatus.Failed or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman ||
+            task.LastVerification is { Succeeded: false } ||
+            task.SubscriptionRetryAfter is not null;
+        if (!stuck)
+        {
+            continue;
+        }
+
+        // RetryTask refuses Running/WaitingForHuman; normalize to Failed first (the dance's middle step).
+        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
+        {
+            context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
+        }
+
+        context.Kernel.RetryTask(goal.Id, task.Id, note);
+        Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+        actions++;
+    }
+
+    if (actions == 0)
+    {
+        Console.WriteLine("recover: nothing to recover (no pending input or stuck tasks).");
+    }
+
+    ConsoleViews.PrintGoal(goal);
+    return actions > 0;
+}
+
+// Deterministic verification from git ground truth: when a goal still has un-verified work tasks
+// but the goal branch carries committed changes against main on a CLEAN worktree, record the
+// verification from that evidence instead of requiring a manual `verify-manual`. The acceptance
+// suite + evidence bundle remain the authoritative substance gates downstream (a failed suite or
+// a generated/forbidden/no-relevant-change diff still blocks the merge), so this only removes the
+// bookkeeping step, never the safety gate.
+private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal goal)
+{
+    if (goal.Status == GoalStatus.Completed)
+    {
+        return;
+    }
+
+    var pending = goal.Tasks
+        .Where(t => t.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+        .ToList();
+    if (pending.Count == 0)
+    {
+        return;
+    }
+
+    var executionDirectory = context.Workspace.ExecutionDirectory;
+    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    if (worktree is null ||
+        !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
+        !GoalWorktrees.HasChangesAgainstMain(executionDirectory, goal.Id))
+    {
+        return;
+    }
+
+    var note =
+        $"Auto-verified from git ground truth: committed changes on {GoalWorktrees.BranchName(goal.Id)} " +
+        "against main on a clean worktree. The acceptance suite and evidence bundle are the authoritative gates.";
+    foreach (var task in pending)
+    {
+        context.Kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, note, worktree, DateTimeOffset.UtcNow));
+        Console.WriteLine($"Auto-verified task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} from git ground truth.");
+    }
+}
+
+// Deterministic chorekeeping: dispatch owns workspace creation so the operator never hand-runs
+// `workspace create` before dispatching. Idempotent — a no-op when the worktree already exists.
+// Without this, ResolveExecutionDirectory silently falls back to the repo root and a dispatch
+// would prepare context artifacts into the main checkout.
+private static void EnsureGoalWorkspaceForDispatch(CliExecutionContext context, Goal goal)
+{
+    if (GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null)
+    {
+        return;
+    }
+
+    // Deterministic creation needs a git work tree to host the worktree; outside a git repo,
+    // fall back to the existing execution-directory resolution rather than failing the dispatch.
+    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    {
+        return;
+    }
+
+    var branch = GoalWorktrees.BranchName(goal.Id);
+    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
+    var path = GoalWorktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
+    GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", path);
+    Console.WriteLine($"Workspace auto-created: {path} (branch {branch})");
+}
+
+// Deterministic post-merge chorekeeping: the acceptance path owns workspace cleanup so the
+// operator never hand-runs `workspace remove` after a successful merge. Gated by autonomy
+// policy and journaled. A policy block or --keep-workspace leaves the workspace in place and
+// is NOT treated as a failure (the merge already succeeded); an incomplete removal (e.g. a
+// lock holder) prints a resume hint rather than throwing.
+private static void CleanupGoalWorkspaceAfterMerge(
+    CliExecutionContext context, Goal goal, AutonomyPolicy policy, bool keepWorkspace)
+{
+    var goalPrefix = goal.Id.Value[..8];
+    if (keepWorkspace)
+    {
+        Console.WriteLine($"Workspace kept (--keep-workspace). Remove later with: workspace remove {goalPrefix}");
+        return;
+    }
+
+    if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "workspace cleanup", out _))
+    {
+        Console.WriteLine(
+            $"Workspace cleanup skipped by policy. Remove with: workspace remove {goalPrefix} --autonomy {AutonomyPolicy.SupervisedAuto.Name}");
+        return;
+    }
+
+    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Acceptance removing goal workspace.");
+    GoalWorktreeRemoveResult removeResult;
+    try
+    {
+        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id);
+    }
+    catch (InvalidOperationException ex)
+    {
+        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
+        Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
+        return;
+    }
+
+    PrintWorkspaceRemoveResult(removeResult);
+    if (removeResult.IsComplete)
+    {
+        GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+    }
+    else
+    {
+        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+    }
 }
 
 private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)

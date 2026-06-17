@@ -10,7 +10,8 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
         TryExecuteSystemCommand(command, parts, context) ??
         TryExecuteGoalCommand(command, parts, context) ??
         TryExecuteTaskCommand(command, parts, context) ??
-        TryExecuteWorkerCommand(command, parts, context);
+        TryExecuteWorkerCommand(command, parts, context) ??
+        TryExecuteBacklogCommand(command, parts, context);
 
     if (handled is not null)
     {
