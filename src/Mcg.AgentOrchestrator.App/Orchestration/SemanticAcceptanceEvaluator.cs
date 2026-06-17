@@ -229,9 +229,12 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
 
 // Decorator that runs a leaf judge once per changed file rather than once over the whole diff,
 // fixing the 6KB truncation blind spot for large changes. Falls back to whole-diff judging when
-// PerFileDiffs is empty (graceful degradation for callers that don't populate it).
+// PerFileDiffs is empty, all files are whitespace-only, or the substantive file count exceeds the
+// cap (prevents excessive leaf invocations on very large changes).
 internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
 {
+    internal const int MaxPerFileJudgeCalls = 10;
+
     private readonly ISemanticJudge _leaf;
 
     public RecursivePerFileSemanticJudge(ISemanticJudge leaf) => _leaf = leaf;
@@ -245,15 +248,23 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
         CancellationToken cancellationToken)
     {
         var perFileDiffs = inputs.PerFileDiffs;
-        // CLI judges have a cold-start cost per invocation; fan-out multiplies that cost N-fold and
-        // caused observed 90s timeouts on 3-file changes. Judge the whole diff in one call instead.
-        if (perFileDiffs is null or { Count: 0 } || _leaf is SubscriptionCliSemanticJudge)
+        if (perFileDiffs is null or { Count: 0 })
+        {
+            return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Skip whitespace-only files — they carry no semantic signal.
+        var substantive = perFileDiffs.Where(f => !IsWhitespaceOnly(f.Diff)).ToList();
+
+        // Fall back to the whole-diff call when no substantive files remain or the file count
+        // exceeds the cap — prevents excessive cold-start cost on large changes.
+        if (substantive.Count == 0 || substantive.Count > MaxPerFileJudgeCalls)
         {
             return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
         }
 
         var perFileVerdicts = await Task.WhenAll(
-            perFileDiffs.Select(file => _leaf.JudgeAsync(
+            substantive.Select(file => _leaf.JudgeAsync(
                 inputs with
                 {
                     DiffExcerpt = file.Diff,
@@ -264,6 +275,20 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
             .ConfigureAwait(false);
 
         return Aggregate(perFileVerdicts);
+    }
+
+    private static bool IsWhitespaceOnly(string diff)
+    {
+        foreach (var line in diff.Split('\n'))
+        {
+            if ((line.StartsWith('+') && !line.StartsWith("+++")) ||
+                (line.StartsWith('-') && !line.StartsWith("---")))
+            {
+                if (!string.IsNullOrWhiteSpace(line[1..]))
+                    return false;
+            }
+        }
+        return true;
     }
 
     private static SemanticAcceptanceVerdict Aggregate(SemanticAcceptanceVerdict[] verdicts)

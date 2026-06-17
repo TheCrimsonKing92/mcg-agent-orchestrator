@@ -229,7 +229,7 @@ public sealed class SemanticAcceptanceTests
             ["src/A.cs", "src/B.cs"],
             string.Empty,
             null,
-            [("src/A.cs", "diff A"), ("src/B.cs", "diff B")]);
+            [("src/A.cs", "+int a = 1;"), ("src/B.cs", "+int b = 2;")]);
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
@@ -251,7 +251,7 @@ public sealed class SemanticAcceptanceTests
             ["src/A.cs", "src/B.cs"],
             string.Empty,
             null,
-            [("src/A.cs", "diff A"), ("src/B.cs", "diff B")]);
+            [("src/A.cs", "+int a = 1;"), ("src/B.cs", "+int b = 2;")]);
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
@@ -471,7 +471,7 @@ public sealed class SemanticAcceptanceTests
         var judge = new RecursivePerFileSemanticJudge(leaf);
         var inputs = new SemanticAcceptanceInputs(
             "obj", [], ["a", "b", "c"], string.Empty, null,
-            [("a", "diff a"), ("b", "diff b"), ("c", "diff c")]);
+            [("a", "+int a = 1;"), ("b", "+int b = 2;"), ("c", "+int c = 3;")]);
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
@@ -479,8 +479,8 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("low", verdict.Confidence);
     }
 
-    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_skips_per_file_recursion_for_subscription_cli_leaf")]
-    public async Task RecursiveJudgeSkipsRecursionForCliLeaf()
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_fans_out_per_file_for_subscription_cli_leaf_within_cap")]
+    public async Task RecursiveJudgeFansOutPerFileForCliLeafWithinCap()
     {
         var callCount = 0;
         Task<string> CountingRunner(string command, string workingDirectory, CancellationToken ct)
@@ -505,14 +505,80 @@ public sealed class SemanticAcceptanceTests
             "objective", [], ["src/A.cs", "src/B.cs", "src/C.cs"],
             "big diff",
             null,
-            [("src/A.cs", "diff A"), ("src/B.cs", "diff B"), ("src/C.cs", "diff C")]);
+            [("src/A.cs", "+int x = 1;"), ("src/B.cs", "+int y = 2;"), ("src/C.cs", "+int z = 3;")]);
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
-        // CLI leaf must make exactly ONE call (whole diff), not one per file.
-        Assert.Equal(1, callCount);
+        // CLI leaf must now fan out once per file (hang fix in goal 267f98b6 made this safe).
+        Assert.Equal(3, callCount);
         Assert.True(verdict.IsValid);
         Assert.True(verdict.CriteriaMet);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_falls_back_to_whole_diff_when_file_count_exceeds_cap")]
+    public async Task RecursiveJudgeFallsBackWhenFileCountExceedsCap()
+    {
+        var callCount = 0;
+        string? capturedDiff = null;
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            callCount++;
+            capturedDiff = inputs.DiffExcerpt;
+            return new SemanticAcceptanceVerdict(true, "high", ["whole diff ok"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+
+        // Build MaxPerFileJudgeCalls+1 substantive files to exceed the cap.
+        var fileCount = RecursivePerFileSemanticJudge.MaxPerFileJudgeCalls + 1;
+        var perFileDiffs = Enumerable.Range(1, fileCount)
+            .Select(i => ($"src/File{i}.cs", $"+int x{i} = {i};"))
+            .ToList();
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [],
+            perFileDiffs.Select(f => f.Item1).ToList(),
+            "whole diff excerpt",
+            null,
+            perFileDiffs);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        // Must fall back to one whole-diff call, not fan out per file.
+        Assert.Equal(1, callCount);
+        Assert.Equal("whole diff excerpt", capturedDiff);
+        Assert.True(verdict.IsValid);
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_skips_whitespace_only_files_during_fan_out")]
+    public async Task RecursiveJudgeSkipsWhitespaceOnlyFiles()
+    {
+        var capturedFiles = new List<string>();
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            capturedFiles.Add(inputs.ChangedFiles.Count > 0 ? inputs.ChangedFiles[0] : "?");
+            return new SemanticAcceptanceVerdict(true, "high", ["ok"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [],
+            ["src/A.cs", "src/B.cs", "src/C.cs"],
+            string.Empty,
+            null,
+            [
+                ("src/A.cs", "+int x = 1;"),       // substantive
+                ("src/B.cs", "+   \n+\t"),          // whitespace-only lines
+                ("src/C.cs", "+string s = \"hi\";") // substantive
+            ]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        // Whitespace-only B must be skipped; A and C must be judged.
+        Assert.Equal(2, capturedFiles.Count);
+        Assert.True(capturedFiles.Contains("src/A.cs"));
+        Assert.True(capturedFiles.Contains("src/C.cs"));
+        Assert.False(capturedFiles.Contains("src/B.cs"));
+        Assert.True(verdict.IsValid);
     }
 
     [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_keeps_per_file_recursion_for_non_cli_leaf")]
@@ -530,7 +596,7 @@ public sealed class SemanticAcceptanceTests
             "objective", [], ["src/A.cs", "src/B.cs"],
             "diff",
             null,
-            [("src/A.cs", "diff A"), ("src/B.cs", "diff B")]);
+            [("src/A.cs", "+int a = 1;"), ("src/B.cs", "+int b = 2;")]);
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
