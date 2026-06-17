@@ -1436,3 +1436,10 @@ Goal 73a73b1a: Fix a false-positive in the verification-policy compiler at src/M
 
 - Operator gate: Developer: pass — 283/283 Core.Tests green; 7 VerificationPolicyCompiler-specific tests (6 new + 1 updated existing) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted predicate fix with test coverage - scoped change, well-specified behavior.
+
+## 2026-06-17 - Add --body-file (and --reason-file) options to the backlog CLI verbs, mirrori...
+
+Goal 72389a42: Add --body-file (and --reason-file) options to the backlog CLI verbs, mirroring the existing --brief-file on simple-g.... Developer task via OpenAI/gpt-5.5 (exit 0, commit 0238c687189f737f970613bb8043b36f5d0d1e7f). Acceptance passed.
+
+- Operator gate: Developer: pass - 3/3 focused backlog file-option tests (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped CLI/parser/test change - enough context and code-editing accuracy for a small .NET change.
