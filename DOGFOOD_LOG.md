@@ -1562,3 +1562,10 @@ Goal 6ec7e93c: # Host the Discord gateway listener + bind the decision applier (
 
 - Operator gate: (no receipt)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - app-layer wiring with existing static patterns - no design ambiguity; all extension points were clear from existing code.
+
+## 2026-06-17 - # Conductor dispatch-start reliability: bounded retry on transient spawn fail...
+
+Goal 853ac01d: # Conductor dispatch-start reliability: bounded retry on transient spawn failure  ## Context Goal d5c46af7 made the c.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 79b4a3f). Acceptance passed.
+
+- Operator gate: Developer: pass — Core.Tests 308/308, Infrastructure.Tests 874/874 (4 new tests added, all green) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - categorized-result refactor + retry logic across 3 test files - well-scoped; sonnet handled the cascading test updates without difficulty.
