@@ -176,16 +176,15 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
-    internal static async Task<string> RunCommandAsync(
-        string command,
-        string workingDirectory,
-        CancellationToken cancellationToken)
+    // Extracted so tests can assert ProcessStartInfo properties without launching a real process.
+    internal static ProcessStartInfo BuildStartInfo(string command, string workingDirectory)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = WorkerShell.Executable,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
@@ -194,11 +193,23 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
         {
             startInfo.ArgumentList.Add(arg);
         }
-
         startInfo.ArgumentList.Add(command);
+        return startInfo;
+    }
+
+    internal static async Task<string> RunCommandAsync(
+        string command,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = BuildStartInfo(command, workingDirectory);
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start subscription CLI for semantic acceptance.");
+
+        // Close stdin immediately so codex exec doesn't block on "Reading additional input from stdin...".
+        // claude-cli ignores stdin; codex hangs until EOF arrives.
+        process.StandardInput.Close();
 
         // Link to the outer token so either cancellation path cancels the reads.
         using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

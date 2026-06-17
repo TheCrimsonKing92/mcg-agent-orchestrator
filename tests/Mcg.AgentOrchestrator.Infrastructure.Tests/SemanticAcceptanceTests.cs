@@ -610,6 +610,16 @@ public sealed class SemanticAcceptanceTests
         Assert.True(verdict.CriteriaMet);
     }
 
+    [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_BuildStartInfo_sets_RedirectStandardInput_true")]
+    public void BuildStartInfoRedirectsStandardInput()
+    {
+        var startInfo = SubscriptionCliSemanticJudge.BuildStartInfo("echo hi", Path.GetTempPath());
+
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+    }
+
     [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_has_180s_judge_timeout")]
     public void SubscriptionCliJudgeHas180sTimeout()
     {
