@@ -1499,3 +1499,10 @@ Goal bfe43df6: # Consolidate duplicated git-process runners into one shared GitC
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-17 - # Consolidate duplicated Display(enum) name maps into one shared helper  ## P...
+
+Goal 85957656: # Consolidate duplicated Display(enum) name maps into one shared helper  ## Problem The enum-to-display-string switch.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit af29a27). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 298/298 Core.Tests + 820/820 Infrastructure.Tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - mechanical deduplication/refactor - straightforward switch consolidation, no complex logic.
