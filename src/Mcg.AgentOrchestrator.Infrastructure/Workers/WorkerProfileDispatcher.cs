@@ -11,6 +11,8 @@ public sealed record WorkerSubscriptionPreflightResult(
     string CapabilityStatus,
     IReadOnlyList<string> Findings);
 
+public sealed record DispatchModelOverride(string? ProfileName, string? ModelName, string? ReasoningEffort);
+
 public static class WorkerProfileDispatcher
 {
     public const string OpenAiSubscriptionProfileName = "codex-cli";
@@ -88,15 +90,28 @@ public static class WorkerProfileDispatcher
         WorkerProfileCatalog profiles,
         string promptRoot,
         string workingDirectory,
-        DateTimeOffset dispatchedAt)
+        DateTimeOffset dispatchedAt,
+        DispatchModelOverride? modelOverride = null)
     {
         EnsureTaskNeedsExecution(task);
 
         var agent = ResolveAssignedAgent(task, agents);
         var selection = ResolveSubscriptionModel(agent, goal, task);
-        var profile = ResolveSubscriptionProfile(agent, selection.Model, profiles);
-        var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
-        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt);
+        var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
+            ? profiles.GetRequired(overrideProfile)
+            : ResolveSubscriptionProfile(agent, selection.Model, profiles);
+        var resolvedModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
+            ? overrideModel
+            : ResolveEffectiveSubscriptionModelName(agent, selection);
+        var resolvedReasoning = modelOverride?.ReasoningEffort is not null
+            ? modelOverride.ReasoningEffort
+            : ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
+        var variables = BuildSubscriptionTemplateVariables(agent, selection);
+        if (modelOverride?.ModelName is { Length: > 0 })
+            variables["subscriptionModelName"] = resolvedModelName;
+        if (modelOverride?.ReasoningEffort is not null)
+            variables["subscriptionReasoningEffort"] = resolvedReasoning;
+        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt, modelOverride);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -106,10 +121,10 @@ public static class WorkerProfileDispatcher
             promptRoot,
             workingDirectory,
             dispatchedAt,
-            BuildSubscriptionTemplateVariables(agent, selection),
+            variables,
             selection.Model.ProviderName,
-            ResolveEffectiveSubscriptionModelName(agent, selection),
-            reasoningEffort,
+            resolvedModelName,
+            resolvedReasoning,
             selection.Complexity,
             selection.UsesComplexModel,
             preflight.Findings);
@@ -121,7 +136,8 @@ public static class WorkerProfileDispatcher
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
         string workingDirectory,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        DispatchModelOverride? modelOverride = null)
     {
         var findings = new List<string>();
         string profileName;
@@ -130,10 +146,15 @@ public static class WorkerProfileDispatcher
             EnsureTaskNeedsExecution(task);
             var agent = ResolveAssignedAgent(task, agents);
             var selection = ResolveSubscriptionModel(agent, goal, task);
-            profileName = ResolveSubscriptionProfileName(agent, selection.Model);
+            profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
+                ? overrideProfile
+                : ResolveSubscriptionProfileName(agent, selection.Model);
             var profile = profiles.GetRequired(profileName);
             findings.Add($"profile: {profile.Name}");
-            findings.Add($"model: {selection.Model.ProviderName}/{ResolveEffectiveSubscriptionModelName(agent, selection)}");
+            var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
+                ? overrideModel
+                : ResolveEffectiveSubscriptionModelName(agent, selection);
+            findings.Add($"model: {selection.Model.ProviderName}/{effectiveModelName}");
             findings.Add($"complexity: {selection.Complexity}");
 
             AddProfileFinding(
@@ -146,7 +167,9 @@ public static class WorkerProfileDispatcher
                 !WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate),
                 $"worker profile '{profile.Name}' does not include {{subscriptionModelName}}",
                 $"worker profile '{profile.Name}' pins selected model");
-            var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
+            var reasoningEffort = modelOverride?.ReasoningEffort is not null
+                ? modelOverride.ReasoningEffort
+                : ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
             AddProfileFinding(
                 findings,
                 RequiresSubscriptionReasoningPlaceholder(selection.Model.ProviderName, reasoningEffort) &&

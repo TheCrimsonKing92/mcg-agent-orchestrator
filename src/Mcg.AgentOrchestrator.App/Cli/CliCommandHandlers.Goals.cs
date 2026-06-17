@@ -1565,6 +1565,8 @@ private static bool IsCliValueFlag(string part)
         part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--subscription", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--subscription-model", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--subscription-reasoning", StringComparison.OrdinalIgnoreCase);
 }
 

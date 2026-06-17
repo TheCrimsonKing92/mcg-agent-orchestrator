@@ -823,6 +823,141 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains(developer.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]
+    public void SubscriptionDispatchOverrideModelBeatsComplexPath()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var modelOverride = new DispatchModelOverride(null, "gpt-5.3-codex-spark", null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex-spark'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_replaces_agent_default")]
+    public void SubscriptionDispatchOverrideProfileReplacesAgentDefault()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Review the implementation",
+        [new TaskSpec(TaskId.New(), "Review the code.", AgentRole.Reviewer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("alt-profile", "alt-cli --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var profileOverride = new DispatchModelOverride("alt-profile", null, null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, profileOverride);
+
+    Assert.Equal("alt-profile", task.LastDispatch!.WorkerName);
+}
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_reasoning_beats_agent_default")]
+    public void SubscriptionDispatchOverrideReasoningBeatsAgentDefault()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Review the implementation",
+        [new TaskSpec(TaskId.New(), "Review the code.", AgentRole.Reviewer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var reasoningOverride = new DispatchModelOverride(null, null, "low");
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, reasoningOverride);
+
+    Assert.Equal("low", task.LastDispatch!.ReasoningEffort);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_no_override_preserves_complex_model_default")]
+    public void SubscriptionDispatchNoOverridePreservesComplexModelDefault()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Design and implement a production multi-tenant architecture",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
+        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_pins_anthropic_subscription_model")]
     public void WorkerProfileDispatcherPinsAnthropicSubscriptionModel()
 {

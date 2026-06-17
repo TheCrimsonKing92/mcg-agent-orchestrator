@@ -139,12 +139,18 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             }
 
         case "subscription-dispatch":
-            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>]");
+            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>]");
             AcknowledgeSubscriptionLimitReviewFromCli(context, subscriptionTask, parts);
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal!);
             try
             {
-                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles);
+                var overrideProfileName = GetFlagValue(parts, "--subscription");
+                var overrideModelName = GetFlagValue(parts, "--subscription-model");
+                var overrideReasoning = GetFlagValue(parts, "--subscription-reasoning");
+                DispatchModelOverride? modelOverride = overrideProfileName is not null || overrideModelName is not null || overrideReasoning is not null
+                    ? new DispatchModelOverride(overrideProfileName, overrideModelName, overrideReasoning)
+                    : null;
+                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles, modelOverride);
                 Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
                 Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
                 ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);
