@@ -570,6 +570,29 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal(TimeSpan.FromSeconds(180), judge.JudgeTimeout);
     }
 
+    [Xunit.Fact(DisplayName = "RunCommandAsync_drain_timeout_unblocks_when_grandchild_holds_pipe_after_parent_exits")]
+    public async Task RunCommandAsyncDrainTimeoutUnblocksWhenGrandchildHoldsPipe()
+    {
+        // Simulate the grandchild-holds-the-pipe bug: the parent PowerShell writes output
+        // and exits, but a grandchild (started via Process.Start with UseShellExecute=false
+        // so it inherits the stdout pipe handle) keeps the pipe open for 60s. Without the
+        // fix, ReadToEndAsync hangs until the outer 20s CancellationToken fires. With the
+        // fix, the 12s drain timeout kills the tree and returns well before 20s.
+        var exe = WorkerShell.Executable;
+        var command = $"Write-Output 'verdict'; $psi = [System.Diagnostics.ProcessStartInfo]::new('{exe}', '-NonInteractive -Command Start-Sleep 60'); $psi.UseShellExecute = $false; [System.Diagnostics.Process]::Start($psi) | Out-Null; exit 0";
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await SubscriptionCliSemanticJudge.RunCommandAsync(command, Path.GetTempPath(), cts.Token);
+
+        sw.Stop();
+
+        // Drain timeout (12s) must fire before the outer 20s cancellation token.
+        Assert.False(cts.IsCancellationRequested);
+        Assert.True(sw.ElapsedMilliseconds < 18_000);
+    }
+
     private static ModelFunctionBinding JudgeBinding(ModelLane lane, string provider, string model) =>
         new(ModelFunctionPurposes.AcceptanceJudge, lane,
             new ModelProfile(provider, model, ModelCapability.Text,

@@ -168,7 +168,7 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
-    private static async Task<string> RunCommandAsync(
+    internal static async Task<string> RunCommandAsync(
         string command,
         string workingDirectory,
         CancellationToken cancellationToken)
@@ -192,8 +192,10 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start subscription CLI for semantic acceptance.");
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        // Link to the outer token so either cancellation path cancels the reads.
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(drainCts.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(drainCts.Token);
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -204,8 +206,23 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
             throw;
         }
 
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        await stderrTask.ConfigureAwait(false);
+        // Cap the drain so a grandchild that inherits the stdout pipe handle (e.g. the node
+        // process spawned by claude-cli) cannot keep ReadToEndAsync alive indefinitely after
+        // the parent exits. On timeout, kill the tree; the verdict is recorded as invalid
+        // (advisory — the judge never blocks the deterministic merge gate).
+        const int DrainTimeoutMs = 12_000;
+        drainCts.CancelAfter(DrainTimeoutMs);
+        string stdout;
+        try
+        {
+            stdout = await stdoutTask.ConfigureAwait(false);
+            await stderrTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            stdout = string.Empty;
+        }
         return stdout.Trim();
     }
 }
