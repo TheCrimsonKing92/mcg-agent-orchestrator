@@ -10,6 +10,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // role catalog. Absent/empty file => an empty catalog (the feature stays dormant).
 public static class ModelFunctionCatalogStore
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
+
     public static ModelFunctionCatalog Load(string path)
     {
         if (!File.Exists(path))
@@ -20,7 +22,7 @@ public static class ModelFunctionCatalogStore
         ModelFunctionCatalog? catalog;
         try
         {
-            catalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(path), JsonOptions());
+            catalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(path), _jsonOptions);
         }
         catch
         {
@@ -39,7 +41,7 @@ public static class ModelFunctionCatalogStore
             Console.Error.WriteLine($"[ModelFunctionCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt; recovering from backup.");
             try
             {
-                var bakCatalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(bak), JsonOptions());
+                var bakCatalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(bak), _jsonOptions);
                 if (bakCatalog is not null)
                 {
                     return bakCatalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : bakCatalog;
@@ -61,17 +63,11 @@ public static class ModelFunctionCatalogStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tmp = path + ".tmp";
         var bak = path + ".bak";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, JsonOptions()));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, _jsonOptions));
         if (File.Exists(path))
             File.Replace(tmp, path, bak);
         else
             File.Move(tmp, path);
     }
 
-    private static JsonSerializerOptions JsonOptions()
-    {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
-    }
 }

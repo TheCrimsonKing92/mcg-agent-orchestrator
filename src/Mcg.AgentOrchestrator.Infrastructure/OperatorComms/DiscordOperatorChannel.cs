@@ -11,6 +11,7 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
     private readonly string? _dashboardBaseUrl;
 
     private const string ThreadStateFile = "discord-threads.json";
+    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
 
     public DiscordOperatorChannel(
         IDiscordForumApi api,
@@ -91,7 +92,7 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
         Directory.CreateDirectory(_stateDirectory);
         File.WriteAllText(
             Path.Combine(_stateDirectory, ThreadStateFile),
-            JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+            JsonSerializer.Serialize(state, _jsonOptions));
     }
 
     private Dictionary<string, string> LoadThreadState()

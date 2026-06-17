@@ -113,6 +113,8 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
 public static class AgentCatalogStore
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
+
     public static AgentCatalog Load(string path, AgentCatalog? fallback = null)
     {
         var defaultCatalog = fallback ?? AgentCatalog.Default();
@@ -152,7 +154,7 @@ public static class AgentCatalogStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tmp = path + ".tmp";
         var bak = path + ".bak";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, JsonOptions()));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, _jsonOptions));
         if (File.Exists(path))
             File.Replace(tmp, path, bak);
         else
@@ -161,15 +163,8 @@ public static class AgentCatalogStore
 
     private static AgentCatalog? TryDeserialize(string path)
     {
-        try { return JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), JsonOptions()); }
+        try { return JsonSerializer.Deserialize<AgentCatalog>(File.ReadAllText(path), _jsonOptions); }
         catch { return null; }
-    }
-
-    private static JsonSerializerOptions JsonOptions()
-    {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        options.Converters.Add(new JsonStringEnumConverter());
-        return options;
     }
 
     private static AgentCatalog NormalizePaidProviderCaps(AgentCatalog catalog)

@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class SqliteStateJsonMigrator
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new() { Converters = { new JsonStringEnumConverter() } };
+
     public static async Task<bool> MigrateIfNeededAsync(
         string jsonPath,
         string dbPath,
@@ -15,10 +17,8 @@ public static class SqliteStateJsonMigrator
             return false;
 
         var json = await File.ReadAllTextAsync(jsonPath, cancellationToken);
-        var options = new JsonSerializerOptions();
-        options.Converters.Add(new JsonStringEnumConverter());
 
-        var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json, options)
+        var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json, _jsonOptions)
             ?? new OrchestratorSnapshot([], []);
         var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
 

@@ -207,6 +207,8 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 
 public static class WorkerProfileStore
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
+
     public static WorkerProfileCatalog Load(string path)
     {
         if (!File.Exists(path))
@@ -276,7 +278,7 @@ public static class WorkerProfileStore
 
         var tmp = path + ".tmp";
         var bak = path + ".bak";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, JsonOptions()));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(catalog, _jsonOptions));
         if (File.Exists(path))
             File.Replace(tmp, path, bak);
         else
@@ -285,13 +287,8 @@ public static class WorkerProfileStore
 
     private static WorkerProfileCatalog? TryDeserialize(string path)
     {
-        try { return JsonSerializer.Deserialize<WorkerProfileCatalog>(File.ReadAllText(path), JsonOptions()); }
+        try { return JsonSerializer.Deserialize<WorkerProfileCatalog>(File.ReadAllText(path), _jsonOptions); }
         catch { return null; }
-    }
-
-    private static JsonSerializerOptions JsonOptions()
-    {
-        return new JsonSerializerOptions { PropertyNameCaseInsensitive = true, WriteIndented = true };
     }
 
     private static WorkerProfileCatalog RepairBuiltInSubscriptionProfiles(WorkerProfileCatalog catalog)
