@@ -1520,3 +1520,10 @@ Goal b9282731: # Add a goals-prune verb to reap landed-but-unclosed goals  ## Pr
 
 - Operator gate: Developer: ALL GREEN — Core 307/307, Infrastructure 833/833 (includes 7 new GoalsPruneTests) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file CLI feature with git integration and test coverage - correctly navigated the partial-class CLI handler pattern, adapted GoalWorktrees/GitCli helpers, and produced 7 passing tests matching the custom Assert framework.
+
+## 2026-06-17 - # Conductor landing + dispatch-start robustness (true unattended operation)  ...
+
+Goal d5c46af7: # Conductor landing + dispatch-start robustness (true unattended operation)  Two independent conductor defects observ.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit d31e18547fd7a18c8d95add86fd92069490e15d9). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — Core.Tests 307/307, Infrastructure.Tests 830/830 (4 new tests added, all pass) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - App-layer surgical fix with cascade test updates - straightforward once the code paths were located; no novel reasoning required.
