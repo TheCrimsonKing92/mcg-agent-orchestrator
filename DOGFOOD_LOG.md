@@ -1457,3 +1457,10 @@ Goal c30e4f3b: Add a per-dispatch model override to subscription-dispatch so one
 
 - Operator gate: Developer: pass/1092 green (283 Core + 809 Infrastructure), 4 new override tests all pass (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file C# feature threading a record through 3 layers + tests - right size for this kind of structured implementation task.
+
+## 2026-06-17 - Complete the verification-policy smoke-check scope fix from goal 73a73b1a
+
+Goal 167378ec: Complete the verification-policy smoke-check scope fix from goal 73a73b1a. That change set the smoke check in src/Mcg.... Developer task via Anthropic/gpt-5.3-codex-spark (exit 0, commit f89f972). Acceptance passed.
+
+- Operator gate: Developer: pass — `8 passed, 0 failed` (exit 0)
+- Model fit: Anthropic/gpt-5.3-codex-spark - adequate - deterministic, scoped, two-file C# rule correction with focused behavioral tests - exactly matched task shape.
