@@ -1620,6 +1620,47 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_invokes_build_server_shutdown_before_directory_delete")]
+    public void GoalWorktreesRemoveInvokesBuildServerShutdownBeforeDirectoryDelete()
+    {
+        var repo = CreateSeededRepository();
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            // Simulate the unregistered-but-directory-remains half-state so the
+            // test exercises BuildServerShutdown → DeleteDirectoryWithRetry directly.
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var shutdownCalled = false;
+            string? shutdownPath = null;
+            var directoryExistedAtShutdown = false;
+
+            GoalWorktrees.BuildServerShutdown = worktreePath =>
+            {
+                shutdownCalled = true;
+                shutdownPath = worktreePath;
+                directoryExistedAtShutdown = Directory.Exists(worktreePath);
+            };
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(shutdownCalled);
+            Assert.Equal(path, shutdownPath);
+            Assert.True(directoryExistedAtShutdown);
+            Assert.True(result.IsComplete);
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));

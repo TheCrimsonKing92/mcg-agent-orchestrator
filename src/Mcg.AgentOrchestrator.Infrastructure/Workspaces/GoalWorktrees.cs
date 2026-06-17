@@ -50,6 +50,11 @@ public static class GoalWorktrees
     private const int DeleteRetryAttempts = 6;
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
+    private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
+
+    // Injectable for testing: called best-effort before directory deletion to release any
+    // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
+    internal static Action<string> BuildServerShutdown = DefaultBuildServerShutdown;
 
     public static string BranchName(GoalId goalId) => $"goal/{Prefix(goalId)}";
 
@@ -119,6 +124,11 @@ public static class GoalWorktrees
             // Worktree already unregistered; prune any stale tracking entries left by a prior
             // partial removal so git's internal state is consistent before we finish cleanup.
             RunGit(executionDirectory, "worktree", "prune");
+        }
+
+        if (Directory.Exists(path))
+        {
+            BuildServerShutdown(path);
         }
 
         if (Directory.Exists(path) && !DeleteDirectoryWithRetry(path))
@@ -421,6 +431,35 @@ public static class GoalWorktrees
     private static bool IsTransientDeleteFailure(Exception ex)
     {
         return ex is IOException or UnauthorizedAccessException;
+    }
+
+    private static void DefaultBuildServerShutdown(string worktreePath)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = worktreePath
+            };
+            startInfo.ArgumentList.Add("build-server");
+            startInfo.ArgumentList.Add("shutdown");
+
+            using var process = Process.Start(startInfo);
+            if (process is null) return;
+            if (!process.WaitForExit((int)BuildServerShutdownTimeout.TotalMilliseconds))
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Best-effort; ignore all failures so removal always proceeds.
+        }
     }
 
     private static List<WorktreeLockHolder> FindLockHolders(string path)
