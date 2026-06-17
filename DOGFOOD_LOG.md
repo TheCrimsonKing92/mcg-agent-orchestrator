@@ -1443,3 +1443,10 @@ Goal 72389a42: Add --body-file (and --reason-file) options to the backlog CLI ve
 
 - Operator gate: Developer: pass - 3/3 focused backlog file-option tests (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped CLI/parser/test change - enough context and code-editing accuracy for a small .NET change.
+
+## 2026-06-17 - Auto-run verification-policy-required acceptance checks so required coverage ...
+
+Goal a42592f4: Auto-run verification-policy-required acceptance checks so required coverage runs WITHOUT hand-editing config/accepta.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 918f60cc66ce5582ae273abba64b55fcc90767a8). Acceptance passed.
+
+- Operator gate: Developer: pass — 808/808 Infrastructure + 277/277 Core (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - moderate implementation + integration analysis - required understanding policy/manifest/verifier interaction and classifying dedup edge cases; adequate for the scope.
