@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -10,7 +11,8 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
-    private readonly Func<Goal, string?> _dispatchAndStart;
+    private readonly Func<Goal, DispatchStartOutcome> _dispatchAndStart;
+    private readonly Action _buildServerShutdown;
     private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
@@ -64,13 +66,39 @@ internal sealed class ConductorDriver
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
                     $"Dispatched {result.Dispatches.Count} tasks, started {result.Processes.Tasks.Count} processes.");
-                return null;
+                return DispatchStartOutcome.Started();
             }
             var reason = result.Dispatches.Count == 0
                 ? "No tasks in ready batch; goal may have no assigned or ready tasks"
                 : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
             GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
-            return reason;
+            return result.Dispatches.Count == 0
+                ? DispatchStartOutcome.EmptyBatch(reason)
+                : DispatchStartOutcome.SpawnFailed(reason);
+        };
+
+        _buildServerShutdown = () =>
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = dir
+                };
+                startInfo.ArgumentList.Add("build-server");
+                startInfo.ArgumentList.Add("shutdown");
+                using var process = Process.Start(startInfo);
+                if (process is null) return;
+                process.StandardOutput.ReadToEnd();
+                process.StandardError.ReadToEnd();
+                process.WaitForExit(30_000);
+            }
+            catch { }
         };
 
         _runAcceptanceVerification = goal =>
@@ -158,7 +186,8 @@ internal sealed class ConductorDriver
         Func<Goal, GoalLifecycleFacts> getFacts,
         Func<int> getRunningPaidWorkerCount,
         Func<Goal, string> createWorkspace,
-        Func<Goal, string?> dispatchAndStart,
+        Func<Goal, DispatchStartOutcome> dispatchAndStart,
+        Action? buildServerShutdown,
         Func<Goal, AcceptanceVerificationSummary> runAcceptanceVerification,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback,
@@ -174,6 +203,7 @@ internal sealed class ConductorDriver
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
         _dispatchAndStart = dispatchAndStart;
+        _buildServerShutdown = buildServerShutdown ?? (() => { });
         _runAcceptanceVerification = runAcceptanceVerification;
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
@@ -252,14 +282,20 @@ internal sealed class ConductorDriver
                     $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
-        var failureReason = _dispatchAndStart(goal);
-        if (failureReason is not null)
+        var outcome = _dispatchAndStart(goal);
+        if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady, failureReason);
+            _buildServerShutdown();
+            outcome = _dispatchAndStart(goal);
         }
 
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.WorkspaceReady, "Subscription dispatch started"));
+        if (outcome.Category == DispatchStartOutcomeCategory.Started)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Executed(GoalLifecycleState.WorkspaceReady, "Subscription dispatch started"));
+        }
+
+        return Escalate(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady, outcome.Reason!);
     }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)

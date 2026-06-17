@@ -36,7 +36,7 @@ public sealed class ConductorBatchLoopTests
         Func<Goal, GoalLifecycleFacts>? getFacts = null,
         Func<int>? getRunningCount = null,
         Func<Goal, string>? createWorkspace = null,
-        Func<Goal, string?>? dispatchAndStart = null,
+        Func<Goal, DispatchStartOutcome>? dispatchAndStart = null,
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
@@ -48,7 +48,8 @@ public sealed class ConductorBatchLoopTests
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
             createWorkspace ?? (_ => "/tmp/workspace"),
-            dispatchAndStart ?? (_ => null),
+            dispatchAndStart ?? (_ => DispatchStartOutcome.Started()),
+            null,
             goal => (runAcceptance ?? (_ => true))(goal)
                 ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
                 : AcceptanceVerificationSummary.Failed,
@@ -88,7 +89,7 @@ public sealed class ConductorBatchLoopTests
             getFacts: _ => advanceCalls < 1 ? GoalLifecycleFacts.None : new GoalLifecycleFacts(WorkspaceExists: true),
             getRunningCount: () => advanceCalls >= 2 ? ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers : 0,
             createWorkspace: _ => { advanceCalls++; return "/tmp/ws"; },
-            dispatchAndStart: _ => { advanceCalls++; return null; });
+            dispatchAndStart: _ => { advanceCalls++; return DispatchStartOutcome.Started(); });
 
         var stopFile = NoStopPath();
         var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile, maxIterations: 5);
@@ -116,7 +117,7 @@ public sealed class ConductorBatchLoopTests
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getRunningCount: () => dispatched,
-            dispatchAndStart: _ => { dispatched++; return null; });
+            dispatchAndStart: _ => { dispatched++; return DispatchStartOutcome.Started(); });
 
         var stopFile = NoStopPath();
         // Conservative cap = 2; tick 1: 2 dispatched, 1 held → tickAdvanced=2 → loop continues
@@ -219,7 +220,7 @@ public sealed class ConductorBatchLoopTests
                 var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
                 kernel.RecordTaskDispatch(g.Id, task.Id,
                     new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
-                return null;
+                return DispatchStartOutcome.Started();
             });
 
         var stopFile = NoStopPath();
@@ -313,7 +314,7 @@ public sealed class ConductorBatchLoopTests
                 var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
                 kernel.RecordTaskDispatch(g.Id, task.Id,
                     new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
-                return null;
+                return DispatchStartOutcome.Started();
             });
 
         var stopFile = NoStopPath();
@@ -360,7 +361,7 @@ public sealed class ConductorBatchLoopTests
                 var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
                 kernel.RecordTaskDispatch(g.Id, task.Id,
                     new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
-                return null;
+                return DispatchStartOutcome.Started();
             });
 
         var stopFile = NoStopPath();
@@ -412,7 +413,7 @@ public sealed class ConductorBatchLoopTests
                 var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
                 kernel.RecordTaskDispatch(g.Id, task.Id,
                     new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
-                return null;
+                return DispatchStartOutcome.Started();
             });
 
         var stopFile = NoStopPath();
@@ -505,7 +506,7 @@ public sealed class ConductorBatchLoopTests
             dispatchAndStart: g =>
             {
                 advancedGoalIds.Add(g.Id.Value);
-                return null;
+                return DispatchStartOutcome.Started();
             });
 
         var stopFile = NoStopPath();
@@ -536,7 +537,7 @@ public sealed class ConductorBatchLoopTests
             dispatchAndStart: g =>
             {
                 advancedGoalIds.Add(g.Id.Value);
-                return null;
+                return DispatchStartOutcome.Started();
             });
 
         var stopFile = NoStopPath();

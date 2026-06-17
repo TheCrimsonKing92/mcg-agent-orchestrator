@@ -106,7 +106,8 @@ public sealed class GoalDependencyTests
             getFacts: _ => GoalLifecycleFacts.None,
             getRunningPaidWorkerCount: () => 0,
             createWorkspace: g => { workspacesCreated.Add(g.Id.Value); return "/tmp/ws"; },
-            dispatchAndStart: _ => null,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            buildServerShutdown: null,
             runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             retryTask: null,
             recordCriterionRetryFeedback: null,
@@ -172,7 +173,8 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: _ => null,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            buildServerShutdown: null,
             runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             retryTask: null,
             recordCriterionRetryFeedback: null,
@@ -223,7 +225,10 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: g => g.Id == a.Id ? "Dispatch failed for A" : null, // A fails → escalated
+            dispatchAndStart: g => g.Id == a.Id // A fails → escalated
+                ? DispatchStartOutcome.EmptyBatch("Dispatch failed for A")
+                : DispatchStartOutcome.Started(),
+            buildServerShutdown: null,
             runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             retryTask: null,
             recordCriterionRetryFeedback: null,
