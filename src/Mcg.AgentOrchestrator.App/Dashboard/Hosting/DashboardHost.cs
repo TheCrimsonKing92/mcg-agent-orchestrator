@@ -356,6 +356,18 @@ public static async Task RunDashboardHostAsync(
     app.Lifetime.ApplicationStarted.Register(() => WriteDashboardUrlFile(dashboardUrlFilePath, browserUrl));
     app.Lifetime.ApplicationStopped.Register(() => DeleteDashboardUrlFile(dashboardUrlFilePath));
 
+    // Start Discord gateway listener when operator channel is configured as discord and
+    // MCGO_DISCORD_BOT_TOKEN is set.  Returns null (no-op) when either condition is absent.
+    var catalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
+    var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+    var discordApplier = DiscordListenerWiring.BuildApplier(workspace, repository, providers, agentCatalogFallback);
+    var discordListener = OperatorChannelFactory.CreateGatewayListener(catalog, botToken, discordApplier);
+    if (discordListener is not null)
+    {
+        app.Lifetime.ApplicationStopped.Register(() =>
+            discordListener.DisposeAsync().AsTask().GetAwaiter().GetResult());
+    }
+
     if (args.OpenBrowser)
     {
         app.Lifetime.ApplicationStarted.Register(() => OpenDashboardInBrowser(GetDashboardPageUrl(browserUrl)));

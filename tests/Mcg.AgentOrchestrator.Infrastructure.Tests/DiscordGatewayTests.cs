@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class DiscordGatewayTests
@@ -219,6 +221,77 @@ public sealed class DiscordGatewayTests
 
         var listener = OperatorChannelFactory.CreateGatewayListener(catalog, "fake-token", applier);
 
+        Assert.True(listener is null);
+    }
+
+    // ---- App-layer wiring: DiscordListenerWiring integration ----
+
+    [Xunit.Fact(DisplayName = "DiscordListenerWiring_dispatch_seam_receives_split_command_parts")]
+    public async Task DiscordListenerWiringDispatchSeamReceivesSplitCommandParts()
+    {
+        // Arrange: workspace backed by a temp directory; fake seam captures parsed parts.
+        var root = CreateTempDirectory();
+        var workspace = Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(root);
+        var dispatchedParts = new List<IReadOnlyList<string>>();
+
+        Func<IReadOnlyList<string>, CancellationToken, Task> seam = (parts, _) =>
+        {
+            dispatchedParts.Add(parts);
+            return Task.CompletedTask;
+        };
+
+        var applier = DiscordListenerWiring.BuildApplier(workspace, seam);
+        var decision = new OperatorDecision("inbox-wire-001", "next abc123", null, "discord:user1", "key-wire-001");
+
+        // Act
+        var applied = await applier.ApplyAsync(decision);
+
+        // Assert: dispatch was called with correctly split parts, proving the command string
+        // is routed through CliArgumentParser.SplitCommand before reaching the CLI dispatcher.
+        Assert.True(applied);
+        Assert.Equal(1, dispatchedParts.Count);
+        Assert.True(dispatchedParts[0].Count >= 2);
+        Assert.Equal("next", dispatchedParts[0][0]);
+        Assert.Equal("abc123", dispatchedParts[0][1]);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordListenerWiring_acknowledge_delegate_writes_to_inbox_acks_file")]
+    public async Task DiscordListenerWiringAcknowledgeDelegateWritesToInboxAcksFile()
+    {
+        // Arrange
+        var root = CreateTempDirectory();
+        var workspace = Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(root);
+
+        var applier = DiscordListenerWiring.BuildApplier(
+            workspace,
+            (_, _) => Task.CompletedTask);
+
+        var decision = new OperatorDecision("inbox-ack-wire-001", "goals", null, "discord:user1", "key-ack-wire-001");
+
+        // Act
+        var applied = await applier.ApplyAsync(decision);
+
+        // Assert: the acks file was written with the inbox item id.
+        Assert.True(applied);
+        var acksPath = Path.Combine(workspace.OrchestratorDirectory, "operator-inbox-acks.json");
+        Assert.True(File.Exists(acksPath));
+        var content = File.ReadAllText(acksPath);
+        Assert.True(content.Contains("inbox-ack-wire-001"));
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordListenerWiring_no_connection_when_discord_unconfigured")]
+    public void DiscordListenerWiringNoConnectionWhenDiscordUnconfigured()
+    {
+        // Arrange: default (null-type) catalog and no bot token.
+        var root = CreateTempDirectory();
+        var workspace = Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(root);
+        var catalog = OperatorChannelCatalog.Default();
+        var applier = DiscordListenerWiring.BuildApplier(workspace, (_, _) => Task.CompletedTask);
+
+        // Act: factory returns null — no connection is attempted.
+        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, null, applier);
+
+        // Assert
         Assert.True(listener is null);
     }
 }
