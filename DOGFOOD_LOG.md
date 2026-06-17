@@ -1401,3 +1401,10 @@ Goal 42315600: Make the launcher resilient when a long-running App instance (ser
 
 - Operator gate: Developer: not-run (shell-only changes; no test suite covers launcher scripts) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - shell scripting task - straightforward batch + bash logic, no C# involved; no reasoning needed beyond mechanics of cmd label jumps and bash error handling.
+
+## 2026-06-17 - Make the legacy-workspace consolidation also migrate CONFIG files, not just g...
+
+Goal 2231d0f5: Make the legacy-workspace consolidation also migrate CONFIG files, not just goals — so the acceptance-judge registry .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 062a4b0). Acceptance passed.
+
+- Operator gate: Developer: pass — 13 WorkspaceConsolidator tests (9 existing + 4 new), full suite 1085/1085 green (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped file edit + test authoring with clear domain constraints - right size for the task.
