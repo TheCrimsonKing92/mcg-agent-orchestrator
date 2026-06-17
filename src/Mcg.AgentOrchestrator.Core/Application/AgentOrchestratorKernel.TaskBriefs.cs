@@ -110,6 +110,17 @@ public sealed partial class AgentOrchestratorKernel
                 CollapsePriority: 50));
         }
 
+        if (task.CriterionRetryFeedback.Count > 0)
+        {
+            var feedbackLines = new List<string>
+            {
+                "## Unmet acceptance criteria from the prior attempt - fix these:"
+            };
+            feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {PromptContextFormatter.TrimPromptBlock(item)}"));
+            feedbackLines.Add(string.Empty);
+            segments.Add(TaskBriefSegment.Fixed(feedbackLines));
+        }
+
         if (pendingInput.Count > 0)
         {
             var pendingInputLines = new List<string> { "## Pending Human Input" };

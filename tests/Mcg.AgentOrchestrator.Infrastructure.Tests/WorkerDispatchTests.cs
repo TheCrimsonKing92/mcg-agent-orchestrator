@@ -3739,6 +3739,31 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(manifest, text => text.Contains("check deterministic failures", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_unmet_acceptance_criterion_retry_feedback")]
+    public void WorkerContextArtifactsWritesUnmetAcceptanceCriterionRetryFeedback()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(
+        TaskId.New(),
+        "Fix the acceptance criterion miss.",
+        AgentRole.Developer,
+        "Run focused acceptance retry tests.");
+    var goal = kernel.CreateGoal("Retry with deterministic criterion feedback", [task]);
+    kernel.RecordCriterionRetryFeedback(
+        goal.Id,
+        task.Id,
+        ["grep-present docs/usage.md contains Ready: docs/usage.md is missing Ready"]);
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+
+    var currentTask = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
+    Assert.Contains(currentTask, text => text.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", StringComparison.Ordinal));
+    Assert.Contains(currentTask, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]
     public void WorkerProfileDispatcherLateFileAccessSubscriptionPromptStaysBelowLargePaidThreshold()
 {

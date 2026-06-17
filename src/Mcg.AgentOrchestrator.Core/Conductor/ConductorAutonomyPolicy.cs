@@ -30,6 +30,7 @@ public sealed record ConductorAutonomyPolicy(
     string Name,
     int MaxConcurrentPaidWorkers,
     decimal MaxTotalBudget,
+    int MaxCriterionRetries,
     IReadOnlyDictionary<string, decimal>? PerProviderBudgetCaps,
     ChangeRiskTier? AutoPromoteRiskThreshold,
     IReadOnlyDictionary<GoalLifecycleState, ConductorTransitionDecision> TransitionMap)
@@ -47,6 +48,7 @@ public sealed record ConductorAutonomyPolicy(
         "Conservative",
         MaxConcurrentPaidWorkers: 2,
         MaxTotalBudget: 5.00m,
+        MaxCriterionRetries: 1,
         PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: ChangeRiskTier.DocsOnly,
         TransitionMap: new Dictionary<GoalLifecycleState, ConductorTransitionDecision>
@@ -71,6 +73,7 @@ public sealed record ConductorAutonomyPolicy(
         "Permissive",
         MaxConcurrentPaidWorkers: 5,
         MaxTotalBudget: 20.00m,
+        MaxCriterionRetries: 2,
         PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: ChangeRiskTier.Broad,
         TransitionMap: BuildUniformMap(ConductorTransitionDecision.Auto));
@@ -80,6 +83,7 @@ public sealed record ConductorAutonomyPolicy(
         "Manual",
         MaxConcurrentPaidWorkers: 1,
         MaxTotalBudget: 2.00m,
+        MaxCriterionRetries: 0,
         PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: null,
         TransitionMap: BuildUniformMap(ConductorTransitionDecision.Escalate));
@@ -119,6 +123,9 @@ public sealed record ConductorAutonomyPolicy(
         if (MaxTotalBudget <= 0)
             errors.Add($"maxTotalBudget must be greater than zero (got {MaxTotalBudget}).");
 
+        if (MaxCriterionRetries < 0)
+            errors.Add($"maxCriterionRetries must be zero or greater (got {MaxCriterionRetries}).");
+
         if (PerProviderBudgetCaps is not null)
         {
             foreach (var (provider, cap) in PerProviderBudgetCaps)
@@ -147,6 +154,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"name\": {JsonStr(Name)},");
         sb.AppendLine($"  \"maxConcurrentPaidWorkers\": {MaxConcurrentPaidWorkers},");
         sb.AppendLine($"  \"maxTotalBudget\": {MaxTotalBudget},");
+        sb.AppendLine($"  \"maxCriterionRetries\": {MaxCriterionRetries},");
 
         if (PerProviderBudgetCaps is { Count: > 0 })
         {
@@ -204,6 +212,9 @@ public sealed record ConductorAutonomyPolicy(
             var name = RequireString(root, "name", src) ?? "custom";
             var maxWorkers = RequireInt(root, "maxConcurrentPaidWorkers", src);
             var maxBudget = RequireDecimal(root, "maxTotalBudget", src);
+            var maxCriterionRetries = root.TryGetProperty("maxCriterionRetries", out _)
+                ? RequireInt(root, "maxCriterionRetries", src)
+                : 1;
 
             IReadOnlyDictionary<string, decimal>? providerCaps = null;
             if (root.TryGetProperty("perProviderBudgetCaps", out var capsEl)
@@ -255,7 +266,7 @@ public sealed record ConductorAutonomyPolicy(
             }
 
             var policy = new ConductorAutonomyPolicy(
-                name, maxWorkers, maxBudget, providerCaps, riskThreshold, transitionMap);
+                name, maxWorkers, maxBudget, maxCriterionRetries, providerCaps, riskThreshold, transitionMap);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

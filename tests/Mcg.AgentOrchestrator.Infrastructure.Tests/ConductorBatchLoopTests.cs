@@ -49,7 +49,12 @@ public sealed class ConductorBatchLoopTests
             getRunningCount ?? (() => 0),
             createWorkspace ?? (_ => "/tmp/workspace"),
             dispatchAndStart ?? (_ => null),
-            runAcceptance ?? (_ => true),
+            goal => (runAcceptance ?? (_ => true))(goal)
+                ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
+                : AcceptanceVerificationSummary.Failed,
+            null,
+            null,
+            null,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
             land ?? (g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed")),
             record ?? (_ => { }),

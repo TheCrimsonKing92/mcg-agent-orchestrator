@@ -107,7 +107,10 @@ public sealed class GoalDependencyTests
             getRunningPaidWorkerCount: () => 0,
             createWorkspace: g => { workspacesCreated.Add(g.Id.Value); return "/tmp/ws"; },
             dispatchAndStart: _ => null,
-            runAcceptanceVerification: _ => true,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            retryTask: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
             rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
@@ -170,7 +173,10 @@ public sealed class GoalDependencyTests
                 return "/tmp/ws";
             },
             dispatchAndStart: _ => null,
-            runAcceptanceVerification: _ => true,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            retryTask: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
             rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g =>
             {
@@ -218,7 +224,10 @@ public sealed class GoalDependencyTests
                 return "/tmp/ws";
             },
             dispatchAndStart: g => g.Id == a.Id ? "Dispatch failed for A" : null, // A fails → escalated
-            runAcceptanceVerification: _ => true,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            retryTask: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
             rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },

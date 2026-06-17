@@ -11,7 +11,10 @@ internal sealed class ConductorDriver
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
     private readonly Func<Goal, string?> _dispatchAndStart;
-    private readonly Func<Goal, bool> _runAcceptanceVerification;
+    private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
+    private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
+    private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, LandingResult> _land;
     private readonly Action<Goal> _record;
@@ -72,18 +75,27 @@ internal sealed class ConductorDriver
         _runAcceptanceVerification = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
-            if (worktreePath is null) return false;
+            if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
             GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", "Running acceptance verification.");
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles).GetAwaiter().GetResult();
+            var unmetCriteria = verification.Checks?
+                .Where(check => check.Advisory && !check.Passed)
+                .ToArray() ?? [];
             if (verification.Passed)
                 GoalOperationJournal.Completed(dir, goal, "conductor:acceptance",
-                    $"Acceptance passed (exit {verification.ExitCode}).");
+                    unmetCriteria.Length == 0
+                        ? $"Acceptance passed (exit {verification.ExitCode})."
+                        : $"Acceptance passed (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:acceptance",
                     $"Acceptance failed (exit {verification.ExitCode}).");
-            return verification.Passed;
+            return new AcceptanceVerificationSummary(verification.Passed, unmetCriteria);
         };
+
+        _retryTask = kernel.RetryTask;
+        _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
+        _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
 
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
 
@@ -146,7 +158,10 @@ internal sealed class ConductorDriver
         Func<int> getRunningPaidWorkerCount,
         Func<Goal, string> createWorkspace,
         Func<Goal, string?> dispatchAndStart,
-        Func<Goal, bool> runAcceptanceVerification,
+        Func<Goal, AcceptanceVerificationSummary> runAcceptanceVerification,
+        Func<GoalId, TaskId, string, TaskSpec>? retryTask,
+        Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback,
+        Action<GoalId, TaskId>? clearCriterionRetryFeedback,
         Func<Goal, GoalWorktreeRebaseResult> rebaseOntoMain,
         Func<Goal, LandingResult> land,
         Action<Goal> record,
@@ -159,6 +174,9 @@ internal sealed class ConductorDriver
         _createWorkspace = createWorkspace;
         _dispatchAndStart = dispatchAndStart;
         _runAcceptanceVerification = runAcceptanceVerification;
+        _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
+        _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
+        _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _rebaseOntoMain = rebaseOntoMain;
         _land = land;
         _record = record;
@@ -246,11 +264,42 @@ internal sealed class ConductorDriver
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
         // Gate 1: acceptance verification (test suite quality check).
-        var acceptancePassed = _runAcceptanceVerification(goal);
-        if (!acceptancePassed)
+        var acceptance = _runAcceptanceVerification(goal);
+        if (!acceptance.Passed)
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
                 "Acceptance verification failed; review and fix before landing");
+        }
+
+        if (acceptance.UnmetCriteria.Count > 0)
+        {
+            var criteria = FormatUnmetCriteria(acceptance.UnmetCriteria);
+            var task = SelectTaskForCriterionRetry(goal);
+            if (task is null)
+            {
+                return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
+                    $"Acceptance criteria unmet but no completed task is available to retry: {criteria}; review/land manually");
+            }
+
+            if (task.CriterionRetryCount < policy.MaxCriterionRetries)
+            {
+                var retryCount = _recordCriterionRetryFeedback(
+                    goal.Id,
+                    task.Id,
+                    acceptance.UnmetCriteria.Select(FormatUnmetCriterion).ToArray());
+                var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): {criteria}";
+                _retryTask(goal.Id, task.Id, retryMessage);
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
+            }
+
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
+                $"Acceptance criteria unmet after {task.CriterionRetryCount} retries: {criteria}; review/land manually");
+        }
+
+        foreach (var task in goal.Tasks)
+        {
+            _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
         // Gate 2: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
@@ -320,4 +369,20 @@ internal sealed class ConductorDriver
         ConductorAdvanceOutcome outcome) =>
         new(goalId, goalPrefix, policy.Name, outcome);
 
+    private static TaskSpec? SelectTaskForCriterionRetry(Goal goal) =>
+        goal.Tasks.LastOrDefault(task => task.Status == WorkTaskStatus.Completed && task.RequiredRole == AgentRole.Developer) ??
+        goal.Tasks.LastOrDefault(task => task.Status == WorkTaskStatus.Completed);
+
+    private static string FormatUnmetCriteria(IReadOnlyList<AcceptanceCheckResult> criteria) =>
+        string.Join("; ", criteria.Select(FormatUnmetCriterion));
+
+    private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
+    {
+        var summary = string.IsNullOrWhiteSpace(criterion.ResultSummary)
+            ? criterion.OutputTail
+            : criterion.ResultSummary;
+        return string.IsNullOrWhiteSpace(summary)
+            ? criterion.Name
+            : $"{criterion.Name}: {summary.Trim()}";
+    }
 }

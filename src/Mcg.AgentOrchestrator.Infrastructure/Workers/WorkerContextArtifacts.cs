@@ -269,6 +269,16 @@ public static class WorkerContextArtifacts
             lines.Add(task.VerificationPlan);
         }
 
+        if (task.CriterionRetryFeedback.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Unmet acceptance criteria from the prior attempt - fix these:");
+            foreach (var feedback in task.CriterionRetryFeedback)
+            {
+                lines.Add($"- {feedback}");
+            }
+        }
+
         if (task.LastExecution is not null)
         {
             lines.Add(string.Empty);

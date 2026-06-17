@@ -46,6 +46,10 @@ public sealed class ConductorDriverTests
         Func<Goal, string>? createWorkspace = null,
         Func<Goal, string?>? dispatchAndStart = null,
         Func<Goal, bool>? runAcceptance = null,
+        Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null,
+        Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
+        Action<GoalId, TaskId>? clearCriterionRetryFeedback = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
         Action<Goal>? record = null,
@@ -58,7 +62,12 @@ public sealed class ConductorDriverTests
             getRunningCount ?? (() => 0),
             createWorkspace ?? (_ => "/tmp/workspace"),
             dispatchAndStart ?? (_ => null),
-            runAcceptance ?? (_ => true),
+            runAcceptanceSummary ?? (goal => (runAcceptance ?? (_ => true))(goal)
+                ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
+                : AcceptanceVerificationSummary.Failed),
+            retryTask,
+            recordCriterionRetryFeedback,
+            clearCriterionRetryFeedback,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
             land ?? (g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed")),
             record ?? (_ => { }),
@@ -199,6 +208,150 @@ public sealed class ConductorDriverTests
         Assert.True(escalated);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
         Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Escalated)result.Outcome).State);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_retries_task_with_feedback")]
+    public void ConductorDriverVerifiedUnmetAcceptanceCriterionRetriesTaskWithFeedback()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var landCalled = false;
+        var retryCalled = false;
+        string? retryMessage = null;
+        var unmet = new AcceptanceCheckResult(
+            "grep-present docs/usage.md contains Ready",
+            false,
+            1,
+            "Pattern 'Ready' was not found.",
+            ResultSummary: "docs/usage.md is missing Ready",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
+
+        Assert.True(retryCalled);
+        Assert.False(landCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+        Assert.Contains(retryMessage!, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
+        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal)));
+        Assert.Contains(brief.Content, text => text.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", StringComparison.Ordinal));
+        Assert.Contains(brief.Content, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_escalates_after_retry_budget")]
+    public void ConductorDriverVerifiedUnmetAcceptanceCriterionEscalatesAfterRetryBudget()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["previous unmet criterion"]);
+        var landCalled = false;
+        string? escalationReason = null;
+        var unmet = new AcceptanceCheckResult(
+            "file-exists docs/usage.md",
+            false,
+            1,
+            "file missing",
+            ResultSummary: "docs/usage.md missing",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (_, _, _) => throw new InvalidOperationException("Retry should not be called after budget is spent."),
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.False(landCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Contains(escalationReason!, text => text.Contains("Acceptance criteria unmet after 1 retries", StringComparison.Ordinal));
+        Assert.Contains(escalationReason!, text => text.Contains("docs/usage.md missing", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_all_acceptance_criteria_met_lands")]
+    public void ConductorDriverVerifiedAllAcceptanceCriteriaMetLands()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["stale retry feedback"]);
+        var landCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            clearCriterionRetryFeedback: kernel.ClearCriterionRetryFeedback,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(landCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(0, task.CriterionRetryFeedback.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_zero_criterion_retry_budget_escalates_without_retry")]
+    public void ConductorDriverVerifiedZeroCriterionRetryBudgetEscalatesWithoutRetry()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var retryCalled = false;
+        string? escalationReason = null;
+        var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 0 };
+        var unmet = new AcceptanceCheckResult(
+            "command-exit dotnet test",
+            false,
+            1,
+            "failed",
+            ResultSummary: "focused command failed",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, policy);
+
+        Assert.False(retryCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Contains(escalationReason!, text => text.Contains("Acceptance criteria unmet after 0 retries", StringComparison.Ordinal));
+        Assert.Contains(escalationReason!, text => text.Contains("focused command failed", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_policy_risk_gate_escalates_Security_risk")]

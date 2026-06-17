@@ -162,6 +162,22 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.RecordCriterionRetryFeedback(feedback);
+        task.IncrementCriterionRetryCount();
+        return task.CriterionRetryCount;
+    }
+
+    public void ClearCriterionRetryFeedback(GoalId goalId, TaskId taskId)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.ClearCriterionRetryFeedback();
+    }
+
     public TaskSpec RedelegateTask(GoalId goalId, TaskId taskId, IReadOnlyList<AgentDefinition> availableAgents)
     {
         var goal = GetGoal(goalId);
