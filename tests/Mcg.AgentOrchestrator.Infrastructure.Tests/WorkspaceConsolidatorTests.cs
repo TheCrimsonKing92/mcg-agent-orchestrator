@@ -250,6 +250,96 @@ public sealed class WorkspaceConsolidatorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "LegacyWorkspaceConsolidator_migrates_legacy_model_functions_when_canonical_lacks_one")]
+    public async Task LegacyWorkspaceConsolidatorMigratesLegacyModelFunctionsWhenCanonicalLacksOne()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (legacyDbPath, _) = SetupWorkspacePaths(root);
+            var legacyDir = Path.GetDirectoryName(legacyDbPath)!;
+            var canonicalDir = Path.Combine(root, ".orchestrator");
+
+            SeedGoal(legacyDbPath, Guid.NewGuid().ToString("n"), "2026-06-01T00:00:00.0000000+00:00", "Goal");
+            var legacyJson = PopulatedModelFunctionsJson();
+            File.WriteAllText(Path.Combine(legacyDir, "model-functions.json"), legacyJson);
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var result = await LegacyWorkspaceConsolidator.ConsolidateAsync(workspace);
+
+            Assert.False(result.IsNoOp);
+            Assert.True(result.MigratedConfigFiles.Contains("model-functions.json"));
+            Assert.False(result.SkippedConfigFiles.Contains("model-functions.json"));
+
+            var canonicalConfigPath = Path.Combine(canonicalDir, "model-functions.json");
+            Assert.True(File.Exists(canonicalConfigPath));
+            Assert.Equal(legacyJson, File.ReadAllText(canonicalConfigPath));
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LegacyWorkspaceConsolidator_does_not_overwrite_populated_canonical_config")]
+    public async Task LegacyWorkspaceConsolidatorDoesNotOverwritePopulatedCanonicalConfig()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (legacyDbPath, _) = SetupWorkspacePaths(root);
+            var legacyDir = Path.GetDirectoryName(legacyDbPath)!;
+            var canonicalDir = Path.Combine(root, ".orchestrator");
+
+            SeedGoal(legacyDbPath, Guid.NewGuid().ToString("n"), "2026-06-01T00:00:00.0000000+00:00", "Goal");
+
+            var legacyJson = PopulatedModelFunctionsJson("legacy-judge");
+            File.WriteAllText(Path.Combine(legacyDir, "model-functions.json"), legacyJson);
+
+            var canonicalJson = PopulatedModelFunctionsJson("canonical-judge");
+            var canonicalConfigPath = Path.Combine(canonicalDir, "model-functions.json");
+            File.WriteAllText(canonicalConfigPath, canonicalJson);
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var result = await LegacyWorkspaceConsolidator.ConsolidateAsync(workspace);
+
+            Assert.False(result.IsNoOp);
+            Assert.False(result.MigratedConfigFiles.Contains("model-functions.json"));
+            Assert.True(result.SkippedConfigFiles.Contains("model-functions.json"));
+
+            // Canonical content must be preserved unchanged.
+            Assert.Equal(canonicalJson, File.ReadAllText(canonicalConfigPath));
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LegacyWorkspaceConsolidator_is_idempotent_on_second_run")]
+    public async Task LegacyWorkspaceConsolidatorIsIdempotentOnSecondRun()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (legacyDbPath, _) = SetupWorkspacePaths(root);
+            SeedGoal(legacyDbPath, Guid.NewGuid().ToString("n"), "2026-06-01T00:00:00.0000000+00:00", "Goal");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+
+            var first = await LegacyWorkspaceConsolidator.ConsolidateAsync(workspace);
+            Assert.False(first.IsNoOp);
+
+            // Second run: legacy dir has been renamed to archive, so no legacy state.db exists.
+            var second = await LegacyWorkspaceConsolidator.ConsolidateAsync(workspace);
+            Assert.True(second.IsNoOp);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
     private static (string LegacyDbPath, string CanonicalDbPath) SetupWorkspacePaths(string root)
     {
         var legacyDir = Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", ".orchestrator");
@@ -276,6 +366,11 @@ public sealed class WorkspaceConsolidatorTests
         cmd.Parameters.AddWithValue("$id", goalId);
         cmd.ExecuteNonQuery();
     }
+
+    // Returns a minimal JSON string that IsPopulatedConfigFile recognises as populated
+    // (non-empty Bindings array). The purpose string differentiates canonical vs legacy fixtures.
+    private static string PopulatedModelFunctionsJson(string purpose = "acceptance-judge") =>
+        "{\"Bindings\":[{\"Purpose\":\"" + purpose + "\",\"Lane\":\"CheapApi\",\"Model\":{\"ProviderName\":\"Anthropic\",\"ModelName\":\"claude-haiku-4-5\",\"Capabilities\":\"Text\",\"SubscriptionMode\":\"ApiKey\"}}]}";
 
     private static void DeleteDirectory(string path)
     {
