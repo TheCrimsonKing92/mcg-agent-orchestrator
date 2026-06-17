@@ -14,6 +14,10 @@ internal interface ISemanticJudge
     // null means use the per-judge default passed to EvaluateAsync; non-null overrides it for slow lanes.
     TimeSpan? JudgeTimeout { get; }
 
+    // false for slow-lane CLI judges (SubscriptionCliSemanticJudge): N cold process launches per file
+    // would exceed the 180s budget. Fast local judges (ModelRegistrySemanticJudge) default to true.
+    bool SupportsFanOut => true;
+
     Task<SemanticAcceptanceVerdict> JudgeAsync(SemanticAcceptanceInputs inputs, CancellationToken cancellationToken);
 }
 
@@ -120,6 +124,10 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
     public string Name => $"sub:{_profileName}:{_modelAlias}";
 
     public TimeSpan? JudgeTimeout => TimeSpan.FromSeconds(180);
+
+    // CLI judges must never fan out per-file: each call is a cold process launch that can easily
+    // consume the entire 180s budget across N files. Judge the whole diff in a single call instead.
+    public bool SupportsFanOut => false;
 
     public async Task<SemanticAcceptanceVerdict> JudgeAsync(
         SemanticAcceptanceInputs inputs,
@@ -248,7 +256,7 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
         CancellationToken cancellationToken)
     {
         var perFileDiffs = inputs.PerFileDiffs;
-        if (perFileDiffs is null or { Count: 0 })
+        if (!_leaf.SupportsFanOut || perFileDiffs is null or { Count: 0 })
         {
             return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
         }

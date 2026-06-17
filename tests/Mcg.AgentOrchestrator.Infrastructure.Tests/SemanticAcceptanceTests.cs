@@ -479,10 +479,11 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("low", verdict.Confidence);
     }
 
-    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_fans_out_per_file_for_subscription_cli_leaf_within_cap")]
-    public async Task RecursiveJudgeFansOutPerFileForCliLeafWithinCap()
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_subscription_cli_leaf_judges_whole_diff_in_single_call")]
+    public async Task RecursiveJudgeSubscriptionCliLeafJudgesWholeDiffInSingleCall()
     {
         var callCount = 0;
+        string? capturedDiff = null;
         Task<string> CountingRunner(string command, string workingDirectory, CancellationToken ct)
         {
             callCount++;
@@ -509,8 +510,9 @@ public sealed class SemanticAcceptanceTests
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
-        // CLI leaf must now fan out once per file (hang fix in goal 267f98b6 made this safe).
-        Assert.Equal(3, callCount);
+        // CLI leaf must NOT fan out per-file — N cold launches exceed the 180s budget.
+        // The whole diff must be judged in exactly one call regardless of file count.
+        Assert.Equal(1, callCount);
         Assert.True(verdict.IsValid);
         Assert.True(verdict.CriteriaMet);
     }
