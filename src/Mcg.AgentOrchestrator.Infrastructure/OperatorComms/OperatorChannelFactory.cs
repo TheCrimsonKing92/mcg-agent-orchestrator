@@ -28,6 +28,19 @@ public static class OperatorChannelFactory
         return new DiscordOperatorChannel(api, forumChannelId, stateDirectory, catalog.DashboardBaseUrl);
     }
 
+    public static DiscordGatewayListener? CreateGatewayListener(
+        OperatorChannelCatalog catalog,
+        string? botToken,
+        DiscordDecisionApplier applier)
+    {
+        if (!IsDiscordConfigured(catalog, botToken, out _))
+            return null;
+
+        var allowedUserIds = catalog.OperatorUserIds ?? [];
+        return DiscordGatewayListener.CreateAndConnectAsync(botToken!, applier, allowedUserIds)
+            .GetAwaiter().GetResult();
+    }
+
     private static bool IsDiscordConfigured(OperatorChannelCatalog catalog, string? botToken, out ulong forumChannelId)
     {
         forumChannelId = 0;
