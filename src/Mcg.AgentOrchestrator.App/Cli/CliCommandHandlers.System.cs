@@ -217,34 +217,8 @@ internal static partial class CliCommandHandlers
         }
     }
 
-    private static bool GitCommitShaExists(string executionDirectory, string sha)
-    {
-        var startInfo = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = executionDirectory
-        };
-        startInfo.ArgumentList.Add("cat-file");
-        startInfo.ArgumentList.Add("-e");
-        startInfo.ArgumentList.Add($"{sha}^{{commit}}");
-
-        try
-        {
-            using var process = System.Diagnostics.Process.Start(startInfo);
-            if (process is null) return false;
-            _ = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            return process.WaitForExit(5000) && process.ExitCode == 0;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
-        {
-            return false;
-        }
-    }
+    private static bool GitCommitShaExists(string executionDirectory, string sha) =>
+        GitCli.Run(executionDirectory, 5_000, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
 
     private static DistributedArchitectureDto BuildCliArchitectureReport(CliExecutionContext context)
     {

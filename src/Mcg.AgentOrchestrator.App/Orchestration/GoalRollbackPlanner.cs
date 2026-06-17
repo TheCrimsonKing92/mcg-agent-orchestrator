@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -31,9 +30,9 @@ internal static class GoalRollbackPlanner
     public static GoalRollbackAcceptanceRange? CapturePendingAcceptance(string executionDirectory, GoalId goalId)
     {
         var branch = GoalWorktrees.BranchName(goalId);
-        var baseCommit = RunGit(executionDirectory, "merge-base", "main", branch);
-        var head = RunGit(executionDirectory, "rev-parse", branch);
-        var main = RunGit(executionDirectory, "rev-parse", "main");
+        var baseCommit = GitCli.Run(executionDirectory, "merge-base", "main", branch);
+        var head = GitCli.Run(executionDirectory, "rev-parse", branch);
+        var main = GitCli.Run(executionDirectory, "rev-parse", "main");
         if (baseCommit.ExitCode != 0 || head.ExitCode != 0 || main.ExitCode != 0)
         {
             return null;
@@ -109,15 +108,21 @@ internal static class GoalRollbackPlanner
         var range = ReadRange(executionDirectory, goal.Id)
             ?? throw new InvalidOperationException("Rollback metadata disappeared before apply.");
 
-        EnsureGit(RunGit(executionDirectory, "switch", "main"), "switch to main");
-        EnsureGit(RunGit(executionDirectory, "switch", "-c", plan.RollbackBranch), "create rollback branch");
-        var revert = RunGit(executionDirectory, "revert", "--no-commit", $"{range.BaseCommit}..{range.AcceptedHeadCommit}");
+        var switchMain = GitCli.Run(executionDirectory, "switch", "main");
+        if (switchMain.ExitCode != 0)
+            throw new InvalidOperationException($"Failed to switch to main: {switchMain.Error}");
+        var createBranch = GitCli.Run(executionDirectory, "switch", "-c", plan.RollbackBranch);
+        if (createBranch.ExitCode != 0)
+            throw new InvalidOperationException($"Failed to create rollback branch: {createBranch.Error}");
+        var revert = GitCli.Run(executionDirectory, "revert", "--no-commit", $"{range.BaseCommit}..{range.AcceptedHeadCommit}");
         if (revert.ExitCode != 0)
         {
             throw new InvalidOperationException($"Rollback revert conflicted on {plan.RollbackBranch}: {revert.Error}");
         }
 
-        EnsureGit(RunGit(executionDirectory, "commit", "-m", $"Rollback goal {plan.GoalPrefix}: {plan.Reason}"), "commit rollback");
+        var commitResult = GitCli.Run(executionDirectory, "commit", "-m", $"Rollback goal {plan.GoalPrefix}: {plan.Reason}");
+        if (commitResult.ExitCode != 0)
+            throw new InvalidOperationException($"Failed to commit rollback: {commitResult.Error}");
         return Build(executionDirectory, goal, reason, dryRun: false) with
         {
             CanApply = true,
@@ -141,7 +146,7 @@ internal static class GoalRollbackPlanner
         Path.Combine(StoreDirectory(executionDirectory), $"{goalId.Value[..8]}.json");
 
     private static bool BranchExists(string executionDirectory, string branch) =>
-        RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
+        GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
 
     private static string NormalizeReason(string reason)
     {
@@ -154,38 +159,4 @@ internal static class GoalRollbackPlanner
         return normalized;
     }
 
-    private static void EnsureGit(GitResult result, string operation)
-    {
-        if (result.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"Failed to {operation}: {result.Error}");
-        }
-    }
-
-    private static GitResult RunGit(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        return new GitResult(process.ExitCode, output, error);
-    }
-
-    private sealed record GitResult(int ExitCode, string Output, string Error);
 }

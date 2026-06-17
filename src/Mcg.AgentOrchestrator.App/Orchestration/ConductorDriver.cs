@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -120,7 +119,7 @@ internal sealed class ConductorDriver
             try
             {
                 var branch = GoalWorktrees.BranchName(goal.Id);
-                var result = RunGit(dir, "diff", "--name-only", $"main...{branch}");
+                var result = GitCli.Run(dir, "diff", "--name-only", $"main...{branch}");
                 if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output)) return null;
                 var files = result.Output
                     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -302,31 +301,4 @@ internal sealed class ConductorDriver
         ConductorAdvanceOutcome outcome) =>
         new(goalId, goalPrefix, policy.Name, outcome);
 
-    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
-
-    private static (int ExitCode, string Output) RunGit(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        foreach (var arg in arguments)
-            startInfo.ArgumentList.Add(arg);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git process.");
-        var output = process.StandardOutput.ReadToEnd();
-        if (!process.WaitForExit((int)GitTimeout.TotalMilliseconds))
-        {
-            process.Kill(entireProcessTree: true);
-            return (-1, string.Empty);
-        }
-
-        return (process.ExitCode, output.Trim());
-    }
 }

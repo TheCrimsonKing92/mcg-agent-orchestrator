@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -283,58 +282,21 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var status = ReadGitPorcelainStatus(workingDirectory);
-        if (status is null)
+        var statusResult = GitCli.Run(workingDirectory, "status", "--porcelain");
+        if (statusResult.ExitCode != 0)
         {
             findings.Add("worktree: cleanliness unavailable before dispatch; verify git status from the goal workspace if this is unexpected");
             return;
         }
 
-        if (status.Length == 0)
+        if (string.IsNullOrWhiteSpace(statusResult.Output))
         {
             findings.Add("ok: worktree clean before dispatch");
             return;
         }
 
-        var changedLineCount = status.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
+        var changedLineCount = statusResult.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
         findings.Add($"blocked: worktree has {changedLineCount} uncommitted change(s) before dispatch; commit, stash, or clean the goal workspace first");
-    }
-
-    private static string? ReadGitPorcelainStatus(string workingDirectory)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDirectory
-            };
-            startInfo.ArgumentList.Add("status");
-            startInfo.ArgumentList.Add("--porcelain");
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            if (!process.WaitForExit(10000) || process.ExitCode != 0)
-            {
-                return null;
-            }
-
-            return output.Trim();
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
     }
 
     private static void ThrowIfPreflightBlocked(WorkerSubscriptionPreflightResult preflight)

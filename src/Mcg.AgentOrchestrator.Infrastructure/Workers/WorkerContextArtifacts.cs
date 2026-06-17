@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -1109,53 +1108,9 @@ public static class WorkerContextArtifacts
 
     private static bool TryRunGit(string workingDirectory, string[] arguments, out string output)
     {
-        output = string.Empty;
-        try
-        {
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDirectory
-            };
-
-            foreach (var argument in arguments)
-            {
-                process.StartInfo.ArgumentList.Add(argument);
-            }
-
-            if (!process.Start())
-            {
-                return false;
-            }
-
-            if (!process.WaitForExit(5000))
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // Best-effort cleanup; missing git data should not block dispatch preparation.
-                }
-
-                return false;
-            }
-
-            output = process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            return process.ExitCode == 0;
-        }
-        catch
-        {
-            output = string.Empty;
-            return false;
-        }
+        var result = GitCli.Run(workingDirectory, 5_000, arguments);
+        output = result.Output;
+        return result.Succeeded;
     }
 
     private static IEnumerable<string> EnumerateSourceFiles(string workingDirectory)

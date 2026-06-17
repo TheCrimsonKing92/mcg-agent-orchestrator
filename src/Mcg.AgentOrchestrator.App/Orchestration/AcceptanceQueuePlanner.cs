@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -156,64 +155,21 @@ internal static class AcceptanceQueuePlanner
         return goal.Timeline.Count == 0 ? null : goal.Timeline.Min(evt => evt.OccurredAt);
     }
 
-    private static bool TryIsDirty(string worktreePath)
-    {
-        var result = RunGit(worktreePath, "status", "--porcelain");
-        return result.ExitCode != 0 || !string.IsNullOrWhiteSpace(result.Output);
-    }
+    private static bool TryIsDirty(string worktreePath) => GitCli.IsWorktreeDirty(worktreePath);
 
     private static bool BranchExists(string executionDirectory, string branchName)
     {
-        return RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}").ExitCode == 0;
+        return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}").ExitCode == 0;
     }
 
     private static bool IsFastForwardable(string executionDirectory, string branchName)
     {
-        return RunGit(executionDirectory, "merge-base", "--is-ancestor", "HEAD", branchName).ExitCode == 0;
+        return GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", branchName).ExitCode == 0;
     }
 
     private static bool BranchHasDiff(string executionDirectory, string branchName)
     {
-        var result = RunGit(executionDirectory, "diff", "--name-only", "HEAD..." + branchName);
+        var result = GitCli.Run(executionDirectory, "diff", "--name-only", "HEAD..." + branchName);
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output);
     }
-
-    private static GitResult RunGit(string workingDirectory, params string[] arguments)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDirectory
-            };
-
-            foreach (var argument in arguments)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return new GitResult(1, string.Empty, "failed to start git");
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            return process.WaitForExit(10000)
-                ? new GitResult(process.ExitCode, output, error)
-                : new GitResult(1, output, "git command timed out");
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
-        {
-            return new GitResult(1, string.Empty, ex.Message);
-        }
-    }
-
-    private sealed record GitResult(int ExitCode, string Output, string Error);
 }
