@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -107,6 +108,8 @@ public static class WorkerContextArtifacts
         WriteText(Path.Combine(contextDirectory, "context-package.json"), BuildContextPackage(goal, task, contextDirectory));
         WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings);
         SnapshotCurrentPackage(contextDirectory, task.Id);
+
+        WriteAcceptanceCriteriaIfNonEmpty(goal.Objective, workingDirectory);
 
         return contextDirectory;
     }
@@ -1764,6 +1767,25 @@ public static class WorkerContextArtifacts
         {
             lines.Add($"  Stderr path: {verification.StandardErrorPath}");
         }
+    }
+
+    private static readonly JsonSerializerOptions CriteriaJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true
+    };
+
+    private static void WriteAcceptanceCriteriaIfNonEmpty(string objective, string workingDirectory)
+    {
+        var criteria = AcceptanceCriteriaParser.Parse(objective);
+        if (criteria.Count == 0)
+            return;
+
+        var dir = Path.Combine(workingDirectory, ".orchestrator");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "goal-acceptance-criteria.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(criteria, CriteriaJsonOptions));
     }
 
     private static void WriteText(string path, string content)

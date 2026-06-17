@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -15,7 +16,8 @@ public sealed record AcceptanceCheckResult(
     string? LeaseId = null,
     long? DurationMilliseconds = null,
     bool LockRemediationApplied = false,
-    string? ResultSummary = null);
+    string? ResultSummary = null,
+    bool Advisory = false);
 
 public sealed record AcceptanceVerificationResult(
     bool Passed,
@@ -59,6 +61,8 @@ public sealed class GoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks = injected.Count == 0
             ? manifest.Checks
             : [.. manifest.Checks, .. injected];
+
+        var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
         var checks = new List<AcceptanceCheckResult>();
         var retried = false;
@@ -149,7 +153,14 @@ public sealed class GoalAcceptanceVerifier
             checks.Add(await RunForbiddenChangedPathsCheckAsync(manifest.ForbiddenChangedPathGlobs, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
-        var failedCheck = checks.FirstOrDefault(check => !check.Passed);
+        // Advisory checks: always run, failures are recorded but do not affect overall Passed.
+        foreach (var advisoryCheck in advisoryChecks)
+        {
+            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+            checks.Add(checkResult.Result with { Advisory = true });
+        }
+
+        var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
 
         return new AcceptanceVerificationResult(
@@ -247,6 +258,57 @@ public sealed class GoalAcceptanceVerifier
         return slnContent.Contains(Path.GetFileName(projectPath), StringComparison.OrdinalIgnoreCase);
     }
 
+    private static AcceptanceManifestCheck[] LoadAdvisoryChecks(string worktreePath)
+    {
+        var path = System.IO.Path.Combine(worktreePath, ".orchestrator", "goal-acceptance-criteria.json");
+        if (!File.Exists(path))
+            return [];
+
+        try
+        {
+            var criteria = JsonSerializer.Deserialize<AcceptanceCriterion[]>(
+                File.ReadAllText(path),
+                CriteriaJsonOptions) ?? [];
+            return criteria
+                .Where(c => !string.IsNullOrWhiteSpace(c.Type))
+                .Select(c => CriterionToManifestCheck(c))
+                .ToArray();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static AcceptanceManifestCheck CriterionToManifestCheck(AcceptanceCriterion criterion)
+    {
+        // For command-exit, the stored Command is the full command line (e.g. "dotnet build Foo.sln -c Release").
+        // Split it into executable + arguments for process launch.
+        if (criterion.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(criterion.Command))
+        {
+            var parts = criterion.Command.Split([' '], StringSplitOptions.RemoveEmptyEntries);
+            return new AcceptanceManifestCheck
+            {
+                Name = criterion.Name,
+                Type = "command-exit",
+                Command = parts[0],
+                Arguments = parts.Length > 1 ? parts[1..] : [],
+                Advisory = true
+            };
+        }
+
+        return new AcceptanceManifestCheck
+        {
+            Name = criterion.Name,
+            Type = criterion.Type,
+            Command = criterion.Command,
+            Pattern = criterion.Pattern,
+            FilePath = criterion.Path,
+            Advisory = true
+        };
+    }
+
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckAsync(
         AcceptanceManifestCheck check,
         string worktreePath,
@@ -255,12 +317,82 @@ public sealed class GoalAcceptanceVerifier
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
-            return (new AcceptanceCheckResult(check.Name, true, null, null), false);
+            return (new AcceptanceCheckResult(check.Name, true, null, null, Advisory: check.Advisory), false);
         }
+
+        if (check.Type.Equals("grep-absent", StringComparison.OrdinalIgnoreCase))
+            return (await RunGrepCheckAsync(check, worktreePath, expectPresent: false, cancellationToken).ConfigureAwait(false), false);
+
+        if (check.Type.Equals("grep-present", StringComparison.OrdinalIgnoreCase))
+            return (await RunGrepCheckAsync(check, worktreePath, expectPresent: true, cancellationToken).ConfigureAwait(false), false);
+
+        if (check.Type.Equals("file-exists", StringComparison.OrdinalIgnoreCase))
+            return (RunFileExistsCheck(check, worktreePath), false);
+
+        if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
+            return await RunCommandCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
 
         return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
             ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false)
             : await RunCommandCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AcceptanceCheckResult> RunGrepCheckAsync(
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        bool expectPresent,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(check.Pattern))
+        {
+            return new AcceptanceCheckResult(
+                check.Name, false, 1,
+                "grep check has no pattern configured",
+                Advisory: check.Advisory);
+        }
+
+        var result = await _runner(
+            ["git", "grep", "-q", "--", check.Pattern],
+            worktreePath,
+            cancellationToken).ConfigureAwait(false);
+
+        // git grep exit 0 = pattern found, exit 1 = not found
+        var patternFound = result.ExitCode == 0;
+        var passed = expectPresent ? patternFound : !patternFound;
+        var summary = expectPresent
+            ? (patternFound ? "pattern found" : "pattern not found")
+            : (patternFound ? "pattern still present" : "pattern absent");
+
+        return new AcceptanceCheckResult(
+            check.Name,
+            passed,
+            passed ? 0 : 1,
+            passed ? null : $"Advisory check failed: {summary} for pattern '{check.Pattern}'",
+            ResultSummary: summary,
+            Advisory: check.Advisory);
+    }
+
+    private AcceptanceCheckResult RunFileExistsCheck(
+        AcceptanceManifestCheck check,
+        string worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(check.FilePath))
+        {
+            return new AcceptanceCheckResult(
+                check.Name, false, 1,
+                "file-exists check has no path configured",
+                Advisory: check.Advisory);
+        }
+
+        var fullPath = System.IO.Path.Combine(worktreePath, check.FilePath);
+        var exists = File.Exists(fullPath);
+        return new AcceptanceCheckResult(
+            check.Name,
+            exists,
+            exists ? 0 : 1,
+            exists ? null : $"Advisory check failed: file not found: {check.FilePath}",
+            ResultSummary: exists ? "file exists" : "file not found",
+            Advisory: check.Advisory);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCommandCheckAsync(
@@ -286,7 +418,8 @@ public sealed class GoalAcceptanceVerifier
             check.Name,
             result.ExitCode == 0,
             result.ExitCode,
-            result.ExitCode == 0 ? null : TailOutput(result.Output)), false);
+            result.ExitCode == 0 ? null : TailOutput(result.Output),
+            Advisory: check.Advisory), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunDotnetTestCheckAsync(
@@ -569,6 +702,12 @@ public sealed class GoalAcceptanceVerifier
         }
     }
 
+    private static readonly JsonSerializerOptions CriteriaJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     private sealed class AcceptanceManifestCheck
     {
         public static AcceptanceManifestCheck DefaultDotnetTest { get; } = new()
@@ -582,5 +721,8 @@ public sealed class GoalAcceptanceVerifier
         public string? Command { get; init; }
         public string? Project { get; init; }
         public IReadOnlyList<string> Arguments { get; init; } = [];
+        public string? Pattern { get; init; }
+        public string? FilePath { get; init; }
+        public bool Advisory { get; init; }
     }
 }
