@@ -1534,3 +1534,10 @@ Goal 07e63cd2: # Acceptance 1b: bounded auto-retry-with-feedback on an unmet acc
 
 - Operator gate: Developer: pass - build clean; Core.Tests 308 passed; Infrastructure.Tests 842 passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET conductor change - handled implementation, tests, and verification without needing a stronger model.
+
+## 2026-06-17 - # Acceptance increment 2: advisory test-tamper guard  ## Why A worker can mak...
+
+Goal 5f76fd29: # Acceptance increment 2: advisory test-tamper guard  ## Why A worker can make the suite go green by WEAKENING the te.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit b938ba0). Acceptance passed.
+
+- Operator gate: Developer: pass — 308/308 Core.Tests + 846/846 Infrastructure.Tests (4 new tamper-guard tests included) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - advisory check feature with diff parsing heuristic and mocked-runner test pattern - appropriate capability for the task; no overkill.
