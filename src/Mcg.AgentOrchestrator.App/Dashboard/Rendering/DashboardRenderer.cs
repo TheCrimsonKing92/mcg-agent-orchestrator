@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
@@ -409,7 +410,7 @@ public static partial class DashboardRenderer
                     ? $"<br><a class=\"button-link\" href=\"#{Encode(BuildHumanInputFormAnchor(item.RequestId))}\">Answer</a>"
                     : string.Empty;
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(OutputTextPreview.CreateSummary(item.Question).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</span></td><td><code>{Encode(BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
+                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(OutputTextPreview.CreateSummary(item.Question).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</span></td><td><code>{Encode(ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
                 html.AppendLine("</tr>");
             }
         }
@@ -467,10 +468,10 @@ public static partial class DashboardRenderer
             html.AppendLine("<table><thead><tr><th>Scope</th><th>Blocker</th><th>Action</th><th>Command</th></tr></thead><tbody>");
             foreach (var blocker in acceptance.Blockers)
             {
-                int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
+                int? taskNumber = blocker.TaskId is null ? null : TaskDisplayNumber.Resolve(goal, blocker.TaskId);
                 var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{Encode(scope)}</td><td>{Encode(Display(blocker.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(blocker.Message).Text)}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(blocker.SuggestedAction).Text)}</td><td><code>{Encode(BuildAcceptanceSuggestedCommand(blocker, taskNumber))}</code></td>");
+                html.AppendLine($"<td>{Encode(scope)}</td><td>{Encode(Display(blocker.Kind))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(blocker.Message).Text)}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(blocker.SuggestedAction).Text)}</td><td><code>{Encode(ConsoleViews.BuildAcceptanceSuggestedCommand(blocker, taskNumber))}</code></td>");
                 html.AppendLine("</tr>");
             }
             html.AppendLine("</tbody></table>");
@@ -492,9 +493,9 @@ public static partial class DashboardRenderer
         {
             foreach (var item in verificationWorklist.Items)
             {
-                var taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
+                var taskNumber = TaskDisplayNumber.Resolve(goal, item.TaskId);
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{taskNumber}</td><td>{Encode(Display(item.GateStatus))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</td><td><code>{Encode(BuildVerificationSuggestedCommand(taskNumber, item.GateStatus))}</code></td>");
+                html.AppendLine($"<td>{taskNumber}</td><td>{Encode(Display(item.GateStatus))}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</td><td><code>{Encode(ConsoleViews.BuildVerificationSuggestedCommand(taskNumber, item.GateStatus))}</code></td>");
                 html.AppendLine("</tr>");
             }
         }
@@ -522,7 +523,7 @@ public static partial class DashboardRenderer
         foreach (var item in evidence.Tasks)
         {
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.TaskId)}</td><td>{Encode(Display(item.LatestEvidence))}<br><span class=\"meta\">{item.Role} &middot; {Encode(Display(item.TaskStatus))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</td>");
+            html.AppendLine($"<td>{TaskDisplayNumber.Resolve(goal, item.TaskId)}</td><td>{Encode(Display(item.LatestEvidence))}<br><span class=\"meta\">{item.Role} &middot; {Encode(Display(item.TaskStatus))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(item.Message).Text)}</td>");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");
@@ -537,7 +538,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<table><thead><tr><th>#</th><th>Stage</th><th>Status</th><th>Action</th><th>Command</th></tr></thead><tbody>");
         foreach (var stage in stages.Stages)
         {
-            var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
+            var taskNumber = TaskDisplayNumber.Resolve(goal, stage.TaskId);
             html.AppendLine("<tr>");
             html.AppendLine($"<td>{taskNumber}</td><td>{stage.Stage}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateSummary(stage.Description).Text)}</span></td><td>{Encode(Display(stage.StageStatus))}<br><span class=\"meta\">task {Encode(Display(stage.TaskStatus))} &middot; gate {Encode(Display(stage.VerificationStatus))} &middot; evidence {Encode(Display(stage.LatestEvidence))}</span></td><td>{Encode(OutputTextPreview.CreateTimeline(stage.SuggestedAction).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(stage.Message).Text)}</span></td><td><code>{Encode(BuildStageSuggestedCommand(goal, stage, options.AgentDefinitions))}</code></td>");
             html.AppendLine("</tr>");
@@ -554,7 +555,7 @@ public static partial class DashboardRenderer
         foreach (var gate in verificationGate.Tasks)
         {
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, gate.TaskId)}</td><td>{Encode(Display(gate.GateStatus))}</td><td>{Encode(OutputTextPreview.CreateTimeline(gate.Message).Text)}</td>");
+            html.AppendLine($"<td>{TaskDisplayNumber.Resolve(goal, gate.TaskId)}</td><td>{Encode(Display(gate.GateStatus))}</td><td>{Encode(OutputTextPreview.CreateTimeline(gate.Message).Text)}</td>");
             html.AppendLine("</tr>");
         }
         html.AppendLine("</tbody></table>");
@@ -751,7 +752,7 @@ public static partial class DashboardRenderer
                 ? "1 limit failure"
                 : $"{item.RecoverableLimitFailures} limit failures";
             html.AppendLine("<tr>");
-            html.AppendLine($"<td>{GetTaskDisplayNumber(goal, item.Task.Id)}</td><td>{item.Task.RequiredRole}</td><td><code>{Encode(item.RetryAfter.ToString("u"))}</code></td><td>{Encode(FormatRetryDelay(delay))}</td><td>{Encode(failures)}</td><td>{Encode(item.Task.Description)}</td>");
+            html.AppendLine($"<td>{TaskDisplayNumber.Resolve(goal, item.Task.Id)}</td><td>{item.Task.RequiredRole}</td><td><code>{Encode(item.RetryAfter.ToString("u"))}</code></td><td>{Encode(FormatRetryDelay(delay))}</td><td>{Encode(failures)}</td><td>{Encode(item.Task.Description)}</td>");
             html.AppendLine("</tr>");
         }
 
