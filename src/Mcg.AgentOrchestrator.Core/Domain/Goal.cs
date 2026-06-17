@@ -21,6 +21,8 @@ public sealed class Goal
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
 
+    public string? SourceBacklogItemId { get; private set; }
+
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
 
     public IReadOnlyList<ProgressEvent> Timeline => _timeline;
@@ -28,6 +30,8 @@ public sealed class Goal
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
     internal void SetStatus(GoalStatus status) => Status = status;
+
+    internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
 
@@ -48,7 +52,8 @@ public sealed class Goal
                 evt.Kind,
                 evt.Message,
                 evt.OccurredAt)).ToList(),
-            _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null);
+            _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
+            SourceBacklogItemId);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -70,6 +75,9 @@ public sealed class Goal
         {
             goal.AddDependency(new GoalId(depId));
         }
+
+        if (snapshot.SourceBacklogItemId is not null)
+            goal.SetSourceBacklogItemId(snapshot.SourceBacklogItemId);
 
         return goal;
     }

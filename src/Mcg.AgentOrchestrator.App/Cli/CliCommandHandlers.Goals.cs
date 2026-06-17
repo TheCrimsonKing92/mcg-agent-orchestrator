@@ -358,6 +358,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     AutoRecordDogfoodEntry(context);
                 }
 
+                AutoCloseSourceBacklogItem(context.CurrentGoal, context.Workspace.BacklogStorePath);
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
@@ -668,6 +669,21 @@ private static void AutoRecordDogfoodEntry(CliExecutionContext context)
     CommitDogfoodEntry(context.Workspace.ExecutionDirectory, goal.Id.Value[..8]);
 }
 
+// Closes the linked backlog item (if any) when a goal lands. Idempotent: already-closed or
+// absent items are a safe no-op. Swallows all store exceptions so acceptance never fails here.
+internal static bool AutoCloseSourceBacklogItem(Goal? goal, string backlogStorePath)
+{
+    if (goal?.SourceBacklogItemId is null)
+        return false;
+
+    var store = new BacklogStore(backlogStorePath);
+    var closed = store.TryCloseByIdAsync(goal.SourceBacklogItemId, $"Goal {goal.Id.Value[..8]} landed.").GetAwaiter().GetResult();
+    Console.WriteLine(closed
+        ? $"Closed backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]} landed)."
+        : $"Backlog item {goal.SourceBacklogItemId} already closed or not found (no-op).");
+    return closed;
+}
+
 private static void CommitDogfoodEntry(string executionDirectory, string goalPrefix)
 {
     var add = RunGit(executionDirectory, "add", "DOGFOOD_LOG.md");
@@ -851,6 +867,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance passed and merge completed.");
+    AutoCloseSourceBacklogItem(goal, context.Workspace.BacklogStorePath);
     if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, $"{commandName} workspace cleanup", out var cleanupPolicyError))
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", cleanupPolicyError);
@@ -1158,9 +1175,29 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     var item = plan.Items.Single();
+    var backlogItemId = BacklogStore.SlugId(item.Heading);
+
+    // Skip intake if the item is already Done in the backlog store.
+    if (!string.IsNullOrEmpty(backlogItemId))
+    {
+        var store = new BacklogStore(context.Workspace.BacklogStorePath);
+        var existing = store.GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult();
+        if (existing is { Status: BacklogItemStatus.Done })
+        {
+            Console.WriteLine($"Backlog item '{item.Heading}' is already Done; no goal created.");
+            return false;
+        }
+    }
+
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective)
         : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, item.SuggestedObjective);
+
+    if (!string.IsNullOrEmpty(backlogItemId))
+    {
+        context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, backlogItemId);
+    }
+
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;

@@ -116,6 +116,45 @@ public sealed class BacklogStoreTests
         Assert.Equal(goalId, items[0].SourceGoalId);
     }
 
+    // ── TryCloseByIdAsync (idempotent close) ──────────────────────────────────
+
+    [Xunit.Fact(DisplayName = "BacklogStore_try_close_returns_true_and_closes_open_item")]
+    public async Task TryCloseReturnsTrueAndClosesOpenItem()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Close me idempotently");
+
+        var result = await store.TryCloseByIdAsync(item.Id);
+
+        Assert.True(result);
+        var fetched = await store.GetByExactIdAsync(item.Id);
+        Assert.True(fetched is not null && fetched!.Status == BacklogItemStatus.Done);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_try_close_returns_false_for_already_done_item")]
+    public async Task TryCloseReturnsFalseForAlreadyDoneItem()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Already done");
+        await store.CloseAsync(item.Id);
+
+        var result = await store.TryCloseByIdAsync(item.Id);
+
+        Assert.False(result);
+        var fetched = await store.GetByExactIdAsync(item.Id);
+        Assert.True(fetched is not null && fetched!.Status == BacklogItemStatus.Done);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_try_close_returns_false_for_absent_item")]
+    public async Task TryCloseReturnsFalseForAbsentItem()
+    {
+        var store = new BacklogStore(TempDb());
+
+        var result = await store.TryCloseByIdAsync("nonexistent-id");
+
+        Assert.False(result);
+    }
+
     // ── Upsert / idempotency ─────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_upsert_inserts_new_item")]

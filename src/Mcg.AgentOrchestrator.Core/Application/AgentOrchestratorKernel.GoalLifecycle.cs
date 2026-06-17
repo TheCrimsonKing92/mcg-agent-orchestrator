@@ -360,6 +360,11 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, null, ProgressKind.GoalPolicyDecision, message);
     }
 
+    public void SetGoalSourceBacklogItemId(GoalId goalId, string backlogItemId)
+    {
+        GetGoal(goalId).SetSourceBacklogItemId(backlogItemId);
+    }
+
     public void SetGoalDependency(GoalId dependentId, GoalId dependencyId)
     {
         if (dependentId == dependencyId)

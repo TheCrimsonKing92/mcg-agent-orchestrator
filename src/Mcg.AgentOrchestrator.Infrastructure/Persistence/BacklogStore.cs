@@ -209,6 +209,52 @@ public sealed class BacklogStore
         }
     }
 
+    public async Task<BacklogItem?> GetByExactIdAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        return await LoadItemByIdAsync(conn, id, cancellationToken);
+    }
+
+    // Closes the item if Open; no-op if already Done or absent; never throws.
+    public async Task<bool> TryCloseByIdAsync(
+        string id,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+            await using var cmd = conn.CreateCommand();
+            if (reason is null)
+            {
+                cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id AND status = 'Open'";
+            }
+            else
+            {
+                cmd.CommandText = """
+                    UPDATE backlog
+                    SET status = 'Done',
+                        updated_at = $updated_at,
+                        body = CASE WHEN body = '' THEN $reason
+                                    ELSE body || char(10) || char(10) || 'Closed: ' || $reason
+                               END
+                    WHERE id = $id AND status = 'Open'
+                    """;
+                cmd.Parameters.AddWithValue("$reason", reason);
+            }
+            cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+            cmd.Parameters.AddWithValue("$id", id);
+            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            return rows > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // Returns true if inserted, false if the item already existed (idempotent for import).
     public async Task<bool> UpsertAsync(BacklogItem item, CancellationToken cancellationToken = default)
     {
