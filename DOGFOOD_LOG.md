@@ -1422,3 +1422,10 @@ Goal df7d1260: Remove the now-unnecessary one-time legacy-workspace migration co
 
 - Operator gate: Developer: pass — 277/277 Core.Tests + 799/799 Infrastructure.Tests (ALL GREEN) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped deletion with namespace resolution wrinkle - task was targeted dead-code removal; the only non-trivial step was discovering `OrchestratorWorkspace` lives in `App.Orchestration` not `Infrastructure`, caught immediately by the build.
+
+## 2026-06-17 - Fix the flaky DispatchProcessHost grandchild-pipe test
+
+Goal 003d2850: Fix the flaky DispatchProcessHost grandchild-pipe test. In tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DispatchP.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 8b0a7f5). Acceptance passed.
+
+- Operator gate: Developer: pass - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 12s (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted single-file test fix with no design decisions - straightforward file-handle race analysis and implementation.
