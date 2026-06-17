@@ -1415,3 +1415,10 @@ Goal 8d287a9b: Reorganize the README into a Fundamentals/Advanced split (docs on
 
 - Operator gate: Developer: not-run (docs-only change; no tests apply) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - docs restructuring with CLI source cross-check - reading two source files to verify six verb names before writing kept the docs accurate; task required no generation or inference beyond writing.
+
+## 2026-06-17 - Remove the now-unnecessary one-time legacy-workspace migration code
+
+Goal df7d1260: Remove the now-unnecessary one-time legacy-workspace migration code. The workspace state issue is fixed: Orchestrator.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 640f21f). Acceptance passed.
+
+- Operator gate: Developer: pass — 277/277 Core.Tests + 799/799 Infrastructure.Tests (ALL GREEN) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped deletion with namespace resolution wrinkle - task was targeted dead-code removal; the only non-trivial step was discovering `OrchestratorWorkspace` lives in `App.Orchestration` not `Infrastructure`, caught immediately by the build.
