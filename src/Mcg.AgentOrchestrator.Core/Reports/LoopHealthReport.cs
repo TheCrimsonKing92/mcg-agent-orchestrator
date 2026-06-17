@@ -1,5 +1,11 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+public sealed record JudgeVerdictDistribution(
+    string JudgeName,
+    int MetCount,
+    int NotMetCount,
+    int NoVerdictCount);
+
 public sealed record LoopHealthSnapshot(
     int GoalCount,
     int CompletedGoalCount,
@@ -10,7 +16,11 @@ public sealed record LoopHealthSnapshot(
     double OperatorPromptsPerGoal,
     double ReworkRetryRate,
     double? MedianTimeToAcceptanceHours,
-    IReadOnlyList<ModelOutcomeRecord> ModelOutcomeMix);
+    IReadOnlyList<ModelOutcomeRecord> ModelOutcomeMix,
+    IReadOnlyList<JudgeVerdictDistribution> JudgeVerdictDistributions,
+    double InterJudgeAgreementRate,
+    double FalseBlockRate,
+    double FalsePassRate);
 
 public static class LoopHealthReport
 {
@@ -18,7 +28,8 @@ public static class LoopHealthReport
         IEnumerable<Goal> goals,
         IEnumerable<HumanInputRequest> humanInputRequests,
         int? lastN = null,
-        int modelOutcomeWindowSize = ModelOutcomeScorecard.DefaultWindowSize)
+        int modelOutcomeWindowSize = ModelOutcomeScorecard.DefaultWindowSize,
+        IEnumerable<SemanticAcceptanceReceipt>? receipts = null)
     {
         var window = ApplyWindow(goals.ToList(), lastN);
         var goalIds = window.Select(g => g.Id).ToHashSet();
@@ -74,6 +85,13 @@ public static class LoopHealthReport
 
         var modelMix = ModelOutcomeScorecard.Build(allTasks, modelOutcomeWindowSize);
 
+        var receiptList = receipts?.ToList() ?? [];
+        var goalStatusById = window.ToDictionary(g => g.Id.Value, g => g.Status, StringComparer.Ordinal);
+
+        var judgeDistributions = BuildJudgeVerdictDistributions(receiptList);
+        var agreementRate = ComputeInterJudgeAgreementRate(receiptList);
+        var (falseBlockRate, falsePassRate) = ComputeFalseBlockPassRates(receiptList, goalStatusById);
+
         return new LoopHealthSnapshot(
             window.Count,
             completedGoals.Count,
@@ -84,7 +102,11 @@ public static class LoopHealthReport
             promptsPerGoal,
             retryRate,
             medianHours,
-            modelMix);
+            modelMix,
+            judgeDistributions,
+            agreementRate,
+            falseBlockRate,
+            falsePassRate);
     }
 
     // Emitted by BackgroundDispatchRunner when a dispatch exits 0 but the file-change guard fires.
@@ -96,6 +118,77 @@ public static class LoopHealthReport
     private static bool IsFalseCompletionCatch(TaskSpec task) =>
         task.VerificationHistory.Any(v =>
             v.StandardError.Contains(FalsePositiveRejectionMarker, StringComparison.Ordinal));
+
+    private static IReadOnlyList<JudgeVerdictDistribution> BuildJudgeVerdictDistributions(
+        IReadOnlyList<SemanticAcceptanceReceipt> receipts)
+    {
+        var byJudge = new Dictionary<string, (int Met, int NotMet, int NoVerdict)>(StringComparer.Ordinal);
+        foreach (var receipt in receipts)
+        {
+            foreach (var entry in receipt.Judges)
+            {
+                byJudge.TryGetValue(entry.Judge, out var counts);
+                if (!entry.Valid)
+                    byJudge[entry.Judge] = counts with { NoVerdict = counts.NoVerdict + 1 };
+                else if (entry.CriteriaMet)
+                    byJudge[entry.Judge] = counts with { Met = counts.Met + 1 };
+                else
+                    byJudge[entry.Judge] = counts with { NotMet = counts.NotMet + 1 };
+            }
+        }
+
+        return byJudge
+            .Select(kv => new JudgeVerdictDistribution(kv.Key, kv.Value.Met, kv.Value.NotMet, kv.Value.NoVerdict))
+            .OrderBy(d => d.JudgeName, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static double ComputeInterJudgeAgreementRate(IReadOnlyList<SemanticAcceptanceReceipt> receipts)
+    {
+        var totalWithMultiple = 0;
+        var agreeing = 0;
+        foreach (var receipt in receipts)
+        {
+            var validJudges = receipt.Judges.Where(j => j.Valid).ToList();
+            if (validJudges.Count < 2) continue;
+            totalWithMultiple++;
+            if (validJudges.All(j => j.CriteriaMet == validJudges[0].CriteriaMet))
+                agreeing++;
+        }
+
+        return totalWithMultiple > 0 ? (double)agreeing / totalWithMultiple : 0.0;
+    }
+
+    // Denominates over receipts where consensus is non-null AND goal has a terminal status.
+    // FalseBlock: consensus=false (NOT-MET) but goal Completed (would have wrongly blocked a landed goal).
+    // FalsePass:  consensus=true  (MET)     but goal Failed/Cancelled/Superseded (passed a failed goal).
+    private static (double FalseBlockRate, double FalsePassRate) ComputeFalseBlockPassRates(
+        IReadOnlyList<SemanticAcceptanceReceipt> receipts,
+        Dictionary<string, GoalStatus> goalStatusById)
+    {
+        var denominator = 0;
+        var falseBlocks = 0;
+        var falsePasses = 0;
+
+        foreach (var receipt in receipts)
+        {
+            if (receipt.Consensus is null) continue;
+            if (!goalStatusById.TryGetValue(receipt.GoalId, out var status)) continue;
+
+            var isTerminal = status is GoalStatus.Completed or GoalStatus.Failed
+                or GoalStatus.Cancelled or GoalStatus.Superseded;
+            if (!isTerminal) continue;
+
+            denominator++;
+            if (!receipt.Consensus.Value && status == GoalStatus.Completed)
+                falseBlocks++;
+            else if (receipt.Consensus.Value && status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+                falsePasses++;
+        }
+
+        if (denominator == 0) return (0.0, 0.0);
+        return ((double)falseBlocks / denominator, (double)falsePasses / denominator);
+    }
 
     private static List<Goal> ApplyWindow(List<Goal> goals, int? lastN)
     {
