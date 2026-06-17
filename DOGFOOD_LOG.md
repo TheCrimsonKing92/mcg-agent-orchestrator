@@ -1527,3 +1527,10 @@ Goal d5c46af7: # Conductor landing + dispatch-start robustness (true unattended 
 
 - Operator gate: Developer: ALL GREEN — Core.Tests 307/307, Infrastructure.Tests 830/830 (4 new tests added, all pass) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - App-layer surgical fix with cascade test updates - straightforward once the code paths were located; no novel reasoning required.
+
+## 2026-06-17 - # Acceptance 1b: bounded auto-retry-with-feedback on an unmet acceptance crit...
+
+Goal 07e63cd2: # Acceptance 1b: bounded auto-retry-with-feedback on an unmet acceptance criterion  ## Context (1a already landed) 1a.... Developer task via OpenAI/gpt-5.5 (exit 0, commit 2728ed9). Acceptance passed.
+
+- Operator gate: Developer: pass - build clean; Core.Tests 308 passed; Infrastructure.Tests 842 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET conductor change - handled implementation, tests, and verification without needing a stronger model.
