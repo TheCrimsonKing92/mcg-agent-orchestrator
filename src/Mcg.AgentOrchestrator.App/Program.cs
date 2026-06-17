@@ -56,7 +56,6 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
 }
 
 await SqliteStateJsonMigrator.MigrateIfNeededAsync(workspace.StatePath, workspace.SqliteStatePath);
-await LegacyWorkspaceConsolidator.ConsolidateAsync(workspace);
 ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 var kernel = await stateRepository.LoadAsync();
 var currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
