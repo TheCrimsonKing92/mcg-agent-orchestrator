@@ -1450,3 +1450,10 @@ Goal a42592f4: Auto-run verification-policy-required acceptance checks so requir
 
 - Operator gate: Developer: pass — 808/808 Infrastructure + 277/277 Core (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - moderate implementation + integration analysis - required understanding policy/manifest/verifier interaction and classifying dedup edge cases; adequate for the scope.
+
+## 2026-06-17 - Add a per-dispatch model override to subscription-dispatch so one goal can ru...
+
+Goal c30e4f3b: Add a per-dispatch model override to subscription-dispatch so one goal can run through a chosen model (e.g. gpt-5.3-c.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 9d48c94). Acceptance passed.
+
+- Operator gate: Developer: pass/1092 green (283 Core + 809 Infrastructure), 4 new override tests all pass (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file C# feature threading a record through 3 layers + tests - right size for this kind of structured implementation task.
