@@ -1366,3 +1366,10 @@ Goal 6f486244: Spike: can the Claude Agent SDK drive a worker on the SUBSCRIPTIO
 
 - Operator gate: Developer: not-run — doc-only deliverable, no code changed (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - research/doc spike requiring SDK credential-chain analysis and event surface mapping; no implementation needed for STEP 1
+
+## 2026-06-17 - Re-enable recursive per-file diff judging for acceptance judges, now that the...
+
+Goal cd00dcb2: Re-enable recursive per-file diff judging for acceptance judges, now that the judge runner no longer hangs (goal 267f.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 5fa3e9a). Acceptance passed.
+
+- Operator gate: Developer: pass — 32 SemanticAcceptance tests pass; full suite 1076/1076 green (ALL GREEN from Invoke-TestSummary) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped C# implementation + test fix in a well-structured codebase - no complex inference needed, just precise edits and build-test verification.
