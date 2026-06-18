@@ -1674,3 +1674,10 @@ Goal 45a65740: # Mock the nested build/acceptance in GoalWorktreeTests (fast, de
 
 - Operator gate: Planner: not-run (planner role — no implementation) (exit 0); Developer: pass; Release build clean; Core 356 passed/0 skipped; Infrastructure 927 passed/0 skipped; GoalWorktreeTests 45 passed/0 skipped (exit 0)
 - Model fit: Not reported.
+
+## 2026-06-18 - # Judge-input increment 2: aggregate true PER-FILE verdicts + budgeting for L...
+
+Goal 019a2b2b: # Judge-input increment 2: aggregate true PER-FILE verdicts + budgeting for LARGE multi-file changes  ## Why (north-s.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 9f12432). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Developer: pass; semantic focused 38/38, core 356/356, infrastructure 930/930; build succeeded 0 warnings/errors (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped multi-file judge behavior change - enough reasoning for edge cases and test coverage.
