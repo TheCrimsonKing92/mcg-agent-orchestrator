@@ -4,7 +4,8 @@ internal static partial class CliArgumentParser
 {
 private static bool IsSimpleCommand(string command)
 {
-    return command.Equals("status", StringComparison.OrdinalIgnoreCase) ||
+    return command.Equals("attention", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("status", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("doctor", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("state-compact", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("provider-smoke", StringComparison.OrdinalIgnoreCase) ||

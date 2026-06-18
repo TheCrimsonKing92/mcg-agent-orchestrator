@@ -8,16 +8,19 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Hosting;
 internal static class DiscordListenerWiring
 {
     // Production: full wiring — split command string, run through CliCommandDispatcher,
-    // acknowledge inbox item in the acks file.
+    // acknowledge inbox item in the acks file, resolve collaboration item.
     public static DiscordDecisionApplier BuildApplier(
         OrchestratorWorkspace workspace,
         IOrchestratorStateRepository repository,
         IModelProviderRegistry providers,
         AgentCatalog? agentCatalogFallback)
     {
-        return BuildApplier(
-            workspace,
-            (parts, ct) => RunCliCommandAsync(parts, ct, workspace, repository, providers, agentCatalogFallback));
+        return new DiscordDecisionApplier(
+            workspace.OrchestratorDirectory,
+            dispatch: (cmd, ct) => RunCliCommandAsync(
+                CliArgumentParser.SplitCommand(cmd), ct, workspace, repository, providers, agentCatalogFallback),
+            acknowledge: itemId => OperatorInbox.AppendAcknowledgement(workspace, itemId),
+            collaborationStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
     // Testable overload: accepts a seam in place of the real CliCommandDispatcher call.
@@ -30,7 +33,8 @@ internal static class DiscordListenerWiring
         return new DiscordDecisionApplier(
             workspace.OrchestratorDirectory,
             dispatch: (cmd, ct) => dispatchSeam(CliArgumentParser.SplitCommand(cmd), ct),
-            acknowledge: itemId => OperatorInbox.AppendAcknowledgement(workspace, itemId));
+            acknowledge: itemId => OperatorInbox.AppendAcknowledgement(workspace, itemId),
+            collaborationStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
     private static async Task RunCliCommandAsync(

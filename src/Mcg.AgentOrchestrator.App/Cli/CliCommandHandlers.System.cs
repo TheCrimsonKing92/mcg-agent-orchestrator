@@ -10,6 +10,14 @@ internal static partial class CliCommandHandlers
     {
         switch (command)
         {
+            case "attention":
+            {
+                var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+                var queue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
+                ConsoleViews.PrintAttentionQueue(queue);
+                return false;
+            }
+
             case "doctor":
                 ConsoleViews.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(new AgentCatalog(context.Agents), context.WorkerProfiles));
                 return false;

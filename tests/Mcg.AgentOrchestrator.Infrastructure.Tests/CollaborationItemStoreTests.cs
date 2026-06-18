@@ -1,0 +1,240 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+public sealed class CollaborationItemStoreTests
+{
+    // --- Basic CRUD ---
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_raise_creates_item_in_Raised_status")]
+    public async Task RaiseCreatesItemInRaisedStatus()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        var item = await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc", "subject", "body");
+
+        Xunit.Assert.NotNull(item.Id);
+        Xunit.Assert.Equal(CollaborationItemType.Decision, item.Type);
+        Xunit.Assert.Equal("goal-abc", item.GoalId);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, item.Status);
+        Xunit.Assert.Equal("subject", item.Subject);
+        Xunit.Assert.Equal("body", item.Body);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_raise_with_correlation_key")]
+    public async Task RaiseWithCorrelationKeyStoredAndQueryable()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        var item = await store.RaiseAsync(
+            CollaborationItemType.Decision, null, "Landing conflict", "merge failed",
+            correlationKey: "inbox-deadbeef1234");
+
+        Xunit.Assert.Equal("inbox-deadbeef1234", item.CorrelationKey);
+        var listed = await store.ListAsync();
+        Xunit.Assert.Single(listed);
+        Xunit.Assert.Equal("inbox-deadbeef1234", listed[0].CorrelationKey);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_list_returns_all_items")]
+    public async Task ListReturnsAllItems()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "s1", "b1");
+        await store.RaiseAsync(CollaborationItemType.Clarification, "g2", "s2", "b2");
+
+        var all = await store.ListAsync();
+        Xunit.Assert.Equal(2, all.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_list_filters_by_goal_id")]
+    public async Task ListFiltersByGoalId()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-aaa", "s1", "b1");
+        await store.RaiseAsync(CollaborationItemType.Clarification, "goal-bbb", "s2", "b2");
+
+        var filtered = await store.ListAsync("goal-aaa");
+        Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("goal-aaa", filtered[0].GoalId);
+    }
+
+    // --- Resolution ---
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_transitions_item_to_Resolved")]
+    public async Task ResolveSetsItemToResolved()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "s", "b", "corr-key-1");
+
+        var resolved = await store.TryResolveAsync("corr-key-1", "land g1prefix");
+
+        Xunit.Assert.True(resolved);
+        var items = await store.ListAsync();
+        Xunit.Assert.Equal(CollaborationItemStatus.Resolved, items[0].Status);
+        Xunit.Assert.Equal("land g1prefix", items[0].Resolution);
+        Xunit.Assert.NotNull(items[0].ResolvedAt);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_is_idempotent_returns_false_on_second_call")]
+    public async Task ResolveIsIdempotent()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "s", "b", "corr-key-2");
+
+        var firstResult = await store.TryResolveAsync("corr-key-2", "land g1prefix");
+        var secondResult = await store.TryResolveAsync("corr-key-2", "land g1prefix");
+
+        Xunit.Assert.True(firstResult);
+        Xunit.Assert.False(secondResult);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_unknown_key_returns_false")]
+    public async Task ResolveUnknownKeyReturnsFalse()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        var result = await store.TryResolveAsync("no-such-key", "some command");
+
+        Xunit.Assert.False(result);
+    }
+
+    // --- Attention queue ---
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_attention_queue_excludes_intake_types_and_terminal_items")]
+    public async Task AttentionQueueExcludesIntakeTypesAndTerminalItems()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "open decision", "b", "ck-1");
+        await store.RaiseAsync(CollaborationItemType.Notice, "g1", "notice", "b");
+        await store.RaiseAsync(CollaborationItemType.Capture, "g1", "capture", "b");
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "resolved decision", "b", "ck-2");
+        await store.TryResolveAsync("ck-2", "done");
+
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Single(queue);
+        Xunit.Assert.Equal("open decision", queue[0].Subject);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_attention_queue_ordered_Decision_Clarification_Verify")]
+    public async Task AttentionQueueOrdered()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        await store.RaiseAsync(CollaborationItemType.Verify, "g1", "verify-item", "b");
+        await store.RaiseAsync(CollaborationItemType.Clarification, "g1", "clarification-item", "b");
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "decision-item", "b");
+
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Equal(3, queue.Count);
+        Xunit.Assert.Equal(CollaborationItemType.Decision, queue[0].Type);
+        Xunit.Assert.Equal(CollaborationItemType.Clarification, queue[1].Type);
+        Xunit.Assert.Equal(CollaborationItemType.Verify, queue[2].Type);
+    }
+
+    // --- Producer+consumer round-trip with fake store seam ---
+
+    [Xunit.Fact(DisplayName = "RoundTrip_landing_escalation_raises_item_and_decision_resolves_it")]
+    public async Task LandingEscalationRaisesItemAndDecisionResolvesIt()
+    {
+        var fakeStore = new FakeCollaborationItemStore();
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Test round-trip goal");
+
+        // Producer: landing escalation raises a Decision item.
+        OperatorInbox.RecordLandingEscalation(
+            workspace, goal, "merge conflict", "integration",
+            channel: null, collaborationStore: fakeStore);
+
+        Xunit.Assert.Single(fakeStore.Items);
+        var raised = fakeStore.Items[0];
+        Xunit.Assert.Equal(CollaborationItemType.Decision, raised.Type);
+        Xunit.Assert.Equal(goal.Id.Value, raised.GoalId);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, raised.Status);
+        Xunit.Assert.NotNull(raised.CorrelationKey);
+
+        // Consumer: applying the decision (keyed by correlationKey = inboxItemId) resolves it.
+        var resolved = await fakeStore.TryResolveAsync(raised.CorrelationKey!, $"land {goal.Id.Value[..8]}");
+
+        Xunit.Assert.True(resolved);
+        Xunit.Assert.Equal(CollaborationItemStatus.Resolved, fakeStore.Items[0].Status);
+    }
+
+    [Xunit.Fact(DisplayName = "RoundTrip_resolve_is_idempotent_on_fake_store")]
+    public async Task ResolveIsIdempotentOnFakeStore()
+    {
+        var fakeStore = new FakeCollaborationItemStore();
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Test idempotent resolve");
+
+        OperatorInbox.RecordLandingEscalation(
+            workspace, goal, "conflict", "integration",
+            channel: null, collaborationStore: fakeStore);
+
+        var correlationKey = fakeStore.Items[0].CorrelationKey!;
+        var first = await fakeStore.TryResolveAsync(correlationKey, "land prefix");
+        var second = await fakeStore.TryResolveAsync(correlationKey, "land prefix");
+
+        Xunit.Assert.True(first);
+        Xunit.Assert.False(second);
+    }
+
+    private static string DbPath() =>
+        Path.Combine(CreateTempDirectory(), "collab.db");
+}
+
+internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
+{
+    private readonly List<CollaborationItem> _items = [];
+
+    public IReadOnlyList<CollaborationItem> Items => _items;
+
+    public Task<CollaborationItem> RaiseAsync(
+        CollaborationItemType type,
+        string? goalId,
+        string subject,
+        string body,
+        string? correlationKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        var item = new CollaborationItem(
+            Guid.NewGuid().ToString("n"),
+            type, goalId, CollaborationItemStatus.Raised,
+            subject, body, correlationKey, DateTimeOffset.UtcNow, null, null);
+        _items.Add(item);
+        return Task.FromResult(item);
+    }
+
+    public Task<bool> TryResolveAsync(
+        string correlationKey,
+        string resolution,
+        CancellationToken cancellationToken = default)
+    {
+        for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            if (item.CorrelationKey == correlationKey && !CollaborationItemLifecycle.IsTerminal(item.Status))
+            {
+                _items[i] = item with { Status = CollaborationItemStatus.Resolved, Resolution = resolution, ResolvedAt = DateTimeOffset.UtcNow };
+                return Task.FromResult(true);
+            }
+        }
+        return Task.FromResult(false);
+    }
+
+    public Task<IReadOnlyList<CollaborationItem>> GetAttentionQueueAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CollaborationItemLifecycle.BuildAttentionQueue(_items));
+
+    public Task<IReadOnlyList<CollaborationItem>> ListAsync(string? goalId = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<CollaborationItem>>(
+            goalId is null ? _items : _items.Where(i => i.GoalId == goalId).ToList());
+}
