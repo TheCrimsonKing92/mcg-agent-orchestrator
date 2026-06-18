@@ -109,6 +109,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase))

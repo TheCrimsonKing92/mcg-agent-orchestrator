@@ -101,6 +101,19 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.False(result);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_mark_delivered_transitions_Raised_to_Delivered")]
+    public async Task MarkDeliveredTransitionsRaisedToDelivered()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "s", "b", "corr-delivered-1");
+
+        var delivered = await store.TryMarkDeliveredAsync("corr-delivered-1");
+
+        Xunit.Assert.True(delivered);
+        var items = await store.ListAsync();
+        Xunit.Assert.Equal(CollaborationItemStatus.Delivered, items[0].Status);
+    }
+
     // --- Attention queue ---
 
     [Xunit.Fact(DisplayName = "CollaborationItemStore_attention_queue_excludes_intake_types_and_terminal_items")]
@@ -225,6 +238,22 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
             if (item.CorrelationKey == correlationKey && !CollaborationItemLifecycle.IsTerminal(item.Status))
             {
                 _items[i] = item with { Status = CollaborationItemStatus.Resolved, Resolution = resolution, ResolvedAt = DateTimeOffset.UtcNow };
+                return Task.FromResult(true);
+            }
+        }
+        return Task.FromResult(false);
+    }
+
+    public Task<bool> TryMarkDeliveredAsync(
+        string correlationKey,
+        CancellationToken cancellationToken = default)
+    {
+        for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            if (item.CorrelationKey == correlationKey && item.Status == CollaborationItemStatus.Raised)
+            {
+                _items[i] = item with { Status = CollaborationItemStatus.Delivered };
                 return Task.FromResult(true);
             }
         }

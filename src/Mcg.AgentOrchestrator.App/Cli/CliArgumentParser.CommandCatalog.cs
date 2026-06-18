@@ -35,6 +35,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("input-needed", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-inbox", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-inbox-ack", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("next", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("subscription-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("advance", StringComparison.OrdinalIgnoreCase) ||

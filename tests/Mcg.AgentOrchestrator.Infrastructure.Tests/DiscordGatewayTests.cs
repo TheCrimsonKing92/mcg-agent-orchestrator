@@ -1,5 +1,4 @@
-using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
-using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class DiscordGatewayTests
@@ -193,9 +192,9 @@ public sealed class DiscordGatewayTests
     {
         var catalog = OperatorChannelCatalog.Default();
         var auditDir = CreateTempDirectory();
-        var applier = new DiscordDecisionApplier(auditDir, (_, _) => Task.CompletedTask);
+        var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
 
-        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, "any-token", applier);
+        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, "any-token", store, auditDir);
 
         Assert.True(listener is null);
     }
@@ -205,9 +204,9 @@ public sealed class DiscordGatewayTests
     {
         var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "123456789", ["user1"]);
         var auditDir = CreateTempDirectory();
-        var applier = new DiscordDecisionApplier(auditDir, (_, _) => Task.CompletedTask);
+        var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
 
-        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, null, applier);
+        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, null, store, auditDir);
 
         Assert.True(listener is null);
     }
@@ -217,81 +216,108 @@ public sealed class DiscordGatewayTests
     {
         var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", ForumChannelId: null, OperatorUserIds: ["user1"]);
         var auditDir = CreateTempDirectory();
-        var applier = new DiscordDecisionApplier(auditDir, (_, _) => Task.CompletedTask);
+        var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
 
-        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, "fake-token", applier);
+        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, "fake-token", store, auditDir);
 
         Assert.True(listener is null);
     }
 
-    // ---- App-layer wiring: DiscordListenerWiring integration ----
+    // ---- Collaboration spine view ----
 
-    [Xunit.Fact(DisplayName = "DiscordListenerWiring_dispatch_seam_receives_split_command_parts")]
-    public async Task DiscordListenerWiringDispatchSeamReceivesSplitCommandParts()
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_reconcile_delivers_raised_item_and_marks_delivered")]
+    public async Task DiscordCollaborationViewReconcileDeliversRaisedItemAndMarksDelivered()
     {
-        // Arrange: workspace backed by a temp directory; fake seam captures parsed parts.
         var root = CreateTempDirectory();
-        var workspace = Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(root);
-        var dispatchedParts = new List<IReadOnlyList<string>>();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc123", "Need decision", "Body", "corr-1");
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
 
-        Func<IReadOnlyList<string>, CancellationToken, Task> seam = (parts, _) =>
+        await view.ReconcileAsync();
+
+        var items = await store.ListAsync();
+        Assert.Equal(CollaborationItemStatus.Delivered, items[0].Status);
+        Assert.Equal(1, api.CreatedThreads.Count);
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.False(api.SentMessages[0].Buttons[0].Disabled);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_duplicate_tap_resolves_once_and_posts_result_once")]
+    public async Task DiscordCollaborationViewDuplicateTapResolvesOnceAndPostsResultOnce()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc123", "Need decision", "Body", "corr-dup");
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+        var customId = DiscordInteractionHandler.BuildDirectCustomId("corr-dup", "resolved");
+
+        await view.ApplyInteractionAsync(customId, "user1", "interaction-1");
+        await view.ApplyInteractionAsync(customId, "user1", "interaction-2");
+
+        var items = await store.ListAsync();
+        Assert.Equal(CollaborationItemStatus.Resolved, items[0].Status);
+        Assert.Equal(2, api.SentMessages.Count);
+        Assert.Equal(2, api.EditedMessages.Count);
+        Assert.True(api.EditedMessages.Last().Buttons[0].Disabled);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_restart_reconcile_refreshes_existing_open_message")]
+    public async Task DiscordCollaborationViewRestartReconcileRefreshesExistingOpenMessage()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Verify, "goal-abc123", "Verify result", "Body", "corr-restart");
+        var firstView = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await firstView.ReconcileAsync();
+
+        var restartedView = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await restartedView.ReconcileAsync();
+
+        Assert.Equal(1, api.CreatedThreads.Count);
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.Equal(1, api.EditedMessages.Count);
+        Assert.False(api.EditedMessages[0].Buttons[0].Disabled);
+    }
+
+    private sealed class FakeDiscordForumApi : IDiscordForumApi
+    {
+        public List<(ulong ForumChannelId, string Title, string Content)> CreatedThreads { get; } = [];
+        public List<(ulong ThreadId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> SentMessages { get; } = [];
+        public List<(ulong ThreadId, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> EditedMessages { get; } = [];
+
+        public Task<ulong> CreateThreadAsync(
+            ulong forumChannelId,
+            string title,
+            string initialContent,
+            CancellationToken cancellationToken = default)
         {
-            dispatchedParts.Add(parts);
+            CreatedThreads.Add((forumChannelId, title, initialContent));
+            return Task.FromResult((ulong)CreatedThreads.Count + 1000UL);
+        }
+
+        public Task<ulong> SendMessageAsync(
+            ulong threadId,
+            string content,
+            IReadOnlyList<DiscordButtonDefinition> buttons,
+            CancellationToken cancellationToken = default)
+        {
+            SentMessages.Add((threadId, content, buttons));
+            return Task.FromResult((ulong)SentMessages.Count + 2000UL);
+        }
+
+        public Task EditMessageAsync(
+            ulong threadId,
+            ulong messageId,
+            string content,
+            IReadOnlyList<DiscordButtonDefinition> buttons,
+            CancellationToken cancellationToken = default)
+        {
+            EditedMessages.Add((threadId, messageId, content, buttons));
             return Task.CompletedTask;
-        };
-
-        var applier = DiscordListenerWiring.BuildApplier(workspace, seam);
-        var decision = new OperatorDecision("inbox-wire-001", "next abc123", null, "discord:user1", "key-wire-001");
-
-        // Act
-        var applied = await applier.ApplyAsync(decision);
-
-        // Assert: dispatch was called with correctly split parts, proving the command string
-        // is routed through CliArgumentParser.SplitCommand before reaching the CLI dispatcher.
-        Assert.True(applied);
-        Assert.Equal(1, dispatchedParts.Count);
-        Assert.True(dispatchedParts[0].Count >= 2);
-        Assert.Equal("next", dispatchedParts[0][0]);
-        Assert.Equal("abc123", dispatchedParts[0][1]);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordListenerWiring_acknowledge_delegate_writes_to_inbox_acks_file")]
-    public async Task DiscordListenerWiringAcknowledgeDelegateWritesToInboxAcksFile()
-    {
-        // Arrange
-        var root = CreateTempDirectory();
-        var workspace = Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(root);
-
-        var applier = DiscordListenerWiring.BuildApplier(
-            workspace,
-            (_, _) => Task.CompletedTask);
-
-        var decision = new OperatorDecision("inbox-ack-wire-001", "goals", null, "discord:user1", "key-ack-wire-001");
-
-        // Act
-        var applied = await applier.ApplyAsync(decision);
-
-        // Assert: the acks file was written with the inbox item id.
-        Assert.True(applied);
-        var acksPath = Path.Combine(workspace.OrchestratorDirectory, "operator-inbox-acks.json");
-        Assert.True(File.Exists(acksPath));
-        var content = File.ReadAllText(acksPath);
-        Assert.True(content.Contains("inbox-ack-wire-001"));
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordListenerWiring_no_connection_when_discord_unconfigured")]
-    public void DiscordListenerWiringNoConnectionWhenDiscordUnconfigured()
-    {
-        // Arrange: default (null-type) catalog and no bot token.
-        var root = CreateTempDirectory();
-        var workspace = Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(root);
-        var catalog = OperatorChannelCatalog.Default();
-        var applier = DiscordListenerWiring.BuildApplier(workspace, (_, _) => Task.CompletedTask);
-
-        // Act: factory returns null — no connection is attempted.
-        var listener = OperatorChannelFactory.CreateGatewayListener(catalog, null, applier);
-
-        // Assert
-        Assert.True(listener is null);
+        }
     }
 }

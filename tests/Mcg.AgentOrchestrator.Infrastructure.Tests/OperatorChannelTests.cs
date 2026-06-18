@@ -693,6 +693,7 @@ public sealed class OperatorChannelTests
 
         public List<(string Title, string Content)> CreatedThreads { get; } = [];
         public List<(ulong ThreadId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> SentMessages { get; } = [];
+        public List<(ulong ThreadId, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> EditedMessages { get; } = [];
 
         public Task<ulong> CreateThreadAsync(
             ulong forumChannelId,
@@ -704,13 +705,24 @@ public sealed class OperatorChannelTests
             return Task.FromResult(_nextThreadId);
         }
 
-        public Task SendMessageAsync(
+        public Task<ulong> SendMessageAsync(
             ulong threadId,
             string content,
             IReadOnlyList<DiscordButtonDefinition> buttons,
             CancellationToken cancellationToken = default)
         {
             SentMessages.Add((threadId, content, buttons));
+            return Task.FromResult((ulong)SentMessages.Count);
+        }
+
+        public Task EditMessageAsync(
+            ulong threadId,
+            ulong messageId,
+            string content,
+            IReadOnlyList<DiscordButtonDefinition> buttons,
+            CancellationToken cancellationToken = default)
+        {
+            EditedMessages.Add((threadId, messageId, content, buttons));
             return Task.CompletedTask;
         }
     }

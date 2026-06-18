@@ -42,13 +42,20 @@ var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
 var operatorBotToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
 IOperatorChannel operatorChannel;
-try
-{
-    operatorChannel = OperatorChannelFactory.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
-}
-catch
+if (SkipsStartupOperatorChannel(startupArgs))
 {
     operatorChannel = NullOperatorChannel.Instance;
+}
+else
+{
+    try
+    {
+        operatorChannel = OperatorChannelFactory.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
+    }
+    catch
+    {
+        operatorChannel = NullOperatorChannel.Instance;
+    }
 }
 
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
@@ -114,6 +121,7 @@ Console.WriteLine("  doctor, architecture, tenant, state-rollback --confirm-stat
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
 Console.WriteLine("  prototype [objective], prototype-ui [url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  serve-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
+Console.WriteLine("  operator-listen");
 Console.WriteLine("  hosted-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  simple-hosted-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  open-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
@@ -183,4 +191,19 @@ while (true)
     {
         Console.WriteLine($"Error: {ex.Message}");
     }
+}
+
+static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
+{
+    if (startupArgs.Count == 0)
+        return false;
+
+    var command = startupArgs[0];
+    return command.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }

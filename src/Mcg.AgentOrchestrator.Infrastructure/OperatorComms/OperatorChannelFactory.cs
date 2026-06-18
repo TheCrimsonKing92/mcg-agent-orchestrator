@@ -31,13 +31,16 @@ public static class OperatorChannelFactory
     public static DiscordGatewayListener? CreateGatewayListener(
         OperatorChannelCatalog catalog,
         string? botToken,
-        DiscordDecisionApplier applier)
+        ICollaborationItemStore store,
+        string stateDirectory)
     {
-        if (!IsDiscordConfigured(catalog, botToken, out _))
+        if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
-        return DiscordGatewayListener.CreateAndConnectAsync(botToken!, applier, allowedUserIds)
+        var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
+        var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
+        return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view)
             .GetAwaiter().GetResult();
     }
 

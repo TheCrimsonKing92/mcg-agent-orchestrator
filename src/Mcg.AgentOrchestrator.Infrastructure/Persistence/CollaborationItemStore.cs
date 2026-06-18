@@ -18,6 +18,10 @@ public interface ICollaborationItemStore
         string resolution,
         CancellationToken cancellationToken = default);
 
+    Task<bool> TryMarkDeliveredAsync(
+        string correlationKey,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<CollaborationItem>> GetAttentionQueueAsync(
         CancellationToken cancellationToken = default);
 
@@ -129,6 +133,34 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                 """;
             cmd.Parameters.AddWithValue("$resolved_at", resolvedAt);
             cmd.Parameters.AddWithValue("$resolution", resolution);
+            cmd.Parameters.AddWithValue("$key", correlationKey);
+            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            return rows > 0;
+        }
+        catch
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            throw;
+        }
+    }
+
+    public async Task<bool> TryMarkDeliveredAsync(
+        string correlationKey,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE collaboration_items
+                SET status = 'Delivered'
+                WHERE correlation_key = $key
+                  AND status = 'Raised'
+                """;
             cmd.Parameters.AddWithValue("$key", correlationKey);
             var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);

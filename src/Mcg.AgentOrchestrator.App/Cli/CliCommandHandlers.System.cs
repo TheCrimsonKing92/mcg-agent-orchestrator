@@ -143,6 +143,34 @@ internal static partial class CliCommandHandlers
             case "operator-channel":
                 return HandleOperatorChannelCommand(parts, context);
 
+            case "operator-listen":
+            {
+                var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
+                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+                var listener = OperatorChannelFactory.CreateGatewayListener(
+                    catalog,
+                    botToken,
+                    store,
+                    context.Workspace.OrchestratorDirectory);
+                if (listener is null)
+                {
+                    Console.WriteLine("operator-listen: Discord not configured or MCGO_DISCORD_BOT_TOKEN missing.");
+                    return false;
+                }
+
+                Console.WriteLine("operator-listen: Discord listener running. Press Ctrl+C to stop.");
+                using var stopped = new ManualResetEventSlim(false);
+                Console.CancelKeyPress += (_, eventArgs) =>
+                {
+                    eventArgs.Cancel = true;
+                    stopped.Set();
+                };
+                stopped.Wait();
+                listener.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                return false;
+            }
+
             case "monitor-goal":
                 GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
                 return false;

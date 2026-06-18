@@ -6,30 +6,27 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DiscordGatewayListener : IAsyncDisposable
 {
     private readonly DiscordSocketClient _client;
-    private readonly DiscordDecisionApplier _applier;
-    private readonly IReadOnlyList<string> _allowedUserIds;
+    private readonly DiscordCollaborationViewService _view;
 
     private DiscordGatewayListener(
         DiscordSocketClient client,
-        DiscordDecisionApplier applier,
-        IReadOnlyList<string> allowedUserIds)
+        DiscordCollaborationViewService view)
     {
         _client = client;
-        _applier = applier;
-        _allowedUserIds = allowedUserIds;
+        _view = view;
         _client.ButtonExecuted += OnButtonExecutedAsync;
     }
 
     public static async Task<DiscordGatewayListener> CreateAndConnectAsync(
         string botToken,
-        DiscordDecisionApplier applier,
-        IReadOnlyList<string> allowedUserIds)
+        DiscordCollaborationViewService view)
     {
         var config = new DiscordSocketConfig { GatewayIntents = GatewayIntents.Guilds };
         var client = new DiscordSocketClient(config);
         await client.LoginAsync(TokenType.Bot, botToken);
         await client.StartAsync();
-        return new DiscordGatewayListener(client, applier, allowedUserIds);
+        await view.ReconcileAsync();
+        return new DiscordGatewayListener(client, view);
     }
 
     private async Task OnButtonExecutedAsync(SocketMessageComponent component)
@@ -42,11 +39,11 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
             var userId = component.User.Id.ToString();
             var interactionId = component.Id.ToString();
 
-            var result = DiscordInteractionHandler.Process(customId, userId, interactionId, _allowedUserIds);
+            var result = await _view.ApplyInteractionAsync(customId, userId, interactionId);
 
             if (result.ErrorMessage is not null)
             {
-                await component.DeleteOriginalResponseAsync();
+                await component.FollowupAsync(result.ErrorMessage, ephemeral: true);
                 return;
             }
 
@@ -58,20 +55,13 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                     "Please confirm this action:",
                     components: builder.Build(),
                     ephemeral: true);
-                await component.DeleteOriginalResponseAsync();
                 return;
             }
-
-            if (result.Decision is not null)
-            {
-                await _applier.ApplyAsync(result.Decision);
-            }
-
-            await component.DeleteOriginalResponseAsync();
+            await component.FollowupAsync("Resolved.", ephemeral: true);
         }
         catch
         {
-            try { await component.DeleteOriginalResponseAsync(); } catch { }
+            try { await component.FollowupAsync("The interaction could not be applied. The thread remains unresolved; retry the button.", ephemeral: true); } catch { }
         }
     }
 
