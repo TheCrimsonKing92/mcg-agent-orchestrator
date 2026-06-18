@@ -105,19 +105,34 @@ public sealed class DiscordCollaborationViewService
 
     private async Task DeliverAsync(CollaborationItem item, CancellationToken cancellationToken)
     {
-        var title = BuildThreadTitle(item);
-        var threadId = await _api.CreateThreadAsync(_forumChannelId, title, BuildContent(item), cancellationToken);
+        var refs = LoadRefs();
+        var threadKey = ThreadKey(item);
+
+        if (!refs.Threads.TryGetValue(threadKey, out var threadId))
+        {
+            // First escalation for this id/goal: open one thread for it.
+            var title = BuildThreadTitle(item);
+            threadId = await _api.CreateThreadAsync(_forumChannelId, title, BuildContent(item), cancellationToken);
+            refs.Threads[threadKey] = threadId;
+        }
+
+        // Every escalation for the same id posts as a message in that one thread rather than
+        // spawning a new thread, so a goal's escalations stay grouped and trackable.
         var messageId = await _api.SendMessageAsync(
             threadId,
             BuildContent(item),
             BuildButtons(item, disabled: false),
             cancellationToken);
 
-        var refs = LoadRefs();
         refs.Items[item.Id] = new DiscordItemMessageRef(threadId, messageId);
         SaveRefs(refs);
         await _store.TryMarkDeliveredAsync(item.CorrelationKey!, cancellationToken);
     }
+
+    // One Discord thread per goal id (the thread title is already goal-scoped); orchestrator-level
+    // items without a goal share a single "orchestrator" thread.
+    private static string ThreadKey(CollaborationItem item) =>
+        string.IsNullOrWhiteSpace(item.GoalId) ? "orchestrator" : item.GoalId;
 
     private static string BuildThreadTitle(CollaborationItem item)
     {
@@ -164,17 +179,28 @@ public sealed class DiscordCollaborationViewService
     private DiscordCollaborationRefs LoadRefs()
     {
         var path = Path.Combine(_stateDirectory, RefsFileName);
-        if (!File.Exists(path))
-            return new DiscordCollaborationRefs(new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase));
-        try
+        if (File.Exists(path))
         {
-            var refs = JsonSerializer.Deserialize<DiscordCollaborationRefs>(File.ReadAllText(path), JsonOptions);
-            return refs ?? new DiscordCollaborationRefs(new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase));
+            try
+            {
+                var refs = JsonSerializer.Deserialize<DiscordCollaborationRefs>(File.ReadAllText(path), JsonOptions);
+                if (refs is not null)
+                {
+                    // Tolerate older ref files written before per-goal thread grouping (no Threads map).
+                    return new DiscordCollaborationRefs(
+                        refs.Items ?? new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase),
+                        refs.Threads ?? new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase));
+                }
+            }
+            catch
+            {
+                // fall through to an empty ref set
+            }
         }
-        catch
-        {
-            return new DiscordCollaborationRefs(new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase));
-        }
+
+        return new DiscordCollaborationRefs(
+            new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase));
     }
 
     private void SaveRefs(DiscordCollaborationRefs refs)
@@ -183,7 +209,9 @@ public sealed class DiscordCollaborationViewService
         File.WriteAllText(Path.Combine(_stateDirectory, RefsFileName), JsonSerializer.Serialize(refs, JsonOptions));
     }
 
-    private sealed record DiscordCollaborationRefs(Dictionary<string, DiscordItemMessageRef> Items);
+    private sealed record DiscordCollaborationRefs(
+        Dictionary<string, DiscordItemMessageRef> Items,
+        Dictionary<string, ulong> Threads);
 
     private sealed record DiscordItemMessageRef(ulong ThreadId, ulong MessageId);
 }

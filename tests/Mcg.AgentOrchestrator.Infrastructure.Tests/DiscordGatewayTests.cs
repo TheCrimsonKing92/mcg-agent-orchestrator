@@ -243,6 +243,24 @@ public sealed class DiscordGatewayTests
         Assert.False(api.SentMessages[0].Buttons[0].Disabled);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_groups_same_goal_escalations_under_one_thread")]
+    public async Task DiscordCollaborationViewGroupsSameGoalEscalationsUnderOneThread()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc123", "First escalation", "Body", "corr-a");
+        await store.RaiseAsync(CollaborationItemType.Clarification, "goal-abc123", "Second escalation", "Body", "corr-b");
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        // Both escalations for goal-abc123 land in ONE thread (posted as two messages), not two threads.
+        Assert.Equal(1, api.CreatedThreads.Count);
+        Assert.Equal(2, api.SentMessages.Count);
+        Assert.Equal(api.SentMessages[0].ThreadId, api.SentMessages[1].ThreadId);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_duplicate_tap_resolves_once_and_posts_result_once")]
     public async Task DiscordCollaborationViewDuplicateTapResolvesOnceAndPostsResultOnce()
     {
