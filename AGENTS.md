@@ -52,6 +52,18 @@ Before adding a member, field, case, or flag, think about the system ontology �
 - **Constraints are load-bearing; do not trade them for convenience.** The deterministic gates, subscription-budget-first posture, and evidence-over-narrative spine are invariants of this system. New work composes WITH them (e.g. an LLM judgment lands ADVISORY, never inside a deterministic gate; fan-out goes on free/cheap lanes, never the paid CLI). If a feature seems to require breaking one, that is a design signal to rethink the placement, not a license.
 - **Put behavior where its data and invariant already live.** Prefer extending an existing seam that owns the concept over threading a parallel path; reuse the deterministic signal that already exists (e.g. select among parallel model outputs by an existing validator, not a model self-rating). Match the surrounding idiom.
 
+## Specification Discipline — the brief is the unverified root of trust
+
+The gates verify "did the output match the spec," never "was the spec right" — so a sloppy brief lands a plausible-but-wrong implementation on green tests (the Discord listener that deleted its own forum post compiled and passed fake-API tests; the gateway built but never hosted; `postResult` left optional so the operator saw nothing). A capable worker does exactly what the brief says — quality is set or lost in the brief. Before dispatch, run the objective through this rubric; each item is a scar:
+
+- **External-interaction contracts — happy AND unhappy path.** For every external system/API/UI touched, state the exact contract incl. failure/edge behavior. (Discord interaction-ack semantics were unspecified → improvised wrongly.)
+- **Observable success.** Say what the user SEES/experiences on success, not just "it works."
+- **Ownership / lifecycle / hosting — decide it.** Where it lives, its lifecycle, its dependencies. Never offer "host here OR there"; collapse options into a decision or escalate the genuine fork to the human. Don't pass under-determination downstream.
+- **Own the seams.** If work spans goals/files, name the integration contract and make integration verification a first-class, OWNED step — the bugs live in the unowned seams between locally-green pieces. ("Built but not wired": a "make X work end-to-end" goal that touches only Infrastructure + tests and no App/host/CLI is almost certainly not reachable.)
+- **Verification class.** Tag it: TEST-VERIFIABLE (pure logic → automated gate suffices) vs REAL-WORLD-DEPENDENT (external/UX/integration → a green test is NOT "done"; ship a human/real-world checklist as the gate). Fake-API unit tests cannot prove an integration works; that takes a real round-trip.
+
+Separate the axes when scoping: WHERE it applies (which goals) vs HOW it's implemented (stage/role/function) vs WHAT the increment limits (depth vs coverage) — conflating them produces contradictory specs.
+
 ## Diagnosis Discipline — empirics over theorizing
 
 Reproduce before you theorize. When something fails — especially an external CLI, model, or tool — run the smallest command that reproduces the behavior before concluding a cause or declaring it unfixable. Do not build a verdict on documentation, web reports, or aggregate stats alone.
