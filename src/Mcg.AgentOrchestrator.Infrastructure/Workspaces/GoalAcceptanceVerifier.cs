@@ -33,15 +33,10 @@ public sealed class GoalAcceptanceVerifier
     internal sealed record CommandResult(int ExitCode, string Output);
 
     // Hard ceiling for a single build/test process. The suite itself runs in ~90s even in the
-    // throttled acceptance environment, so this only guards a genuinely runaway process.
+    // throttled acceptance environment, so this only guards a genuinely runaway process. Output is
+    // captured to files (see RunProcessAsync) so a grandchild holding an inherited handle no longer
+    // stalls the command to this ceiling.
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
-
-    // After the child process exits, a grandchild it spawned (e.g. a port-binding dashboard server
-    // or a worker host) can inherit and keep the redirected stdout/stderr pipe open, which makes
-    // ReadToEndAsync block until CommandTimeout even though the work is finished and the exit code
-    // is known. Bound the post-exit drain so a lingering grandchild can never stall a command
-    // ("A task was canceled" at the full ceiling) for the whole timeout.
-    private static readonly TimeSpan PipeDrainGrace = TimeSpan.FromSeconds(30);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -728,63 +723,117 @@ public sealed class GoalAcceptanceVerifier
         string workingDirectory,
         CancellationToken cancellationToken)
     {
+        // Capture output to FILES via the platform shell, not pipes. A test or build can spawn a
+        // grandchild that inherits the child's stdout/stderr handle and outlives it; with a
+        // redirected PIPE the test runner never reaches EOF while that grandchild holds the write
+        // end, so `dotnet test` never exits and the whole command rides CommandTimeout to a
+        // "A task was canceled". A plain `dotnet test > out 2> err` exits cleanly in that same
+        // scenario, so we mirror it: every process exits regardless of a lingering grandchild and
+        // we read the files afterward with a shared, delete-tolerant handle.
+        var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
+        var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
+
         var startInfo = new ProcessStartInfo
         {
-            FileName = arguments[0],
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
         };
 
-        // Match the dispatch wrapper: without these, MSBuild worker nodes and
-        // VBCSCompiler outlive the root test process holding the redirected
-        // pipes and worktree obj files, so the output reads below hang until
-        // the command timeout cancels them.
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.FileName = "cmd.exe";
+            // cmd /c strips one surrounding quote pair, so wrap the whole redirected command once.
+            startInfo.Arguments = $"/c \"{BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForCmd)}\"";
+        }
+        else
+        {
+            startInfo.FileName = "/bin/sh";
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForPosix));
+        }
+
+        // Match the dispatch wrapper: keep MSBuild worker nodes and VBCSCompiler from outliving the
+        // root process and pinning worktree obj files.
         startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
         startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
-        for (var i = 1; i < arguments.Length; i++)
-        {
-            startInfo.ArgumentList.Add(arguments[i]);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(CommandTimeout);
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-
-        await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-
-        // The child has exited; its exit code is final. Don't let a grandchild that inherited and
-        // is still holding the stdout/stderr pipe block the drain for the full CommandTimeout.
-        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        drainCts.CancelAfter(PipeDrainGrace);
-        var stdout = await DrainPipeAsync(stdoutTask, drainCts.Token).ConfigureAwait(false);
-        var stderr = await DrainPipeAsync(stderrTask, drainCts.Token).ConfigureAwait(false);
-        return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
-    }
-
-    private static async Task<string> DrainPipeAsync(Task<string> readTask, CancellationToken token)
-    {
         try
         {
-            return await readTask.WaitAsync(token).ConfigureAwait(false);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(CommandTimeout);
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                throw;
+            }
+
+            var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
+            var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
+            return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
         }
-        catch (OperationCanceledException)
+        finally
         {
-            // A lingering grandchild is holding the pipe open. Stop waiting and observe the
-            // abandoned read so its later cancellation never surfaces as an unobserved exception.
-            _ = readTask.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
-            return string.Empty;
+            TryDeleteFile(stdoutPath);
+            TryDeleteFile(stderrPath);
         }
+    }
+
+    private static string BuildRedirectedCommand(
+        string[] arguments,
+        string stdoutPath,
+        string stderrPath,
+        Func<string, string> quote)
+    {
+        var command = string.Join(' ', arguments.Select(quote));
+        return $"{command} > {quote(stdoutPath)} 2> {quote(stderrPath)}";
+    }
+
+    private static string QuoteForCmd(string value) =>
+        $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+
+    private static string QuoteForPosix(string value) =>
+        $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
+    private static async Task<string> ReadFileWithRetryAsync(string path)
+    {
+        // A reparented grandchild may still hold the file's write handle; open shared and tolerate
+        // transient locks. The output we need (the child's own writes) is already flushed on exit.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return await reader.ReadToEndAsync().ConfigureAwait(false);
+            }
+            catch (FileNotFoundException)
+            {
+                return string.Empty;
+            }
+            catch (IOException)
+            {
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { File.Delete(path); } catch { /* best effort; lives under the temp dir */ }
     }
 
     private sealed class AcceptanceManifest
