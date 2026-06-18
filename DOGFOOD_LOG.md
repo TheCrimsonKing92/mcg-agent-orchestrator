@@ -1660,3 +1660,10 @@ Goal 1e88e199: # Eliminate testhost firewall prompts for unattended test runs (s
 
 - Operator gate: Developer: pass - Release build clean; Core 356/356 and Infrastructure 926/926 passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - .NET infrastructure path/verification change - enough context and coding capability for scoped implementation.
+
+## 2026-06-18 - # KEYSTONE: fix conductor silent auto-dispatch-start so it drives a goal role...
+
+Goal 82f1038b: # KEYSTONE: fix conductor silent auto-dispatch-start so it drives a goal role end-to-end UNATTENDED  ## Why (north-st.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
