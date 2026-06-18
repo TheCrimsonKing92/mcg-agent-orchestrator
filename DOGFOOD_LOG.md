@@ -1576,3 +1576,10 @@ Goal 0650cb7b: # Make the Discord operator channel verifiable: settable allowlis
 
 - Operator gate: Developer: pass — 878 Infrastructure.Tests (4 new: OperatorChannelStore_roundtrips_catalog_with_forum_channel_id_X_and_user_ids_A_B, OperatorChannelCatalog_three_user_ids_from_csv_A_B_C, OperatorChannelFactory_SendTestEscalation_null_channel_prints_guidance_and_does_not_throw, OperatorChannelFactory_SendTestEscalation_configured_channel_calls_send_once_with_safe_button); Core.Tests 308/308 (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file CLI extension with targeted tests - task was well-specified with clear file paths; no LLM orchestration or ambiguous design decisions required.
+
+## 2026-06-18 - # Phase 0: the collaboration-item spine (deterministic control plane) — incre...
+
+Goal 40d4560e: # Phase 0: the collaboration-item spine (deterministic control plane) — increment 1  ## Intent (observable) A single .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit eead964). Acceptance passed.
+
+- Operator gate: Developer: pass — Core 344/344, Infrastructure 889/889 (both suites fully green including 47 new tests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - deterministic state-machine + SQLite store implementation with CLI integration - no reasoning needed, pure structural work.
