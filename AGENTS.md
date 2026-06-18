@@ -36,6 +36,8 @@ This repository implements an AI agent orchestrator. Avoid recursive or high-fan
 - Do not spawn workers to verify work until local evidence indicates the change is ready.
 - Prefer one narrow verification command per change.
 
+**Judging a dispatched worker's progress.** A worker showing zero stdout AND an empty worktree is NOT stalled — it is reading the brief + project context and planning. claude-cli/codex write nothing (stdout *or* files) during this phase, which is 4–6+ minutes for a complex brief. Judge a dispatch hung ONLY by a long-window absence of progress — default 15–30 min for Complex work — and confirm against the worker PROCESS (alive + CPU accumulating = thinking) before concluding, never a short empty-worktree snapshot. A short "backstop timer → cancel → re-dispatch" loop manufactures the very hang it's looking for and is the worst form of repeating-hoping-for-a-different-result; it also invites hallucinated root causes (rate-limiting, etc.) to explain the self-inflicted symptom. Inspect, don't theorize.
+
 ## Repository Rules
 
 - Treat version-controlled files as source. Build outputs, browser profiles, prototype workspace files, logs, scratch scripts, and previous run artifacts are not source structure.
