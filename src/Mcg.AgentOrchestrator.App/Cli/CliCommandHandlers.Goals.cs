@@ -9,6 +9,17 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
+private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
+    new Dictionary<string, AgentRole>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["--planner"] = AgentRole.Planner,
+        ["--ideation"] = AgentRole.Ideation,
+        ["--researcher"] = AgentRole.Researcher,
+        ["--developer"] = AgentRole.Developer,
+        ["--tester"] = AgentRole.Tester,
+        ["--reviewer"] = AgentRole.Reviewer
+    };
+
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)
@@ -27,11 +38,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple");
                 var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
-                foreach (var flag in parts.Skip(2).Where(p =>
-                    p.StartsWith("--", StringComparison.Ordinal) &&
-                    !p.Equals("--simple", StringComparison.OrdinalIgnoreCase) &&
-                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)))
-                    simpleAliasParts.Add(flag);
+                AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file");
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
             }
             // --from-backlog: delegate to backlog-intake (objective used as heading filter)
@@ -52,19 +59,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
-                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, runObjective);
+                var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                runParts.AddRange(parts.Skip(2).Where(p =>
-                    !p.Equals("--run", StringComparison.OrdinalIgnoreCase) &&
-                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)));
+                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
             var goalObjectivePlan = GoalObjectivePlanner.Build(goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjective);
+            var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
@@ -73,7 +80,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleObjectivePlan = GoalObjectivePlanner.Build(simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, simpleObjective);
+            var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
@@ -1128,6 +1136,70 @@ private static string? GetOptionalArgument(IReadOnlyList<string> parts, params s
     return null;
 }
 
+private static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
+    IReadOnlyList<string> parts,
+    IReadOnlyList<AgentDefinition> agents)
+{
+    var catalog = new AgentCatalog(agents);
+    foreach (var (flag, role) in GoalRoleAgentFlags)
+    {
+        var agentId = GetFlagValue(parts, flag);
+        if (agentId is null && !HasCliConfirmation(parts, flag))
+        {
+            continue;
+        }
+
+        if (string.IsNullOrWhiteSpace(agentId) || agentId.StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{flag} requires <agentId>.");
+        }
+
+        var agent = catalog.FindById(agentId)
+            ?? throw new ArgumentException($"Unknown agent id '{agentId}' for {flag}.");
+        if (agent.Role != role)
+        {
+            throw new ArgumentException(
+                $"Agent id '{agentId}' has role {agent.Role}; {flag} requires an agent with role {role}.");
+        }
+
+        catalog = catalog.UpsertRole(agent);
+    }
+
+    return catalog.Agents;
+}
+
+private static void AppendGoalAliasFlags(
+    IReadOnlyList<string> parts,
+    List<string> target,
+    bool includeRoleAgentFlags,
+    params string[] excludedFlags)
+{
+    for (var i = 2; i < parts.Count; i++)
+    {
+        var part = parts[i];
+        if (!part.StartsWith("--", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        if (excludedFlags.Any(flag => part.Equals(flag, StringComparison.OrdinalIgnoreCase)) ||
+            (!includeRoleAgentFlags && GoalRoleAgentFlags.ContainsKey(part)))
+        {
+            if (IsCliValueFlag(part))
+            {
+                i++;
+            }
+            continue;
+        }
+
+        target.Add(part);
+        if (IsCliValueFlag(part) && i + 1 < parts.Count)
+        {
+            target.Add(parts[++i]);
+        }
+    }
+}
+
 private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     var createGoal = HasCliConfirmation(parts, "--create-goal");
@@ -1552,7 +1624,8 @@ private static string? GetFirstNonFlagArgument(IReadOnlyList<string> parts, int 
 
 private static bool IsCliValueFlag(string part)
 {
-    return part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
+    return GoalRoleAgentFlags.ContainsKey(part) ||
+        part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
