@@ -1597,3 +1597,10 @@ Goal c3580797: # Phase 2: Discord as a durable VIEW over the collaboration spine
 
 - Operator gate: Developer: pass; build exit 0; Core.Tests 354 passed; Infrastructure.Tests 906 passed; dashboard source rg found zero Discord references (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - medium backend refactor with tests - handled code/test changes, live Discord validation remains external.
+
+## 2026-06-18 - # Agent-menu: compose a goal's role roster at creation (one command)  ## Inte...
+
+Goal 32a5b028: # Agent-menu: compose a goal's role roster at creation (one command)  ## Intent (observable) A goal can be created wi.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit d4e1b8e). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (planner role — no code changes) (exit 0); Researcher: not-run (research task, no code changes) (exit 0); Developer: pass; focused override tests pass; build clean; Core 354 passed, Infrastructure 910 passed (exit 0)
+- Model fit: Model fit: Anthropic/claude-sonnet-4-6 - adequate - planning task with deep codebase exploration across CLI, kernel, and test layers - sonnet handles cross-file reasoning and structured plan authoring well without overkill.
