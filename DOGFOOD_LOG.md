@@ -1667,3 +1667,10 @@ Goal 82f1038b: # KEYSTONE: fix conductor silent auto-dispatch-start so it drives
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-18 - # Mock the nested build/acceptance in GoalWorktreeTests (fast, deterministic,...
+
+Goal 45a65740: # Mock the nested build/acceptance in GoalWorktreeTests (fast, deterministic, prompt-free)  ## Why A FAMILY of GoalWo.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 569d0c75867c39713e1ec80cd49447816cee6bd8). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (planner role — no implementation) (exit 0); Developer: pass; Release build clean; Core 356 passed/0 skipped; Infrastructure 927 passed/0 skipped; GoalWorktreeTests 45 passed/0 skipped (exit 0)
+- Model fit: Not reported.
