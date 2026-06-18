@@ -1653,3 +1653,10 @@ Goal f14b5827: # Phase 4a: expose the dashboard on the LOCAL network (local-wifi
 
 - Operator gate: Planner: not-run (exit 0); Developer: pass; build clean 0 warnings/errors; Core 356 passed; Infrastructure 925 passed; focused DashboardHostTests 9 passed; manual phone-on-wifi not run (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped dashboard host binding change with focused tests - handled safely without broader design work.
+
+## 2026-06-18 - # Eliminate testhost firewall prompts for unattended test runs (stable/socket...
+
+Goal 1e88e199: # Eliminate testhost firewall prompts for unattended test runs (stable/socketless testhost; stop artifact-path sprawl.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 6232423). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass - Release build clean; Core 356/356 and Infrastructure 926/926 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - .NET infrastructure path/verification change - enough context and coding capability for scoped implementation.
