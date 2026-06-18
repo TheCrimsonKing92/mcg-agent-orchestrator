@@ -304,6 +304,84 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("Which option?", restored.HumanInputRequests.Single().Question);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_persists_model_fit_history_rows")]
+    public async Task PersistsModelFitHistoryRows()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = RecordDispatchOutcome(
+            kernel,
+            AgentRole.Developer,
+            "Anthropic",
+            "claude-sonnet-4-6",
+            TaskComplexity.Complex,
+            exitCode: 0,
+            "Model fit: Anthropic/claude-sonnet-4-6 - adequate - implementation - scoped edit");
+
+        await repo.SaveAsync(kernel);
+
+        var rows = await repo.ListModelFitHistoryAsync();
+        var row = rows.Single();
+        Assert.Equal(goal.Id.Value, row.GoalId);
+        Assert.Equal(AgentRole.Developer, row.Role);
+        Assert.Equal("Anthropic", row.ProviderName);
+        Assert.Equal("claude-sonnet-4-6", row.ModelName);
+        Assert.Equal(TaskComplexity.Complex, row.Complexity);
+        Assert.Equal("implementation", row.TaskShape);
+        Assert.Equal(WorkTaskStatus.Completed, row.Outcome);
+        Assert.Equal(ModelFitHistory.Adequate, row.SelfRating);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_scorecard_reflects_model_fit_history_store")]
+    public async Task ScorecardReflectsModelFitHistoryStore()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", "gpt-5.5", TaskComplexity.Complex, 1,
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - failed despite fit");
+        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", "gpt-5.5", TaskComplexity.Complex, 1,
+            "Model fit: OpenAI/gpt-5.5 - underpowered - implementation - missed repo context");
+        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", "gpt-5.5", TaskComplexity.Complex, 0,
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - completed");
+
+        await repo.SaveAsync(kernel);
+
+        var scorecard = await repo.BuildModelOutcomeScorecardAsync();
+        var record = scorecard.Single(r => r.ProviderName == "OpenAI" && r.ModelName == "gpt-5.5");
+        Assert.Equal(1, record.Completed);
+        Assert.Equal(2, record.Failed);
+        Assert.Equal(2, record.SelfRatedAdequate);
+        Assert.Equal(1, record.SelfRatedUnderpowered);
+        Assert.Equal(1, record.Divergence);
+        Assert.Equal(ModelOutcomeRecommendation.Avoid, record.Recommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_best_fit_for_role_prefers_non_underpowered_model")]
+    public async Task BestFitForRolePrefersNonUnderpoweredModel()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        RecordDispatchOutcome(kernel, AgentRole.Planner, "Ollama", "qwen3:8b", TaskComplexity.Simple, 0,
+            "Model fit: Ollama/qwen3:8b - underpowered - planning - too shallow");
+        RecordDispatchOutcome(kernel, AgentRole.Planner, "Ollama", "qwen3:8b", TaskComplexity.Simple, 0,
+            "Model fit: Ollama/qwen3:8b - underpowered - planning - too shallow");
+        RecordDispatchOutcome(kernel, AgentRole.Planner, "Anthropic", "claude-sonnet-4-6", TaskComplexity.Complex, 0,
+            "Model fit: Anthropic/claude-sonnet-4-6 - adequate - planning - good decomposition");
+        RecordDispatchOutcome(kernel, AgentRole.Planner, "Anthropic", "claude-sonnet-4-6", TaskComplexity.Complex, 0,
+            "Model fit: Anthropic/claude-sonnet-4-6 - adequate - planning - good decomposition");
+
+        await repo.SaveAsync(kernel);
+
+        var best = await repo.QueryBestFitForRoleAsync(AgentRole.Planner);
+        Assert.True(best is not null);
+        Assert.Equal("Anthropic", best!.ProviderName);
+        Assert.Equal("claude-sonnet-4-6", best.ModelName);
+        Assert.Equal(ModelOutcomeRecommendation.Prefer, best.Recommendation);
+    }
+
     [Xunit.Fact(DisplayName = "FileOrchestratorStateRepository_lists_goal_metadata")]
     public async Task FileRepositoryListsGoalMetadata()
     {
@@ -327,5 +405,37 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     {
         var dir = CreateTempDirectory();
         return Path.Combine(dir, "state.db");
+    }
+
+    private static Goal RecordDispatchOutcome(
+        AgentOrchestratorKernel kernel,
+        AgentRole role,
+        string provider,
+        string model,
+        TaskComplexity complexity,
+        int exitCode,
+        string modelFitNote)
+    {
+        var goal = kernel.CreateGoal($"Model fit {Guid.NewGuid():n}", [new TaskSpec(TaskId.New(), "task", role)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var at = DateTimeOffset.UtcNow.AddTicks(kernel.Goals.Count);
+        var dispatch = new TaskDispatchRecord(
+            "worker-cli",
+            $"worker {goal.Id.Value}",
+            "C:\\work",
+            at,
+            provider,
+            model,
+            TaskComplexity: complexity);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            dispatch.Command,
+            dispatch.WorkingDirectory,
+            exitCode,
+            modelFitNote,
+            exitCode == 0 ? string.Empty : "failed",
+            at.AddSeconds(1)));
+        return goal;
     }
 }

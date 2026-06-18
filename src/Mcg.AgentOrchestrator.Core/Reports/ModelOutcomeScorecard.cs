@@ -28,21 +28,29 @@ public static class ModelOutcomeScorecard
         IEnumerable<TaskSpec> tasks,
         int windowSize = DefaultWindowSize)
     {
-        var qualified = tasks
-            .Where(HasDispatchWithModel)
-            .Where(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Failed)
+        return Build(tasks.Select(TryCreateLegacyRow).Where(row => row is not null).Cast<ModelFitHistoryRow>(), windowSize);
+    }
+
+    public static IReadOnlyList<ModelOutcomeRecord> Build(
+        IEnumerable<ModelFitHistoryRow> rows,
+        int windowSize = DefaultWindowSize)
+    {
+        var qualified = rows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderName))
+            .Where(row => !string.IsNullOrWhiteSpace(row.ModelName))
+            .Where(row => row.Outcome is WorkTaskStatus.Completed or WorkTaskStatus.Failed)
             .ToList();
 
         return qualified
-            .GroupBy(task => (
-                ProviderName: task.LastDispatch!.ProviderName!,
-                ModelName: task.LastDispatch.ModelName!))
+            .GroupBy(row => (
+                row.ProviderName,
+                row.ModelName))
             .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
             .Select(group =>
             {
                 var recent = group
-                    .OrderByDescending(task => task.LastDispatch!.DispatchedAt)
+                    .OrderByDescending(row => row.Timestamp)
                     .Take(windowSize)
                     .ToList();
                 return BuildRecord(group.Key.ProviderName, group.Key.ModelName, recent);
@@ -50,37 +58,53 @@ public static class ModelOutcomeScorecard
             .ToList();
     }
 
-    private static bool HasDispatchWithModel(TaskSpec task)
+    private static ModelFitHistoryRow? TryCreateLegacyRow(TaskSpec task)
     {
-        return !string.IsNullOrWhiteSpace(task.LastDispatch?.ProviderName) &&
-               !string.IsNullOrWhiteSpace(task.LastDispatch.ModelName);
+        if (task.LastDispatch is not { ProviderName: { Length: > 0 } providerName, ModelName: { Length: > 0 } modelName } dispatch ||
+            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed))
+        {
+            return null;
+        }
+
+        var fit = ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task));
+        return new ModelFitHistoryRow(
+            string.Empty,
+            task.Id.Value,
+            task.RequiredRole,
+            providerName,
+            modelName,
+            dispatch.TaskComplexity,
+            fit?.TaskShape,
+            task.Status,
+            ModelFitHistory.NormalizeSelfRating(fit?.Fit),
+            task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt);
     }
 
     private static ModelOutcomeRecord BuildRecord(
         string providerName,
         string modelName,
-        List<TaskSpec> recentTasks)
+        List<ModelFitHistoryRow> recentRows)
     {
-        var n = recentTasks.Count;
+        var n = recentRows.Count;
         // Linear recency weights: index 0 (newest) gets weight n, index n-1 (oldest) gets 1.
-        var pairs = recentTasks
-            .Select((task, i) => (
-                task,
-                fit: ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task)),
+        var pairs = recentRows
+            .Select((row, i) => (
+                row,
                 weight: n - i))
             .ToList();
 
-        var completed = pairs.Count(p => p.task.Status == WorkTaskStatus.Completed);
-        var failed = pairs.Count(p => p.task.Status == WorkTaskStatus.Failed);
-        var adequate = pairs.Count(p => p.fit?.Fit == "adequate");
-        var overkill = pairs.Count(p => p.fit?.Fit == "overkill");
-        var underpowered = pairs.Count(p => p.fit?.Fit == "underpowered");
-        var divergence = pairs.Count(p => p.fit?.Fit == "adequate" && p.task.Status == WorkTaskStatus.Failed);
+        var completed = pairs.Count(p => p.row.IsCompleted);
+        var failed = pairs.Count(p => p.row.IsFailed);
+        var adequate = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Adequate);
+        var overkill = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Overkill);
+        var underpowered = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Underpowered);
+        var divergence = pairs.Count(p => p.row.SelfRating is ModelFitHistory.Divergence ||
+            (p.row.SelfRating == ModelFitHistory.Adequate && p.row.IsFailed));
 
         var totalWeight = pairs.Sum(p => p.weight);
-        var weightedFailed = pairs.Where(p => p.task.Status == WorkTaskStatus.Failed).Sum(p => p.weight);
-        var weightedCompleted = pairs.Where(p => p.task.Status == WorkTaskStatus.Completed).Sum(p => p.weight);
-        var weightedUnderpowered = pairs.Where(p => p.fit?.Fit == "underpowered").Sum(p => p.weight);
+        var weightedFailed = pairs.Where(p => p.row.IsFailed).Sum(p => p.weight);
+        var weightedCompleted = pairs.Where(p => p.row.IsCompleted).Sum(p => p.weight);
+        var weightedUnderpowered = pairs.Where(p => p.row.SelfRating == ModelFitHistory.Underpowered).Sum(p => p.weight);
 
         var (recommendation, reason) = BuildRecommendation(
             n, completed, failed, underpowered, divergence,

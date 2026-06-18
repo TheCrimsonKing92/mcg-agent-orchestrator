@@ -15,6 +15,13 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
+        if (IsModelOutcomesScorecard(args))
+        {
+            var records = stateRepository.BuildModelOutcomeScorecardAsync().GetAwaiter().GetResult();
+            ConsoleViews.PrintModelOutcomeScorecard(records);
+            return false;
+        }
+
         if (IsMetadataOnlyListing(args))
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
@@ -71,6 +78,11 @@ internal static class CliPersistentStateRunner
     internal static bool IsMetadataOnlyListing(IReadOnlyList<string> args)
     {
         return args.Count == 1 && args[0].Equals("goals", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsModelOutcomesScorecard(IReadOnlyList<string> args)
+    {
+        return args.Count == 1 && args[0].Equals("model-outcomes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldRunInStateTransaction(string command)
