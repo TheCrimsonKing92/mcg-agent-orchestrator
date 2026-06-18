@@ -713,8 +713,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Test run failed\nFailed: 2")));
+            var fakeVerifier = FakeAcceptanceVerifier.Failed("Test run failed\nFailed: 2");
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -756,8 +755,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -800,8 +798,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -845,8 +842,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1246,8 +1242,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1299,8 +1294,7 @@ public sealed class GoalWorktreeTests
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
             // Fake verifier always succeeds — simulates the auto-injected check passing.
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1349,8 +1343,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1394,10 +1387,9 @@ public sealed class GoalWorktreeTests
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
             var verifierCalled = false;
-            var fakeVerifier = new GoalAcceptanceVerifier((_, _, _) =>
+            var fakeVerifier = FakeAcceptanceVerifier.Failed("should not run", onRun: () =>
             {
                 verifierCalled = true;
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "should not run"));
             });
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
@@ -1426,8 +1418,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = EchoProfiles();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1472,8 +1463,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = EchoAgents();
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = EchoProfiles();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1511,8 +1501,7 @@ public sealed class GoalWorktreeTests
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = EchoProfiles();
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1597,8 +1586,7 @@ public sealed class GoalWorktreeTests
             [
                 new WorkerProfile("local", "New-Item -ItemType Directory -Force src | Out-Null; Set-Content -Path src/lifecycle-change.cs -Value '// lifecycle work'; git add -A; git commit -m Lifecycle-work; Write-Output {subscriptionModelName}")
             ]);
-            var fakeVerifier = new GoalAcceptanceVerifier(
-                (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Focused tests failed")));
+            var fakeVerifier = FakeAcceptanceVerifier.Failed("Focused tests failed");
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
                 AcceptanceVerifier = fakeVerifier
@@ -1697,8 +1685,7 @@ public sealed class GoalWorktreeTests
         Goal currentGoal)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(repo);
-        var fakeVerifier = new GoalAcceptanceVerifier(
-            (_, _, _) => Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "")));
+        var fakeVerifier = FakeAcceptanceVerifier.Passed();
         return new CliExecutionContext(
             kernel,
             workspace,
@@ -1709,6 +1696,72 @@ public sealed class GoalWorktreeTests
         {
             AcceptanceVerifier = fakeVerifier
         };
+    }
+
+    private sealed class FakeAcceptanceVerifier(
+        AcceptanceVerificationResult result,
+        Action? onRun = null) : IGoalAcceptanceVerifier
+    {
+        public int RunCount { get; private set; }
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            CancellationToken cancellationToken = default)
+        {
+            RunCount++;
+            onRun?.Invoke();
+            return Task.FromResult(AddPolicyRequiredChecks(result, changedFiles ?? []));
+        }
+
+        private static AcceptanceVerificationResult AddPolicyRequiredChecks(
+            AcceptanceVerificationResult result,
+            IReadOnlyList<string> changedFiles)
+        {
+            if (!result.Passed)
+                return result;
+
+            var checks = result.Checks?.ToList() ?? [];
+            var existing = checks
+                .Select(check => check.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var policy = VerificationPolicyCompiler.Compile(
+                AgentRole.Reviewer,
+                goalObjective: string.Empty,
+                taskDescription: string.Empty,
+                verificationPlan: null,
+                changedFiles);
+            foreach (var check in policy.Checks.Where(check =>
+                check.Required &&
+                !check.Kind.StartsWith("manual", StringComparison.OrdinalIgnoreCase) &&
+                existing.Add(check.Name)))
+            {
+                checks.Add(new AcceptanceCheckResult(check.Name, true, 0, null));
+            }
+
+            return result with { Checks = checks };
+        }
+
+        public static FakeAcceptanceVerifier Passed(Action? onRun = null) =>
+            new(
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("fake acceptance", true, 0, null)]),
+                onRun);
+
+        public static FakeAcceptanceVerifier Failed(string outputTail, Action? onRun = null) =>
+            new(
+                new AcceptanceVerificationResult(
+                    Passed: false,
+                    Skipped: false,
+                    ExitCode: 1,
+                    OutputTail: outputTail,
+                    Checks: [new AcceptanceCheckResult("fake acceptance", false, 1, outputTail)]),
+                onRun);
     }
 
     private static bool BranchExists(string workingDirectory, string branch)

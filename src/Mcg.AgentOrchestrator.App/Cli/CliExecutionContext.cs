@@ -33,7 +33,7 @@ public WorkerProfileCatalog WorkerProfiles { get; set; } = workerProfiles;
 
 public Goal? CurrentGoal { get; set; } = currentGoal;
 
-public GoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new();
+public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier();
 
 public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
 }

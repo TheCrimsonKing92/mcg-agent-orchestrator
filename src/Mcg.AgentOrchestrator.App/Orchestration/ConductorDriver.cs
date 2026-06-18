@@ -28,7 +28,7 @@ internal sealed class ConductorDriver
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
-        GoalAcceptanceVerifier acceptanceVerifier,
+        IGoalAcceptanceVerifier acceptanceVerifier,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
         IOperatorChannel? channel = null)

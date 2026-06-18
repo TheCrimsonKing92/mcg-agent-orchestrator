@@ -28,7 +28,16 @@ public sealed record AcceptanceVerificationResult(
     string? ArtifactsPath = null,
     IReadOnlyList<AcceptanceCheckResult>? Checks = null);
 
-public sealed class GoalAcceptanceVerifier
+public interface IGoalAcceptanceVerifier
+{
+    Task<AcceptanceVerificationResult> RunAsync(
+        string worktreePath,
+        GoalId? goalId = null,
+        IReadOnlyList<string>? changedFiles = null,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
     internal sealed record CommandResult(int ExitCode, string Output);
 
