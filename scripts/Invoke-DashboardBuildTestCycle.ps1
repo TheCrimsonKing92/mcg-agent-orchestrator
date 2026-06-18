@@ -92,15 +92,19 @@ function Wait-DashboardHealth {
 }
 
 function New-IsolatedDotnetArguments {
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmssfff"
-    $suffix = [guid]::NewGuid().ToString("N").Substring(0, 8)
-    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\$stamp-$PID-$suffix"
+    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
+    $artifactsPath = Join-Path $runRoot "artifacts"
+    if (Test-Path -LiteralPath $artifactsPath) {
+        Remove-Item -LiteralPath $artifactsPath -Recurse -Force
+    }
+
+    New-Item -ItemType Directory -Force -Path $artifactsPath | Out-Null
 
     [pscustomobject]@{
         RunRoot = $runRoot
         Arguments = @(
             "--artifacts-path",
-            $runRoot,
+            $artifactsPath,
             "-maxcpucount:1",
             "-p:UseSharedCompilation=false"
         )

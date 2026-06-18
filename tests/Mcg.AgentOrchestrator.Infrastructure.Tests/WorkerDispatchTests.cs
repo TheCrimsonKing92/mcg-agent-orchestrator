@@ -2259,7 +2259,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(preflight.Allowed);
     Assert.True(preflight.Findings.Any(finding => finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains("build environment: goal lease not yet created", StringComparison.Ordinal)));
-    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("goals", goal.Id.Value[..8], "lease", "artifacts"), StringComparison.OrdinalIgnoreCase)));
+    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase)));
     Assert.Contains(ex.Message, text => text.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is null);

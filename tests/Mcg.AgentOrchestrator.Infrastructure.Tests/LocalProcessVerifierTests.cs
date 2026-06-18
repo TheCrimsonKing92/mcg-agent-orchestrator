@@ -17,10 +17,10 @@ public sealed class LocalProcessVerifierTests
             Assert.True(prepared.Command.Contains("'--disable-build-servers'", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("'-maxcpucount:1'", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("'-p:UseSharedCompilation=false'", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains(Path.Combine("goals", "12345678", "lease", "artifacts"), StringComparison.OrdinalIgnoreCase));
+            Assert.True(prepared.Command.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Build environment lease: goal-12345678", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Verification artifacts:", StringComparison.Ordinal));
-            Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("goals", "12345678", "lease", "lease.execution.lock"), StringComparison.OrdinalIgnoreCase) == true);
+            Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {
@@ -46,7 +46,7 @@ public sealed class LocalProcessVerifierTests
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
                 new TaskId("33333333333333333333333333333333"));
-            var expectedArtifacts = Path.Combine("goals", "b16b00b5", "lease", "artifacts");
+            var expectedArtifacts = DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
 
             Assert.True(developer.Command.Contains(expectedArtifacts, StringComparison.OrdinalIgnoreCase));
             Assert.True(tester.Command.Contains(expectedArtifacts, StringComparison.OrdinalIgnoreCase));

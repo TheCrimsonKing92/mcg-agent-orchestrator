@@ -267,9 +267,9 @@ public static class WorkerProfileDispatcher
         }
 
         var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);
-        var artifactsPath = Path.Combine(rootPath, "lease", "artifacts");
+        var artifactsPath = DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id);
         var leaseMetadataPath = Path.Combine(rootPath, "lease", "lease.json");
-        var leaseExists = Directory.Exists(artifactsPath) || File.Exists(leaseMetadataPath);
+        var leaseExists = File.Exists(leaseMetadataPath);
         findings.Add(
             $"build environment: goal lease {(leaseExists ? "exists" : "not yet created")} artifacts={artifactsPath}");
     }

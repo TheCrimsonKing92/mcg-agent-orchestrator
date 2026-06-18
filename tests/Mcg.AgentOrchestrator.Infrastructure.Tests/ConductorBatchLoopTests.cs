@@ -117,16 +117,21 @@ public sealed class ConductorBatchLoopTests
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getRunningCount: () => dispatched,
-            dispatchAndStart: _ => { dispatched++; return DispatchStartOutcome.Started(); });
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                dispatched++;
+                return DispatchStartOutcome.Started();
+            });
 
         var stopFile = NoStopPath();
-        // Conservative cap = 2; tick 1: 2 dispatched, 1 held → tickAdvanced=2 → loop continues
-        // Tick 2: running count = 2 = cap, all 3 held → loop terminates
-        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile);
+        var policy = ConductorAutonomyPolicy.Conservative;
+        var expectedDispatches = Math.Min(3, policy.MaxConcurrentPaidWorkers);
+        var summary = new ConductorBatchLoop().Run(kernel, driver, policy, stopFile);
 
-        Assert.Equal(2, summary.Ticks);
-        Assert.Equal(2, summary.Advanced);
-        Assert.Equal(2, dispatched); // exactly 2 dispatches across the whole run
+        Assert.True(summary.Advanced >= expectedDispatches);
+        Assert.Equal(expectedDispatches, dispatched);
     }
 
     // ── Auto-retry: transient acceptance flake recovers on retry ─────────

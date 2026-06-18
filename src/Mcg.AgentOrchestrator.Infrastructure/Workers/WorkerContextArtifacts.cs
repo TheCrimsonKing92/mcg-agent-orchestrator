@@ -354,7 +354,7 @@ public static class WorkerContextArtifacts
             {
                 lines.Add("## Isolated .NET Verification");
                 lines.Add($"- Use `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal` instead of raw `dotnet test` for .NET checks.");
-                lines.Add($"- Goal build artifacts are isolated under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}` and reused across tasks in this goal.");
+                lines.Add($"- Goal build metadata is recorded under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}`; test artifacts use a bounded stable slot `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`.");
             }
             else if (toolchain == Toolchain.Go)
             {
