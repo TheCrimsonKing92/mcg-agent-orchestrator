@@ -579,7 +579,20 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.WorkerProfiles,
                     context.Channel);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
-                var loopSummary = new ConductorBatchLoop().Run(
+
+                // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
+                // start of every tick. Without this the loop holds a goal at Running forever — the worker
+                // finishes but its result is never recorded — and a stop/restart re-dispatches the same
+                // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
+                Action<AgentOrchestratorKernel> reconcileSweep = loopKernel =>
+                {
+                    foreach (var loopGoal in loopKernel.Goals.ToArray())
+                    {
+                        try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
+                        catch { /* per-goal isolation */ }
+                    }
+                };
+                var loopSummary = new ConductorBatchLoop(reconcileSweep).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
