@@ -50,6 +50,7 @@ public sealed class ConductorBatchLoopTests
             createWorkspace ?? (_ => "/tmp/workspace"),
             dispatchAndStart ?? (_ => DispatchStartOutcome.Started()),
             null,
+            null,
             goal => (runAcceptance ?? (_ => true))(goal)
                 ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
                 : AcceptanceVerificationSummary.Failed,

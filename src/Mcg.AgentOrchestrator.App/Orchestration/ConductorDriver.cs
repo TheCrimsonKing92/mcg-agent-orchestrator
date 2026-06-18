@@ -12,6 +12,7 @@ internal sealed class ConductorDriver
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
     private readonly Func<Goal, DispatchStartOutcome> _dispatchAndStart;
+    private readonly Func<Goal, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Action _buildServerShutdown;
     private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
@@ -61,7 +62,17 @@ internal sealed class ConductorDriver
         _dispatchAndStart = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
-            var result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
+            SubscriptionStartResult result;
+            try
+            {
+                result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
+            }
+            catch (Exception ex)
+            {
+                var exceptionReason = $"Subscription dispatch start failed: {ex.Message}";
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
+                return DispatchStartOutcome.SpawnFailed(exceptionReason);
+            }
             if (result.Processes.Tasks.Count > 0)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
@@ -75,6 +86,33 @@ internal sealed class ConductorDriver
             return result.Dispatches.Count == 0
                 ? DispatchStartOutcome.EmptyBatch(reason)
                 : DispatchStartOutcome.SpawnFailed(reason);
+        };
+
+        _startRecordedDispatches = goal =>
+        {
+            GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
+            ProcessBatchExecutionResult result;
+            try
+            {
+                result = GoalManagementCommandService.StartDispatches(kernel, workspace, goal);
+            }
+            catch (Exception ex)
+            {
+                var exceptionReason = $"Recorded dispatch start failed: {ex.Message}";
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", exceptionReason);
+                return DispatchStartOutcome.SpawnFailed(exceptionReason);
+            }
+
+            if (result.Tasks.Count > 0)
+            {
+                GoalOperationJournal.Completed(dir, goal, "conductor:dispatch-start",
+                    $"Started {result.Tasks.Count} recorded dispatch process(es).");
+                return DispatchStartOutcome.Started();
+            }
+
+            var reason = FormatNoRecordedDispatchStartedReason(result.Plan);
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
+            return DispatchStartOutcome.EmptyBatch(reason);
         };
 
         _buildServerShutdown = () =>
@@ -187,6 +225,7 @@ internal sealed class ConductorDriver
         Func<int> getRunningPaidWorkerCount,
         Func<Goal, string> createWorkspace,
         Func<Goal, DispatchStartOutcome> dispatchAndStart,
+        Func<Goal, DispatchStartOutcome>? startRecordedDispatches,
         Action? buildServerShutdown,
         Func<Goal, AcceptanceVerificationSummary> runAcceptanceVerification,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask,
@@ -203,6 +242,7 @@ internal sealed class ConductorDriver
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
         _dispatchAndStart = dispatchAndStart;
+        _startRecordedDispatches = startRecordedDispatches ?? dispatchAndStart;
         _buildServerShutdown = buildServerShutdown ?? (() => { });
         _runAcceptanceVerification = runAcceptanceVerification;
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
@@ -251,9 +291,8 @@ internal sealed class ConductorDriver
         return state switch
         {
             GoalLifecycleState.Created => ExecuteCreateWorkspace(goal, goalPrefix, policy),
-            GoalLifecycleState.WorkspaceReady => ExecuteDispatchAndStart(goal, goalPrefix, policy),
-            GoalLifecycleState.Dispatched => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "Dispatch recorded; awaiting process start on next advance")),
+            GoalLifecycleState.WorkspaceReady => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady),
+            GoalLifecycleState.Dispatched => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.Dispatched),
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
@@ -272,30 +311,54 @@ internal sealed class ConductorDriver
             new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Created, $"Workspace created: {path}"));
     }
 
-    private ConductorAdvanceResult ExecuteDispatchAndStart(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
+    private ConductorAdvanceResult ExecuteDispatchAndStart(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState fromState)
     {
         var running = _getRunningPaidWorkerCount();
         if (running >= policy.MaxConcurrentPaidWorkers)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.WorkspaceReady,
+                new ConductorAdvanceOutcome.Held(fromState,
                     $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
-        var outcome = _dispatchAndStart(goal);
+        var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
+        var outcome = start(goal);
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
+            var firstFailure = outcome;
             _buildServerShutdown();
-            outcome = _dispatchAndStart(goal);
+            var retryStart = fromState == GoalLifecycleState.WorkspaceReady
+                ? _startRecordedDispatches
+                : start;
+            outcome = retryStart(goal);
+            if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
+            {
+                outcome = firstFailure;
+            }
         }
 
         if (outcome.Category == DispatchStartOutcomeCategory.Started)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Executed(GoalLifecycleState.WorkspaceReady, "Subscription dispatch started"));
+                new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
         }
 
-        return Escalate(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady, outcome.Reason!);
+        return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
+    }
+
+    private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)
+    {
+        var skippedReason = plan.Items
+            .Where(item => item.Status == ProcessBatchItemStatus.Skipped)
+            .Select(item => item.Reason)
+            .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason));
+        return skippedReason is null
+            ? "Dispatch recorded but no process was startable."
+            : $"Dispatch recorded but no process was startable: {skippedReason}";
     }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)

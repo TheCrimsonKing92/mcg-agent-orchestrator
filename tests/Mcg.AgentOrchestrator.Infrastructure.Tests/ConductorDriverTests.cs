@@ -45,6 +45,7 @@ public sealed class ConductorDriverTests
         Func<int>? getRunningCount = null,
         Func<Goal, string>? createWorkspace = null,
         Func<Goal, DispatchStartOutcome>? dispatchAndStart = null,
+        Func<Goal, DispatchStartOutcome>? startRecordedDispatches = null,
         Action? buildServerShutdown = null,
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null,
@@ -63,6 +64,7 @@ public sealed class ConductorDriverTests
             getRunningCount ?? (() => 0),
             createWorkspace ?? (_ => "/tmp/workspace"),
             dispatchAndStart ?? (_ => DispatchStartOutcome.Started()),
+            startRecordedDispatches,
             buildServerShutdown,
             runAcceptanceSummary ?? (goal => (runAcceptance ?? (_ => true))(goal)
                 ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
@@ -137,18 +139,55 @@ public sealed class ConductorDriverTests
 
     // ── Dispatched state ──────────────────────────────────────────────────
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Dispatched_returns_Held")]
-    public void ConductorDriverDispatchedReturnsHeld()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Dispatched_starts_recorded_dispatch")]
+    public void ConductorDriverDispatchedStartsRecordedDispatch()
     {
         var (kernel, goal) = SimpleGoal();
         DispatchTask(kernel, goal, goal.Tasks.Single());
+        var startCalled = false;
 
-        var driver = MakeDriver(getFacts: _ => GoalLifecycleFacts.None);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            startRecordedDispatches: _ =>
+            {
+                startCalled = true;
+                return DispatchStartOutcome.Started();
+            });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
-        Assert.Equal(GoalLifecycleState.Dispatched, ((ConductorAdvanceOutcome.Held)result.Outcome).State);
+        Assert.True(startCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(GoalLifecycleState.Dispatched, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Dispatched_start_failure_escalates_with_reason")]
+    public void ConductorDriverDispatchedStartFailureEscalatesWithReason()
+    {
+        var (kernel, goal) = SimpleGoal();
+        DispatchTask(kernel, goal, goal.Tasks.Single());
+        var callCount = 0;
+        var shutdownCalled = false;
+        string? escalationReason = null;
+        const string startFailReason = "Recorded dispatch start failed: worker command refused to launch";
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            startRecordedDispatches: _ =>
+            {
+                callCount++;
+                return DispatchStartOutcome.SpawnFailed(startFailReason);
+            },
+            buildServerShutdown: () => { shutdownCalled = true; },
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(2, callCount);
+        Assert.True(shutdownCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Equal(GoalLifecycleState.Dispatched, ((ConductorAdvanceOutcome.Escalated)result.Outcome).State);
+        Assert.Equal(startFailReason, escalationReason);
     }
 
     // ── Running state ─────────────────────────────────────────────────────
@@ -548,11 +587,12 @@ public sealed class ConductorDriverTests
 
     // ── Dispatch-start retry on transient spawn failure ───────────────────
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_fail_then_success_retries_and_advances_without_escalation")]
-    public void ConductorDriverWorkspaceReadySpawnFailThenSuccessRetriesAndAdvancesWithoutEscalation()
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_fail_then_recorded_start_success_advances_without_escalation")]
+    public void ConductorDriverWorkspaceReadySpawnFailThenRecordedStartSuccessAdvancesWithoutEscalation()
     {
         var (_, goal) = SimpleGoal();
-        var callCount = 0;
+        var dispatchStartCalls = 0;
+        var recordedStartCalls = 0;
         var shutdownCalled = false;
         var escalated = false;
 
@@ -561,17 +601,21 @@ public sealed class ConductorDriverTests
             getRunningCount: () => 0,
             dispatchAndStart: _ =>
             {
-                callCount++;
-                return callCount == 1
-                    ? DispatchStartOutcome.SpawnFailed("Dispatched 1 task(s) but no processes started (spawn failed)")
-                    : DispatchStartOutcome.Started();
+                dispatchStartCalls++;
+                return DispatchStartOutcome.SpawnFailed("Dispatched 1 task(s) but no processes started (spawn failed)");
+            },
+            startRecordedDispatches: _ =>
+            {
+                recordedStartCalls++;
+                return DispatchStartOutcome.Started();
             },
             buildServerShutdown: () => { shutdownCalled = true; },
             writeEscalation: (_, _, _) => { escalated = true; });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.Equal(2, callCount);
+        Assert.Equal(1, dispatchStartCalls);
+        Assert.Equal(1, recordedStartCalls);
         Assert.True(shutdownCalled);
         Assert.False(escalated);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
