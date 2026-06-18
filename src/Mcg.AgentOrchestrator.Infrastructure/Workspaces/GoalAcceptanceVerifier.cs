@@ -32,7 +32,13 @@ public sealed class GoalAcceptanceVerifier
 {
     internal sealed record CommandResult(int ExitCode, string Output);
 
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
+    // The acceptance build environment is deliberately throttled (--disable-build-servers,
+    // -maxcpucount:1, UseSharedCompilation=false, clean artifacts every run) for cross-slot
+    // isolation, which makes a cold single-threaded rebuild + full test suite far slower than a
+    // normal parallel build. 10 minutes was too tight and silently cancelled the whole acceptance
+    // ("A task was canceled") on the larger suites. Allow generous headroom; relaxing the throttle
+    // for single-run speed is tracked separately.
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(30);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
