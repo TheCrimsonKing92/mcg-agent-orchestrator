@@ -367,6 +367,10 @@ public sealed class ConductorBatchLoopTests
                 var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
                 kernel.RecordTaskDispatch(g.Id, task.Id,
                     new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                // Reflect real start behavior: a started worker moves the goal to Running (which the
+                // loop then HOLDS on), not Dispatched (which the hardened conductor now re-starts).
+                kernel.RecordTaskProcessStarted(g.Id, task.Id,
+                    new TaskProcessRecord(1234, "test.exe", "C:\\tmp", "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
                 return DispatchStartOutcome.Started();
             });
 
