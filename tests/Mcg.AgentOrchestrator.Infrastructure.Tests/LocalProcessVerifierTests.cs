@@ -14,6 +14,7 @@ public sealed class LocalProcessVerifierTests
 
             Assert.True(prepared.Command.StartsWith("dotnet test Example.sln --verbosity minimal", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("'--artifacts-path'", StringComparison.Ordinal));
+            Assert.True(prepared.Command.Contains("'--disable-build-servers'", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("'-maxcpucount:1'", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("'-p:UseSharedCompilation=false'", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains(Path.Combine("goals", "12345678", "lease", "artifacts"), StringComparison.OrdinalIgnoreCase));
@@ -95,6 +96,16 @@ public sealed class LocalProcessVerifierTests
         var prepared = LocalProcessVerifier.PrepareCommand("Write-Output ok", new GoalId("12345678123456781234567812345678"), TaskId.New());
 
         Assert.Equal("Write-Output ok", prepared.Command);
+        Assert.Equal(string.Empty, prepared.ArtifactPathEvidence);
+    }
+
+    [Xunit.Fact(DisplayName = "LocalProcessVerifier_leaves_dotnet_commands_without_goal_context_unchanged")]
+    public void LocalProcessVerifierLeavesDotnetCommandsWithoutGoalContextUnchanged()
+    {
+        var prepared = LocalProcessVerifier.PrepareCommand("dotnet build Mcg.AgentOrchestrator.sln -c Release");
+
+        Assert.Equal("dotnet build Mcg.AgentOrchestrator.sln -c Release", prepared.Command);
+        Assert.False(prepared.Command.Contains("--disable-build-servers", StringComparison.Ordinal));
         Assert.Equal(string.Empty, prepared.ArtifactPathEvidence);
     }
 

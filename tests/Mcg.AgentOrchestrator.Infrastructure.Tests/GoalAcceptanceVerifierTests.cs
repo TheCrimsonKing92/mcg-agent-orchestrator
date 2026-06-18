@@ -549,6 +549,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("dotnet", args[0]);
         Assert.Equal("test", args[1]);
         Assert.True(args.Any(arg => arg.Equals("--artifacts-path", StringComparison.Ordinal)));
+        Assert.True(args.Any(arg => arg.Equals("--disable-build-servers", StringComparison.Ordinal)));
         Assert.True(args.Any(arg => arg.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal)));
         Assert.Contains(GetArtifactsPath(args), text => text.Contains("mcg-dotnet-isolated", StringComparison.Ordinal));
     }

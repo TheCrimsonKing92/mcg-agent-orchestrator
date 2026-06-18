@@ -25,6 +25,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.False(string.IsNullOrWhiteSpace(second.LeaseMetadataPath));
             Assert.True(File.Exists(second.LeaseMetadataPath));
             Assert.True(first.Arguments.Contains("--artifacts-path"));
+            Assert.True(first.Arguments.Contains("--disable-build-servers"));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
