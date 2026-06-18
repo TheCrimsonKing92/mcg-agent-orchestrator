@@ -11,7 +11,19 @@ public sealed record GoalSnapshot(
     IReadOnlyList<TaskSnapshot> Tasks,
     IReadOnlyList<ProgressEventSnapshot> Timeline,
     IReadOnlyList<string>? DependsOn = null,
-    string? SourceBacklogItemId = null);
+    string? SourceBacklogItemId = null,
+    RefinedSpecSnapshot? RefinedSpec = null);
+
+public sealed record RefinedSpecSnapshot(
+    string BehavioralContract,
+    IReadOnlyList<string> AcceptanceCriteria,
+    string VerificationClass,
+    IReadOnlyList<RefinedSpecDecisionSnapshot> Decisions,
+    IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions);
+
+public sealed record RefinedSpecDecisionSnapshot(string Question, string Choice, string Rationale);
+
+public sealed record RefinedSpecOpenQuestionSnapshot(string Id, string Question, string ForkKind, string Status);
 
 public sealed record TaskSnapshot(
     string Id,

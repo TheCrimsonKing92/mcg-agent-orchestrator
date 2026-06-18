@@ -5,7 +5,8 @@ public sealed record GoalLifecycleFacts(
     bool IsBlocked = false,
     bool IsMerged = false,
     bool IsRecorded = false,
-    bool IsCleanedUp = false)
+    bool IsCleanedUp = false,
+    bool HasOpenClarification = false)
 {
     public static GoalLifecycleFacts None { get; } = new();
 }
@@ -31,6 +32,10 @@ public static class GoalLifecycle
         // Waiting for human input takes priority over progress states
         if (goal.Status == GoalStatus.WaitingForHuman)
             return GoalLifecycleState.AwaitingHumanInput;
+
+        // Goal is holding for spec clarification (raised Clarification items not yet resolved)
+        if (facts.HasOpenClarification)
+            return GoalLifecycleState.AwaitingClarification;
 
         // Operator-set external block (preflight fail, dirty worktree, etc.)
         if (facts.IsBlocked)

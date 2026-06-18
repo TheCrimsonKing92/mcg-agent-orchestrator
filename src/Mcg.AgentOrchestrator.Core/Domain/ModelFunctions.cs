@@ -38,4 +38,5 @@ public static class ModelFunctionPurposes
     // Known orchestrator-internal model functions. A new internal use adds its own constant here —
     // no enum churn, no exclusion sets, no square peg.
     public const string AcceptanceJudge = "acceptance-judge";
+    public const string SpecRefiner = "spec-refiner";
 }

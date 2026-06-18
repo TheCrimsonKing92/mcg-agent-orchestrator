@@ -381,6 +381,11 @@ public sealed partial class AgentOrchestratorKernel
         GetGoal(goalId).SetSourceBacklogItemId(backlogItemId);
     }
 
+    public void SetGoalRefinedSpec(GoalId goalId, RefinedSpec spec)
+    {
+        GetGoal(goalId).SetRefinedSpec(spec);
+    }
+
     public void SetGoalDependency(GoalId dependentId, GoalId dependencyId)
     {
         if (dependentId == dependencyId)

@@ -94,6 +94,10 @@ internal sealed record OrchestratorWorkspace(
     // etc.) — separate from the worker agent catalog so internal model uses never touch task routing.
     public string ModelFunctionCatalogPath => Path.Combine(OrchestratorDirectory, "model-functions.json");
 
+    // Answered spec-clarification forks recorded as precedents so a second goal with the same
+    // forkKind reuses the recorded choice rather than re-asking.
+    public string SpecRefinerPrecedentsPath => Path.Combine(OrchestratorDirectory, "spec-refiner-precedents.json");
+
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.
     public string ResolveExecutionDirectory(GoalId goalId)

@@ -54,6 +54,7 @@ public sealed record ConductorAutonomyPolicy(
         TransitionMap: new Dictionary<GoalLifecycleState, ConductorTransitionDecision>
         {
             [GoalLifecycleState.Created] = ConductorTransitionDecision.Auto,
+            [GoalLifecycleState.AwaitingClarification] = ConductorTransitionDecision.Escalate,
             [GoalLifecycleState.WorkspaceReady] = ConductorTransitionDecision.Auto,
             [GoalLifecycleState.Dispatched] = ConductorTransitionDecision.Auto,
             [GoalLifecycleState.Running] = ConductorTransitionDecision.Auto,
