@@ -73,6 +73,22 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     return 0;
 }
 
+if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
+{
+    var commandKernel = new AgentOrchestratorKernel();
+    Goal? commandCurrentGoal = null;
+    try
+    {
+        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
 await SqliteStateJsonMigrator.MigrateIfNeededAsync(workspace.StatePath, workspace.SqliteStatePath);
 ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 var kernel = await stateRepository.LoadAsync();

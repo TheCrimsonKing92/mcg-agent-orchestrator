@@ -4199,6 +4199,22 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_commands_only")]
+    public void RunnerSkipsKernelStateForOperatorCommandsOnly()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-listen"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["OPERATOR-LISTEN"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel", "test", "--spine"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["conduct", "abc123"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["serve-dashboard"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState([]));
+    }
+
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
     public void PrintGoalsRendersMetadataSummaries()
     {

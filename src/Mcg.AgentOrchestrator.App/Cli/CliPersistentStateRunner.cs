@@ -85,6 +85,15 @@ internal static class CliPersistentStateRunner
         return args.Count == 1 && args[0].Equals("model-outcomes", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool SkipsKernelState(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+            return false;
+
+        return args[0].Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("operator-channel", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool ShouldRunInStateTransaction(string command)
     {
         return command.ToLowerInvariant() switch

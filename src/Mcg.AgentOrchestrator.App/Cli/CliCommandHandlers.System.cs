@@ -297,6 +297,12 @@ internal static partial class CliCommandHandlers
             }
             case "test":
             {
+                if (parts.Any(part => part.Equals("--spine", StringComparison.OrdinalIgnoreCase)))
+                {
+                    RaiseOperatorChannelSpineTestItem(context.Workspace.OrchestratorDirectory);
+                    return false;
+                }
+
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
                 var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
                 var channel = OperatorChannelFactory.Create(catalog, botToken, context.Workspace.OrchestratorDirectory);
@@ -306,6 +312,22 @@ internal static partial class CliCommandHandlers
             default:
                 throw new ArgumentException($"Unknown operator-channel sub-command '{sub}'. Usage: operator-channel set|show|test");
         }
+    }
+
+    internal static CollaborationItem RaiseOperatorChannelSpineTestItem(string orchestratorDirectory)
+    {
+        var store = CollaborationItemStore.ForDirectory(orchestratorDirectory);
+        var correlationKey = $"operator-channel-test-spine-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+        var item = store.RaiseAsync(
+                CollaborationItemType.Verify,
+                "operator-channel-test",
+                "Operator channel spine verification",
+                "Seeded by `operator-channel test --spine` to verify the Discord listener delivers a spine-backed reach-up item and resolves it through the collaboration store.",
+                correlationKey)
+            .GetAwaiter()
+            .GetResult();
+        Console.WriteLine($"operator-channel test --spine: raised {item.Type} item {item.Id} correlationKey={item.CorrelationKey}");
+        return item;
     }
 
     private static bool GitCommitShaExists(string executionDirectory, string sha) =>

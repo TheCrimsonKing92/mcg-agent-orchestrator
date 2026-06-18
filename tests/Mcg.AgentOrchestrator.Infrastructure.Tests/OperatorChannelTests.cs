@@ -1,4 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Generators;
@@ -539,6 +541,26 @@ public sealed class OperatorChannelTests
         var buttons = fakeApi.SentMessages[0].Buttons;
         Assert.Equal(1, buttons.Count);
         Assert.False(buttons[0].CustomId.StartsWith("mcgo-confirm|", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannel_spine_test_seed_raises_attention_queue_item_with_correlation_key")]
+    public async Task OperatorChannelSpineTestSeedRaisesAttentionQueueItem()
+    {
+        var workspace = BuildTestWorkspace();
+
+        var item = CliCommandHandlers.RaiseOperatorChannelSpineTestItem(workspace.OrchestratorDirectory);
+
+        Assert.Equal(CollaborationItemType.Verify, item.Type);
+        Assert.Equal("operator-channel-test", item.GoalId);
+        Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
+        Assert.True(item.CorrelationKey!.StartsWith("operator-channel-test-spine-", StringComparison.Ordinal));
+
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var queue = await store.GetAttentionQueueAsync();
+        var queued = queue.Single();
+        Assert.Equal(item.Id, queued.Id);
+        Assert.Equal(item.CorrelationKey, queued.CorrelationKey);
+        Assert.Equal(CollaborationItemStatus.Raised, queued.Status);
     }
 
     // ---- Escalation path: SendEscalationAsync called on RecordLandingEscalation ----
