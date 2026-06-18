@@ -27,7 +27,8 @@ internal sealed class ConductorBatchLoop
         TimeSpan? watchInterval = null,
         Action<BatchTickSummary>? onTick = null,
         Func<TimeSpan, bool>? sleepFunc = null,
-        TimeSpan? maxDuration = null)
+        TimeSpan? maxDuration = null,
+        string? onlyGoalId = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -68,7 +69,8 @@ internal sealed class ConductorBatchLoop
             _sweep(kernel);
 
             var eligible = kernel.Goals
-                .Where(g => !excludedGoals.Contains(g.Id.Value)
+                .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
+                    && !excludedGoals.Contains(g.Id.Value)
                     && g.Status is not GoalStatus.Cancelled
                     && g.Status is not GoalStatus.Superseded)
                 .ToArray();

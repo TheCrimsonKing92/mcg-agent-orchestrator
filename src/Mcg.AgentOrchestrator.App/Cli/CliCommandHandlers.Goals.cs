@@ -614,6 +614,33 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Agents,
                 context.WorkerProfiles,
                 context.Channel);
+
+            // Single-goal continuous mode: drive just this goal to its next checkpoint without the
+            // whole-kernel loop, so adding a goal never requires stopping a running loop and other
+            // goals/ghosts aren't touched. Reuses the batch loop scoped to one goal.
+            if (HasCliConfirmation(parts, "--watch"))
+            {
+                var watchGoalId = context.CurrentGoal.Id.Value;
+                var watchPollSeconds = int.TryParse(
+                    GetFlagValue(parts, "--poll-seconds") ?? GetFlagValue(parts, "--watch-interval"),
+                    out var wps) && wps > 0 ? wps : ConductorBatchLoop.DefaultWatchIntervalSeconds;
+                TimeSpan? watchMax = int.TryParse(GetFlagValue(parts, "--max-duration"), out var wmd)
+                    ? TimeSpan.FromSeconds(wmd) : null;
+                Action<AgentOrchestratorKernel> watchSweep = wk =>
+                {
+                    var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
+                    if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }
+                };
+                var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
+                var watchSummary = new ConductorBatchLoop(watchSweep).Run(
+                    context.Kernel, conductDriver, conductPolicy, watchStopPath,
+                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
+                    onlyGoalId: watchGoalId);
+                Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
+                return watchSummary.Escalated == 0;
+            }
+
             var conductResult = conductDriver.AdvanceOnce(context.CurrentGoal, conductPolicy);
             Console.WriteLine($"Conduct {conductResult.GoalPrefix} [{conductResult.PolicyName}]: {conductResult.Outcome switch {
                 ConductorAdvanceOutcome.Executed e => $"executed from {e.FromState} — {e.Description}",
