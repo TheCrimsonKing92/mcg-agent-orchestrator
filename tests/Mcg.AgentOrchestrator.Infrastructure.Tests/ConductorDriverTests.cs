@@ -103,7 +103,7 @@ public sealed class ConductorDriverTests
     public void ConductorDriverWorkspaceReadyAtCapReturnsHeld()
     {
         var (_, goal) = SimpleGoal();
-        var policy = ConductorAutonomyPolicy.Conservative; // MaxConcurrentPaidWorkers = 2
+        var policy = ConductorAutonomyPolicy.Conservative; // MaxConcurrentPaidWorkers = 4
         var dispatchCalled = false;
 
         var driver = MakeDriver(

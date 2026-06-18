@@ -46,7 +46,7 @@ public sealed record ConductorAutonomyPolicy(
     // escalate on failures, blocks, and human-input waits.
     public static ConductorAutonomyPolicy Conservative { get; } = new(
         "Conservative",
-        MaxConcurrentPaidWorkers: 2,
+        MaxConcurrentPaidWorkers: 4,
         MaxTotalBudget: 5.00m,
         MaxCriterionRetries: 1,
         PerProviderBudgetCaps: null,
