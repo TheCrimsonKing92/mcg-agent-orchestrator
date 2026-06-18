@@ -646,6 +646,15 @@ public sealed class GoalAcceptanceVerifier
         }
 
         args.AddRange(check.Arguments);
+
+        // Fail a hung test fast and by name instead of silently eating CommandTimeout. A test that
+        // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
+        // can otherwise stall the whole acceptance for ten minutes ("A task was canceled"). The
+        // inactivity timeout is per-test; the full suite runs in ~90s so this never false-trips.
+        args.Add("--blame-hang-timeout");
+        args.Add("120s");
+        args.Add("--blame-hang-dump-type");
+        args.Add("none");
         return [.. args];
     }
 
