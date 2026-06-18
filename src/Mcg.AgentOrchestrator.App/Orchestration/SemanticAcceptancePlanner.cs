@@ -79,6 +79,22 @@ internal static class SemanticAcceptancePlanner
         sb.AppendLine(string.IsNullOrWhiteSpace(inputs.TestSummary) ? "(none)" : inputs.TestSummary);
 
         sb.AppendLine();
+        sb.AppendLine("## Per-file unified diffs");
+        if (inputs.PerFileDiffs is null || inputs.PerFileDiffs.Count == 0)
+        {
+            sb.AppendLine("(none)");
+        }
+        else
+        {
+            foreach (var (file, diff) in inputs.PerFileDiffs)
+            {
+                sb.AppendLine($"### {file}");
+                sb.AppendLine(string.IsNullOrWhiteSpace(diff) ? "(empty)" : diff);
+                sb.AppendLine();
+            }
+        }
+
+        sb.AppendLine();
         sb.AppendLine("## Unified diff (may be truncated)");
         sb.AppendLine(string.IsNullOrWhiteSpace(inputs.DiffExcerpt) ? "(empty)" : inputs.DiffExcerpt);
 
