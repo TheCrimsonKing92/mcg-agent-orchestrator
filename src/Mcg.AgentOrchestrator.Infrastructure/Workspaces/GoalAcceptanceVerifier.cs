@@ -642,6 +642,14 @@ public sealed class GoalAcceptanceVerifier
 
         args.AddRange(check.Arguments);
 
+        // Exclude host-integration tests that spawn a real Kestrel dashboard server (binds a port,
+        // needs an interactive firewall allow) — they hang in the unattended, relocated gate. Match
+        // both by class name (works on a worktree built before the trait existed) and by the
+        // [Trait("Category","HostIntegration")] tag (covers any future such tests). They run in a
+        // dedicated lane instead.
+        args.Add("--filter");
+        args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+
         // Fail a hung test fast and by name instead of silently eating CommandTimeout. A test that
         // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
         // can otherwise stall the whole acceptance for ten minutes ("A task was canceled"). The
