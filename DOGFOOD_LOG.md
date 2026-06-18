@@ -1632,3 +1632,10 @@ Goal 685bdadd: # Phase 4b: mobile-responsive dashboard  ## Intent (observable) T
 
 - Operator gate: Developer: pass; focused renderer test 1/1, Release build 0 warnings/0 errors, Core 354/354 and Infrastructure 917/917 passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped responsive dashboard implementation - completed with clean build and full suite verification.
+
+## 2026-06-18 - # Judge-input fidelity: feed acceptance judges the actual diff, not a test-ev...
+
+Goal c97bea0a: # Judge-input fidelity: feed acceptance judges the actual diff, not a test-evidence excerpt  ## Problem (observed rep.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 150749f). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; SemanticAcceptanceTests 35/35, build clean 0 warnings/errors, Core.Tests 354/354, Infrastructure.Tests 918/918 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped acceptance evidence fix - handled implementation, tests, and verification cleanly.
