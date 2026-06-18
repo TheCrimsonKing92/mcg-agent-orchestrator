@@ -519,6 +519,65 @@ public sealed class DashboardHostTests
         Assert.Equal("hosted-dashboard", selection.CommandArgs[0]);
     }
 
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_defaults_to_localhost_binding")]
+    public void HostedDashboardDefaultsToLocalhostBinding()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        var uri = new Uri(args.UrlPrefix);
+
+        Assert.Equal("localhost", uri.Host);
+        Assert.Equal(0, DashboardHost.GetHostedUrlPrefixes(args).Count);
+        Assert.Equal(args.UrlPrefix, DashboardHost.GetBrowserUrl(args));
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_bare_port_stays_localhost_binding")]
+    public void HostedDashboardBarePortStaysLocalhostBinding()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "5099", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        Assert.Equal("http://localhost:5099/", args.UrlPrefix);
+        Assert.Equal(0, DashboardHost.GetHostedUrlPrefixes(args).Count);
+        Assert.Equal("http://localhost:5099/", DashboardHost.GetBrowserUrl(args));
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_lan_flag_binds_all_interfaces")]
+    public void HostedDashboardLanFlagBindsAllInterfaces()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "--lan", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        var uri = new Uri(args.UrlPrefix);
+
+        Assert.Equal("0.0.0.0", uri.Host);
+        Assert.True(uri.Port is >= 5087 and <= 5186);
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_explicit_lan_url_prints_public_url")]
+    public void HostedDashboardExplicitLanUrlPrintsPublicUrl()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "http://192.0.2.10:5099/", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        Assert.Equal("http://0.0.0.0:5099/", args.UrlPrefix);
+        Assert.Equal("http://192.0.2.10:5099/", args.PublicUrlPrefix);
+        Assert.Equal("http://192.0.2.10:5099/", DashboardHost.GetBrowserUrl(args));
+        Assert.True(DashboardHost.GetHostedUrlPrefixes(args).SequenceEqual(["http://192.0.2.10:5099/"]));
+        Assert.True(DashboardHost.GetHostedUrlPrefixes(args)
+            .Select(DashboardHost.GetDashboardPageUrl)
+            .SequenceEqual(["http://192.0.2.10:5099/dashboard"]));
+    }
+
     private static async Task<string> GetRequiredStringAsync(HttpClient client, Uri uri)
     {
         using var response = await client.GetAsync(uri);
