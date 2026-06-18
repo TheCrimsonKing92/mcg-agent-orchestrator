@@ -32,13 +32,16 @@ public sealed class GoalAcceptanceVerifier
 {
     internal sealed record CommandResult(int ExitCode, string Output);
 
-    // The acceptance build environment is deliberately throttled (--disable-build-servers,
-    // -maxcpucount:1, UseSharedCompilation=false, clean artifacts every run) for cross-slot
-    // isolation, which makes a cold single-threaded rebuild + full test suite far slower than a
-    // normal parallel build. 10 minutes was too tight and silently cancelled the whole acceptance
-    // ("A task was canceled") on the larger suites. Allow generous headroom; relaxing the throttle
-    // for single-run speed is tracked separately.
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(30);
+    // Hard ceiling for a single build/test process. The suite itself runs in ~90s even in the
+    // throttled acceptance environment, so this only guards a genuinely runaway process.
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
+
+    // After the child process exits, a grandchild it spawned (e.g. a port-binding dashboard server
+    // or a worker host) can inherit and keep the redirected stdout/stderr pipe open, which makes
+    // ReadToEndAsync block until CommandTimeout even though the work is finished and the exit code
+    // is known. Bound the post-exit drain so a lingering grandchild can never stall a command
+    // ("A task was canceled" at the full ceiling) for the whole timeout.
+    private static readonly TimeSpan PipeDrainGrace = TimeSpan.FromSeconds(30);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -751,9 +754,28 @@ public sealed class GoalAcceptanceVerifier
 
         await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
 
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
+        // The child has exited; its exit code is final. Don't let a grandchild that inherited and
+        // is still holding the stdout/stderr pipe block the drain for the full CommandTimeout.
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        drainCts.CancelAfter(PipeDrainGrace);
+        var stdout = await DrainPipeAsync(stdoutTask, drainCts.Token).ConfigureAwait(false);
+        var stderr = await DrainPipeAsync(stderrTask, drainCts.Token).ConfigureAwait(false);
         return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
+    }
+
+    private static async Task<string> DrainPipeAsync(Task<string> readTask, CancellationToken token)
+    {
+        try
+        {
+            return await readTask.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // A lingering grandchild is holding the pipe open. Stop waiting and observe the
+            // abandoned read so its later cancellation never surfaces as an unobserved exception.
+            _ = readTask.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+            return string.Empty;
+        }
     }
 
     private sealed class AcceptanceManifest
