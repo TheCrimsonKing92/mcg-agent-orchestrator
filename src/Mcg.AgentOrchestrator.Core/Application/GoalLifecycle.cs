@@ -51,11 +51,6 @@ public static class GoalLifecycle
             if (facts.IsCleanedUp) return GoalLifecycleState.CleanedUp;
             if (facts.IsRecorded)  return GoalLifecycleState.Recorded;
             if (facts.IsMerged)    return GoalLifecycleState.Merged;
-            // A completed goal whose worktree is gone has already been landed and cleaned up —
-            // e.g. via the `acceptance` command, which merges + removes the workspace without writing
-            // the conductor's land/record journal. Treat it as terminal so the conductor doesn't
-            // re-run acceptance on a worktree that no longer exists (the ghost-escalation source).
-            if (!facts.WorkspaceExists) return GoalLifecycleState.CleanedUp;
             return GoalLifecycleState.Verified;
         }
 

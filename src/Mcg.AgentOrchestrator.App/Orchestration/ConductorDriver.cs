@@ -44,7 +44,12 @@ internal sealed class ConductorDriver
             var isRecorded = journal.LatestByOperation.Any(e =>
                 e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
             var isCleanedUp = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed)
+                // A completed goal whose worktree is gone was landed + cleaned up outside the conductor
+                // (e.g. via the `acceptance` command, which merges + removes the workspace without
+                // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
+                // acceptance on a missing worktree and spam ghost escalations every tick.
+                || (!workspaceExists && goal.Status == GoalStatus.Completed);
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp);
         };
 
