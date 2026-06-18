@@ -286,7 +286,24 @@ public sealed class GoalLifecycleTests
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
 
     Assert.Equal(GoalStatus.Completed, goal.Status);
-    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
+    // A completed goal awaiting landing still has its worktree.
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+}
+
+[Xunit.Fact(DisplayName = "ResolveState_returns_CleanedUp_when_completed_goal_worktree_is_gone")]
+public void ResolveStateReturnsCleanedUpWhenCompletedGoalWorktreeIsGone()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Landed", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    // Worktree gone (landed via the `acceptance` command, which doesn't write the conductor journal)
+    // → terminal, so the conductor loop won't re-run acceptance on it and spam ghost escalations.
+    Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: false)));
 }
 
     [Xunit.Fact(DisplayName = "ResolveState_returns_Merged_when_goal_completed_and_merged")]
