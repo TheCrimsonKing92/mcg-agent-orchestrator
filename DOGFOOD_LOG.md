@@ -1604,3 +1604,10 @@ Goal 32a5b028: # Agent-menu: compose a goal's role roster at creation (one comma
 
 - Operator gate: Planner: not-run (planner role — no code changes) (exit 0); Researcher: not-run (research task, no code changes) (exit 0); Developer: pass; focused override tests pass; build clean; Core 354 passed, Infrastructure 910 passed (exit 0)
 - Model fit: Model fit: Anthropic/claude-sonnet-4-6 - adequate - planning task with deep codebase exploration across CLI, kernel, and test layers - sonnet handles cross-file reasoning and structured plan authoring well without overkill.
+
+## 2026-06-18 - # Model-fit history in SQLite (structured, queryable — stop the DOGFOOD-prose...
+
+Goal 4dbd0bb5: # Model-fit history in SQLite (structured, queryable — stop the DOGFOOD-prose sprawl)  ## Intent (observable) Model-f.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 5416400b7190e46f3d913b06cd0db6e14ba06ce3). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; build clean, Core 354/354, Infrastructure 908/908 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - structured persistence and query task - enough context and implementation depth without overcomplicating the layering.
