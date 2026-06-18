@@ -148,26 +148,27 @@ internal static partial class CliCommandHandlers
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
                 var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
-                var listener = OperatorChannelFactory.CreateGatewayListener(
+                var runtime = OperatorChannelFactory.CreateDiscordRuntime(
                     catalog,
+                    context.Workspace.OperatorChannelPath,
                     botToken,
                     store,
                     context.Workspace.OrchestratorDirectory);
-                if (listener is null)
+                if (runtime is null)
                 {
                     Console.WriteLine("operator-listen: Discord not configured or MCGO_DISCORD_BOT_TOKEN missing.");
                     return false;
                 }
 
-                Console.WriteLine("operator-listen: Discord listener running. Press Ctrl+C to stop.");
-                using var stopped = new ManualResetEventSlim(false);
+                Console.WriteLine("operator-listen: Discord listener running. Progress view refreshes every 15 minutes. Press Ctrl+C to stop.");
+                using var cts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, eventArgs) =>
                 {
                     eventArgs.Cancel = true;
-                    stopped.Set();
+                    cts.Cancel();
                 };
-                stopped.Wait();
-                listener.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                RunOperatorListenLoopAsync(context, store, runtime.ProgressView, cts.Token).GetAwaiter().GetResult();
+                runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 return false;
             }
 
@@ -256,6 +257,52 @@ internal static partial class CliCommandHandlers
         }
     }
 
+    private static async Task RunOperatorListenLoopAsync(
+        CliExecutionContext context,
+        ICollaborationItemStore collaborationStore,
+        DiscordProgressViewService progressView,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await ReconcileProgressViewAsync(context, collaborationStore, progressView, cancellationToken);
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(15), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
+    private static async Task ReconcileProgressViewAsync(
+        CliExecutionContext context,
+        ICollaborationItemStore collaborationStore,
+        DiscordProgressViewService progressView,
+        CancellationToken cancellationToken)
+    {
+        var kernel = context.ReloadKernel();
+        var openEscalations = (await collaborationStore.GetAttentionQueueAsync(cancellationToken)).Count;
+        var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
+        var projection = StatusProjector.Project(StatusProjector.BuildInput(
+            kernel.Goals,
+            openEscalations,
+            BuildOperatorInboxUrl(catalog.DashboardBaseUrl),
+            DateTimeOffset.UtcNow));
+        await progressView.ReconcileAsync(projection, cancellationToken);
+    }
+
+    private static string? BuildOperatorInboxUrl(string? dashboardBaseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(dashboardBaseUrl))
+            return null;
+
+        return dashboardBaseUrl.TrimEnd('/') + "/api/operator-inbox";
+    }
+
     private static bool? HandleOperatorChannelCommand(IReadOnlyList<string> parts, CliExecutionContext context)
     {
         var sub = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
@@ -285,6 +332,8 @@ internal static partial class CliCommandHandlers
                 var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
                 Console.WriteLine($"Operator channel: type={catalog.ChannelType}");
                 Console.WriteLine($"  forumChannelId: {catalog.ForumChannelId ?? "(none)"}");
+                Console.WriteLine($"  progressThreadId: {catalog.ProgressThreadId ?? "(none)"}");
+                Console.WriteLine($"  progressStatusMessageId: {catalog.ProgressStatusMessageId ?? "(none)"}");
                 Console.WriteLine($"  dashboardUrl: {catalog.DashboardBaseUrl ?? "(none)"}");
                 Console.WriteLine($"  bot token: {(string.IsNullOrWhiteSpace(botToken) ? "not set" : "set (MCGO_DISCORD_BOT_TOKEN)")}");
                 Console.WriteLine($"  active channel: {context.Channel.ChannelType}");

@@ -55,7 +55,8 @@ internal static class CliPersistentStateRunner
                         providers,
                         ref commandProfiles,
                         ref commandGoal,
-                        channel);
+                        channel,
+                        () => stateRepository.LoadAsync().GetAwaiter().GetResult());
 
                     nextAgents = commandAgents;
                     nextWorkerProfiles = commandProfiles;
@@ -130,7 +131,8 @@ internal static class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel);
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult());
 
         if (shouldSave)
         {

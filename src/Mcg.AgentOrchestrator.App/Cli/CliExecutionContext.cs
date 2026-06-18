@@ -10,9 +10,12 @@ internal sealed class CliExecutionContext(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog workerProfiles,
     Goal? currentGoal,
-    IOperatorChannel? channel = null)
+    IOperatorChannel? channel = null,
+    Func<AgentOrchestratorKernel>? reloadKernel = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
+
+public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kernel;
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 

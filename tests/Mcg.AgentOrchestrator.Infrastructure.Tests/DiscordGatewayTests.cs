@@ -283,6 +283,37 @@ public sealed class DiscordGatewayTests
         Assert.False(api.EditedMessages[0].Buttons[0].Disabled);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordProgressView_reconcile_skips_identical_status_content")]
+    public async Task DiscordProgressViewReconcileSkipsIdenticalStatusContent()
+    {
+        var root = CreateTempDirectory();
+        var catalogPath = Path.Combine(root, "operator-channel.json");
+        OperatorChannelStore.Save(catalogPath, new OperatorChannelCatalog("discord", ForumChannelId: "42"));
+        var api = new FakeDiscordForumApi();
+        var view = new DiscordProgressViewService(api, 42UL, catalogPath);
+        var projection = StatusProjector.Project(new StatusProjectionInput(
+            [new StatusProjectionGoal(
+                "goal-123456",
+                "Ship progress view",
+                GoalStatus.Active,
+                [new StatusProjectionTask(AgentRole.Developer, WorkTaskStatus.Running)],
+                DateTimeOffset.UtcNow)],
+            0,
+            null,
+            DateTimeOffset.UtcNow));
+
+        var first = await view.ReconcileAsync(projection);
+        var second = await view.ReconcileAsync(projection);
+
+        Assert.False(first.Unchanged);
+        Assert.True(first.CreatedThread);
+        Assert.True(first.SentMessage);
+        Assert.True(second.Unchanged);
+        Assert.Equal(1, api.CreatedThreads.Count);
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.Equal(0, api.EditedMessages.Count);
+    }
+
     private sealed class FakeDiscordForumApi : IDiscordForumApi
     {
         public List<(ulong ForumChannelId, string Title, string Content)> CreatedThreads { get; } = [];

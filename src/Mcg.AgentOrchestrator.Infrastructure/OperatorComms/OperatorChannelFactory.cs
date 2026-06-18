@@ -2,6 +2,18 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class OperatorChannelFactory
 {
+    public sealed record DiscordOperatorRuntime(
+        DiscordGatewayListener Listener,
+        DiscordProgressViewService ProgressView,
+        IAsyncDisposable Api) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await Listener.DisposeAsync();
+            await Api.DisposeAsync();
+        }
+    }
+
     public static IOperatorChannel Create(
         OperatorChannelCatalog catalog,
         string? botToken,
@@ -42,6 +54,25 @@ public static class OperatorChannelFactory
         var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view)
             .GetAwaiter().GetResult();
+    }
+
+    public static DiscordOperatorRuntime? CreateDiscordRuntime(
+        OperatorChannelCatalog catalog,
+        string catalogPath,
+        string? botToken,
+        ICollaborationItemStore store,
+        string stateDirectory)
+    {
+        if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
+            return null;
+
+        var allowedUserIds = catalog.OperatorUserIds ?? [];
+        var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
+        var collaborationView = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
+        var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView)
+            .GetAwaiter().GetResult();
+        var progressView = new DiscordProgressViewService(api, forumChannelId, catalogPath);
+        return new DiscordOperatorRuntime(listener, progressView, api);
     }
 
     public static async Task SendTestEscalationAsync(IOperatorChannel channel, TextWriter output)
