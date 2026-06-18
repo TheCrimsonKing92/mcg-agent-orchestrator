@@ -12,6 +12,19 @@ using System.Text;
 
 public sealed class DashboardRenderingTests
 {
+    [Xunit.Fact(DisplayName = "DashboardRenderer_emits_mobile_responsive_shell")]
+    public void DashboardRendererEmitsMobileResponsiveShell()
+    {
+        var html = DashboardRenderer.Render(new AgentOrchestratorKernel());
+
+        Assert.True(html.Contains("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">", StringComparison.Ordinal));
+        Assert.True(html.Contains("@media (max-width:900px)", StringComparison.Ordinal));
+        Assert.True(html.Contains(".dashboard-nav{flex-wrap:wrap;padding:0}", StringComparison.Ordinal));
+        Assert.True(html.Contains("min-height:44px", StringComparison.Ordinal));
+        Assert.True(html.Contains("section{overflow-x:auto}", StringComparison.Ordinal));
+        Assert.True(html.Contains("<nav class=\"dashboard-nav\">", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_renders_goal_tasks_and_attention")]
     public void DashboardRendererRendersGoalTasksAndAttention()
 {
