@@ -1618,3 +1618,10 @@ Goal 779b86c5: # operator-listen: coexist with the orchestrator (stop locking st
 
 - Operator gate: Developer: pass; focused 45/45, Release build 0 warnings/errors, full suites 354/354 Core + 916/916 Infrastructure (exit 0)
 - Model fit: Not reported.
+
+## 2026-06-18 - # Bake --disable-build-servers into orchestrator-spawned verification/accepta...
+
+Goal 0ee27aa2: # Bake --disable-build-servers into orchestrator-spawned verification/acceptance builds  ## Why Concurrent worktree b.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 0ea38c5). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; focused filter passed 35/35, release build passed 0 warnings/0 errors (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET build hygiene change - handled implementation, focused tests, and commit.
