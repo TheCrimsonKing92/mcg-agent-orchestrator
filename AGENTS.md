@@ -41,6 +41,7 @@ This repository implements an AI agent orchestrator. Avoid recursive or high-fan
 ## Repository Rules
 
 - Treat version-controlled files as source. Build outputs, browser profiles, prototype workspace files, logs, scratch scripts, and previous run artifacts are not source structure.
+- **Durable state lives in the stores, never in `.scratch`.** Canonical homes: SQLite (backlog, kernel state, collaboration-items) and tracked files (AGENTS.md, docs/, config). `--brief-file`/`--body-file` are throwaway vehicles to pass long content past the command-length permission cap — once the command runs, the durable copy is the goal objective / backlog item, so DELETE the scratch input. Clean `.scratch` as you go; never let it become a parallel faux-durable store. We keep migrating the codebase off scattered state files — do not reintroduce the same sprawl in operating habits.
 - Core and Infrastructure intentionally keep flat public namespaces: `Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`.
 - Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
 
