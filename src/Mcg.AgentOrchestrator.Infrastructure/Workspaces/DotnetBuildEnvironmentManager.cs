@@ -30,6 +30,13 @@ public sealed record DotnetBuildLeaseStatus(
 public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
+
+    // Lets a child process (notably the acceptance test run) redirect the isolated build/lease root
+    // away from the shared default. Without this, tests that exercise the real lease-execution lock
+    // collide with the slot lock the parent acceptance already holds (same %TEMP% path) and deadlock
+    // until the 5-minute lock timeout. The acceptance verifier sets this to a unique per-run
+    // directory on the test process so its locks never touch live production slots.
+    public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
     public const int StableSlotCount = 4;
     private const string LeaseDirectoryName = "lease";
     private const string LeaseMetadataFileName = "lease.json";
@@ -63,7 +70,7 @@ public static class DotnetBuildEnvironmentManager
 
     public static string GoalRoot(GoalId goalId)
     {
-        return Path.Combine(Path.GetTempPath(), RootDirectoryName, "goals", Prefix(goalId));
+        return Path.Combine(IsolatedRootBase(), "goals", Prefix(goalId));
     }
 
     public static string GoalArtifactsPath(GoalId goalId)
@@ -283,9 +290,17 @@ public static class DotnetBuildEnvironmentManager
         return $"slot-{Math.Abs(hash % StableSlotCount)}";
     }
 
+    private static string IsolatedRootBase()
+    {
+        var overridden = Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable);
+        return string.IsNullOrWhiteSpace(overridden)
+            ? Path.Combine(Path.GetTempPath(), RootDirectoryName)
+            : overridden;
+    }
+
     private static string StableSlotRoot(string slotName)
     {
-        return Path.Combine(Path.GetTempPath(), RootDirectoryName, "slots", slotName);
+        return Path.Combine(IsolatedRootBase(), "slots", slotName);
     }
 
     private static string StableSlotArtifactsPath(string slotName)

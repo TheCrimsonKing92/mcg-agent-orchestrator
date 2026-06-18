@@ -768,6 +768,12 @@ public sealed class GoalAcceptanceVerifier
         startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
+        // Isolate the test run's build/lease slot root so tests that exercise the real lease-execution
+        // lock don't deadlock against the slot lock this acceptance already holds in the shared
+        // default location (a fixed test goalId can hash to the very slot we're holding).
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-tests-{Guid.NewGuid():N}");
+
         try
         {
             using var process = Process.Start(startInfo)
