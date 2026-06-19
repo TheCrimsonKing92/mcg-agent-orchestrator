@@ -20,12 +20,19 @@ internal sealed record OrchestratorWorkspace(
 {
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";
-    private const string SolutionFileName = "Mcg.AgentOrchestrator.sln";
+    public const string RepoRootEnvironmentVariable = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";
+    private const string GitDirectoryName = ".git";
 
-    // Walks up from startDirectory (then AppContext.BaseDirectory) looking for the
-    // solution file to find a stable repo root regardless of launch CWD.
+    // Configuration wins for deployed layouts where the orchestrator binary is
+    // outside the target repository tree.
     public static string ResolveRepoRoot(string? startDirectory = null, string? fallbackDirectory = null)
     {
+        var configuredRoot = Environment.GetEnvironmentVariable(RepoRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            return Path.GetFullPath(configuredRoot);
+        }
+
         var candidates = new[]
         {
             startDirectory ?? Environment.CurrentDirectory,
@@ -40,7 +47,7 @@ internal sealed record OrchestratorWorkspace(
             var dir = new DirectoryInfo(Path.GetFullPath(candidate));
             while (dir != null)
             {
-                if (File.Exists(Path.Combine(dir.FullName, SolutionFileName)))
+                if (Directory.Exists(Path.Combine(dir.FullName, GitDirectoryName)))
                     return dir.FullName;
                 dir = dir.Parent;
             }

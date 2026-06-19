@@ -23,7 +23,7 @@ public static int RunPrototypeUi(
 {
     var hostArgs = ParseDashboardHostArgs(parts, "prototype-ui", defaultOpenBrowser: true);
     var prototypeWorkspacePath = PrototypeWorkspaceSeeder.Create(Environment.CurrentDirectory, agentFallback);
-    var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+    var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
     var prototypeWorkspace = OrchestratorWorkspace.ForDirectory(
         prototypeWorkspacePath,
         string.IsNullOrWhiteSpace(executionDirectory) ? Environment.CurrentDirectory : executionDirectory,

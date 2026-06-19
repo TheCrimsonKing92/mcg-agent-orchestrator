@@ -8,7 +8,7 @@ if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
     return DispatchProcessHost.Run(args[1]);
 }
 
-var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorTenantSelection tenantSelection;
 try
 {
@@ -27,7 +27,7 @@ var startupArgs = tenantSelection.CommandArgs.Count == 0
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
-// the solution file so .orchestrator is always at the repo root regardless of launch CWD.
+// a Git repository root so .orchestrator is rooted with the target repo regardless of launch CWD.
 var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);

@@ -1,6 +1,7 @@
 global using static InfrastructureTestSupport;
 
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -51,7 +52,7 @@ public static Process StartDashboardProcess(string appProject, string workingDir
     // Pin Ollama to an unreachable endpoint so assertions are deterministic
     // regardless of whether a live Ollama server runs on this machine.
     startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
-    startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
+    startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
 
     // Spawned-app dispatch starts must never launch real subscription CLIs:
     // codex/claude authenticate from account state, not the API keys pinned
@@ -123,7 +124,7 @@ public static string FindRepositoryRoot()
 {
     var candidates = new[]
     {
-        Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT"),
+        Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable),
         Environment.CurrentDirectory,
         AppContext.BaseDirectory
     };
@@ -138,7 +139,7 @@ public static string FindRepositoryRoot()
         var directory = new DirectoryInfo(Path.GetFullPath(candidate));
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")))
             {
                 return directory.FullName;
             }
