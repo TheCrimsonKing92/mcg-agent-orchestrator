@@ -139,7 +139,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             }
 
         case "subscription-dispatch":
-            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>]");
+            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]");
             AcknowledgeSubscriptionLimitReviewFromCli(context, subscriptionTask, parts);
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal!);
             try
@@ -150,7 +150,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 DispatchModelOverride? modelOverride = overrideProfileName is not null || overrideModelName is not null || overrideReasoning is not null
                     ? new DispatchModelOverride(overrideProfileName, overrideModelName, overrideReasoning)
                     : null;
-                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles, modelOverride);
+                var allowGitReference = HasCliConfirmation(parts, "--allow-git-reference");
+                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles, modelOverride, allowGitReference);
                 Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
                 Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
                 ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);

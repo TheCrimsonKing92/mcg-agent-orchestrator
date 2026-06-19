@@ -90,7 +90,8 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        DispatchModelOverride? modelOverride = null)
+        DispatchModelOverride? modelOverride = null,
+        bool allowGitReference = false)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -110,7 +111,7 @@ public static class WorkerProfileDispatcher
             variables["subscriptionModelName"] = resolvedModelName;
         if (modelOverride?.ReasoningEffort is not null)
             variables["subscriptionReasoningEffort"] = resolvedReasoning;
-        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt, modelOverride);
+        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt, modelOverride, allowGitReference);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -136,7 +137,8 @@ public static class WorkerProfileDispatcher
         WorkerProfileCatalog profiles,
         string workingDirectory,
         DateTimeOffset now,
-        DispatchModelOverride? modelOverride = null)
+        DispatchModelOverride? modelOverride = null,
+        bool allowGitReference = false)
     {
         var findings = new List<string>();
         string profileName;
@@ -176,7 +178,7 @@ public static class WorkerProfileDispatcher
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
 
-            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory);
+            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory, allowGitReference);
             findings.Add($"capability: {capability.Status} - {capability.Detail}");
             if (!capability.Allowed)
             {
