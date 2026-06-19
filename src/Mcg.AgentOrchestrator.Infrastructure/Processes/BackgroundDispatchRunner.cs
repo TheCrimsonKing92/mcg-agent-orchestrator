@@ -96,8 +96,7 @@ public sealed class BackgroundDispatchRunner
             heartbeatPath,
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
-            SandboxLowIntegrity: useSandbox,
-            SandboxGitCommonDir: useSandbox ? ResolveGitCommonDir(dispatch.WorkingDirectory) : null));
+            SandboxLowIntegrity: useSandbox));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
@@ -254,49 +253,53 @@ public sealed class BackgroundDispatchRunner
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         var task = kernel.GetTask(goalId, taskId);
         if (RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence) &&
-            exitCode == 0)
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
         {
-            if (!worktreeEvidence.IsClean)
+            // Recovery (exit-code-agnostic): a Developer/Tester that EDITED the worktree and showed
+            // verification evidence but never landed a commit is finished by the orchestrator. This
+            // covers a low-integrity worker — which cannot write the medium-integrity .git (it lives
+            // outside the worktree) and may even exit non-zero attempting to commit — and codex's
+            // Windows sandbox poisoning before commit. The worker only needs to EDIT; the orchestrator
+            // (medium) commits and the acceptance gate re-verifies, so the worker's exit code is not
+            // authoritative here. Dirty-but-UNVERIFIED edits are NOT committed: they fail and surface
+            // for retry/escalation rather than landing unproven work.
+            var recovered = false;
+            if (!worktreeEvidence.IsClean &&
+                DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) &&
+                TryCommitWorktreeEdits(processRecord.WorkingDirectory, goalId) &&
+                TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+                worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
             {
-                // The worker produced edits but did not commit them — a low-integrity worker cannot
-                // write the medium-integrity .git, and codex's Windows sandbox can poison before it
-                // commits. When the worker also showed verification evidence (a "dirty-useful"
-                // dispatch — it did and verified the work, just couldn't land the commit), recover by
-                // committing the worktree from the orchestrator (medium); the acceptance gate then
-                // re-verifies. This is the linchpin for autonomy: such a worker only needs to EDIT the
-                // worktree, never to commit. Dirty-but-UNVERIFIED edits are still failed (not blindly
-                // committed) so they surface for retry/escalation rather than landing unproven work.
-                if (DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) &&
-                    TryCommitWorktreeEdits(processRecord.WorkingDirectory, goalId) &&
-                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
-                    worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
-                {
-                    standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        "Orchestrator committed the worker's uncommitted worktree edits. " +
-                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
-                }
-                else
+                recovered = true;
+                exitCode = 0;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Orchestrator committed the worker's uncommitted worktree edits. " +
+                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+            }
+
+            if (!recovered && exitCode == 0)
+            {
+                if (!worktreeEvidence.IsClean)
                 {
                     exitCode = 1;
                     standardErrorDiagnostic = AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
-                        "Developer/Tester dispatch exited 0 but left the worktree dirty and it could not be recovered. " +
+                        "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
                         $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
                 }
-            }
-            else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
-                !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
-                !worktreeEvidence.HasRelevantCommitAfterDispatch)
-            {
-                exitCode = 1;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence. " +
-                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
+                else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
+                    !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
+                    !worktreeEvidence.HasRelevantCommitAfterDispatch)
+                {
+                    exitCode = 1;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence. " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                        $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
+                }
             }
 
             // WORKER_RESULT is advisory only. Substance is proven from git ground truth
@@ -385,28 +388,6 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole != AgentRole.Developer &&
             HasExplicitNoChangeRationale(standardOutput, standardError);
-    }
-
-    // Resolves the repository's common .git directory for a worktree (where its commits actually
-    // land: objects/refs and .git/worktrees/<name>), so the sandboxed worker can be granted write
-    // there in addition to the worktree itself — without it, git commit fails inside the sandbox.
-    private static string? ResolveGitCommonDir(string worktree)
-    {
-        try
-        {
-            var result = GitCli.Run(worktree, "rev-parse", "--git-common-dir");
-            if (!result.Succeeded || string.IsNullOrWhiteSpace(result.Output))
-            {
-                return null;
-            }
-
-            var common = result.Output.Trim();
-            return Path.IsPathRooted(common) ? common : Path.GetFullPath(Path.Combine(worktree, common));
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     // Commits the worker's uncommitted worktree edits from the orchestrator (medium integrity). A

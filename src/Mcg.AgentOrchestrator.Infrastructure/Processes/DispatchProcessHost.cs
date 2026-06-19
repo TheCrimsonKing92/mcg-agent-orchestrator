@@ -31,10 +31,10 @@ public static class DispatchProcessHost
         bool ShutdownBuildServerOnExit,
         bool DisableSharedCompilation,
         // OS worker sandbox: when SandboxLowIntegrity is set, the worker runs at LOW integrity (same
-        // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP;
-        // SandboxGitCommonDir is labeled Low so the worker can commit. Default = run at medium integrity.
-        bool SandboxLowIntegrity = false,
-        string? SandboxGitCommonDir = null);
+        // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP.
+        // The worker can only EDIT the worktree (the shared .git stays medium and out of reach); the
+        // orchestrator commits the worker's edits afterwards. Default = run at medium integrity.
+        bool SandboxLowIntegrity = false);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -55,14 +55,13 @@ public static class DispatchProcessHost
             return;
         }
 
-        // Label the worktree (+ git common dir) Low so the Low worker can edit/commit them.
-        // TODO(optimize): label .orchestrator-worktrees Low-inheritable once so worktrees are created
-        // Low (no per-dispatch /T walk); revisit committing via the orchestrator instead of the worker.
+        // Label ONLY the worktree Low so the Low worker can edit it. The shared git common dir is
+        // deliberately left at medium integrity: it lives OUTSIDE the worktree (in the main repo's
+        // .git/worktrees), so the worker must not be able to write it — that is the write-confinement
+        // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
+        // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
+        // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         SetLowIntegrity(parameters.WorkingDirectory);
-        if (!string.IsNullOrWhiteSpace(parameters.SandboxGitCommonDir))
-        {
-            SetLowIntegrity(parameters.SandboxGitCommonDir);
-        }
 
         // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
         // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
