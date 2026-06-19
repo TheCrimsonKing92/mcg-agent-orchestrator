@@ -1759,3 +1759,10 @@ Goal 0e066872: ## Why Time estimates for orchestrator work are currently guessed
 
 - Operator gate: Researcher: not-run (exit 0); Developer: focused pass; full suite failed in existing git worktree/rebase tests with permission-denied creating .git lock/ref files, unrelated to duration changes (exit 0); Tester: pass - unit/integration duration tests 8/8 passing; Core suite 364/364 passing; 5 pre-existing git-worktree failures unrelated to duration feature (exit 0); Reviewer: pass - 364/364 Core; 8/8 focused duration tests; 5 pre-existing git-worktree failures unrelated (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - review/analysis task spanning 8 implementation files + test evidence - thorough code-level review without implementation work needed.
+
+## 2026-06-19 - # Unify Discord escalation delivery through the per-goal priority queue  ## W...
+
+Goal d5fc6b25: # Unify Discord escalation delivery through the per-goal priority queue  ## Why / context Discord escalations current.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit ac0ee60 (Orchestrator-committed worker edits for goal d5fc6b25e7ca4c4db70726eee6648b7c)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Researcher: not-run (research phase only) (exit 0); Developer: focused pass: 66/66 OperatorChannelTests|DiscordGatewayTests; full Infrastructure.Tests fail after retry: 947 passed, 5 failed, all unrelated git worktree/ref permission failures (exit 0); Tester: 945 Passed / 7 Failed (failures pre-existing: git worktree permission issues unrelated to Discord changes). Discord-specific tests all passing. (exit 0)
+- Model fit: Model fit: Haiku 4.5 is ADEQUATE
