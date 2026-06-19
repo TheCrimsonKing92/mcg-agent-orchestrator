@@ -218,9 +218,13 @@ public static class DispatchProcessHost
             try { stderr.Flush(); } catch { }
             exitCode = worker.ExitCode;
         }
-        catch
+        catch (Exception ex)
         {
             exitCode = 1;
+            // Capture launch/setup failures (e.g. launch-as-user under the OS sandbox) — otherwise the
+            // worker never starts and nothing explains why (no worker means no redirected stderr).
+            try { File.AppendAllText(parameters.StderrPath, $"[dispatch-host] worker launch/run failed: {ex}\n"); }
+            catch { /* diagnostics are best-effort */ }
         }
         finally
         {
