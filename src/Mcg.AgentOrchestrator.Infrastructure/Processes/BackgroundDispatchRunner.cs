@@ -96,8 +96,7 @@ public sealed class BackgroundDispatchRunner
             heartbeatPath,
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
-            SandboxAccount: useSandbox ? sandbox.Account : null,
-            SandboxCredentialTarget: useSandbox ? sandbox.CredentialTarget : null,
+            SandboxLowIntegrity: useSandbox,
             SandboxGitCommonDir: useSandbox ? ResolveGitCommonDir(dispatch.WorkingDirectory) : null));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker

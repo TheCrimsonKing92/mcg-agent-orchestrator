@@ -30,11 +30,10 @@ public static class DispatchProcessHost
         string? HeartbeatPath,
         bool ShutdownBuildServerOnExit,
         bool DisableSharedCompilation,
-        // OS worker sandbox: when SandboxAccount is set, the worker command is launched AS that
-        // low-priv account (password read from SandboxCredentialTarget) with Modify granted on the
-        // worktree + SandboxGitCommonDir, so the OS confines its writes. Null = run as the operator.
-        string? SandboxAccount = null,
-        string? SandboxCredentialTarget = null,
+        // OS worker sandbox: when SandboxLowIntegrity is set, the worker runs at LOW integrity (same
+        // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP;
+        // SandboxGitCommonDir is labeled Low so the worker can commit. Default = run at medium integrity.
+        bool SandboxLowIntegrity = false,
         string? SandboxGitCommonDir = null);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
@@ -43,52 +42,106 @@ public static class DispatchProcessHost
         return path;
     }
 
-    // When the OS worker sandbox is configured for this dispatch, grant the low-priv account Modify
-    // on the per-run writable set and launch the worker AS that account. The confinement boundary is
-    // set once at the root; children inherit it via ordinary CreateProcess, so the worker's writes are
-    // OS-confined and codex (run danger-full-access) never touches its fragile CreateProcessAsUserW path.
+    // OS worker sandbox via Mandatory Integrity Control. The worker runs at LOW integrity as the SAME
+    // operator user — so the toolchain (node/codex) and codex auth are reachable (reads aren't
+    // MIC-restricted) — but it can only WRITE Low-labeled objects (the worktree + a Low CODEX_HOME/TEMP),
+    // never the medium-integrity profile or main repo. The host runs at medium and cannot launch a Low
+    // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
+    // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
     private static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
     {
-        if (string.IsNullOrWhiteSpace(parameters.SandboxAccount) || !OperatingSystem.IsWindows())
+        if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
             return;
         }
 
-        var account = parameters.SandboxAccount;
-
-        // pwsh resolves to the per-user WindowsApps execution alias, which the sandbox account cannot
-        // access (Win32 1920 "file cannot be accessed"). Launch via system-wide Windows PowerShell,
-        // which every user can execute; the base args (-NoProfile -ExecutionPolicy Bypass -Command)
-        // and the PowerShell-dialect worker command both run there unchanged.
-        if (startInfo.FileName is "pwsh" or "pwsh.exe")
-        {
-            startInfo.FileName = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "WindowsPowerShell", "v1.0", "powershell.exe");
-        }
-
-        WorkerSandboxAcl.GrantModify(parameters.WorkingDirectory, account);
+        // Label the worktree (+ git common dir) Low so the Low worker can edit/commit them.
+        // TODO(optimize): label .orchestrator-worktrees Low-inheritable once so worktrees are created
+        // Low (no per-dispatch /T walk); revisit committing via the orchestrator instead of the worker.
+        SetLowIntegrity(parameters.WorkingDirectory);
         if (!string.IsNullOrWhiteSpace(parameters.SandboxGitCommonDir))
         {
-            WorkerSandboxAcl.GrantModify(parameters.SandboxGitCommonDir, account);
+            SetLowIntegrity(parameters.SandboxGitCommonDir);
         }
 
-        var password = string.IsNullOrWhiteSpace(parameters.SandboxCredentialTarget)
-            ? null
-            : WindowsWorkerCredential.TryReadPassword(parameters.SandboxCredentialTarget);
-        if (string.IsNullOrEmpty(password))
+        // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
+        // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
+        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+        var tempDir = Path.Combine(sandboxRoot, "temp");
+        Directory.CreateDirectory(codexHome);
+        Directory.CreateDirectory(tempDir);
+        SeedCodexAuth(codexHome);
+        SetLowIntegrity(sandboxRoot);
+
+        startInfo.Environment["CODEX_HOME"] = codexHome;
+        startInfo.Environment["TEMP"] = tempDir;
+        startInfo.Environment["TMP"] = tempDir;
+
+        // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
+        // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
+        var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
+        File.WriteAllText(dropScript, DropToLowScript);
+        var lastIndex = startInfo.ArgumentList.Count - 1;
+        if (lastIndex >= 0)
         {
-            throw new InvalidOperationException(
-                $"OS worker sandbox is enabled (account '{account}') but its credential could not be read from " +
-                "Credential Manager. Run scripts/Setup-WorkerSandbox.ps1 and ensure the credential is readable non-elevated.");
+            startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+    }
 
-        // Launch the worker AS the low-priv account (CreateProcessWithLogonW). WorkingDirectory is the
-        // worktree, which the account can reach because GrantModify above granted it. Redirected stdio
-        // uses handles this host opened as the operator, so worker logging is unaffected by its ACLs.
-        startInfo.UserName = account;
-        startInfo.Domain = ".";
-        startInfo.PasswordInClearText = password;
+    // PowerShell that lowers the current process to Low integrity (lowering one's own token needs no
+    // privilege). Dot-sourced before the worker command so the worker + its children run Low.
+    private const string DropToLowScript = @"Add-Type -Namespace P -Name N -MemberDefinition @'
+[DllImport(""kernel32.dll"")] public static extern System.IntPtr GetCurrentProcess();
+[DllImport(""advapi32.dll"", SetLastError=true)] public static extern bool OpenProcessToken(System.IntPtr h, uint a, out System.IntPtr t);
+[DllImport(""advapi32.dll"", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool ConvertStringSidToSidW(string s, out System.IntPtr sid);
+[DllImport(""advapi32.dll"", SetLastError=true)] public static extern bool SetTokenInformation(System.IntPtr t, int c, ref TML info, int len);
+[StructLayout(LayoutKind.Sequential)] public struct SAA { public System.IntPtr Sid; public uint Attr; }
+[StructLayout(LayoutKind.Sequential)] public struct TML { public SAA Label; }
+public static void DropToLow() {
+    System.IntPtr tok, sid;
+    if (!OpenProcessToken(GetCurrentProcess(), 0x0088, out tok)) throw new System.ComponentModel.Win32Exception();
+    if (!ConvertStringSidToSidW(""S-1-16-4096"", out sid)) throw new System.ComponentModel.Win32Exception();
+    var t = new TML(); t.Label.Sid = sid; t.Label.Attr = 0x20;
+    if (!SetTokenInformation(tok, 25, ref t, Marshal.SizeOf(typeof(TML))+16)) throw new System.ComponentModel.Win32Exception();
+}
+'@
+[P.N]::DropToLow()
+";
+
+    private static void SetLowIntegrity(string path)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "icacls",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add(path);
+            psi.ArgumentList.Add("/setintegritylevel");
+            psi.ArgumentList.Add("(OI)(CI)L");
+            psi.ArgumentList.Add("/T");
+            using var process = Process.Start(psi);
+            process?.WaitForExit(120000);
+        }
+        catch { /* best-effort */ }
+    }
+
+    private static void SeedCodexAuth(string codexHome)
+    {
+        try
+        {
+            var src = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
+            if (File.Exists(src))
+            {
+                File.Copy(src, Path.Combine(codexHome, "auth.json"), overwrite: true);
+            }
+        }
+        catch { /* best-effort */ }
     }
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>

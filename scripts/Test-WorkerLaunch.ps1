@@ -43,6 +43,21 @@ if ([string]::IsNullOrEmpty($plain)) { Write-Error "CredRead failed for '$Creden
 $root = Join-Path $env:TEMP ("mcg-launch-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $root | Out-Null
 icacls $root /grant "${UserName}:(OI)(CI)M" | Out-Null
+# nvm stores node/codex in the OPERATOR's profile (the nodejs symlink points there), and codex auth
+# lives in the operator's ~/.codex. Grant the worker RX on those exact paths so it can resolve, run,
+# and authenticate the toolchain. The operator owns these, so no elevation is needed.
+$toolchain = @((Get-Item C:\nvm4w\nodejs).Target)[0]
+$codexHome = Join-Path $env:USERPROFILE ".codex"
+icacls $toolchain /grant "${UserName}:(OI)(CI)RX" 2>&1 | Out-Null
+icacls $codexHome /grant "${UserName}:(OI)(CI)RX" 2>&1 | Out-Null
+# Read-only traverse on the profile path components down to the toolchain so node can lstat/resolve
+# it. RX = read+execute only: the worker still cannot WRITE or DELETE anywhere in the profile, which
+# is the actual security goal (write/delete confinement to the worktree).
+$cur = $toolchain
+while ($cur -and $cur.Length -ge $env:USERPROFILE.Length) {
+    icacls $cur /grant "${UserName}:(RX)" 2>&1 | Out-Null
+    $cur = Split-Path $cur -Parent
+}
 
 $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -55,7 +70,15 @@ $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 [void]$psi.ArgumentList.Add('-NoProfile'); [void]$psi.ArgumentList.Add('-ExecutionPolicy'); [void]$psi.ArgumentList.Add('Bypass')
 [void]$psi.ArgumentList.Add('-Command')
-[void]$psi.ArgumentList.Add('whoami; & "C:\nvm4w\nodejs\codex.ps1" --version; "codex-home-exists=" + (Test-Path (Join-Path $env:USERPROFILE ".codex"))')
+[void]$psi.ArgumentList.Add('whoami; "path-has-nvm=" + ($env:Path -split ";" -contains "C:\nvm4w\nodejs"); codex --version')
+# Force an explicit env block so the operator's PATH (which has the nvm toolchain) reaches the worker,
+# but point the writable dirs at the worker's OWN profile (it cannot write the operator's).
+$psi.EnvironmentVariables["PATH"] = $env:Path
+$mw = Join-Path $env:SystemDrive ("\Users\" + $UserName)
+$psi.EnvironmentVariables["USERPROFILE"] = $mw
+$psi.EnvironmentVariables["TEMP"] = (Join-Path $mw "AppData\Local\Temp")
+$psi.EnvironmentVariables["TMP"]  = (Join-Path $mw "AppData\Local\Temp")
+$psi.EnvironmentVariables["CODEX_HOME"] = $codexHome   # share the operator's codex auth
 $psi.UserName = $UserName
 $psi.Domain = '.'
 $psi.PasswordInClearText = $plain

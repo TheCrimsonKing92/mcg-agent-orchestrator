@@ -89,6 +89,7 @@
       "PowerShell(.\\scripts\\Find-OrchestratorLocks.ps1*)",
       "PowerShell(.\\scripts\\Test-WorkerSandbox.ps1*)",
       "PowerShell(.\\scripts\\Test-WorkerLaunch.ps1*)",
+      "PowerShell(.\\scripts\\Test-LowIntegrity.ps1*)",
       "PowerShell(.\\mcg-orchestrator.cmd model-outcomes)",
       "PowerShell(.\\mcg-orchestrator.cmd model-outcomes *)",
       "PowerShell(.\\mcg-orchestrator.cmd record-goal *)",
