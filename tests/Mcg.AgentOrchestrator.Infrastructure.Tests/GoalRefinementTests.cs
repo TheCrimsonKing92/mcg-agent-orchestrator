@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -19,6 +20,29 @@ public sealed class GoalRefinementTests
         var goal = kernel.GetGoal(goalId);
         Xunit.Assert.NotNull(goal.RefinedSpec);
         Xunit.Assert.Contains("Implement:", goal.RefinedSpec!.BehavioralContract);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_refines_with_fallback_before_activation_and_planner_brief")]
+    public void GoalLifecycleCommandsRefinesWithFallbackBeforeActivationAndPlannerBrief()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var kernel = new AgentOrchestratorKernel();
+
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Implement a rough feature objective",
+            workspace,
+            providers);
+
+        Xunit.Assert.NotNull(goal.RefinedSpec);
+        Xunit.Assert.Contains("Implement:", goal.RefinedSpec!.BehavioralContract);
+        var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        var brief = kernel.BuildTaskBrief(goal.Id, planner.Id).Content;
+        Xunit.Assert.Contains("Refined Spec", brief);
+        Xunit.Assert.Contains(goal.RefinedSpec.BehavioralContract, brief);
     }
 
     // --- Clean auto-refine (no ask forks) ---
@@ -184,6 +208,20 @@ public sealed class GoalRefinementTests
         Xunit.Assert.False(GoalRefinementService.HasOpenClarification(items));
     }
 
+    [Xunit.Fact(DisplayName = "HasOpenClarification_true_when_clarification_is_delivered_but_unresolved")]
+    public void HasOpenClarificationTrueWhenClarificationDeliveredButUnresolved()
+    {
+        var items = new[]
+        {
+            new CollaborationItem(
+                "id1", CollaborationItemType.Clarification, "goal-1",
+                CollaborationItemStatus.Delivered, "Q?", "body",
+                "spec-clarification:abc:external-contract:xyz", DateTimeOffset.UtcNow, null, null)
+        };
+
+        Xunit.Assert.True(GoalRefinementService.HasOpenClarification(items));
+    }
+
     [Xunit.Fact(DisplayName = "HasOpenClarification_false_when_no_items")]
     public void HasOpenClarificationFalseWhenNoItems()
     {
@@ -299,6 +337,85 @@ public sealed class GoalRefinementTests
         var fork = new SpecRefinementFork("other", "low", "low", "Variable name?", "goalId", "Convention.");
 
         Xunit.Assert.Equal(SpecForkDisposition.Decide, SpecRefinerPlanner.ClassifyFork(fork));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementGate_ask_fork_blocks_dispatch_until_collaboration_resolved")]
+    public async Task GoalRefinementGateAskForkBlocksDispatchUntilResolved()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var json = """
+            ```json
+            {
+              "behavioralContract": "Integrates with an external API.",
+              "acceptanceCriteria": ["Endpoint responds correctly"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "refinerConfidence": "low", "blastRadius": "high", "question": "Which API version to target?", "choice": "", "rationale": "Unclear from objective."}]
+            }
+            ```
+            """;
+        var provider = new FakeSmokeProvider(text: json, providerName: "fake-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Integrate API with unspecified version",
+            workspace,
+            providers);
+
+        Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
+        var blocked = Xunit.Assert.Throws<InvalidOperationException>(
+            () => GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                providers));
+        Xunit.Assert.Contains("Resolve spec clarification", blocked.Message);
+
+        var item = (await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync(goal.Id.Value))
+            .Single();
+        var resolved = await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .TryResolveAsync(item.CorrelationKey!, "Use v2.");
+
+        Xunit.Assert.True(resolved);
+        Xunit.Assert.False(GoalRefinementGate.HasOpenClarification(workspace, goal));
+        GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementGate_is_idempotent_for_refined_goal")]
+    public void GoalRefinementGateIsIdempotentForRefinedGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var provider = new FakeSmokeProvider(text: "{} ", providerName: "fake-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Do one thing");
+
+        var first = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+        var second = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+
+        Xunit.Assert.True(first.RanRefinement);
+        Xunit.Assert.False(second.RanRefinement);
+        Xunit.Assert.Equal(1, kernel.GetTimeline(goal.Id).Count(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Goal refinement attached", StringComparison.Ordinal)));
     }
 
     // --- Helpers ---

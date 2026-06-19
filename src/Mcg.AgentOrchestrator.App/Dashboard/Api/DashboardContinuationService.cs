@@ -150,7 +150,8 @@ internal sealed class DashboardContinuationService : IDisposable
                             agents,
                             profiles,
                             services.Workspace,
-                            goal);
+                            goal,
+                            providers: services.Providers);
                         if (advance.Executed)
                         {
                             return Task.FromResult((true, advance));

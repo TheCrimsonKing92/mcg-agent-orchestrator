@@ -51,6 +51,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var workerExecutionDirectory = context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id);
+            GoalRefinementGate.EnsureRefined(context.Kernel, context.Workspace, context.Providers, context.CurrentGoal);
+            GoalRefinementGate.ThrowIfAwaitingClarification(context.Workspace, context.CurrentGoal);
             var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
             var preparation = WorkerCommandTemplate.Prepare(
                 brief,
@@ -98,7 +100,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
                 try
                 {
-                    var profileDispatch = GoalManagementCommandService.ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile, context.Agents);
+                    var profileDispatch = GoalManagementCommandService.ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile, context.Agents, context.Providers);
                     Console.WriteLine($"Prompt: {profileDispatch.PromptPath}");
                     ConsoleViews.PrintTask(context.CurrentGoal, profileTask);
                     if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
@@ -128,7 +130,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, readyGoalPrefix);
                 var readyProfile = context.WorkerProfiles.GetRequired(parts[readyProfileIndex]);
                 EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
-                var dispatched = GoalManagementCommandService.ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile, context.Agents);
+                var dispatched = GoalManagementCommandService.ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile, context.Agents, context.Providers);
                 foreach (var dispatchResult in dispatched)
                 {
                     Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} prompt: {dispatchResult.PromptPath}");
@@ -151,7 +153,16 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     ? new DispatchModelOverride(overrideProfileName, overrideModelName, overrideReasoning)
                     : null;
                 var allowGitReference = HasCliConfirmation(parts, "--allow-git-reference");
-                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal!, subscriptionTask, context.Agents, context.WorkerProfiles, modelOverride, allowGitReference);
+                var subscriptionDispatch = GoalManagementCommandService.SubscriptionDispatchTask(
+                    context.Kernel,
+                    context.Workspace,
+                    context.CurrentGoal!,
+                    subscriptionTask,
+                    context.Agents,
+                    context.WorkerProfiles,
+                    modelOverride,
+                    allowGitReference,
+                    context.Providers);
                 Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
                 Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
                 ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);
@@ -168,7 +179,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
         case "subscription-dispatch-ready":
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "subscription-dispatch-ready [goal-prefix|--goal <goal-prefix>]");
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
-            var subscriptionDispatches = GoalManagementCommandService.SubscriptionDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles);
+            var subscriptionDispatches = GoalManagementCommandService.SubscriptionDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
             foreach (var dispatchResult in subscriptionDispatches)
             {
                 Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
@@ -216,7 +227,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     context.Workspace,
                     goal,
                     context.Agents,
-                    context.WorkerProfiles);
+                    context.WorkerProfiles,
+                    context.Providers);
                 ConsoleViews.PrintSubscriptionStartResult(goal, result);
                 startedAny |= result.Dispatches.Count > 0 || result.Processes.Tasks.Count > 0;
             }
@@ -240,7 +252,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     context.WorkerProfiles,
                     task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents)),
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-            var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles);
+            var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 

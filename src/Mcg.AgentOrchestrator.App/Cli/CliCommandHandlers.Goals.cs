@@ -60,7 +60,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
-                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective);
+                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective, context.Workspace, context.Providers);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
                 AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file");
@@ -71,7 +71,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective, context.Workspace, context.Providers);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
@@ -81,7 +81,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective, context.Workspace, context.Providers);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
@@ -482,7 +482,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.WorkerProfiles,
                 context.Workspace,
                 context.CurrentGoal,
-                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag),
+                context.Providers);
             ConsoleViews.PrintAdvanceResult(subscriptionAdvance);
             return subscriptionAdvance.Executed;
 
@@ -505,13 +506,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.WorkerProfiles,
                 context.Workspace,
                 context.CurrentGoal,
-                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag))
+                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag),
+                providers: context.Providers)
                 .GetAwaiter().GetResult();
             ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult);
             return runGoalResult.Executed;
 
         case "delegate":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            GoalRefinementGate.EnsureRefined(context.Kernel, context.Workspace, context.Providers, context.CurrentGoal);
             var delegation = context.Kernel.ActivateGoal(context.CurrentGoal.Id, context.Agents);
             ConsoleViews.PrintDelegationPlan(context.CurrentGoal, delegation);
             return delegation.Assignments.Count > 0;
@@ -577,7 +580,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.AcceptanceVerifier,
                     context.Agents,
                     context.WorkerProfiles,
-                    context.Channel);
+                    context.Channel,
+                    context.Providers);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
 
                 // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
@@ -617,7 +621,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.AcceptanceVerifier,
                 context.Agents,
                 context.WorkerProfiles,
-                context.Channel);
+                context.Channel,
+                context.Providers);
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other
@@ -826,8 +831,8 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
         context.Kernel.Goals.FirstOrDefault(goal => goal.Id == existingGoalId) is { } existingGoal
         ? existingGoal
         : simple
-            ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, objective)
-            : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, objective);
+            ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers)
+            : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers);
     var goal = context.CurrentGoal;
     var goalPrefix = goal.Id.Value[..8];
     Console.WriteLine($"Lifecycle goal: {goal.Id.Value}");
@@ -870,7 +875,8 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
         context.WorkerProfiles,
         context.Workspace,
         goal,
-        allowLargePaidSubscriptionStart: true)
+        allowLargePaidSubscriptionStart: true,
+        providers: context.Providers)
         .GetAwaiter().GetResult();
     Console.WriteLine("Stage run-goal:");
     ConsoleViews.PrintRunGoalResult(goal, runGoalResult);
@@ -1066,7 +1072,8 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
             context.Workspace,
             goal,
             context.Agents,
-            context.WorkerProfiles);
+            context.WorkerProfiles,
+            context.Providers);
         applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count}");
     }
 
@@ -1290,8 +1297,8 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     context.CurrentGoal = createSimpleGoal
-        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective)
-        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, item.SuggestedObjective);
+        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers)
+        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers);
 
     if (!string.IsNullOrEmpty(backlogItemId))
     {
@@ -1326,8 +1333,8 @@ private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IR
     }
 
     context.CurrentGoal = createSimpleGoal
-        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, plan.ReadyObjective)
-        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, plan.ReadyObjective);
+        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, plan.ReadyObjective, context.Workspace, context.Providers)
+        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, plan.ReadyObjective, context.Workspace, context.Providers);
     Console.WriteLine(createSimpleGoal ? "Created simple goal from intent template." : "Created five-role goal from intent template.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
@@ -1404,8 +1411,8 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
     foreach (var node in plan.Nodes)
     {
         context.CurrentGoal = createSimpleGoals
-            ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, node.ReadyObjective)
-            : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, node.ReadyObjective);
+            ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers)
+            : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers);
         Console.WriteLine(createSimpleGoals
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
             : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");

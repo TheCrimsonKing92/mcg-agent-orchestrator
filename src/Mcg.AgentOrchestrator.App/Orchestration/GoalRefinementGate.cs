@@ -1,0 +1,81 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal sealed record GoalRefinementGateResult(
+    RefinementOutcome Outcome,
+    bool RanRefinement,
+    RefinedSpec Spec)
+{
+    public bool AwaitingClarification => Outcome == RefinementOutcome.AwaitingClarification;
+}
+
+internal static class GoalRefinementGate
+{
+    public static GoalRefinementGateResult EnsureRefined(
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        Goal goal)
+    {
+        if (goal.RefinedSpec is { } existing)
+        {
+            return new GoalRefinementGateResult(
+                existing.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined,
+                RanRefinement: false,
+                existing);
+        }
+
+        var service = CreateService(workspace, providers);
+        var result = service.RefineAsync(kernel, goal.Id).GetAwaiter().GetResult();
+        kernel.RecordGoalPolicyDecision(
+            goal.Id,
+            result.Outcome == RefinementOutcome.AwaitingClarification
+                ? "Goal refinement attached a RefinedSpec and raised clarification item(s); planning is held until they are resolved."
+                : "Goal refinement attached a RefinedSpec before planning.");
+        return new GoalRefinementGateResult(result.Outcome, RanRefinement: true, result.Spec);
+    }
+
+    public static void ThrowIfAwaitingClarification(OrchestratorWorkspace workspace, Goal goal)
+    {
+        var items = ListGoalCollaborationItems(workspace, goal);
+        if (!GoalRefinementService.HasOpenClarification(items))
+        {
+            return;
+        }
+
+        var questions = items
+            .Where(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.CorrelationKey?.StartsWith(GoalRefinementService.CorrelationKeyPrefix, StringComparison.Ordinal) == true)
+            .Select(item => item.Subject)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var detail = questions.Length == 0
+            ? "Resolve the spec clarification item before dispatching planner work."
+            : $"Resolve spec clarification before dispatching planner work: {string.Join("; ", questions)}";
+        throw new InvalidOperationException(detail);
+    }
+
+    public static bool HasOpenClarification(OrchestratorWorkspace workspace, Goal goal) =>
+        GoalRefinementService.HasOpenClarification(ListGoalCollaborationItems(workspace, goal));
+
+    private static GoalRefinementService CreateService(
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers) =>
+        new(
+            providers,
+            ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
+
+    private static IReadOnlyList<CollaborationItem> ListGoalCollaborationItems(
+        OrchestratorWorkspace workspace,
+        Goal goal) =>
+        CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(goal.Id.Value)
+            .GetAwaiter()
+            .GetResult();
+}

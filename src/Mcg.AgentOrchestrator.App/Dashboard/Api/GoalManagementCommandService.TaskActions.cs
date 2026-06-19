@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -24,6 +25,8 @@ public static async Task<object?> ApplyTaskActionAsync(
             return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
 
         case "dispatch":
+            GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+            GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
             var dispatch = DashboardRequestParser.ParseDispatchSubmission(body);
             kernel.RecordTaskDispatch(
                 goal.Id,
@@ -34,13 +37,13 @@ public static async Task<object?> ApplyTaskActionAsync(
         case "profile-dispatch":
             var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
             var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-            var profileDispatch = ProfileDispatchTask(kernel, workspace, goal, task, profile, agents);
+            var profileDispatch = ProfileDispatchTask(kernel, workspace, goal, task, profile, agents, providers);
             return DashboardResponseMapper.ToProfileDispatchDto(goal, profileDispatch);
 
         case "subscription-dispatch":
             var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
             ApplySubscriptionLimitReviewAcknowledgement(kernel, goal, task, body);
-            var subscriptionDispatch = SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles);
+            var subscriptionDispatch = SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles, providers: providers);
             return DashboardResponseMapper.ToProfileDispatchDto(goal, subscriptionDispatch);
 
         case "start":
