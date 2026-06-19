@@ -2913,6 +2913,59 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(task.LastVerification.StandardError.Contains("Orchestrator committed", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_verification_only_tester_nonzero_exit_with_evidence_passes")]
+    public void BackgroundDispatchRunnerVerificationOnlyTesterNonZeroExitWithEvidencePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Reviewed the implementation and ran the focused suite.\r\nPassed! - Failed: 0, Passed: 4, Skipped: 0, Total: 4.",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+
+    // A verification-only Tester (no file changes requested) that verified successfully on a clean
+    // worktree but exited non-zero due to Low-IL shutdown friction. The deliverable is the verification,
+    // the worktree is clean, and the acceptance gate re-verifies — so accept rather than fail on the
+    // unreliable exit code.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Accepted on verification evidence despite a non-zero worker exit", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_clean_worktree_nonzero_exit_without_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerCleanWorktreeNonZeroExitWithoutEvidenceStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Provider connection dropped before any checks ran.",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+
+    // Clean worktree + non-zero exit but NO verification evidence: a genuine failure (the worker never
+    // verified anything), not exit-code noise. Must stay failed.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
     public void BackgroundDispatchRunnerFileRoleWithCommittedChangePasses()
 {

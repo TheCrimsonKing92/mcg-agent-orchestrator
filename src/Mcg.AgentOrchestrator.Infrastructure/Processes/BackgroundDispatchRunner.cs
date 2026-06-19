@@ -278,27 +278,49 @@ public sealed class BackgroundDispatchRunner
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
             }
 
-            if (!recovered && exitCode == 0)
+            if (!recovered && !worktreeEvidence.IsClean && exitCode == 0)
             {
-                if (!worktreeEvidence.IsClean)
-                {
-                    exitCode = 1;
-                    standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
-                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                        $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
-                }
-                else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
+                // Exited 0 but left uncommitted edits the recovery could not land (no verification
+                // evidence, or the commit failed) — not acceptable.
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
+                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
+            }
+            else if (!recovered && worktreeEvidence.IsClean)
+            {
+                var requiresCommitEvidence =
+                    RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
                     !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
-                    !worktreeEvidence.HasRelevantCommitAfterDispatch)
+                    !worktreeEvidence.HasRelevantCommitAfterDispatch;
+
+                if (requiresCommitEvidence)
                 {
+                    // The role had to land a relevant change and didn't — fail regardless of exit code
+                    // (a Developer that produced nothing is a real failure, not exit-code noise).
                     exitCode = 1;
                     standardErrorDiagnostic = AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
-                        "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence. " +
+                        "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
                         $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
+                }
+                else if (exitCode != 0 &&
+                    DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError))
+                {
+                    // Clean worktree, no commit required (e.g. a Tester verifying already-committed work),
+                    // and the worker produced verification evidence — but it exited non-zero. Under the
+                    // Low-IL sandbox the worker's exit code is unreliable (a benign access-denied during
+                    // shutdown yields a non-zero exit even on success). The deliverable is present and the
+                    // acceptance gate re-verifies, so accept rather than fail on the exit code.
+                    exitCode = 0;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Accepted on verification evidence despite a non-zero worker exit (clean worktree; " +
+                        "worker exit codes are unreliable under the low-integrity sandbox). " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}.");
                 }
             }
 
