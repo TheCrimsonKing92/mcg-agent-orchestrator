@@ -104,6 +104,45 @@ public sealed class ConductorBatchLoopTests
         Assert.False(summary.StopRequested);
     }
 
+    // ── Dynamic goal pickup: a goal ingested mid-run via the sweep is driven ──
+
+    [Xunit.Fact(DisplayName = "BatchLoop_picks_up_a_goal_ingested_mid_run_via_the_sweep")]
+    public void BatchLoop_PicksUpGoalIngestedMidRunViaSweep()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal A");
+
+        // A store snapshot carrying a brand-new goal B, simulating a goal submitted after the loop loaded.
+        var store = new AgentOrchestratorKernel();
+        var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(store, DefaultAgents(), "goal B");
+        var snapshot = store.ExportSnapshot();
+
+        var dispatchedIds = new List<string>();
+        var ingestedOnce = false;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => 0,
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                dispatchedIds.Add(g.Id.Value);
+                return DispatchStartOutcome.Started();
+            });
+
+        // The sweep ingests B on the first tick — exactly how the live --loop pulls in newly-submitted goals.
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            if (!ingestedOnce) { loopKernel.IngestNewGoals(snapshot); ingestedOnce = true; }
+        };
+
+        new ConductorBatchLoop(sweep).Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 3);
+
+        Assert.True(dispatchedIds.Contains(goalA.Id.Value));
+        Assert.True(dispatchedIds.Contains(goalB.Id.Value)); // B was picked up mid-run and driven
+    }
+
     // ── Loop scheduling: concurrent cap limits active dispatches ─────────
 
     [Xunit.Fact(DisplayName = "BatchLoop_cap_holds_third_goal_when_two_already_dispatched")]
