@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -21,13 +22,14 @@ public static BatchActionResultDto ApplyGoalBatchAction(
     Goal goal,
     string operation,
     string body,
-    OrchestratorWorkspace workspace)
+    OrchestratorWorkspace workspace,
+    IModelProviderRegistry? providers = null)
 {
     return operation.ToLowerInvariant() switch
     {
-        "profile-dispatch-ready" => ApplyProfileDispatchReady(kernel, workspace, agents, goal, body),
-        "subscription-dispatch-ready" => ApplySubscriptionDispatchReady(kernel, workspace, agents, goal),
-        "start-subscription-ready" => ApplyStartSubscriptionReady(kernel, workspace, agents, goal),
+        "profile-dispatch-ready" => ApplyProfileDispatchReady(kernel, workspace, agents, goal, body, providers),
+        "subscription-dispatch-ready" => ApplySubscriptionDispatchReady(kernel, workspace, agents, goal, providers),
+        "start-subscription-ready" => ApplyStartSubscriptionReady(kernel, workspace, agents, goal, providers),
         "start-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", StartDispatches(kernel, workspace, goal)),
         "refresh-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "refresh-dispatches", RefreshDispatches(kernel, goal)),
         "cancel-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "cancel-dispatches", CancelDispatches(kernel, goal)),
@@ -40,25 +42,36 @@ public static BatchActionResultDto ApplyProfileDispatchReady(
     OrchestratorWorkspace workspace,
     IReadOnlyList<AgentDefinition> agents,
     Goal goal,
-    string body)
+    string body,
+    IModelProviderRegistry? providers = null)
 {
     var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
     var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-    var results = ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents);
+    var results = ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents, providers);
     return DashboardResponseMapper.ToBatchActionResultDto(goal, "profile-dispatch-ready", results.Select(result => result.Task).ToList(), results);
 }
 
-public static BatchActionResultDto ApplySubscriptionDispatchReady(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, IReadOnlyList<AgentDefinition> agents, Goal goal)
+public static BatchActionResultDto ApplySubscriptionDispatchReady(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IReadOnlyList<AgentDefinition> agents,
+    Goal goal,
+    IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var results = SubscriptionDispatchReadyTasks(kernel, workspace, goal, agents, profiles);
+    var results = SubscriptionDispatchReadyTasks(kernel, workspace, goal, agents, profiles, providers);
     return DashboardResponseMapper.ToBatchActionResultDto(goal, "subscription-dispatch-ready", results.Select(result => result.Task).ToList(), results);
 }
 
-public static BatchActionResultDto ApplyStartSubscriptionReady(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, IReadOnlyList<AgentDefinition> agents, Goal goal)
+public static BatchActionResultDto ApplyStartSubscriptionReady(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IReadOnlyList<AgentDefinition> agents,
+    Goal goal,
+    IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var result = StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
+    var result = StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles, providers);
     return DashboardResponseMapper.ToSubscriptionStartActionResultDto(goal, result);
 }
 

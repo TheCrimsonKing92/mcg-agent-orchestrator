@@ -21,8 +21,8 @@ internal static partial class DashboardEndpoints
                 {
                     var isSimple = submission.Workflow?.Equals("simple", StringComparison.OrdinalIgnoreCase) is true;
                     var goal = isSimple
-                        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(current, agents, submission.Objective)
-                        : GoalLifecycleCommands.CreateAndActivateGoal(current, agents, submission.Objective);
+                        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(current, agents, submission.Objective, services.Workspace, services.Providers)
+                        : GoalLifecycleCommands.CreateAndActivateGoal(current, agents, submission.Objective, services.Workspace, services.Providers);
                     AdvanceLoopResultDto? autoHandoff = null;
 
                     if (submission.AutoHandoff)
@@ -35,7 +35,8 @@ internal static partial class DashboardEndpoints
                                 agents,
                                 profiles,
                                 services.Workspace,
-                                goal);
+                                goal,
+                                providers: services.Providers);
                             if (DashboardContinuationService.ShouldContinueWatching(autoHandoff))
                             {
                                 services.Continuations.StartSubscriptionWatch(services, autoHandoff.GoalId);
@@ -308,6 +309,7 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
+                GoalRefinementGate.EnsureRefined(current, services.Workspace, services.Providers, goal);
                 var plan = current.ActivateGoal(goal.Id, agents);
                 return Task.FromResult(Json(DashboardResponseMapper.ToDelegationPlanDto(plan)));
             });
@@ -360,7 +362,8 @@ internal static partial class DashboardEndpoints
                     profiles,
                     services.Workspace,
                     goal,
-                    HasLargePaidSubscriptionStartConfirmation(context));
+                    HasLargePaidSubscriptionStartConfirmation(context),
+                    services.Providers);
                 return Task.FromResult((result.Executed, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict)));
             });
     }
@@ -411,7 +414,8 @@ internal static partial class DashboardEndpoints
                     profiles,
                     services.Workspace,
                     goal,
-                    HasLargePaidSubscriptionStartConfirmation(context));
+                    HasLargePaidSubscriptionStartConfirmation(context),
+                    services.Providers);
                 return Task.FromResult((advance.Executed, advance));
             });
         if (DashboardContinuationService.ShouldContinueWatching(result))
@@ -482,7 +486,8 @@ internal static partial class DashboardEndpoints
                     goal,
                     operation,
                     body,
-                    services.Workspace);
+                    services.Workspace,
+                    services.Providers);
                 return Task.FromResult(Json(result));
             },
             context.RequestAborted);

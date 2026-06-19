@@ -47,6 +47,7 @@ internal static class RunGoalService
         TimeSpan? pollInterval = null,
         SleepFunc? sleep = null,
         IClock? clock = null,
+        IModelProviderRegistry? providers = null,
         CancellationToken cancellationToken = default)
     {
         var interval = pollInterval ?? DefaultPollInterval;
@@ -64,7 +65,7 @@ internal static class RunGoalService
             var priorStatuses = goal.Tasks.ToDictionary(t => t.Id, t => t.Status);
 
             var result = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
-                kernel, agents, profiles, workspace, goal, allowLargePaidSubscriptionStart);
+                kernel, agents, profiles, workspace, goal, allowLargePaidSubscriptionStart, providers);
 
             if (result.StepCount > 0) executed = true;
 

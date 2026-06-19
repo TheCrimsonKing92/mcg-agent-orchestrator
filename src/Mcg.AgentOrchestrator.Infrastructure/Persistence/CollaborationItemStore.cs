@@ -43,7 +43,7 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
     public static CollaborationItemStore ForDirectory(string directory) =>
         new(Path.Combine(directory, "collaboration-items.db"));
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;";
+    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     private SqliteConnection OpenConnection()
     {

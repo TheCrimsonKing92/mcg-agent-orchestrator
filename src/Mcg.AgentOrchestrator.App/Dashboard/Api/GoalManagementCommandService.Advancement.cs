@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -71,13 +72,15 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     bool allowApiExecution = true,
     bool allowApiFallback = false)
 {
+    GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var task = goal.Tasks.Single(task => task.Id == taskId);
     var agent = ResolveAssignedAgent(task, agents);
     if (agent.ExecutionPolicy is AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription)
     {
         return DashboardResponseMapper.ToProfileDispatchDto(
             goal,
-            SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath)));
+            SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers: providers));
     }
 
     if (agent.ExecutionPolicy == AgentExecutionPolicy.AnyAvailable)
@@ -86,7 +89,7 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
         {
             return DashboardResponseMapper.ToProfileDispatchDto(
                 goal,
-                SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath)));
+                SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers: providers));
         }
         catch (InvalidOperationException ex)
         {
@@ -131,6 +134,8 @@ private static async Task<object?> AdvanceApiRunAssignedTaskAsync(
     Goal goal,
     TaskId taskId)
 {
+    GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var task = goal.Tasks.Single(task => task.Id == taskId);
     var agent = ResolveAssignedAgent(task, agents);
     if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
@@ -166,8 +171,15 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
     Goal goal,
-    bool allowLargePaidSubscriptionStart = false)
+    bool allowLargePaidSubscriptionStart = false,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var actions = kernel.BuildNextActions(goal.Id);
     var item = actions.Items.FirstOrDefault();
     if (item is null)
@@ -186,7 +198,7 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     object? result;
     try
     {
-        result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart);
+        result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart, providers);
     }
     catch (InvalidOperationException ex)
     {
@@ -206,12 +218,19 @@ public static AdvanceLoopResultDto AdvanceGoalWithSubscriptionsUntilBlocked(
     WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
     Goal goal,
-    bool allowLargePaidSubscriptionStart = false)
+    bool allowLargePaidSubscriptionStart = false,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     return AdvanceUntilBlockedAsync(
         kernel,
         goal,
-        automation => Task.FromResult(ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart)),
+        automation => Task.FromResult(ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart, providers)),
         GetSubscriptionAutomationMessage,
         agents).GetAwaiter().GetResult();
 }
@@ -350,7 +369,7 @@ private static async Task<object?> ExecuteAutomationAsync(
                 : throw new InvalidOperationException(
                     $"Automatic continuation stopped before starting recorded dispatch for task {automation.TaskId!.Value[..8]}; use Start prepared work or subscription advance for an explicit worker process start."),
         NextActionAutomationKind.DelegatePendingTask =>
-            DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
+            DashboardResponseMapper.ToDelegationPlanDto(RefineAndActivateGoal(kernel, agents, providers, workspace, goal)),
         _ => null
     };
 }
@@ -362,20 +381,38 @@ private static object? ExecuteSubscriptionAutomation(
     OrchestratorWorkspace workspace,
     Goal goal,
     NextActionAutomationPlan automation,
-    bool allowLargePaidSubscriptionStart)
+    bool allowLargePaidSubscriptionStart,
+    IModelProviderRegistry? providers = null)
 {
     return automation.Kind switch
     {
         NextActionAutomationKind.RunAssignedTask =>
-            ExecuteSubscriptionRunAssignedTask(kernel, agents, profiles, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart),
+            ExecuteSubscriptionRunAssignedTask(kernel, agents, profiles, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart, providers),
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>
             ExecuteSubscriptionStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart),
         NextActionAutomationKind.DelegatePendingTask =>
-            DashboardResponseMapper.ToDelegationPlanDto(kernel.ActivateGoal(goal.Id, agents)),
+            DashboardResponseMapper.ToDelegationPlanDto(RefineAndActivateGoal(
+                kernel,
+                agents,
+                providers ?? new InMemoryModelProviderRegistry([]),
+                workspace,
+                goal)),
         _ => null
     };
+}
+
+private static DelegationPlan RefineAndActivateGoal(
+    AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    IModelProviderRegistry providers,
+    OrchestratorWorkspace workspace,
+    Goal goal)
+{
+    GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+    return kernel.ActivateGoal(goal.Id, agents);
 }
 
 private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
@@ -385,7 +422,8 @@ private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
     OrchestratorWorkspace workspace,
     Goal goal,
     TaskId taskId,
-    bool allowLargePaidSubscriptionStart)
+    bool allowLargePaidSubscriptionStart,
+    IModelProviderRegistry? providers = null)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
     SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
@@ -405,7 +443,8 @@ private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
             goal,
             task,
             agents,
-            profiles));
+            profiles,
+            providers: providers));
 }
 
 private static TaskDetailDto ExecuteSubscriptionStartRecordedDispatch(
