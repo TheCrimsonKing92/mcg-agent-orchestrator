@@ -20,6 +20,9 @@ private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
         ["--reviewer"] = AgentRole.Reviewer
     };
 
+private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
+    GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
+
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)
@@ -56,7 +59,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (HasCliConfirmation(parts, "--run"))
             {
                 var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run");
-                var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
+                var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -67,7 +70,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
-            var goalObjectivePlan = GoalObjectivePlanner.Build(goalObjective, simple: false);
+            var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -77,7 +80,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "simple-goal":
             var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path>");
-            var simpleObjectivePlan = GoalObjectivePlanner.Build(simpleObjective, simple: true);
+            var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -841,7 +844,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
             $"Usage: {commandName} <objective> --confirm-batch-start [{SubscriptionPromptCostGuard.CliConfirmationFlag}]");
     }
 
-    var objectivePlan = GoalObjectivePlanner.Build(objective, simple);
+    var objectivePlan = BuildGoalObjectivePlan(context, objective, simple);
     GoalObjectivePlanner.ThrowIfBlocked(objectivePlan);
     ConsoleViews.PrintGoalObjectivePlan(objectivePlan);
 
@@ -1503,7 +1506,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
     var direction = parts[1];
     var confirmPlan = HasCliConfirmation(parts, "--confirm-plan");
 
-    var objPlan = GoalObjectivePlanner.Build(direction, simple: true);
+    var objPlan = BuildGoalObjectivePlan(context, direction, simple: true);
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
     ConsoleViews.PrintGoalObjectivePlan(objPlan);
 

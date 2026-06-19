@@ -83,6 +83,10 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
                 return false;
 
+            case "durations":
+                ConsoleViews.PrintTaskDurationStats(context.Kernel.BuildTaskDurationStats(HasCliConfirmation(parts, "--by-model")));
+                return false;
+
             case "loop-health":
             {
                 int? lastN = null;

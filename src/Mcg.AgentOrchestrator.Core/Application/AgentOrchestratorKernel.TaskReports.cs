@@ -218,6 +218,13 @@ public sealed partial class AgentOrchestratorKernel
         return ModelOutcomeScorecard.Build(allTasks, windowSize);
     }
 
+    public IReadOnlyList<TaskDurationStatsRecord> BuildTaskDurationStats(bool includeModel = false)
+    {
+        return includeModel
+            ? TaskDurationReport.BuildByRoleComplexityAndModel(Goals)
+            : TaskDurationReport.BuildByRoleAndComplexity(Goals);
+    }
+
     public LoopHealthSnapshot BuildLoopHealthReport(int? lastN = null)
     {
         return LoopHealthReport.Build(Goals, HumanInputRequests, lastN);

@@ -21,6 +21,7 @@ internal sealed record GoalObjectivePlan(
     string Workflow,
     GoalObjectiveDisposition Disposition,
     TaskComplexity EstimatedComplexity,
+    string? HistoricalTimeEstimate,
     IReadOnlyList<string> RiskLabels,
     IReadOnlyList<string> FileScopes,
     IReadOnlyList<string> RequiredTools,
@@ -86,12 +87,16 @@ internal static class GoalObjectivePlanner
         "work"
     };
 
-    public static GoalObjectivePlan Build(string objective, bool simple)
+    public static GoalObjectivePlan Build(
+        string objective,
+        bool simple,
+        IEnumerable<TaskDurationStatsRecord>? durationStats = null)
     {
         var normalized = objective.Trim();
         var tokens = BuildTokenSet(normalized);
         var fileScopes = InferFileScopes(normalized);
         var estimated = TaskComplexityEstimator.Estimate(normalized, normalized, AgentRole.Developer);
+        var historicalEstimate = BuildHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
         var riskLabels = BuildRiskLabels(tokens, fileScopes, estimated);
         var workflow = simple ? "simple-goal" : "goal";
         var requiredTools = BuildRequiredTools(fileScopes, tokens);
@@ -103,6 +108,7 @@ internal static class GoalObjectivePlanner
             workflow,
             ambiguous ? GoalObjectiveDisposition.NeedsClarification : GoalObjectiveDisposition.Ready,
             estimated,
+            historicalEstimate,
             riskLabels,
             fileScopes,
             requiredTools,
@@ -110,7 +116,7 @@ internal static class GoalObjectivePlanner
             BuildTaskBoundaries(simple, estimated, requiredVerification),
             ambiguous
                 ? "Add the target subsystem, expected behavior, and at least one file scope or concrete artifact before creating tasks."
-                : BuildRecommendation(simple, estimated, riskLabels, fileScopes));
+                : BuildRecommendation(simple, estimated, riskLabels, fileScopes, historicalEstimate));
     }
 
     public static void ThrowIfBlocked(GoalObjectivePlan plan)
@@ -300,24 +306,63 @@ internal static class GoalObjectivePlanner
         bool simple,
         TaskComplexity complexity,
         string[] riskLabels,
-        string[] fileScopes)
+        string[] fileScopes,
+        string? historicalEstimate)
     {
+        var suffix = string.IsNullOrWhiteSpace(historicalEstimate)
+            ? string.Empty
+            : $" Historical estimate: {historicalEstimate}";
         if (simple && complexity == TaskComplexity.Complex)
         {
-            return "Prefer a five-role goal or split into smaller simple-goals before subscription dispatch.";
+            return "Prefer a five-role goal or split into smaller simple-goals before subscription dispatch." + suffix;
         }
 
         if (riskLabels.Contains("high-risk"))
         {
-            return "Create an isolated workspace and require readiness confirmation before unattended dispatch.";
+            return "Create an isolated workspace and require readiness confirmation before unattended dispatch." + suffix;
         }
 
         if (fileScopes.Length == 0)
         {
-            return "Proceed only after Planner/Researcher confirm concrete file scopes.";
+            return "Proceed only after Planner/Researcher confirm concrete file scopes." + suffix;
         }
 
-        return "Proceed with the selected workflow and focused verification.";
+        return "Proceed with the selected workflow and focused verification." + suffix;
+    }
+
+    private static string? BuildHistoricalEstimate(
+        IEnumerable<TaskDurationStatsRecord>? durationStats,
+        AgentRole role,
+        TaskComplexity complexity)
+    {
+        if (durationStats is null)
+        {
+            return null;
+        }
+
+        var record = TaskDurationReport.FindEstimate(durationStats, role, complexity);
+        if (record?.MedianLegitimateRuntime is null)
+        {
+            return null;
+        }
+
+        var p90 = record.P90LegitimateRuntime is null
+            ? string.Empty
+            : $" (p90 {FormatDuration(record.P90LegitimateRuntime.Value)})";
+        return $"{record.Role} {record.Complexity} tasks: ~{FormatDuration(record.MedianLegitimateRuntime.Value)} legitimate runtime{p90}, historical failure rate {record.FailureRate:P0}; excludes {FormatDuration(record.MedianFailureInterventionOverhead)} median failure/intervention overhead.";
+    }
+
+    private static string FormatDuration(TimeSpan? duration)
+    {
+        if (duration is null)
+        {
+            return "n/a";
+        }
+
+        var value = duration.Value;
+        return value.TotalMinutes >= 1
+            ? $"{value.TotalMinutes:0.#} min"
+            : $"{value.TotalSeconds:0.#} sec";
     }
 
     private static HashSet<string> BuildTokenSet(string text)
