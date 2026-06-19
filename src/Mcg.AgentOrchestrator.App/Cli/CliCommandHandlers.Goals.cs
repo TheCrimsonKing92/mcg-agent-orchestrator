@@ -564,6 +564,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 if (GetFlagValue(parts, "--max-duration") is { } mdStr)
                     maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
 
+                // --daemon: run as a PERSISTENT conductor — never exit on an empty backlog. The loop stays
+                // alive and polls, so goals submitted later (via a separate `goal` command, backlog
+                // promotion, or the dashboard) are ingested by the per-tick sweep and driven without a
+                // restart. Implies watch behavior; defaults the poll interval when not given. Stop via the
+                // .conduct-stop file or --max-duration.
+                var loopDaemon = HasCliConfirmation(parts, "--daemon");
+                if (loopDaemon && watchInterval is null)
+                {
+                    watchInterval = TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds);
+                    Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {ConductorBatchLoop.DefaultWatchIntervalSeconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
+                }
+
                 // SSE push: discover dashboard URL and build onTick callback.
                 Action<BatchTickSummary>? onTick = null;
                 var dashboardUrl = GetFlagValue(parts, "--dashboard-url")
@@ -609,7 +621,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
-                    persistTick: context.PersistCheckpoint);
+                    persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
