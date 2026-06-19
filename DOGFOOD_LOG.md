@@ -1695,3 +1695,10 @@ Goal 493c248f: # Robust process-lifecycle reaping for spawned workers and build/
 
 - Operator gate: Planner: not-run (Planner role — no code changes) (exit 0); Researcher: not-run (Researcher role — no code execution) (exit 0); Developer: pass - Infrastructure 52/52, Core 21/21, git diff --check clean; first infra attempt hit CS2012 lock and passed after build-server shutdown retry (exit 0); Tester: pass - Core 9/9, Infrastructure 51/51, DispatchProcessHost 2/2; critical safety tests confirmed (scoped PID reaping, unrecorded process avoidance, orphan sweep) (exit 0); Reviewer: not-run (Reviewer role — no code changes; independent test run recommended per verification plan) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file review task requiring cross-platform safety reasoning and evidence validation - correctly identified the Linux-crash residual risk and the Tester's file citation error that Haiku missed.
+
+## 2026-06-19 - # Document the autonomous-execution flow in the README  ## What Add a concise...
+
+Goal 51aedc52: # Document the autonomous-execution flow in the README  ## What Add a concise "Autonomous execution" subsection to th.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 03a6600). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Reviewer role — no file modifications)). Acceptance passed.
+
+- Operator gate: Developer: pass - README-only diff; `git diff --check -- README.md` exited 0 (exit 0); Tester: pass - README section present, correctly formatted, all 7 acceptance criteria documented (exit 0); Reviewer: not-run (docs-only; no test suite applicable) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - structured review task - docs-only diff with clear acceptance criteria; no architectural judgment required.
