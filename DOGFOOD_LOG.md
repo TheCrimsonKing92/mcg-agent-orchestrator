@@ -1723,3 +1723,10 @@ Goal 21d16ca9: # Make operator escalations useful and actionable (Discord + oper
 
 - Operator gate: Developer: focused pass, 48/48 OperatorChannel tests; full suite blocked by existing Git worktree permission failures creating refs/heads/goal/*.lock, Core passed 356/356, Infrastructure failed 5 git-worktree tests (exit 0); Tester: PASSED — 48 OperatorChannel tests (exit 0); PASSED — 5 Landing escalation tests (exit 0); PASSED — 10 Projection tests (exit 0); Total: 63/63 escalation-focused tests passed, 0 failed (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review / static analysis - structural review without running tests; caught a medium bug the Tester missed.
+
+## 2026-06-19 - # Reap a goal's running dispatches when the conductor watch escalates/stops i...
+
+Goal 6c7d7552: # Reap a goal's running dispatches when the conductor watch escalates/stops it  ## Why When `conduct --watch` (or `--.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 11735e4a98dcba2727c7483710c9e540ef213bbc). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: focused pass: ConductorBatchLoop 19/19; build pass. Full Infrastructure suite failed 5 existing git-worktree/ref tests with parent .git Permission denied creating refs. (exit 0); Tester: pass - 19/19 ConductorBatchLoopTests, 2/2 reaping-specific tests, 356/356 Core tests (exit 0); Reviewer: ConductorBatchLoop 19/19 PASSED (Tester evidence); Infrastructure suite 5 pre-existing failures (sandbox ACL on .git/worktrees refs, unrelated) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review + diff analysis - straightforward .NET orchestration change, no ambiguity in the evidence trail.
