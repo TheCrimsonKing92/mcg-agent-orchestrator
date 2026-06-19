@@ -135,6 +135,64 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(expectedDispatches, dispatched);
     }
 
+    // ── Persistence: a loop dispatch must be durable across reload ────────
+    // Regression for the autonomy-blocker found 2026-06-18. `conduct --loop[ --watch]` runs the
+    // ENTIRE loop inside one state transaction (CliPersistentStateRunner.TransactAsync), which
+    // only commits when the command returns. ConductorBatchLoop.Run never persists per tick, so
+    // a long-running watch loop never commits its dispatches and a killed loop rolls them all
+    // back. Observed live: Researcher 5825a584 ran four times on disk (exit 0 each) yet the
+    // timeline shows zero TaskDispatchRecorded/TaskProcessStarted events after the Planner — so
+    // every tick re-dispatched it and the goal could never advance.
+    // The fix runs the loop outside the transaction and checkpoints each tick via persistTick, so a
+    // started dispatch is durable the moment its tick completes. This test fails if that wiring breaks.
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_persists_each_tick_so_dispatch_survives_reload")]
+    public async Task LoopPersistsEachTickDispatchSurvivesReload()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-persist-{Guid.NewGuid():N}.db");
+        var repo = new SqliteOrchestratorStateRepository(db);
+
+        // Seed a single-task goal and commit it.
+        GoalId goalId = default;
+        TaskId taskId = default;
+        await repo.TransactAsync((k, _) =>
+        {
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(k, DefaultAgents(), "Durable dispatch goal");
+            goalId = goal.Id;
+            taskId = goal.Tasks.Single().Id;
+            return Task.FromResult((true, true));
+        });
+
+        // Drive the loop as the fixed conduct --loop path does: load the kernel, then run the loop
+        // outside the wrapping transaction so each tick can persist independently.
+        var kernel = await repo.LoadAsync();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.Single();
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("claude-cli", "claude -p plan", "C:\\wt", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, task.Id,
+                    new TaskProcessRecord(4242, "claude -p plan", "C:\\wt", "out.log", "err.log", "exit.txt",
+                        DateTimeOffset.UtcNow, null, null));
+                return DispatchStartOutcome.Started();
+            });
+
+        // The loop runs outside any transaction and checkpoints each tick via persistTick. The
+        // process then "dies" with no final save, so durability must come from the per-tick save.
+        new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+            maxIterations: 1,
+            persistTick: k => repo.SaveAsync(k).GetAwaiter().GetResult());
+
+        // The dispatch the loop performed must survive so reconcile can recognize it instead of
+        // re-dispatching the same task forever.
+        // If LastProcess is null after reload, the loop's dispatch was never persisted — so the
+        // conductor re-dispatches the same task on every tick and the goal can never advance.
+        var reloaded = await repo.LoadAsync();
+        var task = reloaded.GetTask(goalId, taskId);
+        Assert.True(task.LastProcess is not null);
+    }
+
     // ── Auto-retry: transient acceptance flake recovers on retry ─────────
 
     [Xunit.Fact(DisplayName = "BatchLoop_AutoRetry_flakeOnFirstAttempt_recoverOnRetry")]

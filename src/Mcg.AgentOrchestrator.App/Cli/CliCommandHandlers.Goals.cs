@@ -594,7 +594,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 };
                 var loopSummary = new ConductorBatchLoop(reconcileSweep).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
-                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration);
+                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
+                    persistTick: context.PersistCheckpoint);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -636,7 +637,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchSummary = new ConductorBatchLoop(watchSweep).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
-                    onlyGoalId: watchGoalId);
+                    onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }
