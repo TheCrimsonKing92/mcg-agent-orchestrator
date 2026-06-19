@@ -24,7 +24,7 @@ public static class OperatorEscalationProjection
             item.GoalPrefix,
             item.Kind.ToString(),
             item.Title,
-            item.Message,
+            FormatSummary(item.Objective, item.Message, item.SuggestedAction),
             item.Evidence,
             actions,
             deepLink);
@@ -97,4 +97,27 @@ public static class OperatorEscalationProjection
         var trimmed = dashboardBaseUrl.TrimEnd('/');
         return $"{trimmed}/goals/{goalPrefix}";
     }
+
+    internal static string FormatSummary(string objective, string reason, string suggestedAction)
+    {
+        var title = FormatObjectiveTitle(objective);
+        var summary = $"Goal: {title}{Environment.NewLine}Reason: {Clean(reason)}";
+        if (!string.IsNullOrWhiteSpace(suggestedAction))
+        {
+            summary += $"{Environment.NewLine}Response: {Clean(suggestedAction)}";
+        }
+
+        return summary;
+    }
+
+    internal static string FormatObjectiveTitle(string objective)
+    {
+        var clean = Clean(objective);
+        if (clean.Length <= 120)
+            return clean;
+        return clean[..117] + "...";
+    }
+
+    internal static string Clean(string value) =>
+        string.Join(" ", value.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 }

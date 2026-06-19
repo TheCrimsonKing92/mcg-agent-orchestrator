@@ -452,15 +452,24 @@ internal static class OperatorInbox
         if (channel is null or NullOperatorChannel)
             return;
 
+        var command = BuildEscalationCommand(goalPrefix, integrationBranch);
+        var actionLabel = integrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase)
+            ? "Resolve Escalation"
+            : "Promote to Main";
+        var requiresConfirm = command.StartsWith("land ", StringComparison.OrdinalIgnoreCase)
+            || command.StartsWith("acceptance ", StringComparison.OrdinalIgnoreCase);
         var escalation = new OperatorEscalation(
             itemId,
             goal.Id.Value,
             goalPrefix,
             "LandingEscalation",
             $"Landing parked on {integrationBranch}",
-            reason,
+            OperatorEscalationProjection.FormatSummary(
+                goal.Objective,
+                reason,
+                BuildEscalationSuggestedAction(integrationBranch)),
             $"escalated at {DateTimeOffset.UtcNow:u}; branch={integrationBranch}",
-            [new OperatorEscalationAction("Promote to Main", $"land {goalPrefix}", RequiresConfirm: true)],
+            [new OperatorEscalationAction(actionLabel, command, RequiresConfirm: requiresConfirm, RequiresInput: command.Contains('<'))],
             null);
         try
         {
@@ -485,14 +494,16 @@ internal static class OperatorInbox
             Add(items, BuildItem(
                 goal,
                 OperatorInboxKind.LandingEscalation,
-                OperatorInboxSeverity.Warning,
+                escalation.IntegrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase)
+                    ? OperatorInboxSeverity.Blocker
+                    : OperatorInboxSeverity.Warning,
                 null,
                 null,
                 $"Landing parked on {escalation.IntegrationBranch}",
-                escalation.Reason,
+                $"Reason: {escalation.Reason}",
                 $"escalated at {escalation.EscalatedAt:u}; branch={escalation.IntegrationBranch}",
-                "Review the change and promote manually or rerun land after resolving the issue.",
-                $"land {goal.Id.Value[..8]}",
+                BuildEscalationSuggestedAction(escalation.IntegrationBranch),
+                BuildEscalationCommand(goal.Id.Value[..8], escalation.IntegrationBranch),
                 $"landing-escalation:{escalation.GoalId}:{escalation.Reason}",
                 acknowledgements));
         }
@@ -606,6 +617,41 @@ internal static class OperatorInbox
         return taskNumber is null
             ? $"acceptance {goal.Id.Value[..8]}"
             : $"verify {taskNumber} <command>";
+    }
+
+    private static string BuildEscalationCommand(string goalPrefix, string integrationBranch)
+    {
+        if (!integrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"land {goalPrefix}";
+        }
+
+        var state = integrationBranch["conductor:".Length..];
+        return state switch
+        {
+            "Failed" or "Blocked" or "AwaitingHumanInput" => $"recover {goalPrefix} <note>",
+            "Verified" => $"acceptance {goalPrefix} --autonomy supervised-auto",
+            "Running" or "AwaitingVerification" => $"conduct {goalPrefix} --watch --poll-seconds 30",
+            _ => $"conduct {goalPrefix}"
+        };
+    }
+
+    private static string BuildEscalationSuggestedAction(string integrationBranch)
+    {
+        if (!integrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Review the change and promote manually or rerun land after resolving the issue.";
+        }
+
+        var state = integrationBranch["conductor:".Length..];
+        return state switch
+        {
+            "Failed" or "Blocked" => "Recover the goal with an operator note, then resume the conductor.",
+            "AwaitingHumanInput" => "Provide the requested input or recover the goal with an operator note.",
+            "Verified" => "Review the goal branch diff and run acceptance when the landing risk is acceptable.",
+            "Running" or "AwaitingVerification" => "Refresh or watch the conductor until worker and verification evidence settles.",
+            _ => "Inspect the reason and run the suggested conductor command from the repository root."
+        };
     }
 
     private static string BuildId(GoalId goalId, OperatorInboxKind kind, string sourceKey)

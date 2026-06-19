@@ -74,9 +74,28 @@ public sealed class OperatorChannelTests
         Assert.Equal(item.GoalPrefix, escalation.GoalPrefix);
         Assert.Equal("FailedTask", escalation.Kind);
         Assert.Equal(item.Title, escalation.Title);
-        Assert.Equal(item.Message, escalation.Summary);
+        Assert.Contains(escalation.Summary, s => s.Contains(item.Objective));
+        Assert.Contains(escalation.Summary, s => s.Contains(item.Message));
         Assert.Equal(item.Evidence, escalation.KeyEvidence);
         Assert.True(escalation.Actions.Count >= 1);
+    }
+
+    [Xunit.Fact(DisplayName = "Projection_formats_actionable_summary_with_goal_reason_and_response")]
+    public void ProjectionFormatsActionableSummaryWithGoalReasonAndResponse()
+    {
+        var item = BuildInboxItem(
+            OperatorInboxKind.AcceptanceGate,
+            OperatorInboxSeverity.Blocker,
+            suggestedCommand: "acceptance goal1234 --autonomy supervised-auto");
+
+        var escalation = OperatorEscalationProjection.Project(item);
+
+        Assert.True(escalation is not null);
+        Assert.True(escalation!.Summary.Contains("Goal: Test goal objective", StringComparison.Ordinal));
+        Assert.True(escalation.Summary.Contains("Reason: Something needs attention.", StringComparison.Ordinal));
+        Assert.True(escalation.Summary.Contains("Response: Suggested action here.", StringComparison.Ordinal));
+        Assert.True(escalation.Actions.Any(action =>
+            action.Command == "acceptance goal1234 --autonomy supervised-auto"));
     }
 
     [Xunit.Fact(DisplayName = "Projection_non_blocker_item_returns_null")]
@@ -427,6 +446,33 @@ public sealed class OperatorChannelTests
         Assert.Equal(DiscordButtonStyle.Danger, buttons[0].Style);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_message_includes_goal_reason_command_and_response")]
+    public async Task DiscordOperatorChannelMessageIncludesGoalReasonCommandAndResponse()
+    {
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 778UL);
+        var stateDir = CreateTempDirectory();
+        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var escalation = new OperatorEscalation(
+            "inbox-actionable",
+            "goal-id-abc123456",
+            "abc12345",
+            "AcceptanceGate",
+            "Acceptance blocked for goal",
+            "Goal: Improve escalation content\nReason: Acceptance output tail: test failure",
+            "tail: Xunit failed in OperatorChannelTests",
+            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)],
+            null);
+
+        await channel.SendEscalationAsync(escalation);
+
+        var content = fakeApi.SentMessages[0].Content;
+        Assert.Contains(content, s => s.Contains("`abc12345`"));
+        Assert.Contains(content, s => s.Contains("Improve escalation content"));
+        Assert.Contains(content, s => s.Contains("Acceptance output tail: test failure"));
+        Assert.Contains(content, s => s.Contains("`acceptance abc12345 --autonomy supervised-auto`"));
+        Assert.Contains(content, s => s.Contains("**Response:**"));
+    }
+
     // ---- OperatorChannelFactory ----
 
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_catalog_is_null_type")]
@@ -578,6 +624,43 @@ public sealed class OperatorChannelTests
 
         Assert.Equal(1, fakeApi.SentMessages.Count);
         Assert.Contains(fakeApi.SentMessages[0].Content, s => s.Contains("LandingEscalation"));
+    }
+
+    [Xunit.Fact(DisplayName = "RecordLandingEscalation_conductor_escalation_uses_state_aware_actionable_content")]
+    public void RecordLandingEscalationConductorEscalationUsesStateAwareActionableContent()
+    {
+        var workspace = BuildTestWorkspace();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Test objective", [
+            new TaskSpec(TaskId.New(), "Test task", AgentRole.Developer)
+        ]);
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 501UL);
+        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, workspace.OrchestratorDirectory);
+
+        Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
+            workspace,
+            goal,
+            "Acceptance output tail: Unit test failed",
+            "conductor:Verified",
+            channel);
+
+        var content = fakeApi.SentMessages[0].Content;
+        Assert.Contains(content, s => s.Contains(goal.Id.Value[..8]));
+        Assert.Contains(content, s => s.Contains("Test objective"));
+        Assert.Contains(content, s => s.Contains("Acceptance output tail: Unit test failed"));
+        Assert.Contains(content, s => s.Contains($"`acceptance {goal.Id.Value[..8]} --autonomy supervised-auto`"));
+        Assert.Contains(content, s => s.Contains("**Response:**"));
+
+        var report = Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.Build(
+            kernel,
+            [],
+            WorkerProfileCatalog.Default(),
+            workspace,
+            goal.Id.Value[..8]);
+        var item = report.Items.Single(item => item.Kind == OperatorInboxKind.LandingEscalation);
+        Assert.Equal(OperatorInboxSeverity.Blocker, item.Severity);
+        Assert.Contains(item.Message, s => s.Contains("Acceptance output tail: Unit test failed"));
+        Assert.Equal($"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto", item.SuggestedCommand);
     }
 
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_inbox_still_recorded_when_channel_throws")]
