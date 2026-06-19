@@ -1716,3 +1716,17 @@ Goal 7dc55e0a: # Add a short docs note describing the acceptance gate  ## What C
 
 - Operator gate: Researcher: not-run (exit 0); Developer: pass - docs/acceptance-gate.md exists, 9 lines, git status shows only ?? docs/acceptance-gate.md (exit 0); Tester: pass - file exists with 9 lines, all 5 spec requirements present and accurate (exit 0); Reviewer: pass - docs/acceptance-gate.md exists (9 lines, all 5 spec points covered), only file in HEAD commit cfceee7, no non-markdown files changed (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - overkill - docs-only review task - a haiku-class model would handle this adequately.
+
+## 2026-06-19 - # Make operator escalations useful and actionable (Discord + operator inbox) ...
+
+Goal 21d16ca9: # Make operator escalations useful and actionable (Discord + operator inbox)  ## Why When the conductor escalates a g.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 6483684 Orchestrator-committed worker edits for goal 21d16ca9ac8f41589c7d229e27016152). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: focused pass, 48/48 OperatorChannel tests; full suite blocked by existing Git worktree permission failures creating refs/heads/goal/*.lock, Core passed 356/356, Infrastructure failed 5 git-worktree tests (exit 0); Tester: PASSED — 48 OperatorChannel tests (exit 0); PASSED — 5 Landing escalation tests (exit 0); PASSED — 10 Projection tests (exit 0); Total: 63/63 escalation-focused tests passed, 0 failed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review / static analysis - structural review without running tests; caught a medium bug the Tester missed.
+
+## 2026-06-19 - # Reap a goal's running dispatches when the conductor watch escalates/stops i...
+
+Goal 6c7d7552: # Reap a goal's running dispatches when the conductor watch escalates/stops it  ## Why When `conduct --watch` (or `--.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 11735e4a98dcba2727c7483710c9e540ef213bbc). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: focused pass: ConductorBatchLoop 19/19; build pass. Full Infrastructure suite failed 5 existing git-worktree/ref tests with parent .git Permission denied creating refs. (exit 0); Tester: pass - 19/19 ConductorBatchLoopTests, 2/2 reaping-specific tests, 356/356 Core tests (exit 0); Reviewer: ConductorBatchLoop 19/19 PASSED (Tester evidence); Infrastructure suite 5 pre-existing failures (sandbox ACL on .git/worktrees refs, unrelated) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review + diff analysis - straightforward .NET orchestration change, no ambiguity in the evidence trail.

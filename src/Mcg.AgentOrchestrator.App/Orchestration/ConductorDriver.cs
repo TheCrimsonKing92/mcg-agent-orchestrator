@@ -285,8 +285,8 @@ internal sealed class ConductorDriver
         {
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
-                t.LastVerification is { } latest && IsEmptyOutputFlake(latest) &&
-                t.VerificationHistory.Count(IsEmptyOutputFlake) <= MaxTransientDispatchRetries);
+                t.LastVerification is { } latest && DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(latest) &&
+                t.VerificationHistory.Count(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake) <= MaxTransientDispatchRetries);
             if (flakedTask is not null)
             {
                 _retryTask(goal.Id, flakedTask.Id,
@@ -411,15 +411,6 @@ internal sealed class ConductorDriver
         var tail = trimmed.Length > maxChars ? "..." + trimmed[^maxChars..] : trimmed;
         return $" Acceptance output tail: {tail}";
     }
-
-    // A dispatch that exited 0 but produced no output at all — the orchestrator cannot confirm the
-    // work happened (RecordTaskProcessRefreshed flags this). It is almost always an intermittent
-    // headless-CLI flake (an empty model response), so the conductor retries it rather than failing
-    // the whole goal on it.
-    private static bool IsEmptyOutputFlake(TaskVerificationRecord verification) =>
-        verification.ExitCode == 0 &&
-        string.IsNullOrWhiteSpace(verification.StandardOutput) &&
-        string.IsNullOrWhiteSpace(verification.StandardError);
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
