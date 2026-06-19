@@ -272,6 +272,29 @@ internal sealed class ConductorDriver
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
 
+        // A goal failed ONLY because a task hit a transient empty-output dispatch flake (the worker
+        // exited 0 but produced nothing — a known intermittent claude/codex headless behaviour) is
+        // self-healed by re-dispatching that task, bounded by MaxTransientDispatchRetries, instead of
+        // escalating to a human. Without this, a single flaky empty response kills an otherwise-healthy
+        // goal — exactly what blocked an end-to-end autonomous run. A genuine failure (non-zero exit or
+        // any output) is NOT matched here and still escalates.
+        if (state == GoalLifecycleState.Failed)
+        {
+            var flakedTask = goal.Tasks.FirstOrDefault(t =>
+                t.Status == WorkTaskStatus.Failed &&
+                t.LastVerification is { } latest && IsEmptyOutputFlake(latest) &&
+                t.VerificationHistory.Count(IsEmptyOutputFlake) <= MaxTransientDispatchRetries);
+            if (flakedTask is not null)
+            {
+                _retryTask(goal.Id, flakedTask.Id,
+                    "Auto-retry transient dispatch flake: worker exited 0 with no output (verification could not be confirmed)");
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Executed(
+                        GoalLifecycleState.Failed,
+                        $"Auto-retried transient empty-output dispatch flake on task {flakedTask.Id.Value[..8]}"));
+            }
+        }
+
         // Error states always escalate regardless of policy
         if (state is GoalLifecycleState.Failed
                   or GoalLifecycleState.Blocked
@@ -365,6 +388,19 @@ internal sealed class ConductorDriver
             ? "Dispatch recorded but no process was startable."
             : $"Dispatch recorded but no process was startable: {skippedReason}";
     }
+
+    // Cap on auto-retrying a transient empty-output dispatch flake before escalating to a human; a
+    // worker that keeps exiting 0 with no output is a genuine problem, not a flake.
+    private const int MaxTransientDispatchRetries = 2;
+
+    // A dispatch that exited 0 but produced no output at all — the orchestrator cannot confirm the
+    // work happened (RecordTaskProcessRefreshed flags this). It is almost always an intermittent
+    // headless-CLI flake (an empty model response), so the conductor retries it rather than failing
+    // the whole goal on it.
+    private static bool IsEmptyOutputFlake(TaskVerificationRecord verification) =>
+        verification.ExitCode == 0 &&
+        string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+        string.IsNullOrWhiteSpace(verification.StandardError);
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {

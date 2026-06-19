@@ -554,6 +554,34 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_Failed_empty_output_flake_auto_retries_instead_of_escalating")]
+    public void ConductorDriverFailedEmptyOutputFlakeAutoRetriesInsteadOfEscalating()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        // Worker exited 0 but produced no output: the kernel marks the task Failed ("verification
+        // cannot be confirmed"), putting the goal in the Failed lifecycle state. This is a transient
+        // headless-CLI flake, so the conductor should re-dispatch the task rather than escalate.
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "", "", DateTimeOffset.UtcNow));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+
+        var retried = false;
+        var escalated = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(retried);
+        Assert.False(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Blocked_facts_escalates")]
     public void ConductorDriverBlockedFactsEscalates()
     {
