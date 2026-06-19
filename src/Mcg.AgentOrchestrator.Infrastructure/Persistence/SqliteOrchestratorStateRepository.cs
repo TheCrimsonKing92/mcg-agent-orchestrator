@@ -22,6 +22,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     {
         var conn = new SqliteConnection(ConnectionString);
         conn.Open();
+        // busy_timeout is PER-CONNECTION (unlike WAL, which is a persistent DB property set once in
+        // EnsureSchema). Without it a connection that meets a held lock fails IMMEDIATELY with
+        // "database is locked" — so a `backlog-add`/`status`/etc. issued while the conductor holds a
+        // brief per-tick write lock errors out instead of waiting. Setting it lets concurrent commands
+        // (and concurrent goal drivers) wait out the short write window, which WAL already keeps small.
+        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         return conn;
     }
 
