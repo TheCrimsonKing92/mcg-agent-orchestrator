@@ -161,8 +161,11 @@ internal sealed class ConductorDriver
                         : $"Acceptance passed (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:acceptance",
-                    $"Acceptance failed (exit {verification.ExitCode}).");
-            return new AcceptanceVerificationSummary(verification.Passed, unmetCriteria);
+                    $"Acceptance failed (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}");
+            return new AcceptanceVerificationSummary(
+                verification.Passed,
+                unmetCriteria,
+                verification.Passed ? null : verification.OutputTail);
         };
 
         _retryTask = kernel.RetryTask;
@@ -393,6 +396,22 @@ internal sealed class ConductorDriver
     // worker that keeps exiting 0 with no output is a genuine problem, not a flake.
     private const int MaxTransientDispatchRetries = 2;
 
+    // Appends a bounded tail of the acceptance build/test output to an escalation/journal line so an
+    // operator (or the conductor's own retry diagnostics) can see WHY acceptance failed — the detail
+    // was previously dropped, leaving only a generic "Acceptance verification failed".
+    private static string FormatFailureTail(string? outputTail)
+    {
+        if (string.IsNullOrWhiteSpace(outputTail))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = outputTail.Trim();
+        const int maxChars = 600;
+        var tail = trimmed.Length > maxChars ? "..." + trimmed[^maxChars..] : trimmed;
+        return $" Acceptance output tail: {tail}";
+    }
+
     // A dispatch that exited 0 but produced no output at all — the orchestrator cannot confirm the
     // work happened (RecordTaskProcessRefreshed flags this). It is almost always an intermittent
     // headless-CLI flake (an empty model response), so the conductor retries it rather than failing
@@ -424,7 +443,8 @@ internal sealed class ConductorDriver
         if (!acceptance.Passed)
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                "Acceptance verification failed; review and fix before landing");
+                "Acceptance verification failed; review and fix before landing." +
+                FormatFailureTail(acceptance.FailureDetail));
         }
 
         if (acceptance.UnmetCriteria.Count > 0)
