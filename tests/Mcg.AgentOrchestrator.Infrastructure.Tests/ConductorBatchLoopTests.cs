@@ -243,6 +243,51 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_escalated_goal_reaps_only_its_owned_running_dispatches")]
+    public void BatchLoopEscalatedGoalReapsOnlyItsOwnedRunningDispatches()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var escalatedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "escalated goal");
+        var otherGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "other goal");
+        var escalatedTask = escalatedGoal.Tasks.Single();
+        var otherTask = otherGoal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(escalatedGoal.Id, escalatedTask.Id,
+            new TaskDispatchRecord("test-worker", "test.exe", "C:\\escalated", now));
+        kernel.RecordTaskProcessStarted(escalatedGoal.Id, escalatedTask.Id,
+            new TaskProcessRecord(111, "test.exe", "C:\\escalated", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [111, 222]));
+        kernel.RecordTaskDispatch(otherGoal.Id, otherTask.Id,
+            new TaskDispatchRecord("test-worker", "other.exe", "C:\\other", now));
+        kernel.RecordTaskProcessStarted(otherGoal.Id, otherTask.Id,
+            new TaskProcessRecord(333, "other.exe", "C:\\other", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [333]));
+
+        var killed = new List<int>();
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            tryKillOwnedProcess: pid =>
+            {
+                killed.Add(pid);
+                return true;
+            });
+        var driver = MakeDriver(getFacts: _ => throw new InvalidOperationException("policy gate"));
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (loopKernel, goal) => runner.CancelRunningProcessesForGoal(loopKernel, goal.Id)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                onlyGoalId: escalatedGoal.Id.Value);
+
+        Assert.Equal(1, summary.Escalated);
+        Xunit.Assert.Equal([111, 222], killed);
+        Assert.True(kernel.GetTask(escalatedGoal.Id, escalatedTask.Id).LastProcess!.WasCancelled);
+        Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);
+    }
+
     // ── Kill-switch: stop file present → loop exits before first tick ─────
 
     [Xunit.Fact(DisplayName = "BatchLoop_KillSwitch_stopFilePresent_exitsBeforeAnyAdvance")]
@@ -260,6 +305,58 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(0, summary.Ticks);
             Assert.True(summary.StopRequested);
             Assert.False(advanceCalled); // AdvanceOnce must not run when stop signal is present
+        }
+        finally
+        {
+            File.Delete(stopFile);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_reaps_watched_goal_running_dispatch")]
+    public void BatchLoopStopReapsWatchedGoalRunningDispatch()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var watchedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "watched goal");
+        var otherGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "other goal");
+        var watchedTask = watchedGoal.Tasks.Single();
+        var otherTask = otherGoal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(watchedGoal.Id, watchedTask.Id,
+            new TaskDispatchRecord("test-worker", "watch.exe", "C:\\watch", now));
+        kernel.RecordTaskProcessStarted(watchedGoal.Id, watchedTask.Id,
+            new TaskProcessRecord(444, "watch.exe", "C:\\watch", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [444]));
+        kernel.RecordTaskDispatch(otherGoal.Id, otherTask.Id,
+            new TaskDispatchRecord("test-worker", "other.exe", "C:\\other", now));
+        kernel.RecordTaskProcessStarted(otherGoal.Id, otherTask.Id,
+            new TaskProcessRecord(555, "other.exe", "C:\\other", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [555]));
+
+        var killed = new List<int>();
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            tryKillOwnedProcess: pid =>
+            {
+                killed.Add(pid);
+                return true;
+            });
+        var stopFile = ExistingStopPath();
+
+        try
+        {
+            var summary = new ConductorBatchLoop(
+                reapGoalRunningDispatches: (loopKernel, goal) => runner.CancelRunningProcessesForGoal(loopKernel, goal.Id)).Run(
+                    kernel,
+                    MakeDriver(),
+                    ConductorAutonomyPolicy.Conservative,
+                    stopFile,
+                    onlyGoalId: watchedGoal.Id.Value);
+
+            Assert.True(summary.StopRequested);
+            Xunit.Assert.Equal([444], killed);
+            Assert.True(kernel.GetTask(watchedGoal.Id, watchedTask.Id).LastProcess!.WasCancelled);
+            Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);
         }
         finally
         {

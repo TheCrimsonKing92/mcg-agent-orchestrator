@@ -612,6 +612,25 @@ public sealed class BackgroundDispatchRunner
         return cancelled;
     }
 
+    public int CancelRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var goal = kernel.GetGoal(goalId);
+        var cancelled = 0;
+
+        foreach (var task in goal.Tasks)
+        {
+            if (task.LastProcess is not { IsRunning: true })
+            {
+                continue;
+            }
+
+            CancelLatestProcess(kernel, goalId, task.Id);
+            cancelled++;
+        }
+
+        return cancelled;
+    }
+
     private string? ReapWorktreeBuildDaemons(string workingDirectory)
     {
         try
