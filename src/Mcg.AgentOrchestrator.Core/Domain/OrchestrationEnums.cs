@@ -189,6 +189,7 @@ public enum TaskComplexity
 public enum GoalLifecycleState
 {
     Created,
+    AwaitingClarification,
     WorkspaceReady,
     Dispatched,
     Running,

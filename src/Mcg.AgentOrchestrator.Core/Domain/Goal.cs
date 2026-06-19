@@ -21,6 +21,8 @@ public sealed class Goal
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
 
+    public RefinedSpec? RefinedSpec { get; private set; }
+
     public string? SourceBacklogItemId { get; private set; }
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
@@ -30,6 +32,8 @@ public sealed class Goal
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
     internal void SetStatus(GoalStatus status) => Status = status;
+
+    internal void SetRefinedSpec(RefinedSpec spec) => RefinedSpec = spec;
 
     internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
 
@@ -53,7 +57,13 @@ public sealed class Goal
                 evt.Message,
                 evt.OccurredAt)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
-            SourceBacklogItemId);
+            SourceBacklogItemId,
+            RefinedSpec is null ? null : new RefinedSpecSnapshot(
+                RefinedSpec.BehavioralContract,
+                RefinedSpec.AcceptanceCriteria.ToList(),
+                RefinedSpec.VerificationClass.ToString(),
+                RefinedSpec.Decisions.Select(d => new RefinedSpecDecisionSnapshot(d.Question, d.Choice, d.Rationale)).ToList(),
+                RefinedSpec.OpenQuestions.Select(q => new RefinedSpecOpenQuestionSnapshot(q.Id, q.Question, q.ForkKind, q.Status)).ToList()));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -78,6 +88,16 @@ public sealed class Goal
 
         if (snapshot.SourceBacklogItemId is not null)
             goal.SetSourceBacklogItemId(snapshot.SourceBacklogItemId);
+
+        if (snapshot.RefinedSpec is { } rs)
+        {
+            goal.SetRefinedSpec(new RefinedSpec(
+                rs.BehavioralContract,
+                rs.AcceptanceCriteria,
+                Enum.TryParse<VerificationClass>(rs.VerificationClass, out var vc) ? vc : VerificationClass.TestVerifiable,
+                rs.Decisions.Select(d => new RefinedSpecDecision(d.Question, d.Choice, d.Rationale)).ToList(),
+                rs.OpenQuestions.Select(q => new RefinedSpecOpenQuestion(q.Id, q.Question, q.ForkKind, q.Status)).ToList()));
+        }
 
         return goal;
     }

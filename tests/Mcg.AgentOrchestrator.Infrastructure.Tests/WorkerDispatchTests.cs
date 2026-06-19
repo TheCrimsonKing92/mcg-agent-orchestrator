@@ -2259,7 +2259,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(preflight.Allowed);
     Assert.True(preflight.Findings.Any(finding => finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains("build environment: goal lease not yet created", StringComparison.Ordinal)));
-    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("goals", goal.Id.Value[..8], "lease", "artifacts"), StringComparison.OrdinalIgnoreCase)));
+    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase)));
     Assert.Contains(ex.Message, text => text.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is null);
@@ -2833,6 +2833,137 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=dirty", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=?? dirty.txt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_with_verification_evidence_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerFileRoleDirtyWorktreeWithVerificationEvidenceIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    // The worker edited the worktree AND showed verification evidence but never committed (a
+    // low-integrity sandbox cannot write the medium .git, and codex's Windows sandbox can poison
+    // before it commits). The orchestrator commits the edits so the dispatch advances — this is the
+    // recovery that keeps goals moving autonomously without the worker needing to write .git.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's uncommitted worktree edits", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the change and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited but commit failed under low integrity"));
+
+    // A low-integrity worker edited the worktree and verified its work but could NOT write the medium
+    // .git to commit, so it exited non-zero. The worker's exit code is not authoritative: the
+    // orchestrator commits the verified edits and the dispatch advances. This is what makes the Low-IL
+    // sandbox autonomous without granting the worker write access to the shared .git.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's uncommitted worktree edits", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
+    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyUnverifiedStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Started editing but the provider connection dropped before anything was verified.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "half-done, unverified"));
+
+    // Dirty but UNVERIFIED on a non-zero exit: the orchestrator must NOT blindly commit unproven work.
+    // It stays failed so it surfaces for retry/escalation.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.False(task.LastVerification.StandardError.Contains("Orchestrator committed", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_verification_only_tester_nonzero_exit_with_evidence_passes")]
+    public void BackgroundDispatchRunnerVerificationOnlyTesterNonZeroExitWithEvidencePasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Reviewed the implementation and ran the focused suite.\r\nPassed! - Failed: 0, Passed: 4, Skipped: 0, Total: 4.",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+
+    // A verification-only Tester (no file changes requested) that verified successfully on a clean
+    // worktree but exited non-zero due to Low-IL shutdown friction. The deliverable is the verification,
+    // the worktree is clean, and the acceptance gate re-verifies — so accept rather than fail on the
+    // unreliable exit code.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Accepted on verification evidence despite a non-zero worker exit", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_clean_worktree_nonzero_exit_without_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerCleanWorktreeNonZeroExitWithoutEvidenceStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Provider connection dropped before any checks ran.",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+
+    // Clean worktree + non-zero exit but NO verification evidence: a genuine failure (the worker never
+    // verified anything), not exit-code noise. Must stay failed.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
@@ -3737,6 +3868,31 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(checklist, text => text.Contains("## Test Impact Plan", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("deterministic-verification.md", StringComparison.Ordinal));
     Assert.Contains(manifest, text => text.Contains("check deterministic failures", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_unmet_acceptance_criterion_retry_feedback")]
+    public void WorkerContextArtifactsWritesUnmetAcceptanceCriterionRetryFeedback()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(
+        TaskId.New(),
+        "Fix the acceptance criterion miss.",
+        AgentRole.Developer,
+        "Run focused acceptance retry tests.");
+    var goal = kernel.CreateGoal("Retry with deterministic criterion feedback", [task]);
+    kernel.RecordCriterionRetryFeedback(
+        goal.Id,
+        task.Id,
+        ["grep-present docs/usage.md contains Ready: docs/usage.md is missing Ready"]);
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+
+    var currentTask = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
+    Assert.Contains(currentTask, text => text.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", StringComparison.Ordinal));
+    Assert.Contains(currentTask, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]

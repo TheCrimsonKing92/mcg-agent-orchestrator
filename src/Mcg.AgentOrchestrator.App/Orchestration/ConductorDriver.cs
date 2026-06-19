@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -10,8 +11,14 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
-    private readonly Func<Goal, bool> _dispatchAndStart;
-    private readonly Func<Goal, bool> _runAcceptanceVerification;
+    private readonly Func<Goal, DispatchStartOutcome> _dispatchAndStart;
+    private readonly Func<Goal, DispatchStartOutcome> _startRecordedDispatches;
+    private readonly Action _buildServerShutdown;
+    private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
+    private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
+    private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
+    private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, LandingResult> _land;
     private readonly Action<Goal> _record;
     private readonly Action<Goal> _cleanup;
@@ -21,9 +28,10 @@ internal sealed class ConductorDriver
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
-        GoalAcceptanceVerifier acceptanceVerifier,
+        IGoalAcceptanceVerifier acceptanceVerifier,
         IReadOnlyList<AgentDefinition> agents,
-        WorkerProfileCatalog profiles)
+        WorkerProfileCatalog profiles,
+        IOperatorChannel? channel = null)
     {
         var dir = workspace.ExecutionDirectory;
 
@@ -36,7 +44,12 @@ internal sealed class ConductorDriver
             var isRecorded = journal.LatestByOperation.Any(e =>
                 e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
             var isCleanedUp = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed)
+                // A completed goal whose worktree is gone was landed + cleaned up outside the conductor
+                // (e.g. via the `acceptance` command, which merges + removes the workspace without
+                // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
+                // acceptance on a missing worktree and spam ghost escalations every tick.
+                || (!workspaceExists && goal.Status == GoalStatus.Completed);
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp);
         };
 
@@ -54,36 +67,114 @@ internal sealed class ConductorDriver
         _dispatchAndStart = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
-            var result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
-            var started = result.Processes.Tasks.Count > 0;
-            if (started)
+            SubscriptionStartResult result;
+            try
+            {
+                result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
+            }
+            catch (Exception ex)
+            {
+                var exceptionReason = $"Subscription dispatch start failed: {ex.Message}";
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
+                return DispatchStartOutcome.SpawnFailed(exceptionReason);
+            }
+            if (result.Processes.Tasks.Count > 0)
+            {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
                     $"Dispatched {result.Dispatches.Count} tasks, started {result.Processes.Tasks.Count} processes.");
-            else
-                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", "No tasks dispatched.");
-            return started;
+                return DispatchStartOutcome.Started();
+            }
+            var reason = result.Dispatches.Count == 0
+                ? "No tasks in ready batch; goal may have no assigned or ready tasks"
+                : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
+            return result.Dispatches.Count == 0
+                ? DispatchStartOutcome.EmptyBatch(reason)
+                : DispatchStartOutcome.SpawnFailed(reason);
+        };
+
+        _startRecordedDispatches = goal =>
+        {
+            GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
+            ProcessBatchExecutionResult result;
+            try
+            {
+                result = GoalManagementCommandService.StartDispatches(kernel, workspace, goal);
+            }
+            catch (Exception ex)
+            {
+                var exceptionReason = $"Recorded dispatch start failed: {ex.Message}";
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", exceptionReason);
+                return DispatchStartOutcome.SpawnFailed(exceptionReason);
+            }
+
+            if (result.Tasks.Count > 0)
+            {
+                GoalOperationJournal.Completed(dir, goal, "conductor:dispatch-start",
+                    $"Started {result.Tasks.Count} recorded dispatch process(es).");
+                return DispatchStartOutcome.Started();
+            }
+
+            var reason = FormatNoRecordedDispatchStartedReason(result.Plan);
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
+            return DispatchStartOutcome.EmptyBatch(reason);
+        };
+
+        _buildServerShutdown = () =>
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = dir
+                };
+                startInfo.ArgumentList.Add("build-server");
+                startInfo.ArgumentList.Add("shutdown");
+                using var process = Process.Start(startInfo);
+                if (process is null) return;
+                process.StandardOutput.ReadToEnd();
+                process.StandardError.ReadToEnd();
+                process.WaitForExit(30_000);
+            }
+            catch { }
         };
 
         _runAcceptanceVerification = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
-            if (worktreePath is null) return false;
+            if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
             GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", "Running acceptance verification.");
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles).GetAwaiter().GetResult();
+            var unmetCriteria = verification.Checks?
+                .Where(check => check.Advisory && !check.Passed)
+                .ToArray() ?? [];
             if (verification.Passed)
                 GoalOperationJournal.Completed(dir, goal, "conductor:acceptance",
-                    $"Acceptance passed (exit {verification.ExitCode}).");
+                    unmetCriteria.Length == 0
+                        ? $"Acceptance passed (exit {verification.ExitCode})."
+                        : $"Acceptance passed (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:acceptance",
                     $"Acceptance failed (exit {verification.ExitCode}).");
-            return verification.Passed;
+            return new AcceptanceVerificationSummary(verification.Passed, unmetCriteria);
         };
+
+        _retryTask = kernel.RetryTask;
+        _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
+        _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
+
+        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
 
         _land = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:land", "Landing goal via integration branch.");
-            var result = LandingExecutor.Execute(kernel, goal, workspace);
+            var result = LandingExecutor.Execute(kernel, goal, workspace, channel);
             if (result.MainAdvanced)
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else
@@ -112,7 +203,7 @@ internal sealed class ConductorDriver
         };
 
         _writeEscalation = (goal, state, reason) =>
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}");
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}", channel);
 
         _classifyChangeRisk = goal =>
         {
@@ -138,8 +229,14 @@ internal sealed class ConductorDriver
         Func<Goal, GoalLifecycleFacts> getFacts,
         Func<int> getRunningPaidWorkerCount,
         Func<Goal, string> createWorkspace,
-        Func<Goal, bool> dispatchAndStart,
-        Func<Goal, bool> runAcceptanceVerification,
+        Func<Goal, DispatchStartOutcome> dispatchAndStart,
+        Func<Goal, DispatchStartOutcome>? startRecordedDispatches,
+        Action? buildServerShutdown,
+        Func<Goal, AcceptanceVerificationSummary> runAcceptanceVerification,
+        Func<GoalId, TaskId, string, TaskSpec>? retryTask,
+        Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback,
+        Action<GoalId, TaskId>? clearCriterionRetryFeedback,
+        Func<Goal, GoalWorktreeRebaseResult> rebaseOntoMain,
         Func<Goal, LandingResult> land,
         Action<Goal> record,
         Action<Goal> cleanup,
@@ -150,7 +247,13 @@ internal sealed class ConductorDriver
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
         _dispatchAndStart = dispatchAndStart;
+        _startRecordedDispatches = startRecordedDispatches ?? dispatchAndStart;
+        _buildServerShutdown = buildServerShutdown ?? (() => { });
         _runAcceptanceVerification = runAcceptanceVerification;
+        _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
+        _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
+        _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
+        _rebaseOntoMain = rebaseOntoMain;
         _land = land;
         _record = record;
         _cleanup = cleanup;
@@ -193,9 +296,8 @@ internal sealed class ConductorDriver
         return state switch
         {
             GoalLifecycleState.Created => ExecuteCreateWorkspace(goal, goalPrefix, policy),
-            GoalLifecycleState.WorkspaceReady => ExecuteDispatchAndStart(goal, goalPrefix, policy),
-            GoalLifecycleState.Dispatched => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "Dispatch recorded; awaiting process start on next advance")),
+            GoalLifecycleState.WorkspaceReady => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady),
+            GoalLifecycleState.Dispatched => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.Dispatched),
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
@@ -214,35 +316,95 @@ internal sealed class ConductorDriver
             new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Created, $"Workspace created: {path}"));
     }
 
-    private ConductorAdvanceResult ExecuteDispatchAndStart(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
+    private ConductorAdvanceResult ExecuteDispatchAndStart(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState fromState)
     {
         var running = _getRunningPaidWorkerCount();
         if (running >= policy.MaxConcurrentPaidWorkers)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.WorkspaceReady,
+                new ConductorAdvanceOutcome.Held(fromState,
                     $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
-        var started = _dispatchAndStart(goal);
-        if (!started)
+        var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
+        var outcome = start(goal);
+        if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady,
-                "Dispatch failed to start any tasks; inspect readiness");
+            var firstFailure = outcome;
+            _buildServerShutdown();
+            var retryStart = fromState == GoalLifecycleState.WorkspaceReady
+                ? _startRecordedDispatches
+                : start;
+            outcome = retryStart(goal);
+            if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
+            {
+                outcome = firstFailure;
+            }
         }
 
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.WorkspaceReady, "Subscription dispatch started"));
+        if (outcome.Category == DispatchStartOutcomeCategory.Started)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
+        }
+
+        return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
+    }
+
+    private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)
+    {
+        var skippedReason = plan.Items
+            .Where(item => item.Status == ProcessBatchItemStatus.Skipped)
+            .Select(item => item.Reason)
+            .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason));
+        return skippedReason is null
+            ? "Dispatch recorded but no process was startable."
+            : $"Dispatch recorded but no process was startable: {skippedReason}";
     }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
         // Gate 1: acceptance verification (test suite quality check).
-        var acceptancePassed = _runAcceptanceVerification(goal);
-        if (!acceptancePassed)
+        var acceptance = _runAcceptanceVerification(goal);
+        if (!acceptance.Passed)
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
                 "Acceptance verification failed; review and fix before landing");
+        }
+
+        if (acceptance.UnmetCriteria.Count > 0)
+        {
+            var criteria = FormatUnmetCriteria(acceptance.UnmetCriteria);
+            var task = SelectTaskForCriterionRetry(goal);
+            if (task is null)
+            {
+                return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
+                    $"Acceptance criteria unmet but no completed task is available to retry: {criteria}; review/land manually");
+            }
+
+            if (task.CriterionRetryCount < policy.MaxCriterionRetries)
+            {
+                var retryCount = _recordCriterionRetryFeedback(
+                    goal.Id,
+                    task.Id,
+                    acceptance.UnmetCriteria.Select(FormatUnmetCriterion).ToArray());
+                var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): {criteria}";
+                _retryTask(goal.Id, task.Id, retryMessage);
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
+            }
+
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
+                $"Acceptance criteria unmet after {task.CriterionRetryCount} retries: {criteria}; review/land manually");
+        }
+
+        foreach (var task in goal.Tasks)
+        {
+            _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
         // Gate 2: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
@@ -257,7 +419,18 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 3: land via integration branch.
+        // Gate 3: rebase goal branch onto current main before integration merge.
+        // Without this, any main advance (even disjoint) fails the integration fast-forward.
+        var rebase = _rebaseOntoMain(goal);
+        if (!rebase.UpdatedBranch)
+        {
+            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
+                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
+                : $"pre-landing rebase failed: {rebase.Message}";
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+        }
+
+        // Gate 4: land via integration branch.
         var landResult = _land(goal);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
@@ -301,4 +474,20 @@ internal sealed class ConductorDriver
         ConductorAdvanceOutcome outcome) =>
         new(goalId, goalPrefix, policy.Name, outcome);
 
+    private static TaskSpec? SelectTaskForCriterionRetry(Goal goal) =>
+        goal.Tasks.LastOrDefault(task => task.Status == WorkTaskStatus.Completed && task.RequiredRole == AgentRole.Developer) ??
+        goal.Tasks.LastOrDefault(task => task.Status == WorkTaskStatus.Completed);
+
+    private static string FormatUnmetCriteria(IReadOnlyList<AcceptanceCheckResult> criteria) =>
+        string.Join("; ", criteria.Select(FormatUnmetCriterion));
+
+    private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
+    {
+        var summary = string.IsNullOrWhiteSpace(criterion.ResultSummary)
+            ? criterion.OutputTail
+            : criterion.ResultSummary;
+        return string.IsNullOrWhiteSpace(summary)
+            ? criterion.Name
+            : $"{criterion.Name}: {summary.Trim()}";
+    }
 }

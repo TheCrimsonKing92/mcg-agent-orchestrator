@@ -11,7 +11,8 @@ public enum DiscordButtonStyle
 public sealed record DiscordButtonDefinition(
     string Label,
     string CustomId,
-    DiscordButtonStyle Style = DiscordButtonStyle.Primary);
+    DiscordButtonStyle Style = DiscordButtonStyle.Primary,
+    bool Disabled = false);
 
 public interface IDiscordForumApi
 {
@@ -21,8 +22,15 @@ public interface IDiscordForumApi
         string initialContent,
         CancellationToken cancellationToken = default);
 
-    Task SendMessageAsync(
+    Task<ulong> SendMessageAsync(
         ulong threadId,
+        string content,
+        IReadOnlyList<DiscordButtonDefinition> buttons,
+        CancellationToken cancellationToken = default);
+
+    Task EditMessageAsync(
+        ulong threadId,
+        ulong messageId,
         string content,
         IReadOnlyList<DiscordButtonDefinition> buttons,
         CancellationToken cancellationToken = default);

@@ -28,6 +28,10 @@ public sealed class TaskSpec
 
     public int SubscriptionLimitReviewedFailureCount { get; private set; }
 
+    public int CriterionRetryCount { get; private set; }
+
+    public IReadOnlyList<string> CriterionRetryFeedback { get; private set; } = [];
+
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
 
     public AgentId? AssignedAgentId { get; private set; }
@@ -127,7 +131,9 @@ public sealed class TaskSpec
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
             SubscriptionLimitReviewedAt,
-            SubscriptionLimitReviewedFailureCount);
+            SubscriptionLimitReviewedFailureCount,
+            CriterionRetryCount,
+            CriterionRetryFeedback);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -229,6 +235,7 @@ public sealed class TaskSpec
             snapshot.SubscriptionLimitReviewNote,
             snapshot.SubscriptionLimitReviewedAt,
             snapshot.SubscriptionLimitReviewedFailureCount);
+        task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
         return task;
     }
 
@@ -271,6 +278,28 @@ public sealed class TaskSpec
         SubscriptionLimitReviewNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
         SubscriptionLimitReviewedAt = reviewedAt;
         SubscriptionLimitReviewedFailureCount = Math.Max(0, failureCount);
+    }
+
+    internal void RecordCriterionRetryFeedback(IReadOnlyList<string> feedback)
+    {
+        CriterionRetryFeedback = feedback
+            .Select(item => item.Trim())
+            .Where(item => item.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
+
+    internal void ClearCriterionRetryFeedback() => CriterionRetryFeedback = [];
+
+    private void RestoreCriterionRetryState(int retryCount, IReadOnlyList<string>? feedback)
+    {
+        CriterionRetryCount = Math.Max(0, retryCount);
+        CriterionRetryFeedback = feedback?
+            .Select(item => item.Trim())
+            .Where(item => item.Length > 0)
+            .ToArray() ?? [];
     }
 
     internal void RecordDispatch(TaskDispatchRecord dispatch)

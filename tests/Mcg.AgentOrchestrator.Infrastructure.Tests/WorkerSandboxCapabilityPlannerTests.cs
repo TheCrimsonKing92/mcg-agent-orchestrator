@@ -50,6 +50,21 @@ public sealed class WorkerSandboxCapabilityPlannerTests
     Assert.Equal("blocked", result.Status);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_allowGitReference_override_permits_repo_root_task")]
+    public void WorkerSandboxCapabilityPlannerAllowGitReferenceOverridePermitsRepoRootTask()
+{
+    // A repo-root-resolution task legitimately references .git read-only; the default policy
+    // false-positive-blocks it, and the operator override permits the vetted case.
+    var (goal, task, profile, workingDirectory) = CreateEvaluateFixture(
+        "Resolve the repo root by locating the .git directory instead of a hardcoded .sln");
+
+    var blockedByDefault = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory);
+    Assert.False(blockedByDefault.Allowed);
+
+    var permittedByOverride = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory, allowGitReference: true);
+    Assert.True(permittedByOverride.Allowed);
+}
+
     private static (Goal goal, TaskSpec task, WorkerProfile profile, string workingDirectory)
         CreateEvaluateFixture(string description)
     {

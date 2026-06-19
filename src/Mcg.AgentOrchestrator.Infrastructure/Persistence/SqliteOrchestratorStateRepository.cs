@@ -57,6 +57,23 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 snapshot_json TEXT NOT NULL
             )
             """);
+        RunNonQuery(conn, """
+            CREATE TABLE IF NOT EXISTS model_fit_history (
+                goal_id       TEXT NOT NULL,
+                task_id       TEXT NOT NULL,
+                role          TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                model_name    TEXT NOT NULL,
+                complexity    TEXT NULL,
+                task_shape    TEXT NULL,
+                outcome       TEXT NOT NULL,
+                self_rating   TEXT NOT NULL,
+                timestamp     TEXT NOT NULL,
+                PRIMARY KEY (goal_id, task_id, timestamp)
+            )
+            """);
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_role ON model_fit_history(role)");
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_model ON model_fit_history(provider_name, model_name)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
     }
 
@@ -144,6 +161,56 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return results;
     }
 
+    public async Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        var results = new List<ModelFitHistoryRow>();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp
+            FROM model_fit_history
+            ORDER BY timestamp DESC
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadModelFitHistoryRow(reader));
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+        CancellationToken cancellationToken = default)
+    {
+        return ModelOutcomeScorecard.Build(await ListModelFitHistoryAsync(cancellationToken), windowSize);
+    }
+
+    public async Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        var rows = new List<ModelFitHistoryRow>();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp
+            FROM model_fit_history
+            WHERE role = $role
+            ORDER BY timestamp DESC
+            """;
+        cmd.Parameters.AddWithValue("$role", role.ToString());
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add(ReadModelFitHistoryRow(reader));
+        }
+
+        return ModelFitHistory.QueryBestFitForRole(rows, role);
+    }
+
     private static async Task<AgentOrchestratorKernel> LoadFromConnectionAsync(
         SqliteConnection conn,
         CancellationToken cancellationToken)
@@ -224,6 +291,59 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             cmd.Parameters.AddWithValue("$json", json);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
+        {
+            await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken);
+        }
+    }
+
+    private static async Task UpsertModelFitHistoryRowAsync(
+        SqliteConnection conn,
+        ModelFitHistoryRow row,
+        CancellationToken cancellationToken)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO model_fit_history (
+                goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp)
+            VALUES (
+                $goal_id, $task_id, $role, $provider_name, $model_name, $complexity, $task_shape, $outcome, $self_rating, $timestamp)
+            ON CONFLICT(goal_id, task_id, timestamp) DO UPDATE SET
+                role          = excluded.role,
+                provider_name = excluded.provider_name,
+                model_name    = excluded.model_name,
+                complexity    = excluded.complexity,
+                task_shape    = excluded.task_shape,
+                outcome       = excluded.outcome,
+                self_rating   = excluded.self_rating
+            """;
+        cmd.Parameters.AddWithValue("$goal_id", row.GoalId);
+        cmd.Parameters.AddWithValue("$task_id", row.TaskId);
+        cmd.Parameters.AddWithValue("$role", row.Role.ToString());
+        cmd.Parameters.AddWithValue("$provider_name", row.ProviderName);
+        cmd.Parameters.AddWithValue("$model_name", row.ModelName);
+        cmd.Parameters.AddWithValue("$complexity", row.Complexity?.ToString() ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("$task_shape", row.TaskShape ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("$outcome", row.Outcome.ToString());
+        cmd.Parameters.AddWithValue("$self_rating", ModelFitHistory.NormalizeSelfRating(row.SelfRating));
+        cmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static ModelFitHistoryRow ReadModelFitHistoryRow(SqliteDataReader reader)
+    {
+        return new ModelFitHistoryRow(
+            reader.GetString(0),
+            reader.GetString(1),
+            Enum.Parse<AgentRole>(reader.GetString(2)),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.IsDBNull(5) ? null : Enum.Parse<TaskComplexity>(reader.GetString(5)),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            Enum.Parse<WorkTaskStatus>(reader.GetString(7)),
+            ModelFitHistory.NormalizeSelfRating(reader.GetString(8)),
+            DateTimeOffset.Parse(reader.GetString(9), null, System.Globalization.DateTimeStyles.RoundtripKind));
     }
 
     private static async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)

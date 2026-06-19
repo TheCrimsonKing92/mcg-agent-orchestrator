@@ -12,6 +12,19 @@ using System.Text;
 
 public sealed class DashboardRenderingTests
 {
+    [Xunit.Fact(DisplayName = "DashboardRenderer_emits_mobile_responsive_shell")]
+    public void DashboardRendererEmitsMobileResponsiveShell()
+    {
+        var html = DashboardRenderer.Render(new AgentOrchestratorKernel());
+
+        Assert.True(html.Contains("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">", StringComparison.Ordinal));
+        Assert.True(html.Contains("@media (max-width:900px)", StringComparison.Ordinal));
+        Assert.True(html.Contains(".dashboard-nav{flex-wrap:wrap;padding:0}", StringComparison.Ordinal));
+        Assert.True(html.Contains("min-height:44px", StringComparison.Ordinal));
+        Assert.True(html.Contains("section{overflow-x:auto}", StringComparison.Ordinal));
+        Assert.True(html.Contains("<nav class=\"dashboard-nav\">", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_renders_goal_tasks_and_attention")]
     public void DashboardRendererRendersGoalTasksAndAttention()
 {
@@ -1672,7 +1685,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal("large paid subscription start", workSummary.NextAction.Control!.CostRisk);
     Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
     Assert.Equal($"goal-{goalPrefix}", workSummary.BuildEnvironment.LeaseId);
-    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("goals", goalPrefix, "lease", "artifacts"), StringComparison.OrdinalIgnoreCase));
+    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
     Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
     Assert.False(workSummary.BuildEnvironment.LeaseExists);
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));

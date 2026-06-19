@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -15,7 +16,8 @@ public sealed record AcceptanceCheckResult(
     string? LeaseId = null,
     long? DurationMilliseconds = null,
     bool LockRemediationApplied = false,
-    string? ResultSummary = null);
+    string? ResultSummary = null,
+    bool Advisory = false);
 
 public sealed record AcceptanceVerificationResult(
     bool Passed,
@@ -26,11 +28,34 @@ public sealed record AcceptanceVerificationResult(
     string? ArtifactsPath = null,
     IReadOnlyList<AcceptanceCheckResult>? Checks = null);
 
-public sealed class GoalAcceptanceVerifier
+public interface IGoalAcceptanceVerifier
+{
+    Task<AcceptanceVerificationResult> RunAsync(
+        string worktreePath,
+        GoalId? goalId = null,
+        IReadOnlyList<string>? changedFiles = null,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
     internal sealed record CommandResult(int ExitCode, string Output);
 
+    // Hard ceiling for a single build/test process. The suite itself runs in ~90s even in the
+    // throttled acceptance environment, so this only guards a genuinely runaway process. Output is
+    // captured to files (see RunProcessAsync) so a grandchild holding an inherited handle no longer
+    // stalls the command to this ceiling.
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
+
+    private static readonly Regex TestAttrPattern = new(
+        @"^\[(?:Fact|Theory|Xunit\.Fact\()",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex TautologyPattern = new(
+        @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
 
     private readonly Func<string[], string, CancellationToken, Task<CommandResult>> _runner;
 
@@ -59,6 +84,8 @@ public sealed class GoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks = injected.Count == 0
             ? manifest.Checks
             : [.. manifest.Checks, .. injected];
+
+        var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
         var checks = new List<AcceptanceCheckResult>();
         var retried = false;
@@ -149,7 +176,20 @@ public sealed class GoalAcceptanceVerifier
             checks.Add(await RunForbiddenChangedPathsCheckAsync(manifest.ForbiddenChangedPathGlobs, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
-        var failedCheck = checks.FirstOrDefault(check => !check.Passed);
+        // Advisory checks: always run, failures are recorded but do not affect overall Passed.
+        foreach (var advisoryCheck in advisoryChecks)
+        {
+            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+            checks.Add(checkResult.Result with { Advisory = true });
+        }
+
+        var testFileChanges = changedFiles?.Where(IsTestFile).ToArray();
+        if (testFileChanges is { Length: > 0 })
+        {
+            checks.Add(await RunTestTamperCheckAsync(testFileChanges, worktreePath, cancellationToken).ConfigureAwait(false));
+        }
+
+        var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
 
         return new AcceptanceVerificationResult(
@@ -247,6 +287,57 @@ public sealed class GoalAcceptanceVerifier
         return slnContent.Contains(Path.GetFileName(projectPath), StringComparison.OrdinalIgnoreCase);
     }
 
+    private static AcceptanceManifestCheck[] LoadAdvisoryChecks(string worktreePath)
+    {
+        var path = System.IO.Path.Combine(worktreePath, ".orchestrator", "goal-acceptance-criteria.json");
+        if (!File.Exists(path))
+            return [];
+
+        try
+        {
+            var criteria = JsonSerializer.Deserialize<AcceptanceCriterion[]>(
+                File.ReadAllText(path),
+                CriteriaJsonOptions) ?? [];
+            return criteria
+                .Where(c => !string.IsNullOrWhiteSpace(c.Type))
+                .Select(c => CriterionToManifestCheck(c))
+                .ToArray();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static AcceptanceManifestCheck CriterionToManifestCheck(AcceptanceCriterion criterion)
+    {
+        // For command-exit, the stored Command is the full command line (e.g. "dotnet build Foo.sln -c Release").
+        // Split it into executable + arguments for process launch.
+        if (criterion.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(criterion.Command))
+        {
+            var parts = criterion.Command.Split([' '], StringSplitOptions.RemoveEmptyEntries);
+            return new AcceptanceManifestCheck
+            {
+                Name = criterion.Name,
+                Type = "command-exit",
+                Command = parts[0],
+                Arguments = parts.Length > 1 ? parts[1..] : [],
+                Advisory = true
+            };
+        }
+
+        return new AcceptanceManifestCheck
+        {
+            Name = criterion.Name,
+            Type = criterion.Type,
+            Command = criterion.Command,
+            Pattern = criterion.Pattern,
+            FilePath = criterion.Path,
+            Advisory = true
+        };
+    }
+
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckAsync(
         AcceptanceManifestCheck check,
         string worktreePath,
@@ -255,12 +346,82 @@ public sealed class GoalAcceptanceVerifier
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
-            return (new AcceptanceCheckResult(check.Name, true, null, null), false);
+            return (new AcceptanceCheckResult(check.Name, true, null, null, Advisory: check.Advisory), false);
         }
+
+        if (check.Type.Equals("grep-absent", StringComparison.OrdinalIgnoreCase))
+            return (await RunGrepCheckAsync(check, worktreePath, expectPresent: false, cancellationToken).ConfigureAwait(false), false);
+
+        if (check.Type.Equals("grep-present", StringComparison.OrdinalIgnoreCase))
+            return (await RunGrepCheckAsync(check, worktreePath, expectPresent: true, cancellationToken).ConfigureAwait(false), false);
+
+        if (check.Type.Equals("file-exists", StringComparison.OrdinalIgnoreCase))
+            return (RunFileExistsCheck(check, worktreePath), false);
+
+        if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
+            return await RunCommandCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
 
         return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
             ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false)
             : await RunCommandCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AcceptanceCheckResult> RunGrepCheckAsync(
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        bool expectPresent,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(check.Pattern))
+        {
+            return new AcceptanceCheckResult(
+                check.Name, false, 1,
+                "grep check has no pattern configured",
+                Advisory: check.Advisory);
+        }
+
+        var result = await _runner(
+            ["git", "grep", "-q", "--", check.Pattern],
+            worktreePath,
+            cancellationToken).ConfigureAwait(false);
+
+        // git grep exit 0 = pattern found, exit 1 = not found
+        var patternFound = result.ExitCode == 0;
+        var passed = expectPresent ? patternFound : !patternFound;
+        var summary = expectPresent
+            ? (patternFound ? "pattern found" : "pattern not found")
+            : (patternFound ? "pattern still present" : "pattern absent");
+
+        return new AcceptanceCheckResult(
+            check.Name,
+            passed,
+            passed ? 0 : 1,
+            passed ? null : $"Advisory check failed: {summary} for pattern '{check.Pattern}'",
+            ResultSummary: summary,
+            Advisory: check.Advisory);
+    }
+
+    private AcceptanceCheckResult RunFileExistsCheck(
+        AcceptanceManifestCheck check,
+        string worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(check.FilePath))
+        {
+            return new AcceptanceCheckResult(
+                check.Name, false, 1,
+                "file-exists check has no path configured",
+                Advisory: check.Advisory);
+        }
+
+        var fullPath = System.IO.Path.Combine(worktreePath, check.FilePath);
+        var exists = File.Exists(fullPath);
+        return new AcceptanceCheckResult(
+            check.Name,
+            exists,
+            exists ? 0 : 1,
+            exists ? null : $"Advisory check failed: file not found: {check.FilePath}",
+            ResultSummary: exists ? "file exists" : "file not found",
+            Advisory: check.Advisory);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCommandCheckAsync(
@@ -286,7 +447,8 @@ public sealed class GoalAcceptanceVerifier
             check.Name,
             result.ExitCode == 0,
             result.ExitCode,
-            result.ExitCode == 0 ? null : TailOutput(result.Output)), false);
+            result.ExitCode == 0 ? null : TailOutput(result.Output),
+            Advisory: check.Advisory), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunDotnetTestCheckAsync(
@@ -365,6 +527,120 @@ public sealed class GoalAcceptanceVerifier
             : new AcceptanceCheckResult("forbidden changed paths", false, 1, string.Join(Environment.NewLine, forbidden));
     }
 
+    private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
+        string[] testFiles,
+        string worktreePath,
+        CancellationToken cancellationToken)
+    {
+        const string CheckName = "test tamper guard";
+
+        var diffArgs = DiffBaseArgs.Concat(testFiles).ToArray();
+
+        var result = await _runner(diffArgs, worktreePath, cancellationToken).ConfigureAwait(false);
+
+        if (result.ExitCode != 0)
+            return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "diff unavailable");
+
+        var signals = AnalyzeTestFileDiff(result.Output);
+
+        if (signals.Count == 0)
+            return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "no test degradation detected");
+
+        return new AcceptanceCheckResult(
+            CheckName, false, 1,
+            string.Join(Environment.NewLine, signals),
+            Advisory: true,
+            ResultSummary: $"{signals.Count} test degradation signal(s)");
+    }
+
+    private static bool IsTestFile(string path) =>
+        path.Contains("Tests", StringComparison.OrdinalIgnoreCase);
+
+    private static List<string> AnalyzeTestFileDiff(string diff)
+    {
+        var signals = new List<string>();
+        string? currentFile = null;
+        string? pendingFile = null;
+        int assertRemoved = 0, assertAdded = 0;
+        int testAttrRemoved = 0, testAttrAdded = 0;
+        var tautologies = new List<string>();
+
+        void FlushFile()
+        {
+            if (currentFile is null) return;
+            var fileSignals = new List<string>();
+
+            var netAssert = assertRemoved - assertAdded;
+            if (netAssert > 0)
+                fileSignals.Add($"net -{netAssert} assertion(s) removed");
+
+            var netTestAttr = testAttrRemoved - testAttrAdded;
+            if (netTestAttr > 0)
+                fileSignals.Add($"{netTestAttr} test method(s) removed");
+
+            foreach (var t in tautologies)
+                fileSignals.Add($"tautology assertion added: {t}");
+
+            if (fileSignals.Count > 0)
+                signals.Add($"{currentFile}: {string.Join("; ", fileSignals)}");
+        }
+
+        void StartFile(string filePath)
+        {
+            FlushFile();
+            currentFile = filePath;
+            assertRemoved = assertAdded = testAttrRemoved = testAttrAdded = 0;
+            tautologies.Clear();
+        }
+
+        foreach (var rawLine in diff.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+
+            if (line.StartsWith("--- a/", StringComparison.Ordinal))
+            {
+                pendingFile = line[6..];
+            }
+            else if (line.StartsWith("+++ b/", StringComparison.Ordinal))
+            {
+                StartFile(line[6..]);
+                pendingFile = null;
+            }
+            else if (line.StartsWith("+++ /dev/null", StringComparison.Ordinal) && pendingFile is not null)
+            {
+                StartFile(pendingFile);
+                pendingFile = null;
+            }
+            else if (line.Length > 1 && line[0] is '-' or '+' &&
+                     !line.StartsWith("--- ", StringComparison.Ordinal) &&
+                     !line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                var content = line[1..];
+                var trimmed = content.TrimStart();
+
+                if (line[0] == '-')
+                {
+                    if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
+                        assertRemoved++;
+                    if (TestAttrPattern.IsMatch(trimmed))
+                        testAttrRemoved++;
+                }
+                else
+                {
+                    if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
+                        assertAdded++;
+                    if (TestAttrPattern.IsMatch(trimmed))
+                        testAttrAdded++;
+                    if (TautologyPattern.IsMatch(content))
+                        tautologies.Add(trimmed.Length > 80 ? trimmed[..80] + "..." : trimmed);
+                }
+            }
+        }
+
+        FlushFile();
+        return signals;
+    }
+
     private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check)
     {
         var args = new List<string> { "dotnet", "test" };
@@ -374,6 +650,23 @@ public sealed class GoalAcceptanceVerifier
         }
 
         args.AddRange(check.Arguments);
+
+        // Exclude host-integration tests that spawn a real Kestrel dashboard server (binds a port,
+        // needs an interactive firewall allow) — they hang in the unattended, relocated gate. Match
+        // both by class name (works on a worktree built before the trait existed) and by the
+        // [Trait("Category","HostIntegration")] tag (covers any future such tests). They run in a
+        // dedicated lane instead.
+        args.Add("--filter");
+        args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+
+        // Fail a hung test fast and by name instead of silently eating CommandTimeout. A test that
+        // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
+        // can otherwise stall the whole acceptance for ten minutes ("A task was canceled"). The
+        // inactivity timeout is per-test; the full suite runs in ~90s so this never false-trips.
+        args.Add("--blame-hang-timeout");
+        args.Add("120s");
+        args.Add("--blame-hang-dump-type");
+        args.Add("none");
         return [.. args];
     }
 
@@ -447,44 +740,123 @@ public sealed class GoalAcceptanceVerifier
         string workingDirectory,
         CancellationToken cancellationToken)
     {
+        // Capture output to FILES via the platform shell, not pipes. A test or build can spawn a
+        // grandchild that inherits the child's stdout/stderr handle and outlives it; with a
+        // redirected PIPE the test runner never reaches EOF while that grandchild holds the write
+        // end, so `dotnet test` never exits and the whole command rides CommandTimeout to a
+        // "A task was canceled". A plain `dotnet test > out 2> err` exits cleanly in that same
+        // scenario, so we mirror it: every process exits regardless of a lingering grandchild and
+        // we read the files afterward with a shared, delete-tolerant handle.
+        var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
+        var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
+
         var startInfo = new ProcessStartInfo
         {
-            FileName = arguments[0],
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
         };
 
-        // Match the dispatch wrapper: without these, MSBuild worker nodes and
-        // VBCSCompiler outlive the root test process holding the redirected
-        // pipes and worktree obj files, so the output reads below hang until
-        // the command timeout cancels them.
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.FileName = "cmd.exe";
+            // cmd /c strips one surrounding quote pair, so wrap the whole redirected command once.
+            startInfo.Arguments = $"/c \"{BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForCmd)}\"";
+        }
+        else
+        {
+            startInfo.FileName = "/bin/sh";
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForPosix));
+        }
+
+        // Match the dispatch wrapper: keep MSBuild worker nodes and VBCSCompiler from outliving the
+        // root process and pinning worktree obj files.
         startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
         startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
-        for (var i = 1; i < arguments.Length; i++)
+        // Isolate the test run's build/lease slot root so tests that exercise the real lease-execution
+        // lock don't deadlock against the slot lock this acceptance already holds in the shared
+        // default location (a fixed test goalId can hash to the very slot we're holding).
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-tests-{Guid.NewGuid():N}");
+
+        try
         {
-            startInfo.ArgumentList.Add(arguments[i]);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(CommandTimeout);
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                throw;
+            }
+
+            var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
+            var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
+            return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
+        }
+        finally
+        {
+            TryDeleteFile(stdoutPath);
+            TryDeleteFile(stderrPath);
+        }
+    }
+
+    private static string BuildRedirectedCommand(
+        string[] arguments,
+        string stdoutPath,
+        string stderrPath,
+        Func<string, string> quote)
+    {
+        var command = string.Join(' ', arguments.Select(quote));
+        return $"{command} > {quote(stdoutPath)} 2> {quote(stderrPath)}";
+    }
+
+    private static string QuoteForCmd(string value) =>
+        $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+
+    private static string QuoteForPosix(string value) =>
+        $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+
+    private static async Task<string> ReadFileWithRetryAsync(string path)
+    {
+        // A reparented grandchild may still hold the file's write handle; open shared and tolerate
+        // transient locks. The output we need (the child's own writes) is already flushed on exit.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return await reader.ReadToEndAsync().ConfigureAwait(false);
+            }
+            catch (FileNotFoundException)
+            {
+                return string.Empty;
+            }
+            catch (IOException)
+            {
+                await Task.Delay(100).ConfigureAwait(false);
+            }
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
+        return string.Empty;
+    }
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(CommandTimeout);
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-
-        await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-        return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
+    private static void TryDeleteFile(string path)
+    {
+        try { File.Delete(path); } catch { /* best effort; lives under the temp dir */ }
     }
 
     private sealed class AcceptanceManifest
@@ -569,6 +941,12 @@ public sealed class GoalAcceptanceVerifier
         }
     }
 
+    private static readonly JsonSerializerOptions CriteriaJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     private sealed class AcceptanceManifestCheck
     {
         public static AcceptanceManifestCheck DefaultDotnetTest { get; } = new()
@@ -582,5 +960,8 @@ public sealed class GoalAcceptanceVerifier
         public string? Command { get; init; }
         public string? Project { get; init; }
         public IReadOnlyList<string> Arguments { get; init; } = [];
+        public string? Pattern { get; init; }
+        public string? FilePath { get; init; }
+        public bool Advisory { get; init; }
     }
 }

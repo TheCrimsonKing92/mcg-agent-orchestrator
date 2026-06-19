@@ -10,7 +10,8 @@ public static class WorkerSandboxCapabilityPlanner
         Goal goal,
         TaskSpec task,
         WorkerProfile profile,
-        string workingDirectory)
+        string workingDirectory,
+        bool allowGitReference = false)
     {
         if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
         {
@@ -22,7 +23,7 @@ public static class WorkerSandboxCapabilityPlanner
             return new WorkerSandboxCapabilityResult(false, "blocked", $"A goal workspace is required for {task.RequiredRole} file work.");
         }
 
-        var targetRisk = DetectTargetRisk(goal, task, profile);
+        var targetRisk = DetectTargetRisk(goal, task, profile, allowGitReference);
         if (targetRisk is not null)
         {
             return targetRisk;
@@ -34,7 +35,7 @@ public static class WorkerSandboxCapabilityPlanner
             : new WorkerSandboxCapabilityResult(false, "blocked", patchCapability.Detail);
     }
 
-    private static WorkerSandboxCapabilityResult? DetectTargetRisk(Goal goal, TaskSpec task, WorkerProfile profile)
+    private static WorkerSandboxCapabilityResult? DetectTargetRisk(Goal goal, TaskSpec task, WorkerProfile profile, bool allowGitReference)
     {
         var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
         if (text.Contains(".agents/skills", StringComparison.Ordinal) ||
@@ -62,7 +63,10 @@ public static class WorkerSandboxCapabilityPlanner
                 "Task appears to target a SKILL.md file; include the exact .agents/skills path and use a full-permission profile if this is intentional.");
         }
 
-        if (ContainsGitDirectoryReference(text))
+        // The .git block is a conservative guard against a worker trying to write the git object DB.
+        // It false-positives on tasks that merely reference .git read-only (e.g. resolving the repo
+        // root). allowGitReference is the operator's vetted override for exactly that case.
+        if (!allowGitReference && ContainsGitDirectoryReference(text))
         {
             return new WorkerSandboxCapabilityResult(
                 false,

@@ -90,7 +90,8 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        DispatchModelOverride? modelOverride = null)
+        DispatchModelOverride? modelOverride = null,
+        bool allowGitReference = false)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -110,7 +111,7 @@ public static class WorkerProfileDispatcher
             variables["subscriptionModelName"] = resolvedModelName;
         if (modelOverride?.ReasoningEffort is not null)
             variables["subscriptionReasoningEffort"] = resolvedReasoning;
-        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt, modelOverride);
+        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt, modelOverride, allowGitReference);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -136,7 +137,8 @@ public static class WorkerProfileDispatcher
         WorkerProfileCatalog profiles,
         string workingDirectory,
         DateTimeOffset now,
-        DispatchModelOverride? modelOverride = null)
+        DispatchModelOverride? modelOverride = null,
+        bool allowGitReference = false)
     {
         var findings = new List<string>();
         string profileName;
@@ -176,7 +178,7 @@ public static class WorkerProfileDispatcher
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
 
-            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory);
+            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory, allowGitReference);
             findings.Add($"capability: {capability.Status} - {capability.Detail}");
             if (!capability.Allowed)
             {
@@ -267,9 +269,9 @@ public static class WorkerProfileDispatcher
         }
 
         var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);
-        var artifactsPath = Path.Combine(rootPath, "lease", "artifacts");
+        var artifactsPath = DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id);
         var leaseMetadataPath = Path.Combine(rootPath, "lease", "lease.json");
-        var leaseExists = Directory.Exists(artifactsPath) || File.Exists(leaseMetadataPath);
+        var leaseExists = File.Exists(leaseMetadataPath);
         findings.Add(
             $"build environment: goal lease {(leaseExists ? "exists" : "not yet created")} artifacts={artifactsPath}");
     }
@@ -346,13 +348,23 @@ public static class WorkerProfileDispatcher
             })
             .ToList();
 
+        // When the Low-IL sandbox is active, the worker runs at low integrity and physically cannot
+        // write the medium-integrity .git (it lives outside the worktree). The .git-reference preflight
+        // guard exists to stop a worker from targeting VCS internals — a risk the OS already eliminates
+        // here — so it is redundant under the sandbox. Relaxing it lets the conductor autonomously
+        // dispatch tasks whose briefs legitimately mention .git (e.g. repo-root resolution goals)
+        // instead of dropping them from the ready batch and escalating a generic "no ready tasks".
+        var sandboxConfinesWrites = WorkerSandboxOptions.FromEnvironment().Enabled;
+
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var selection in selections)
         {
             var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
             var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
             var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel);
-            var preflight = PreflightSubscriptionTask(goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt);
+            var preflight = PreflightSubscriptionTask(
+                goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
+                allowGitReference: sandboxConfinesWrites);
             if (!preflight.Allowed)
             {
                 continue;
@@ -632,10 +644,16 @@ public static class WorkerProfileDispatcher
         IReadOnlyDictionary<string, string?>? variables)
     {
         var isWriteCapable = role == AgentRole.Developer || role == AgentRole.Tester;
+        // When the OS worker sandbox is active, codex's own sandbox is set to danger-full-access so it
+        // uses ordinary CreateProcess (no CreateProcessAsUserW poisoning); the OS account+ACL enforces
+        // confinement instead. Otherwise keep codex's enforced workspace-write sandbox.
+        var osSandbox = WorkerSandboxOptions.FromEnvironment().Enabled;
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["workingDirectory"] = workingDirectory,
-            ["sandboxMode"] = isWriteCapable ? "workspace-write" : "read-only",
+            ["sandboxMode"] = isWriteCapable
+                ? (osSandbox ? "danger-full-access" : "workspace-write")
+                : "read-only",
             ["permissionMode"] = isWriteCapable ? "bypassPermissions" : "plan"
         };
 

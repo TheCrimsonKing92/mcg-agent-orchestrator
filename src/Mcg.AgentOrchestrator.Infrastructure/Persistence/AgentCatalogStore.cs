@@ -20,6 +20,11 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             ?? throw new KeyNotFoundException($"Agent role '{role}' was not found.");
     }
 
+    public AgentDefinition? FindById(string agentId)
+    {
+        return Agents.FirstOrDefault(agent => agent.Id.Value.Equals(agentId, StringComparison.OrdinalIgnoreCase));
+    }
+
     public AgentCatalog UpsertRole(AgentDefinition agent)
     {
         var agents = Agents

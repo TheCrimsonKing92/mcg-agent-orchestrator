@@ -80,6 +80,13 @@ public sealed class BackgroundDispatchRunner
 
         var isLocalDispatch = IsLocalDispatch(dispatch);
         var parametersPath = Path.Combine(logRoot, $"{prefix}.dispatch.json");
+
+        // OS worker sandbox: for write-capable subscription dispatches (Developer/Tester), run the
+        // worker AS the dedicated low-priv account, confined by ACL to the worktree + git common dir.
+        var sandbox = WorkerSandboxOptions.FromEnvironment();
+        var useSandbox = sandbox.Enabled && !isLocalDispatch &&
+            task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatch.Command,
             dispatch.WorkingDirectory,
@@ -88,7 +95,8 @@ public sealed class BackgroundDispatchRunner
             exitCodePath,
             heartbeatPath,
             ShutdownBuildServerOnExit: !isLocalDispatch,
-            DisableSharedCompilation: !isLocalDispatch));
+            DisableSharedCompilation: !isLocalDispatch,
+            SandboxLowIntegrity: useSandbox));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
@@ -245,11 +253,35 @@ public sealed class BackgroundDispatchRunner
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         var task = kernel.GetTask(goalId, taskId);
         if (RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence) &&
-            exitCode == 0)
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
         {
-            if (!worktreeEvidence.IsClean)
+            // Recovery (exit-code-agnostic): a Developer/Tester that EDITED the worktree and showed
+            // verification evidence but never landed a commit is finished by the orchestrator. This
+            // covers a low-integrity worker — which cannot write the medium-integrity .git (it lives
+            // outside the worktree) and may even exit non-zero attempting to commit — and codex's
+            // Windows sandbox poisoning before commit. The worker only needs to EDIT; the orchestrator
+            // (medium) commits and the acceptance gate re-verifies, so the worker's exit code is not
+            // authoritative here. Dirty-but-UNVERIFIED edits are NOT committed: they fail and surface
+            // for retry/escalation rather than landing unproven work.
+            var recovered = false;
+            if (!worktreeEvidence.IsClean &&
+                DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) &&
+                TryCommitWorktreeEdits(processRecord.WorkingDirectory, goalId) &&
+                TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+                worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
             {
+                recovered = true;
+                exitCode = 0;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Orchestrator committed the worker's uncommitted worktree edits. " +
+                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+            }
+
+            if (!recovered && !worktreeEvidence.IsClean && exitCode == 0)
+            {
+                // Exited 0 but left uncommitted edits the recovery could not land (no verification
+                // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
                     standardErrorDiagnostic ?? string.Empty,
@@ -257,16 +289,39 @@ public sealed class BackgroundDispatchRunner
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
             }
-            else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
-                !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
-                !worktreeEvidence.HasRelevantCommitAfterDispatch)
+            else if (!recovered && worktreeEvidence.IsClean)
             {
-                exitCode = 1;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    "Developer/Tester dispatch exited 0 but did not produce required relevant file-change evidence. " +
-                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
+                var requiresCommitEvidence =
+                    RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
+                    !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
+                    !worktreeEvidence.HasRelevantCommitAfterDispatch;
+
+                if (requiresCommitEvidence)
+                {
+                    // The role had to land a relevant change and didn't — fail regardless of exit code
+                    // (a Developer that produced nothing is a real failure, not exit-code noise).
+                    exitCode = 1;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                        $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
+                }
+                else if (exitCode != 0 &&
+                    DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError))
+                {
+                    // Clean worktree, no commit required (e.g. a Tester verifying already-committed work),
+                    // and the worker produced verification evidence — but it exited non-zero. Under the
+                    // Low-IL sandbox the worker's exit code is unreliable (a benign access-denied during
+                    // shutdown yields a non-zero exit even on success). The deliverable is present and the
+                    // acceptance gate re-verifies, so accept rather than fail on the exit code.
+                    exitCode = 0;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Accepted on verification evidence despite a non-zero worker exit (clean worktree; " +
+                        "worker exit codes are unreliable under the low-integrity sandbox). " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}.");
+                }
             }
 
             // WORKER_RESULT is advisory only. Substance is proven from git ground truth
@@ -355,6 +410,43 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole != AgentRole.Developer &&
             HasExplicitNoChangeRationale(standardOutput, standardError);
+    }
+
+    // Commits the worker's uncommitted worktree edits from the orchestrator (medium integrity). A
+    // low-integrity worker cannot write the medium .git, and codex's Windows sandbox can poison
+    // before it commits — in both cases the worker EDITS the worktree but never lands a commit. The
+    // orchestrator finishes the job so the dispatch can be verified by the acceptance gate. The
+    // sandbox scratch dir (.mcg-sandbox) is kept out of the commit via the worktree's local git
+    // exclude (ExcludeSandboxFromGit), so a plain `add -A` honours that exclusion. We must NOT pass an
+    // explicit ":(exclude).mcg-sandbox" pathspec here: combined with the ignore entry, git treats the
+    // ignored path as explicitly requested and exits non-zero ("paths are ignored ... Use -f") AFTER
+    // partially staging the real files — which previously left edits staged-but-uncommitted.
+    private static bool TryCommitWorktreeEdits(string workingDirectory, GoalId goalId)
+    {
+        try
+        {
+            var add = GitCli.Run(workingDirectory, "add", "-A");
+            if (!add.Succeeded)
+            {
+                return false;
+            }
+
+            var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--name-only");
+            if (staged.ExitCode != 0 || string.IsNullOrWhiteSpace(staged.Output))
+            {
+                // Nothing to commit (e.g. only the excluded sandbox scratch was dirty) — leave the
+                // dispatch to fail/report rather than create an empty commit.
+                return false;
+            }
+
+            var message = $"Orchestrator-committed worker edits for goal {goalId.Value}";
+            var commit = GitCli.Run(workingDirectory, "commit", "-m", message);
+            return commit.Succeeded;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryInspectGoalWorktree(

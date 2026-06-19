@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -107,6 +108,8 @@ public static class WorkerContextArtifacts
         WriteText(Path.Combine(contextDirectory, "context-package.json"), BuildContextPackage(goal, task, contextDirectory));
         WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings);
         SnapshotCurrentPackage(contextDirectory, task.Id);
+
+        WriteAcceptanceCriteriaIfNonEmpty(goal.Objective, workingDirectory);
 
         return contextDirectory;
     }
@@ -266,6 +269,16 @@ public static class WorkerContextArtifacts
             lines.Add(task.VerificationPlan);
         }
 
+        if (task.CriterionRetryFeedback.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Unmet acceptance criteria from the prior attempt - fix these:");
+            foreach (var feedback in task.CriterionRetryFeedback)
+            {
+                lines.Add($"- {feedback}");
+            }
+        }
+
         if (task.LastExecution is not null)
         {
             lines.Add(string.Empty);
@@ -341,7 +354,7 @@ public static class WorkerContextArtifacts
             {
                 lines.Add("## Isolated .NET Verification");
                 lines.Add($"- Use `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal` instead of raw `dotnet test` for .NET checks.");
-                lines.Add($"- Goal build artifacts are isolated under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}` and reused across tasks in this goal.");
+                lines.Add($"- Goal build metadata is recorded under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}`; test artifacts use a bounded stable slot `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`.");
             }
             else if (toolchain == Toolchain.Go)
             {
@@ -1764,6 +1777,25 @@ public static class WorkerContextArtifacts
         {
             lines.Add($"  Stderr path: {verification.StandardErrorPath}");
         }
+    }
+
+    private static readonly JsonSerializerOptions CriteriaJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true
+    };
+
+    private static void WriteAcceptanceCriteriaIfNonEmpty(string objective, string workingDirectory)
+    {
+        var criteria = AcceptanceCriteriaParser.Parse(objective);
+        if (criteria.Count == 0)
+            return;
+
+        var dir = Path.Combine(workingDirectory, ".orchestrator");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "goal-acceptance-criteria.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(criteria, CriteriaJsonOptions));
     }
 
     private static void WriteText(string path, string content)

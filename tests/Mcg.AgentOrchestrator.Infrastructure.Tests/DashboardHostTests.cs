@@ -9,6 +9,11 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
+// Host-integration tests: these spawn a real Kestrel dashboard server (dotnet App.dll
+// serve-dashboard) which binds a port and needs an interactive firewall allow. They cannot run in
+// the hands-off acceptance gate (unattended + relocated build outputs), so they are tagged and
+// excluded there (see GoalAcceptanceVerifier) and run locally / in a dedicated lane instead.
+[Xunit.Trait("Category", "HostIntegration")]
 public sealed class DashboardHostTests
 {
     [Xunit.Fact(DisplayName = "Simple_hosted_dashboard_serves_read_only_metadata_and_survey")]
@@ -517,6 +522,65 @@ public sealed class DashboardHostTests
         Assert.True(command.StartsWith(".\\mcg-orchestrator.cmd --tenant customer_1 hosted-dashboard", StringComparison.Ordinal));
         Assert.Equal("customer_1", selection.TenantName);
         Assert.Equal("hosted-dashboard", selection.CommandArgs[0]);
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_defaults_to_localhost_binding")]
+    public void HostedDashboardDefaultsToLocalhostBinding()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        var uri = new Uri(args.UrlPrefix);
+
+        Assert.Equal("localhost", uri.Host);
+        Assert.Equal(0, DashboardHost.GetHostedUrlPrefixes(args).Count);
+        Assert.Equal(args.UrlPrefix, DashboardHost.GetBrowserUrl(args));
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_bare_port_stays_localhost_binding")]
+    public void HostedDashboardBarePortStaysLocalhostBinding()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "5099", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        Assert.Equal("http://localhost:5099/", args.UrlPrefix);
+        Assert.Equal(0, DashboardHost.GetHostedUrlPrefixes(args).Count);
+        Assert.Equal("http://localhost:5099/", DashboardHost.GetBrowserUrl(args));
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_lan_flag_binds_all_interfaces")]
+    public void HostedDashboardLanFlagBindsAllInterfaces()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "--lan", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        var uri = new Uri(args.UrlPrefix);
+
+        Assert.Equal("0.0.0.0", uri.Host);
+        Assert.True(uri.Port is >= 5087 and <= 5186);
+    }
+
+    [Xunit.Fact(DisplayName = "Hosted_dashboard_explicit_lan_url_prints_public_url")]
+    public void HostedDashboardExplicitLanUrlPrintsPublicUrl()
+    {
+        var args = DashboardHost.ParseDashboardHostArgs(
+            ["serve-dashboard", "http://192.0.2.10:5099/", "--no-open"],
+            "hosted-dashboard",
+            defaultOpenBrowser: false);
+
+        Assert.Equal("http://0.0.0.0:5099/", args.UrlPrefix);
+        Assert.Equal("http://192.0.2.10:5099/", args.PublicUrlPrefix);
+        Assert.Equal("http://192.0.2.10:5099/", DashboardHost.GetBrowserUrl(args));
+        Assert.True(DashboardHost.GetHostedUrlPrefixes(args).SequenceEqual(["http://192.0.2.10:5099/"]));
+        Assert.True(DashboardHost.GetHostedUrlPrefixes(args)
+            .Select(DashboardHost.GetDashboardPageUrl)
+            .SequenceEqual(["http://192.0.2.10:5099/dashboard"]));
     }
 
     private static async Task<string> GetRequiredStringAsync(HttpClient client, Uri uri)

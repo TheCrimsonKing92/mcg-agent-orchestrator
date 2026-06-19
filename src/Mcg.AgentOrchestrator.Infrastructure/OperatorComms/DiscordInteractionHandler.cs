@@ -38,14 +38,29 @@ public static class DiscordInteractionHandler
         if (string.IsNullOrWhiteSpace(userId))
             return Error("Interaction missing user id.");
 
-        if (!allowedUserIds.Contains(userId, StringComparer.Ordinal))
-            return Error($"User '{userId}' is not in the operator allowlist.");
-
         var customId = root["data"]?["custom_id"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(customId))
             return Error("Interaction missing custom_id.");
 
-        var idempotencyKey = root["id"]?.GetValue<string>() ?? customId;
+        var interactionId = root["id"]?.GetValue<string>() ?? customId;
+
+        return Process(customId, userId, interactionId, allowedUserIds);
+    }
+
+    public static DiscordInteractionResult Process(
+        string customId,
+        string userId,
+        string interactionId,
+        IReadOnlyList<string> allowedUserIds)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+            return Error("Interaction missing user id.");
+
+        if (!allowedUserIds.Contains(userId, StringComparer.Ordinal))
+            return Error($"User '{userId}' is not in the operator allowlist.");
+
+        if (string.IsNullOrWhiteSpace(customId))
+            return Error("Interaction missing custom_id.");
 
         if (customId.StartsWith(ConfirmedPrefix, StringComparison.Ordinal))
         {
@@ -55,7 +70,7 @@ public static class DiscordInteractionHandler
                 return Error($"Malformed confirmed custom_id: {customId}");
 
             return new DiscordInteractionResult(
-                new OperatorDecision(inboxItemId, command, null, $"discord:{userId}", idempotencyKey),
+                new OperatorDecision(inboxItemId, command, null, $"discord:{userId}", interactionId),
                 RequiresConfirmation: false,
                 ConfirmationCustomId: null,
                 ErrorMessage: null);
@@ -84,7 +99,7 @@ public static class DiscordInteractionHandler
                 return Error($"Malformed direct custom_id: {customId}");
 
             return new DiscordInteractionResult(
-                new OperatorDecision(inboxItemId, command, null, $"discord:{userId}", idempotencyKey),
+                new OperatorDecision(inboxItemId, command, null, $"discord:{userId}", interactionId),
                 RequiresConfirmation: false,
                 ConfirmationCustomId: null,
                 ErrorMessage: null);

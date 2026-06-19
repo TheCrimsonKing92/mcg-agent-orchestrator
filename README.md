@@ -44,6 +44,8 @@ To publish a local Windows executable:
 
 The default publish is framework-dependent and single-file for `win-x64`. Add `-SelfContained` when you need a larger build that does not rely on a locally installed .NET runtime.
 
+Orchestrator-managed `dotnet test` runs write build/test artifacts under a bounded slot pool at `%TEMP%\mcg-dotnet-isolated\slots\` so Windows Firewall sees stable `testhost.exe` paths. If Windows prompts on first use, allow the `.NET testhost` path once; subsequent worker, verification, and acceptance runs reuse the same slot paths instead of creating per-goal executable locations.
+
 ---
 
 # FUNDAMENTALS

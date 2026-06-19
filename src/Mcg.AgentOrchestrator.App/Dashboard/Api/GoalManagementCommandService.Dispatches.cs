@@ -129,7 +129,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
     TaskSpec task,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
-    DispatchModelOverride? modelOverride = null)
+    DispatchModelOverride? modelOverride = null,
+    bool allowGitReference = false)
 {
     return WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -140,7 +141,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
         workspace.PromptDirectory,
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
-        modelOverride);
+        modelOverride,
+        allowGitReference);
 }
 
 public static SubscriptionStartResult StartSubscriptionReadyTasks(

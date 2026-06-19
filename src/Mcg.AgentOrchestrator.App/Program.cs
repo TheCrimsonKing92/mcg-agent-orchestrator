@@ -8,7 +8,7 @@ if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
     return DispatchProcessHost.Run(args[1]);
 }
 
-var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorTenantSelection tenantSelection;
 try
 {
@@ -27,7 +27,7 @@ var startupArgs = tenantSelection.CommandArgs.Count == 0
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
-// the solution file so .orchestrator is always at the repo root regardless of launch CWD.
+// a Git repository root so .orchestrator is rooted with the target repo regardless of launch CWD.
 var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
@@ -39,6 +39,24 @@ var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
+var operatorBotToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+IOperatorChannel operatorChannel;
+if (SkipsStartupOperatorChannel(startupArgs))
+{
+    operatorChannel = NullOperatorChannel.Instance;
+}
+else
+{
+    try
+    {
+        operatorChannel = OperatorChannelFactory.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
+    }
+    catch
+    {
+        operatorChannel = NullOperatorChannel.Instance;
+    }
+}
 
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
 {
@@ -55,6 +73,22 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     return 0;
 }
 
+if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
+{
+    var commandKernel = new AgentOrchestratorKernel();
+    Goal? commandCurrentGoal = null;
+    try
+    {
+        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
 await SqliteStateJsonMigrator.MigrateIfNeededAsync(workspace.StatePath, workspace.SqliteStatePath);
 ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 var kernel = await stateRepository.LoadAsync();
@@ -64,7 +98,7 @@ if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
         return 0;
     }
     catch (Exception ex)
@@ -103,6 +137,7 @@ Console.WriteLine("  doctor, architecture, tenant, state-rollback --confirm-stat
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
 Console.WriteLine("  prototype [objective], prototype-ui [url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  serve-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
+Console.WriteLine("  operator-listen");
 Console.WriteLine("  hosted-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  simple-hosted-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  open-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
@@ -166,10 +201,25 @@ while (true)
 
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"Error: {ex.Message}");
     }
+}
+
+static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
+{
+    if (startupArgs.Count == 0)
+        return false;
+
+    var command = startupArgs[0];
+    return command.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }

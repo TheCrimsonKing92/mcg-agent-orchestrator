@@ -4199,6 +4199,22 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_commands_only")]
+    public void RunnerSkipsKernelStateForOperatorCommandsOnly()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-listen"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["OPERATOR-LISTEN"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel", "test", "--spine"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["conduct", "abc123"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["serve-dashboard"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState([]));
+    }
+
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
     public void PrintGoalsRendersMetadataSummaries()
     {
@@ -4354,6 +4370,161 @@ public sealed class CliCommandTests
                     new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
             }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_role_flags_assign_named_agents_at_creation")]
+    public void CliGoalRoleFlagsAssignNamedAgentsAtCreation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
+            .AddOrReplaceById(TestAgent("planner-alt", AgentRole.Planner))
+            .AddOrReplaceById(TestAgent("researcher-alt", AgentRole.Researcher))
+            .AddOrReplaceById(TestAgent("developer-alt", AgentRole.Developer))
+            .AddOrReplaceById(TestAgent("tester-alt", AgentRole.Tester))
+            .AddOrReplaceById(TestAgent("reviewer-alt", AgentRole.Reviewer))
+            .Agents;
+        var originalAgents = agents.ToList();
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            [
+                "goal",
+                "Implement roster overrides",
+                "--planner",
+                "planner-alt",
+                "--researcher",
+                "researcher-alt",
+                "--developer",
+                "developer-alt",
+                "--tester",
+                "tester-alt",
+                "--reviewer",
+                "reviewer-alt"
+            ],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal("planner-alt", AssignedAgentId(currentGoal!, AgentRole.Planner));
+        Xunit.Assert.Equal("researcher-alt", AssignedAgentId(currentGoal, AgentRole.Researcher));
+        Xunit.Assert.Equal("developer-alt", AssignedAgentId(currentGoal, AgentRole.Developer));
+        Xunit.Assert.Equal("tester-alt", AssignedAgentId(currentGoal, AgentRole.Tester));
+        Xunit.Assert.Equal("reviewer-alt", AssignedAgentId(currentGoal, AgentRole.Reviewer));
+        Xunit.Assert.Equal(originalAgents.Select(agent => agent.Id.Value), agents.Select(agent => agent.Id.Value));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_role_flags_leave_omitted_roles_on_defaults")]
+    public void CliGoalRoleFlagsLeaveOmittedRolesOnDefaults()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
+            .AddOrReplaceById(TestAgent("planner-alt", AgentRole.Planner))
+            .Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal", "Use planner override only", "--planner", "planner-alt"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal("planner-alt", AssignedAgentId(currentGoal!, AgentRole.Planner));
+        Xunit.Assert.Equal("openai-developer", AssignedAgentId(currentGoal, AgentRole.Developer));
+        Xunit.Assert.Equal("openai-reviewer", AssignedAgentId(currentGoal, AgentRole.Reviewer));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_role_flag_unknown_agent_errors_clearly")]
+    public void CliGoalRoleFlagUnknownAgentErrorsClearly()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal", "Fail unknown agent", "--developer", "missing-agent"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal)));
+
+        Xunit.Assert.Contains("Unknown agent id 'missing-agent' for --developer", ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_developer_flag_assigns_named_agent_at_creation")]
+    public void CliSimpleGoalDeveloperFlagAssignsNamedAgentAtCreation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
+            .AddOrReplaceById(TestAgent("developer-alt", AgentRole.Developer))
+            .Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Implement one task", "--developer", "developer-alt"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Single(currentGoal!.Tasks);
+        Xunit.Assert.Equal("developer-alt", currentGoal.Tasks.Single().AssignedAgentId!.Value);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_simple_alias_forwards_developer_flag")]
+    public void CliGoalSimpleAliasForwardsDeveloperFlag()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
+            .AddOrReplaceById(TestAgent("developer-alt", AgentRole.Developer))
+            .Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal", "Implement one task through alias", "--simple", "--developer", "developer-alt"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Single(currentGoal!.Tasks);
+        Xunit.Assert.Equal("developer-alt", currentGoal.Tasks.Single().AssignedAgentId!.Value);
     }
 
     [Xunit.Fact(DisplayName = "Cli_simple_goal_without_dispatch_only_creates_goal")]
@@ -4660,6 +4831,18 @@ public sealed class CliCommandTests
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile(id));
+
+    private static AgentDefinition TestAgent(string id, AgentRole role) => new(
+        new AgentId(id),
+        id,
+        role,
+        new ModelProfile("Fake", id, ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+
+    private static string AssignedAgentId(Goal goal, AgentRole role)
+    {
+        return goal.Tasks.Single(task => task.RequiredRole == role).AssignedAgentId!.Value;
+    }
 
     private static void RecordRunningProcess(
         AgentOrchestratorKernel kernel,

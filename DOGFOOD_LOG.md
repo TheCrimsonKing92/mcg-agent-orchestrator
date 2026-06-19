@@ -1499,3 +1499,185 @@ Goal bfe43df6: # Consolidate duplicated git-process runners into one shared GitC
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-17 - # Consolidate duplicated Display(enum) name maps into one shared helper  ## P...
+
+Goal 85957656: # Consolidate duplicated Display(enum) name maps into one shared helper  ## Problem The enum-to-display-string switch.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit af29a27). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — 298/298 Core.Tests + 820/820 Infrastructure.Tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - mechanical deduplication/refactor - straightforward switch consolidation, no complex logic.
+
+## 2026-06-17 - # Acceptance-criteria verification, increment 1a (ADVISORY): run the goal's o...
+
+Goal 87d49eea: # Acceptance-criteria verification, increment 1a (ADVISORY): run the goal's own ## Acceptance criteria  ## Why Accept.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-17 - # Add a goals-prune verb to reap landed-but-unclosed goals  ## Problem Goals ...
+
+Goal b9282731: # Add a goals-prune verb to reap landed-but-unclosed goals  ## Problem Goals that landed (their work is merged to mai.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 9573de2). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — Core 307/307, Infrastructure 833/833 (includes 7 new GoalsPruneTests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file CLI feature with git integration and test coverage - correctly navigated the partial-class CLI handler pattern, adapted GoalWorktrees/GitCli helpers, and produced 7 passing tests matching the custom Assert framework.
+
+## 2026-06-17 - # Conductor landing + dispatch-start robustness (true unattended operation)  ...
+
+Goal d5c46af7: # Conductor landing + dispatch-start robustness (true unattended operation)  Two independent conductor defects observ.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit d31e18547fd7a18c8d95add86fd92069490e15d9). Acceptance passed.
+
+- Operator gate: Developer: ALL GREEN — Core.Tests 307/307, Infrastructure.Tests 830/830 (4 new tests added, all pass) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - App-layer surgical fix with cascade test updates - straightforward once the code paths were located; no novel reasoning required.
+
+## 2026-06-17 - # Acceptance 1b: bounded auto-retry-with-feedback on an unmet acceptance crit...
+
+Goal 07e63cd2: # Acceptance 1b: bounded auto-retry-with-feedback on an unmet acceptance criterion  ## Context (1a already landed) 1a.... Developer task via OpenAI/gpt-5.5 (exit 0, commit 2728ed9). Acceptance passed.
+
+- Operator gate: Developer: pass - build clean; Core.Tests 308 passed; Infrastructure.Tests 842 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET conductor change - handled implementation, tests, and verification without needing a stronger model.
+
+## 2026-06-17 - # Acceptance increment 2: advisory test-tamper guard  ## Why A worker can mak...
+
+Goal 5f76fd29: # Acceptance increment 2: advisory test-tamper guard  ## Why A worker can make the suite go green by WEAKENING the te.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit b938ba0). Acceptance passed.
+
+- Operator gate: Developer: pass — 308/308 Core.Tests + 846/846 Infrastructure.Tests (4 new tamper-guard tests included) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - advisory check feature with diff parsing heuristic and mocked-runner test pattern - appropriate capability for the task; no overkill.
+
+## 2026-06-17 - # Wire Discord OUTBOUND paging end-to-end (make escalations actually page)  #...
+
+Goal df1a5422: # Wire Discord OUTBOUND paging end-to-end (make escalations actually page)  ## Context All Discord primitives exist a.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit e93d464). Acceptance passed.
+
+- Operator gate: Developer: pass — Core.Tests 308/308, Infrastructure.Tests 854/854 (all green); 37 OperatorChannel tests including 9 new ones (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file wiring task requiring tracing through 5 architectural layers (Infrastructure → Orchestration → CLI → App startup → Tests), all changes scoped and verifiable - adequate for this pattern.
+
+## 2026-06-17 - # Discord INBOUND via gateway: make button taps resolve escalations (two-way ...
+
+Goal 7e81dad3: # Discord INBOUND via gateway: make button taps resolve escalations (two-way channel)  ## Context Discord outbound pa.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit a6ae5e8). Acceptance passed.
+
+- Operator gate: Developer: pass — 867 Infrastructure tests (incl. 11 new DiscordGatewayTests), 308 Core tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file feature addition with tests - the task required understanding existing patterns, adding new infrastructure components with clean seams, and writing parity tests; sonnet handled this well without needing more capability.
+
+## 2026-06-17 - # Host the Discord gateway listener + bind the decision applier (make inbound...
+
+Goal 6ec7e93c: # Host the Discord gateway listener + bind the decision applier (make inbound actually run)  ## Context The Discord i.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - app-layer wiring with existing static patterns - no design ambiguity; all extension points were clear from existing code.
+
+## 2026-06-17 - # Conductor dispatch-start reliability: bounded retry on transient spawn fail...
+
+Goal 853ac01d: # Conductor dispatch-start reliability: bounded retry on transient spawn failure  ## Context Goal d5c46af7 made the c.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 79b4a3f). Acceptance passed.
+
+- Operator gate: Developer: pass — Core.Tests 308/308, Infrastructure.Tests 874/874 (4 new tests added, all green) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - categorized-result refactor + retry logic across 3 test files - well-scoped; sonnet handled the cascading test updates without difficulty.
+
+## 2026-06-17 - # Make the Discord operator channel verifiable: settable allowlist + test-esc...
+
+Goal 0650cb7b: # Make the Discord operator channel verifiable: settable allowlist + test-escalation command  ## Context Discord outb.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 09be3f3). Acceptance passed.
+
+- Operator gate: Developer: pass — 878 Infrastructure.Tests (4 new: OperatorChannelStore_roundtrips_catalog_with_forum_channel_id_X_and_user_ids_A_B, OperatorChannelCatalog_three_user_ids_from_csv_A_B_C, OperatorChannelFactory_SendTestEscalation_null_channel_prints_guidance_and_does_not_throw, OperatorChannelFactory_SendTestEscalation_configured_channel_calls_send_once_with_safe_button); Core.Tests 308/308 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - scoped multi-file CLI extension with targeted tests - task was well-specified with clear file paths; no LLM orchestration or ambiguous design decisions required.
+
+## 2026-06-18 - # Phase 0: the collaboration-item spine (deterministic control plane) — incre...
+
+Goal 40d4560e: # Phase 0: the collaboration-item spine (deterministic control plane) — increment 1  ## Intent (observable) A single .... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit eead964). Acceptance passed.
+
+- Operator gate: Developer: pass — Core 344/344, Infrastructure 889/889 (both suites fully green including 47 new tests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - deterministic state-machine + SQLite store implementation with CLI integration - no reasoning needed, pure structural work.
+
+## 2026-06-18 - # Goal refinement stage (the "Meta-Planner" done right) — increment 1  ## Sco...
+
+Goal bef94079: # Goal refinement stage (the "Meta-Planner" done right) — increment 1  ## Scope, stated on three independent axes (so.... Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-18 - # Phase 2: Discord as a durable VIEW over the collaboration spine (decouple +...
+
+Goal c3580797: # Phase 2: Discord as a durable VIEW over the collaboration spine (decouple + correct response)  ## Intent (observabl.... Planner task via (no receipt) (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 842d6bf). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; build exit 0; Core.Tests 354 passed; Infrastructure.Tests 906 passed; dashboard source rg found zero Discord references (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - medium backend refactor with tests - handled code/test changes, live Discord validation remains external.
+
+## 2026-06-18 - # Agent-menu: compose a goal's role roster at creation (one command)  ## Inte...
+
+Goal 32a5b028: # Agent-menu: compose a goal's role roster at creation (one command)  ## Intent (observable) A goal can be created wi.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit d4e1b8e). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (planner role — no code changes) (exit 0); Researcher: not-run (research task, no code changes) (exit 0); Developer: pass; focused override tests pass; build clean; Core 354 passed, Infrastructure 910 passed (exit 0)
+- Model fit: Model fit: Anthropic/claude-sonnet-4-6 - adequate - planning task with deep codebase exploration across CLI, kernel, and test layers - sonnet handles cross-file reasoning and structured plan authoring well without overkill.
+
+## 2026-06-18 - # Model-fit history in SQLite (structured, queryable — stop the DOGFOOD-prose...
+
+Goal 4dbd0bb5: # Model-fit history in SQLite (structured, queryable — stop the DOGFOOD-prose sprawl)  ## Intent (observable) Model-f.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 5416400b7190e46f3d913b06cd0db6e14ba06ce3). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; build clean, Core 354/354, Infrastructure 908/908 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - structured persistence and query task - enough context and implementation depth without overcomplicating the layering.
+
+## 2026-06-18 - # operator-listen: coexist with the orchestrator (stop locking state
+
+Goal 779b86c5: # operator-listen: coexist with the orchestrator (stop locking state.db) + spine-backed test seed  ## Why The Directo.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 91eabc8). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; focused 45/45, Release build 0 warnings/errors, full suites 354/354 Core + 916/916 Infrastructure (exit 0)
+- Model fit: Not reported.
+
+## 2026-06-18 - # Bake --disable-build-servers into orchestrator-spawned verification/accepta...
+
+Goal 0ee27aa2: # Bake --disable-build-servers into orchestrator-spawned verification/acceptance builds  ## Why Concurrent worktree b.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 0ea38c5). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; focused filter passed 35/35, release build passed 0 warnings/0 errors (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET build hygiene change - handled implementation, focused tests, and commit.
+
+## 2026-06-18 - # Phase 4b: mobile-responsive dashboard  ## Intent (observable) The dashboard...
+
+Goal 685bdadd: # Phase 4b: mobile-responsive dashboard  ## Intent (observable) The dashboard renders cleanly and is usable on a PHON.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit ec1833c). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; focused renderer test 1/1, Release build 0 warnings/0 errors, Core 354/354 and Infrastructure 917/917 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped responsive dashboard implementation - completed with clean build and full suite verification.
+
+## 2026-06-18 - # Judge-input fidelity: feed acceptance judges the actual diff, not a test-ev...
+
+Goal c97bea0a: # Judge-input fidelity: feed acceptance judges the actual diff, not a test-evidence excerpt  ## Problem (observed rep.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 150749f). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass; SemanticAcceptanceTests 35/35, build clean 0 warnings/errors, Core.Tests 354/354, Infrastructure.Tests 918/918 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped acceptance evidence fix - handled implementation, tests, and verification cleanly.
+
+## 2026-06-18 - # Phase 2
+
+Goal 8dfa90e1: # Phase 2.5: low-noise progress VIEW in Discord (live edited status thread)  ## Intent Give the Director a high-level.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 79c8660). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Developer: pass; build 0 warnings/0 errors; Core 356/356 passed; Infrastructure 917/917 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET implementation and verification - handled code navigation, implementation, tests, and commit.
+
+## 2026-06-18 - # Phase 4a: expose the dashboard on the LOCAL network (local-wifi only, NOT p...
+
+Goal f14b5827: # Phase 4a: expose the dashboard on the LOCAL network (local-wifi only, NOT public internet)  ## Intent (observable) .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit da18671). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Developer: pass; build clean 0 warnings/errors; Core 356 passed; Infrastructure 925 passed; focused DashboardHostTests 9 passed; manual phone-on-wifi not run (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped dashboard host binding change with focused tests - handled safely without broader design work.
+
+## 2026-06-18 - # Eliminate testhost firewall prompts for unattended test runs (stable/socket...
+
+Goal 1e88e199: # Eliminate testhost firewall prompts for unattended test runs (stable/socketless testhost; stop artifact-path sprawl.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 6232423). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: pass - Release build clean; Core 356/356 and Infrastructure 926/926 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - .NET infrastructure path/verification change - enough context and coding capability for scoped implementation.
+
+## 2026-06-18 - # KEYSTONE: fix conductor silent auto-dispatch-start so it drives a goal role...
+
+Goal 82f1038b: # KEYSTONE: fix conductor silent auto-dispatch-start so it drives a goal role end-to-end UNATTENDED  ## Why (north-st.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
+
+## 2026-06-18 - # Mock the nested build/acceptance in GoalWorktreeTests (fast, deterministic,...
+
+Goal 45a65740: # Mock the nested build/acceptance in GoalWorktreeTests (fast, deterministic, prompt-free)  ## Why A FAMILY of GoalWo.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 569d0c75867c39713e1ec80cd49447816cee6bd8). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (planner role — no implementation) (exit 0); Developer: pass; Release build clean; Core 356 passed/0 skipped; Infrastructure 927 passed/0 skipped; GoalWorktreeTests 45 passed/0 skipped (exit 0)
+- Model fit: Not reported.
+
+## 2026-06-18 - # Judge-input increment 2: aggregate true PER-FILE verdicts + budgeting for L...
+
+Goal 019a2b2b: # Judge-input increment 2: aggregate true PER-FILE verdicts + budgeting for LARGE multi-file changes  ## Why (north-s.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 9f12432). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Developer: pass; semantic focused 38/38, core 356/356, infrastructure 930/930; build succeeded 0 warnings/errors (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped multi-file judge behavior change - enough reasoning for edge cases and test coverage.

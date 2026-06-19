@@ -405,6 +405,22 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal("Run dotnet test after implementation.", restoredTask.VerificationPlan);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
 }
+
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_criterion_retry_state")]
+    public void SnapshotRoundtripPreservesCriterionRetryState()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Persist criterion retry state");
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["file-exists docs/usage.md: missing file"]);
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+
+    Assert.Equal(1, restoredTask.CriterionRetryCount);
+    Assert.True(restoredTask.CriterionRetryFeedback.Any(item => item.Contains("docs/usage.md", StringComparison.Ordinal)));
+}
     [Xunit.Fact(DisplayName = "CancelGoal_marks_active_assigned_goal_cancelled_with_reason")]
     public void CancelGoalMarksActiveAssignedGoalCancelledWithReason()
 {

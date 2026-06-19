@@ -89,6 +89,28 @@ public sealed partial class AgentOrchestratorKernel
         instructionLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(instructionLines));
 
+        if (goal.RefinedSpec is { } refinedSpec)
+        {
+            var specLines = new List<string>
+            {
+                "## Refined Spec",
+                $"Behavioral contract: {refinedSpec.BehavioralContract}",
+                string.Empty,
+                "Acceptance criteria:"
+            };
+            foreach (var criterion in refinedSpec.AcceptanceCriteria)
+                specLines.Add($"- {criterion}");
+            if (refinedSpec.Decisions.Count > 0)
+            {
+                specLines.Add(string.Empty);
+                specLines.Add("Decisions:");
+                foreach (var decision in refinedSpec.Decisions)
+                    specLines.Add($"- {decision.Question} → {decision.Choice} ({decision.Rationale})");
+            }
+            specLines.Add(string.Empty);
+            segments.Add(TaskBriefSegment.Fixed(specLines));
+        }
+
         var roleLines = new List<string>();
         roleLines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
         roleLines.Add(string.Empty);
@@ -108,6 +130,17 @@ public sealed partial class AgentOrchestratorKernel
                     string.Empty
                 ],
                 CollapsePriority: 50));
+        }
+
+        if (task.CriterionRetryFeedback.Count > 0)
+        {
+            var feedbackLines = new List<string>
+            {
+                "## Unmet acceptance criteria from the prior attempt - fix these:"
+            };
+            feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {PromptContextFormatter.TrimPromptBlock(item)}"));
+            feedbackLines.Add(string.Empty);
+            segments.Add(TaskBriefSegment.Fixed(feedbackLines));
         }
 
         if (pendingInput.Count > 0)

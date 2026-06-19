@@ -37,7 +37,7 @@ public sealed class DiscordNetForumApi : IDiscordForumApi, IAsyncDisposable
         return post.Id;
     }
 
-    public async Task SendMessageAsync(
+    public async Task<ulong> SendMessageAsync(
         ulong threadId,
         string content,
         IReadOnlyList<DiscordButtonDefinition> buttons,
@@ -60,12 +60,53 @@ public sealed class DiscordNetForumApi : IDiscordForumApi, IAsyncDisposable
                     DiscordButtonStyle.Secondary => ButtonStyle.Secondary,
                     _ => ButtonStyle.Primary
                 };
-                builder.WithButton(button.Label, button.CustomId, style);
+                builder.WithButton(button.Label, button.CustomId, style, disabled: button.Disabled);
             }
             components = builder.Build();
         }
 
-        await channel.SendMessageAsync(content, components: components);
+        var message = await channel.SendMessageAsync(content, components: components);
+        return message.Id;
+    }
+
+    public async Task EditMessageAsync(
+        ulong threadId,
+        ulong messageId,
+        string content,
+        IReadOnlyList<DiscordButtonDefinition> buttons,
+        CancellationToken cancellationToken = default)
+    {
+        var channel = await _client.GetChannelAsync(threadId) as IMessageChannel
+            ?? throw new InvalidOperationException(
+                $"Thread {threadId} could not be retrieved as a message channel.");
+
+        MessageComponent? components = null;
+        if (buttons.Count > 0)
+        {
+            var builder = new ComponentBuilder();
+            foreach (var button in buttons.Take(5))
+            {
+                var style = button.Style switch
+                {
+                    DiscordButtonStyle.Danger => ButtonStyle.Danger,
+                    DiscordButtonStyle.Success => ButtonStyle.Success,
+                    DiscordButtonStyle.Secondary => ButtonStyle.Secondary,
+                    _ => ButtonStyle.Primary
+                };
+                builder.WithButton(button.Label, button.CustomId, style, disabled: button.Disabled);
+            }
+            components = builder.Build();
+        }
+
+        var message = await channel.GetMessageAsync(messageId) as IUserMessage
+            ?? throw new InvalidOperationException(
+                $"Message {messageId} could not be retrieved in thread {threadId}.");
+
+        await message.ModifyAsync(properties =>
+        {
+            properties.Content = content;
+            properties.Components = components;
+        });
     }
 
     public async ValueTask DisposeAsync()

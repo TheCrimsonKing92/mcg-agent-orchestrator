@@ -268,14 +268,14 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
 private static GoalBuildEnvironmentDto ToGoalBuildEnvironmentDto(Goal goal)
 {
     var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);
-    var artifactsPath = Path.Combine(rootPath, "lease", "artifacts");
+    var artifactsPath = DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id);
     var leaseMetadataPath = Path.Combine(rootPath, "lease", "lease.json");
     return new GoalBuildEnvironmentDto(
         $"goal-{goal.Id.Value[..8].ToLowerInvariant()}",
         rootPath,
         artifactsPath,
         leaseMetadataPath,
-        Directory.Exists(artifactsPath) || File.Exists(leaseMetadataPath));
+        File.Exists(leaseMetadataPath));
 }
 
 public static TaskWorkContextDto ToTaskWorkContextDto(

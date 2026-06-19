@@ -1,4 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Generators;
@@ -425,7 +427,214 @@ public sealed class OperatorChannelTests
         Assert.Equal(DiscordButtonStyle.Danger, buttons[0].Style);
     }
 
+    // ---- OperatorChannelFactory ----
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_catalog_is_null_type")]
+    public void OperatorChannelFactoryReturnsNullChannelWhenCatalogIsNullType()
+    {
+        var catalog = OperatorChannelCatalog.Default();
+        var channel = OperatorChannelFactory.Create(catalog, "any-token", CreateTempDirectory());
+        Assert.Equal("null", channel.ChannelType);
+        Assert.True(channel is NullOperatorChannel);
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_token_missing")]
+    public void OperatorChannelFactoryReturnsNullChannelWhenTokenMissing()
+    {
+        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "123456789");
+        var channel = OperatorChannelFactory.Create(catalog, null, CreateTempDirectory());
+        Assert.Equal("null", channel.ChannelType);
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_forum_channel_id_missing")]
+    public void OperatorChannelFactoryReturnsNullChannelWhenForumChannelIdMissing()
+    {
+        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", ForumChannelId: null);
+        var channel = OperatorChannelFactory.Create(catalog, "token", CreateTempDirectory());
+        Assert.Equal("null", channel.ChannelType);
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_discord_channel_when_fully_configured")]
+    public void OperatorChannelFactoryReturnsDiscordChannelWhenFullyConfigured()
+    {
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 1UL);
+        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "42");
+        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
+        Assert.Equal("discord", channel.ChannelType);
+    }
+
+    // ---- OperatorChannelCatalog ForumChannelId / OperatorUserIds roundtrip ----
+
+    [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_discord_catalog_with_forum_channel_id")]
+    public void OperatorChannelStoreRoundtripsDiscordCatalogWithForumChannelId()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "operator-channel.json");
+        var catalog = new OperatorChannelCatalog(
+            "discord",
+            "https://localhost:5001",
+            ForumChannelId: "987654321",
+            OperatorUserIds: ["111", "222"]);
+
+        OperatorChannelStore.Save(path, catalog);
+        var restored = OperatorChannelStore.Load(path);
+
+        Assert.Equal("discord", restored.ChannelType);
+        Assert.Equal("987654321", restored.ForumChannelId);
+        Assert.Equal(2, restored.OperatorUserIds?.Count ?? 0);
+        Assert.False(restored.IsNull);
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_catalog_with_forum_channel_id_X_and_user_ids_A_B")]
+    public void OperatorChannelStoreRoundtripsCatalogWithForumChannelIdXAndUserIdsAB()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "operator-channel.json");
+        var catalog = new OperatorChannelCatalog("discord", null, "X", ["A", "B"]);
+
+        OperatorChannelStore.Save(path, catalog);
+        var restored = OperatorChannelStore.Load(path);
+
+        Assert.Equal("X", restored.ForumChannelId);
+        Assert.Equal(2, restored.OperatorUserIds?.Count ?? 0);
+        Assert.True(restored.OperatorUserIds!.Contains("A"));
+        Assert.True(restored.OperatorUserIds!.Contains("B"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelCatalog_three_user_ids_from_csv_A_B_C")]
+    public void OperatorChannelCatalogThreeUserIdsFromCsvABC()
+    {
+        var csv = "A,B,C";
+        var userIds = (IReadOnlyList<string>)csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var catalog = new OperatorChannelCatalog("discord", null, null, userIds);
+
+        Assert.Equal(3, catalog.OperatorUserIds?.Count ?? 0);
+        Assert.True(catalog.OperatorUserIds!.Contains("A"));
+        Assert.True(catalog.OperatorUserIds!.Contains("B"));
+        Assert.True(catalog.OperatorUserIds!.Contains("C"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_null_channel_prints_guidance_and_does_not_throw")]
+    public async Task OperatorChannelFactorySendTestEscalationNullChannelPrintsGuidanceAndDoesNotThrow()
+    {
+        var channel = NullOperatorChannel.Instance;
+        var output = new StringWriter();
+
+        await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
+
+        var text = output.ToString();
+        Assert.Contains(text, s => s.Contains("not configured"));
+        Assert.Contains(text, s => s.Contains("MCGO_DISCORD_BOT_TOKEN"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_configured_channel_calls_send_once_with_safe_button")]
+    public async Task OperatorChannelFactorySendTestEscalationConfiguredChannelCallsSendOnceWithSafeButton()
+    {
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 100UL);
+        var catalog = new OperatorChannelCatalog("discord", null, "42");
+        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
+        var output = new StringWriter();
+
+        await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
+
+        Assert.Equal(1, fakeApi.SentMessages.Count);
+        var buttons = fakeApi.SentMessages[0].Buttons;
+        Assert.Equal(1, buttons.Count);
+        Assert.False(buttons[0].CustomId.StartsWith("mcgo-confirm|", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannel_spine_test_seed_raises_attention_queue_item_with_correlation_key")]
+    public async Task OperatorChannelSpineTestSeedRaisesAttentionQueueItem()
+    {
+        var workspace = BuildTestWorkspace();
+
+        var item = CliCommandHandlers.RaiseOperatorChannelSpineTestItem(workspace.OrchestratorDirectory);
+
+        Assert.Equal(CollaborationItemType.Verify, item.Type);
+        Assert.Equal("operator-channel-test", item.GoalId);
+        Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
+        Assert.True(item.CorrelationKey!.StartsWith("operator-channel-test-spine-", StringComparison.Ordinal));
+
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var queue = await store.GetAttentionQueueAsync();
+        var queued = queue.Single();
+        Assert.Equal(item.Id, queued.Id);
+        Assert.Equal(item.CorrelationKey, queued.CorrelationKey);
+        Assert.Equal(CollaborationItemStatus.Raised, queued.Status);
+    }
+
+    // ---- Escalation path: SendEscalationAsync called on RecordLandingEscalation ----
+
+    [Xunit.Fact(DisplayName = "RecordLandingEscalation_calls_channel_send_when_configured")]
+    public void RecordLandingEscalationCallsChannelSendWhenConfigured()
+    {
+        var workspace = BuildTestWorkspace();
+        var goal = BuildTestGoal();
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 500UL);
+        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, workspace.OrchestratorDirectory);
+
+        Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
+            workspace, goal, "conflict on integration", "integration", channel);
+
+        Assert.Equal(1, fakeApi.SentMessages.Count);
+        Assert.Contains(fakeApi.SentMessages[0].Content, s => s.Contains("LandingEscalation"));
+    }
+
+    [Xunit.Fact(DisplayName = "RecordLandingEscalation_inbox_still_recorded_when_channel_throws")]
+    public void RecordLandingEscalationInboxStillRecordedWhenChannelThrows()
+    {
+        var workspace = BuildTestWorkspace();
+        var goal = BuildTestGoal();
+        var throwingChannel = new ThrowingFakeChannel();
+
+        Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
+            workspace, goal, "conflict reason", "integration", throwingChannel);
+
+        var escapedPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
+        Assert.True(File.Exists(escapedPath));
+    }
+
+    // ---- Deep link rendered in message content ----
+
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_renders_deep_link_in_content")]
+    public async Task DiscordOperatorChannelRendersDeepLinkInContent()
+    {
+        var fakeApi = new FakeDiscordForumApi(nextThreadId: 600UL);
+        var stateDir = CreateTempDirectory();
+        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var escalation = BuildEscalation("inbox-deep-link", goalPrefix: "abc123")
+            with { DashboardDeepLink = "https://localhost:5001/goals/abc123" };
+
+        await channel.SendEscalationAsync(escalation);
+
+        var sentContent = fakeApi.SentMessages[0].Content;
+        Assert.Contains(sentContent, s => s.Contains("https://localhost:5001/goals/abc123"));
+    }
+
     // ---- helpers ----
+
+    private static Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace BuildTestWorkspace()
+    {
+        var dir = CreateTempDirectory();
+        return Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(dir);
+    }
+
+    private static Mcg.AgentOrchestrator.Core.Goal BuildTestGoal()
+    {
+        var id = Mcg.AgentOrchestrator.Core.GoalId.New();
+        var task = new Mcg.AgentOrchestrator.Core.TaskSpec(
+            Mcg.AgentOrchestrator.Core.TaskId.New(),
+            "Test task",
+            Mcg.AgentOrchestrator.Core.AgentRole.Developer);
+        return new Mcg.AgentOrchestrator.Core.Goal(id, "Test objective", [task]);
+    }
+
+    private sealed class ThrowingFakeChannel : IOperatorChannel
+    {
+        public string ChannelType => "throwing-fake";
+        public Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Simulated channel failure.");
+    }
 
     private static OperatorEscalation BuildEscalation(
         string inboxItemId,
@@ -506,6 +715,7 @@ public sealed class OperatorChannelTests
 
         public List<(string Title, string Content)> CreatedThreads { get; } = [];
         public List<(ulong ThreadId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> SentMessages { get; } = [];
+        public List<(ulong ThreadId, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> EditedMessages { get; } = [];
 
         public Task<ulong> CreateThreadAsync(
             ulong forumChannelId,
@@ -517,13 +727,24 @@ public sealed class OperatorChannelTests
             return Task.FromResult(_nextThreadId);
         }
 
-        public Task SendMessageAsync(
+        public Task<ulong> SendMessageAsync(
             ulong threadId,
             string content,
             IReadOnlyList<DiscordButtonDefinition> buttons,
             CancellationToken cancellationToken = default)
         {
             SentMessages.Add((threadId, content, buttons));
+            return Task.FromResult((ulong)SentMessages.Count);
+        }
+
+        public Task EditMessageAsync(
+            ulong threadId,
+            ulong messageId,
+            string content,
+            IReadOnlyList<DiscordButtonDefinition> buttons,
+            CancellationToken cancellationToken = default)
+        {
+            EditedMessages.Add((threadId, messageId, content, buttons));
             return Task.CompletedTask;
         }
     }

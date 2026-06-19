@@ -23,7 +23,7 @@ public static int RunPrototypeUi(
 {
     var hostArgs = ParseDashboardHostArgs(parts, "prototype-ui", defaultOpenBrowser: true);
     var prototypeWorkspacePath = PrototypeWorkspaceSeeder.Create(Environment.CurrentDirectory, agentFallback);
-    var executionDirectory = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+    var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
     var prototypeWorkspace = OrchestratorWorkspace.ForDirectory(
         prototypeWorkspacePath,
         string.IsNullOrWhiteSpace(executionDirectory) ? Environment.CurrentDirectory : executionDirectory,
@@ -82,13 +82,11 @@ public static DashboardHostArgs ParseDashboardHostArgs(IReadOnlyList<string> par
 {
     var hosted = IsHostedDashboardCommand(commandName);
     var enableOperatorControls = !commandName.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase);
-    var usage = $"Usage: {commandName} [port|url] [--refresh seconds] [--open] [--no-open]";
+    var usage = $"Usage: {commandName} [port|url] [--refresh seconds] [--lan] [--open] [--no-open]";
     var preferredPort = hosted
         ? GetHostedDashboardPortFromEnvironment() ?? 5087
         : 5087;
-    var urlPrefix = hosted
-        ? SelectAvailableHostedUrlPrefix(preferredPort)
-        : SelectAvailableLocalUrlPrefix(preferredPort);
+    var urlPrefix = SelectAvailableLocalUrlPrefix(preferredPort);
     string? publicUrlPrefix = null;
     var hasUrl = false;
     int? refreshSeconds = 5;
@@ -106,6 +104,19 @@ public static DashboardHostArgs ParseDashboardHostArgs(IReadOnlyList<string> par
         if (part.Equals("--open", StringComparison.OrdinalIgnoreCase))
         {
             openBrowser = true;
+            continue;
+        }
+
+        if (part.Equals("--lan", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasUrl)
+            {
+                throw new ArgumentException(usage);
+            }
+
+            urlPrefix = SelectAvailableHostedUrlPrefix(preferredPort);
+            publicUrlPrefix = null;
+            hasUrl = true;
             continue;
         }
 
@@ -194,9 +205,7 @@ public static DashboardUrlPrefixes NormalizeUrlPrefix(string value, bool hosted,
             throw new ArgumentException("Dashboard port must be between 1 and 65535.");
         }
 
-        return new DashboardUrlPrefixes(
-            hosted ? $"http://0.0.0.0:{port}/" : $"http://localhost:{port}/",
-            null);
+        return new DashboardUrlPrefixes($"http://localhost:{port}/", null);
     }
 
     if (trimmed.StartsWith("-", StringComparison.Ordinal))
@@ -236,7 +245,7 @@ public static DashboardUrlPrefixes NormalizeUrlPrefix(string value, bool hosted,
             builder.Port = bindPort.Value;
         }
     }
-    else if (hosted)
+    else if (hosted && !IsLoopbackHost(uri.Host))
     {
         publicUrlPrefix = EnsureTrailingSlash(builder.Uri.GetLeftPart(UriPartial.Authority));
         builder.Host = "0.0.0.0";

@@ -36,9 +36,12 @@ This repository implements an AI agent orchestrator. Avoid recursive or high-fan
 - Do not spawn workers to verify work until local evidence indicates the change is ready.
 - Prefer one narrow verification command per change.
 
+**Judging a dispatched worker's progress.** A worker showing zero stdout AND an empty worktree is NOT stalled — it is reading the brief + project context and planning. claude-cli/codex write nothing (stdout *or* files) during this phase, which is 4–6+ minutes for a complex brief. Judge a dispatch hung ONLY by a long-window absence of progress — default 15–30 min for Complex work — and confirm against the worker PROCESS (alive + CPU accumulating = thinking) before concluding, never a short empty-worktree snapshot. A short "backstop timer → cancel → re-dispatch" loop manufactures the very hang it's looking for and is the worst form of repeating-hoping-for-a-different-result; it also invites hallucinated root causes (rate-limiting, etc.) to explain the self-inflicted symptom. Inspect, don't theorize.
+
 ## Repository Rules
 
 - Treat version-controlled files as source. Build outputs, browser profiles, prototype workspace files, logs, scratch scripts, and previous run artifacts are not source structure.
+- **Durable state lives in the stores, never in `.scratch`.** Canonical homes: SQLite (backlog, kernel state, collaboration-items) and tracked files (AGENTS.md, docs/, config). `--brief-file`/`--body-file` are throwaway vehicles to pass long content past the command-length permission cap — once the command runs, the durable copy is the goal objective / backlog item, so DELETE the scratch input. Clean `.scratch` as you go; never let it become a parallel faux-durable store. We keep migrating the codebase off scattered state files — do not reintroduce the same sprawl in operating habits.
 - Core and Infrastructure intentionally keep flat public namespaces: `Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`.
 - Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
 
@@ -51,6 +54,18 @@ Before adding a member, field, case, or flag, think about the system ontology �
 - **Open domains take open extension points, not enum churn.** When the set of things is expected to grow (orchestrator-internal model functions: judges, samplers, summarizers, oracles), extend via a composable point — an open `Purpose` string + a registry — so the next one needs zero taxonomy change. Reserve enums for genuinely closed, exhaustive sets (the 6 SDLC roles).
 - **Constraints are load-bearing; do not trade them for convenience.** The deterministic gates, subscription-budget-first posture, and evidence-over-narrative spine are invariants of this system. New work composes WITH them (e.g. an LLM judgment lands ADVISORY, never inside a deterministic gate; fan-out goes on free/cheap lanes, never the paid CLI). If a feature seems to require breaking one, that is a design signal to rethink the placement, not a license.
 - **Put behavior where its data and invariant already live.** Prefer extending an existing seam that owns the concept over threading a parallel path; reuse the deterministic signal that already exists (e.g. select among parallel model outputs by an existing validator, not a model self-rating). Match the surrounding idiom.
+
+## Specification Discipline — the brief is the unverified root of trust
+
+The gates verify "did the output match the spec," never "was the spec right" — so a sloppy brief lands a plausible-but-wrong implementation on green tests (the Discord listener that deleted its own forum post compiled and passed fake-API tests; the gateway built but never hosted; `postResult` left optional so the operator saw nothing). A capable worker does exactly what the brief says — quality is set or lost in the brief. Before dispatch, run the objective through this rubric; each item is a scar:
+
+- **External-interaction contracts — happy AND unhappy path.** For every external system/API/UI touched, state the exact contract incl. failure/edge behavior. (Discord interaction-ack semantics were unspecified → improvised wrongly.)
+- **Observable success.** Say what the user SEES/experiences on success, not just "it works."
+- **Ownership / lifecycle / hosting — decide it.** Where it lives, its lifecycle, its dependencies. Never offer "host here OR there"; collapse options into a decision or escalate the genuine fork to the human. Don't pass under-determination downstream.
+- **Own the seams.** If work spans goals/files, name the integration contract and make integration verification a first-class, OWNED step — the bugs live in the unowned seams between locally-green pieces. ("Built but not wired": a "make X work end-to-end" goal that touches only Infrastructure + tests and no App/host/CLI is almost certainly not reachable.)
+- **Verification class.** Tag it: TEST-VERIFIABLE (pure logic → automated gate suffices) vs REAL-WORLD-DEPENDENT (external/UX/integration → a green test is NOT "done"; ship a human/real-world checklist as the gate). Fake-API unit tests cannot prove an integration works; that takes a real round-trip.
+
+Separate the axes when scoping: WHERE it applies (which goals) vs HOW it's implemented (stage/role/function) vs WHAT the increment limits (depth vs coverage) — conflating them produces contradictory specs.
 
 ## Diagnosis Discipline — empirics over theorizing
 

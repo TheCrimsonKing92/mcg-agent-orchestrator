@@ -33,8 +33,7 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[3]);
         Assert.Equal(GetArtifactsPath(calls[1]), GetArtifactsPath(calls[3]));
         Assert.True(result.ArtifactsPath is not null);
-        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("goals", "abcd1234"), StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("lease", "artifacts"), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
         var check = result.Checks!.Single(item => item.Name == "dotnet test");
         Assert.Equal("goal-acceptance-verifier", check.BrokerName);
         Assert.Equal("goal-abcd1234", check.LeaseId);
@@ -549,6 +548,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("dotnet", args[0]);
         Assert.Equal("test", args[1]);
         Assert.True(args.Any(arg => arg.Equals("--artifacts-path", StringComparison.Ordinal)));
+        Assert.True(args.Any(arg => arg.Equals("--disable-build-servers", StringComparison.Ordinal)));
         Assert.True(args.Any(arg => arg.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal)));
         Assert.Contains(GetArtifactsPath(args), text => text.Contains("mcg-dotnet-isolated", StringComparison.Ordinal));
     }
@@ -561,12 +561,401 @@ public sealed class GoalAcceptanceVerifierTests
         return args[artifactsPathIndex + 1];
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_grep_absent_failure_does_not_affect_passed")]
+    public async Task GoalAcceptanceVerifierAdvisoryGrepAbsentFailureDoesNotAffectPassed()
+    {
+        var root = CreateAdvisoryWorkspace("""
+            [
+              {
+                "name": "grep confirms no path still calls `new JsonSerializerOptions`",
+                "type": "grep-absent",
+                "pattern": "new JsonSerializerOptions"
+              }
+            ]
+            """);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),                                                         // build-server shutdown
+            new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5."),   // dotnet test
+            new(0, "src/Foo.cs:JsonSerializerOptions opts = new JsonSerializerOptions();") // git grep (pattern found)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        // Suite passed, advisory grep-absent FAILED (pattern found)
+        Assert.True(result.Passed);
+        var advisoryCheck = result.Checks!.Single(c => c.Advisory);
+        Assert.False(advisoryCheck.Passed);
+        Assert.True(advisoryCheck.Advisory);
+        Assert.True(advisoryCheck.Name.Contains("new JsonSerializerOptions", StringComparison.Ordinal));
+        // grep was the last call
+        Assert.Equal("git", calls.Last()[0]);
+        Assert.Equal("grep", calls.Last()[1]);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_grep_absent_passes_when_pattern_absent")]
+    public async Task GoalAcceptanceVerifierAdvisoryGrepAbsentPassesWhenPatternAbsent()
+    {
+        var root = CreateAdvisoryWorkspace("""
+            [
+              {
+                "name": "grep confirms no `OldClass` remains",
+                "type": "grep-absent",
+                "pattern": "OldClass"
+              }
+            ]
+            """);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),   // build-server shutdown
+            new(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2."), // dotnet test
+            new(1, "")    // git grep exit 1 = pattern not found
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        Assert.True(result.Passed);
+        var advisoryCheck = result.Checks!.Single(c => c.Advisory);
+        Assert.True(advisoryCheck.Passed);
+        Assert.Equal("pattern absent", advisoryCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_file_exists_check_reports_pass_and_fail")]
+    public async Task GoalAcceptanceVerifierAdvisoryFileExistsCheckReportsPassAndFail()
+    {
+        // Use a file that does NOT yet exist in the workspace
+        var root = CreateAdvisoryWorkspace("""
+            [
+              {
+                "name": "`.orchestrator/output.txt` is produced",
+                "type": "file-exists",
+                "path": ".orchestrator/output.txt"
+              }
+            ]
+            """);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),  // build-server shutdown
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")  // dotnet test
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        // First run: .orchestrator/output.txt does not exist
+        var resultMissing = await verifier.RunAsync(root);
+        Assert.True(resultMissing.Passed);
+        var missingCheck = resultMissing.Checks!.Single(c => c.Advisory);
+        Assert.False(missingCheck.Passed);
+        Assert.Equal("file not found", missingCheck.ResultSummary);
+
+        // Create the file and verify it now passes
+        var responses2 = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
+        ]);
+        File.WriteAllText(Path.Combine(root, ".orchestrator", "output.txt"), "done");
+
+        var verifier2 = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            return Task.FromResult(responses2.Dequeue());
+        });
+
+        var resultPresent = await verifier2.RunAsync(root);
+        Assert.True(resultPresent.Passed);
+        var presentCheck = resultPresent.Checks!.Single(c => c.Advisory);
+        Assert.True(presentCheck.Passed);
+        Assert.Equal("file exists", presentCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_command_exit_runs_and_reports")]
+    public async Task GoalAcceptanceVerifierAdvisoryCommandExitRunsAndReports()
+    {
+        var root = CreateAdvisoryWorkspace("""
+            [
+              {
+                "name": "`dotnet build Fake.sln -c Release` clean, no new warnings.",
+                "type": "command-exit",
+                "command": "dotnet build Fake.sln -c Release"
+              }
+            ]
+            """);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),   // build-server shutdown
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),   // dotnet test
+            new(0, "Build succeeded.")  // dotnet build (advisory command-exit)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        Assert.True(result.Passed);
+        var advisoryCheck = result.Checks!.Single(c => c.Advisory);
+        Assert.True(advisoryCheck.Passed);
+        Assert.True(advisoryCheck.Advisory);
+
+        // Advisory command was the last call
+        var lastCall = calls.Last();
+        Assert.Equal("dotnet", lastCall[0]);
+        Assert.Equal("build", lastCall[1]);
+        Assert.Equal("Fake.sln", lastCall[2]);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_checks_run_even_when_suite_fails")]
+    public async Task GoalAcceptanceVerifierAdvisoryChecksRunEvenWhenSuiteFails()
+    {
+        var root = CreateAdvisoryWorkspace("""
+            [
+              {
+                "name": "`.orchestrator/marker.txt` exists",
+                "type": "file-exists",
+                "path": ".orchestrator/marker.txt"
+              }
+            ]
+            """);
+        File.WriteAllText(Path.Combine(root, ".orchestrator", "marker.txt"), "exists");
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),   // build-server shutdown
+            new(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")  // dotnet test FAILS
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        // Overall failed because suite failed
+        Assert.False(result.Passed);
+        // But advisory check still ran and passed
+        var advisoryCheck = result.Checks!.Single(c => c.Advisory);
+        Assert.True(advisoryCheck.Passed);
+        Assert.Equal("file exists", advisoryCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_loads_no_advisory_checks_when_criteria_file_missing")]
+    public async Task GoalAcceptanceVerifierLoadsNoAdvisoryChecksWhenCriteriaFileMissing()
+    {
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        // Use a plain worktree with no criteria file
+        var result = await verifier.RunAsync("C:\\fake\\worktree");
+
+        Assert.True(result.Passed);
+        Assert.True(result.Checks is null || !result.Checks.Any(c => c.Advisory));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_flags_deleted_fact_method")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardFlagsDeletedFactMethod()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,5 +10,0 @@",
+            "-    [Xunit.Fact(DisplayName = \"some test\")]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }"
+        ]);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),                                                              // build-server shutdown
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),        // dotnet test
+            new(0, diff)                                                             // git diff test tamper
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+
+        // Suite still passed — advisory does not gate
+        Assert.True(result.Passed);
+        Assert.Equal(0, result.ExitCode);
+
+        // Tamper check is advisory and failed
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Advisory);
+        Assert.False(tamperCheck.Passed);
+        Assert.True(tamperCheck.OutputTail is not null);
+        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("FooTests.cs", StringComparison.Ordinal));
+
+        // Git diff was the last call
+        var lastCall = calls.Last();
+        Assert.Equal("git", lastCall[0]);
+        Assert.Equal("diff", lastCall[1]);
+        Assert.True(lastCall.Any(a => a.Equals("main...HEAD", StringComparison.Ordinal)));
+        Assert.True(lastCall.Any(a => a.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_passes_when_assertions_added")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardPassesWhenAssertionsAdded()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,0 +10,5 @@",
+            "+    [Xunit.Fact(DisplayName = \"new test\")]",
+            "+    public void NewTest()",
+            "+    {",
+            "+        Assert.True(something);",
+            "+    }"
+        ]);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),
+            new(0, diff)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+
+        Assert.True(result.Passed);
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Advisory);
+        Assert.True(tamperCheck.Passed);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_flags_tautology_assertion")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardFlagsTautologyAssertion()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -12,1 +12,1 @@",
+            "-        Assert.True(something);",
+            "+        Assert.True(true);"
+        ]);
+
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),
+            new(0, diff)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+
+        Assert.True(result.Passed);
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Advisory);
+        Assert.False(tamperCheck.Passed);
+        Assert.True(tamperCheck.OutputTail is not null);
+        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("tautology", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("Assert.True(true)", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_absent_when_no_test_files_in_diff")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardAbsentWhenNoTestFilesInDiff()
+    {
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: [
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs",
+                "README.md"
+            ]);
+
+        Assert.True(result.Passed);
+        Assert.False(result.Checks?.Any(c => c.Name == "test tamper guard") == true);
+        Assert.Equal(2, calls.Count); // shutdown + infra tests; no git diff call
+    }
+
     private static string CreateManifestWorkspace(string manifest)
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
         var manifestDirectory = Path.Combine(root, "config");
         Directory.CreateDirectory(manifestDirectory);
         File.WriteAllText(Path.Combine(manifestDirectory, "acceptance-manifest.json"), manifest);
+        return root;
+    }
+
+    private static string CreateAdvisoryWorkspace(string criteriaJson)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
+        var orchestratorDir = Path.Combine(root, ".orchestrator");
+        Directory.CreateDirectory(orchestratorDir);
+        File.WriteAllText(
+            Path.Combine(orchestratorDir, "goal-acceptance-criteria.json"),
+            criteriaJson);
         return root;
     }
 }

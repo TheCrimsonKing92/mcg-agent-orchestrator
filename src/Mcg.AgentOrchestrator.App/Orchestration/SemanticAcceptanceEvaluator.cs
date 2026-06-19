@@ -253,6 +253,7 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
 internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
 {
     internal const int MaxPerFileJudgeCalls = 10;
+    internal const int MaxPerFileDiffChars = 4000;
 
     private readonly ISemanticJudge _leaf;
 
@@ -275,33 +276,60 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
         // Skip whitespace-only files — they carry no semantic signal.
         var substantive = perFileDiffs.Where(f => !IsWhitespaceOnly(f.Diff)).ToList();
 
-        // Fall back to the whole-diff call when no substantive files remain or the file count
-        // exceeds the cap — prevents excessive cold-start cost on large changes.
-        if (substantive.Count == 0 || substantive.Count > MaxPerFileJudgeCalls)
+        if (substantive.Count == 0)
         {
             return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
         }
 
         var perFileVerdicts = await Task.WhenAll(
-            substantive.Select(file => _leaf.JudgeAsync(
-                inputs with
-                {
-                    DiffExcerpt = file.Diff,
-                    ChangedFiles = [file.File],
-                    PerFileDiffs = null
-                },
-                cancellationToken)))
+            substantive.Select(file => JudgeFileAsync(file, inputs, cancellationToken)))
             .ConfigureAwait(false);
 
         return Aggregate(perFileVerdicts);
+    }
+
+    private async Task<PerFileJudgeVerdict> JudgeFileAsync(
+        (string File, string Diff) file,
+        SemanticAcceptanceInputs inputs,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var verdict = await _leaf.JudgeAsync(
+                inputs with
+                {
+                    DiffExcerpt = BudgetDiff(file.Diff),
+                    ChangedFiles = [file.File],
+                    PerFileDiffs = null
+                },
+                cancellationToken).ConfigureAwait(false);
+            return new PerFileJudgeVerdict(file.File, verdict);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new PerFileJudgeVerdict(
+                file.File,
+                SemanticAcceptanceVerdict.Invalid($"Per-file judge failed for {file.File}: {ex.Message}"));
+        }
+    }
+
+    private static string BudgetDiff(string diff)
+    {
+        if (diff.Length <= MaxPerFileDiffChars)
+        {
+            return diff;
+        }
+
+        return diff[..MaxPerFileDiffChars] +
+            $"{Environment.NewLine}...(per-file judge diff summarized at {MaxPerFileDiffChars} chars; oversized single-file change still judged)";
     }
 
     private static bool IsWhitespaceOnly(string diff)
     {
         foreach (var line in diff.Split('\n'))
         {
-            if ((line.StartsWith('+') && !line.StartsWith("+++")) ||
-                (line.StartsWith('-') && !line.StartsWith("---")))
+            if ((line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal)) ||
+                (line.StartsWith('-') && !line.StartsWith("---", StringComparison.Ordinal)))
             {
                 if (!string.IsNullOrWhiteSpace(line[1..]))
                     return false;
@@ -310,19 +338,30 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
         return true;
     }
 
-    private static SemanticAcceptanceVerdict Aggregate(SemanticAcceptanceVerdict[] verdicts)
+    private static SemanticAcceptanceVerdict Aggregate(PerFileJudgeVerdict[] verdicts)
     {
-        var valid = verdicts.Where(v => v.IsValid).ToList();
-        if (valid.Count == 0)
+        var valid = verdicts.Where(v => v.Verdict.IsValid).ToList();
+        var coverageReason = $"RecursivePerFileSemanticJudge coverage: {valid.Count} of {verdicts.Length} files judged.";
+        var reasons = valid.SelectMany(v => v.Verdict.Reasons).Prepend(coverageReason).ToList();
+        var unmet = valid.SelectMany(v => v.Verdict.UnmetCriteria).Distinct(StringComparer.Ordinal).ToList();
+        var invalid = verdicts.Where(v => !v.Verdict.IsValid).ToList();
+        foreach (var file in invalid)
         {
-            return SemanticAcceptanceVerdict.Invalid(
-                "RecursivePerFileSemanticJudge: no valid per-file verdict to aggregate.");
+            var error = file.Verdict.ValidationErrors.Count == 0
+                ? "judge produced no valid verdict"
+                : string.Join("; ", file.Verdict.ValidationErrors);
+            reasons.Add($"{file.File}: {error}");
+            unmet.Add($"{file.File}: no valid per-file verdict");
         }
 
-        var criteriaMet = valid.All(v => v.CriteriaMet);
-        var confidence = LowestConfidence(valid.Select(v => v.Confidence));
-        var reasons = valid.SelectMany(v => v.Reasons).ToList();
-        var unmet = valid.SelectMany(v => v.UnmetCriteria).Distinct(StringComparer.Ordinal).ToList();
+        if (valid.Count == 0)
+        {
+            unmet.Add("No substantive file produced a valid per-file verdict");
+            return new SemanticAcceptanceVerdict(false, "low", reasons, unmet, []);
+        }
+
+        var criteriaMet = invalid.Count == 0 && valid.All(v => v.Verdict.CriteriaMet);
+        var confidence = invalid.Count == 0 ? LowestConfidence(valid.Select(v => v.Verdict.Confidence)) : "low";
         return new SemanticAcceptanceVerdict(criteriaMet, confidence, reasons, unmet, []);
     }
 
@@ -338,6 +377,8 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
 
         return confidences.OrderBy(Rank).FirstOrDefault() ?? "unknown";
     }
+
+    private sealed record PerFileJudgeVerdict(string File, SemanticAcceptanceVerdict Verdict);
 }
 
 internal static class SemanticAcceptanceEvaluator

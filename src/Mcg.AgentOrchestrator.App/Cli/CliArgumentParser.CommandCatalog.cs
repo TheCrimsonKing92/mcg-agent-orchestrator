@@ -4,7 +4,8 @@ internal static partial class CliArgumentParser
 {
 private static bool IsSimpleCommand(string command)
 {
-    return command.Equals("status", StringComparison.OrdinalIgnoreCase) ||
+    return command.Equals("attention", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("status", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("doctor", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("state-compact", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("provider-smoke", StringComparison.OrdinalIgnoreCase) ||
@@ -34,6 +35,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("input-needed", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-inbox", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-inbox-ack", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("next", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("subscription-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("advance", StringComparison.OrdinalIgnoreCase) ||
@@ -101,6 +103,8 @@ private static bool IsSimpleCommand(string command)
         command.Equals("backlog-show", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-import", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase);
+        command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goals-prune", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("operator-channel", StringComparison.OrdinalIgnoreCase);
 }
 }

@@ -367,6 +367,14 @@ public interface IOrchestratorStateRepository
     // resolution). The SQLite backend reads the indexed metadata columns directly; the file
     // backend projects from a full load (no perf win, kept correct so the interface stays honest).
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+        CancellationToken cancellationToken = default);
+
+    Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
 }
 
 public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
@@ -411,6 +419,24 @@ public sealed class FileOrchestratorStateRepository : ITransactionalOrchestrator
                 item.goal.Objective,
                 item.at.ToString("O")))
             .ToList();
+    }
+
+    public async Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        var kernel = await OrchestratorStateStore.LoadAsync(_path, cancellationToken);
+        return ModelFitHistory.FromGoals(kernel.Goals);
+    }
+
+    public async Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+        CancellationToken cancellationToken = default)
+    {
+        return ModelOutcomeScorecard.Build(await ListModelFitHistoryAsync(cancellationToken), windowSize);
+    }
+
+    public async Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default)
+    {
+        return ModelFitHistory.QueryBestFitForRole(await ListModelFitHistoryAsync(cancellationToken), role);
     }
 
     public Task<T> TransactAsync<T>(

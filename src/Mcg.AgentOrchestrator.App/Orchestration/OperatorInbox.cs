@@ -109,6 +109,20 @@ internal static class OperatorInbox
             visible);
     }
 
+    // Lightweight acknowledgement without a full kernel load — used by the Discord gateway
+    // listener where we want to ack the inbox item after dispatch without re-loading state.
+    // If the itemId doesn't match a live inbox item, the record is still stored and silently
+    // ignored when the inbox report is next built.
+    public static void AppendAcknowledgement(OrchestratorWorkspace workspace, string itemId)
+    {
+        var acknowledgements = LoadAcknowledgements(workspace)
+            .Where(item => !item.ItemId.Equals(itemId, StringComparison.OrdinalIgnoreCase))
+            .Append(new OperatorInboxAcknowledgement(itemId, DateTimeOffset.UtcNow, null))
+            .OrderBy(item => item.AcknowledgedAt)
+            .ToList();
+        SaveAcknowledgements(workspace, acknowledgements);
+    }
+
     public static OperatorInboxReport Acknowledge(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
@@ -405,13 +419,57 @@ internal static class OperatorInbox
         OrchestratorWorkspace workspace,
         Goal goal,
         string reason,
-        string integrationBranch)
+        string integrationBranch,
+        IOperatorChannel? channel = null,
+        ICollaborationItemStore? collaborationStore = null)
     {
         var existing = LoadLandingEscalations(workspace)
             .Where(e => !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
             .ToList();
         existing.Add(new LandingEscalationRecord(goal.Id.Value, reason, integrationBranch, DateTimeOffset.UtcNow));
         SaveLandingEscalations(workspace, existing);
+
+        var goalPrefix = goal.Id.Value[..8];
+        var sourceKey = $"landing-escalation:{goal.Id.Value}:{reason}";
+        var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
+
+        var store = collaborationStore
+            ?? CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        try
+        {
+            store.RaiseAsync(
+                CollaborationItemType.Decision,
+                goal.Id.Value,
+                $"Landing parked on {integrationBranch}",
+                reason,
+                itemId).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best-effort: JSON fallback already written.
+        }
+
+        if (channel is null or NullOperatorChannel)
+            return;
+
+        var escalation = new OperatorEscalation(
+            itemId,
+            goal.Id.Value,
+            goalPrefix,
+            "LandingEscalation",
+            $"Landing parked on {integrationBranch}",
+            reason,
+            $"escalated at {DateTimeOffset.UtcNow:u}; branch={integrationBranch}",
+            [new OperatorEscalationAction("Promote to Main", $"land {goalPrefix}", RequiresConfirm: true)],
+            null);
+        try
+        {
+            channel.SendEscalationAsync(escalation).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best-effort: inbox JSON write already succeeded.
+        }
     }
 
     private static void AddLandingEscalationItems(

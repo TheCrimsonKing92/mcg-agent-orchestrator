@@ -30,6 +30,14 @@ public sealed record DotnetBuildLeaseStatus(
 public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
+
+    // Lets a child process (notably the acceptance test run) redirect the isolated build/lease root
+    // away from the shared default. Without this, tests that exercise the real lease-execution lock
+    // collide with the slot lock the parent acceptance already holds (same %TEMP% path) and deadlock
+    // until the 5-minute lock timeout. The acceptance verifier sets this to a unique per-run
+    // directory on the test process so its locks never touch live production slots.
+    public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
+    public const int StableSlotCount = 4;
     private const string LeaseDirectoryName = "lease";
     private const string LeaseMetadataFileName = "lease.json";
     private const string LeaseLockFileName = "lease.lock";
@@ -46,22 +54,28 @@ public static class DotnetBuildEnvironmentManager
             return CreateGoalLease(goalId, attemptName);
         }
 
-        var root = Path.Combine(Path.GetTempPath(), RootDirectoryName, "runs");
-        var runName = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Environment.ProcessId}-{Guid.NewGuid():N}";
-        var artifactsPath = Path.Combine(root, "attempts", $"{Sanitize(attemptName)}-{runName}");
+        var root = StableSlotRoot("manual");
+        var artifactsPath = StableSlotArtifactsPath("manual");
+        var executionLockPath = StableSlotExecutionLockPath("manual");
         Directory.CreateDirectory(artifactsPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
 
         return new DotnetBuildEnvironment(
-            $"run-{runName}",
+            "run-slot-manual",
             root,
             artifactsPath,
-            Path.Combine(artifactsPath, "lease.execution.lock"),
+            executionLockPath,
             BuildArguments(artifactsPath));
     }
 
     public static string GoalRoot(GoalId goalId)
     {
-        return Path.Combine(Path.GetTempPath(), RootDirectoryName, "goals", Prefix(goalId));
+        return Path.Combine(IsolatedRootBase(), "goals", Prefix(goalId));
+    }
+
+    public static string GoalArtifactsPath(GoalId goalId)
+    {
+        return StableSlotArtifactsPath(StableSlotName(goalId));
     }
 
     public static bool TryRotateGoalLease(GoalId goalId, string reason)
@@ -118,11 +132,11 @@ public static class DotnetBuildEnvironmentManager
         var root = GoalRoot(goalId);
         var leaseId = $"goal-{Prefix(goalId)}";
         var leaseDirectory = LeaseDirectory(goalId);
-        var artifactsPath = Path.Combine(leaseDirectory, "artifacts");
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var rootExists = Directory.Exists(root);
-        var artifactsExist = Directory.Exists(artifactsPath);
         var metadataExists = File.Exists(metadataPath);
+        var artifactsPath = TryReadArtifactsPath(metadataPath) ?? GoalArtifactsPath(goalId);
+        var artifactsExist = Directory.Exists(artifactsPath);
         var ownerProcessId = metadataExists ? TryReadOwnerProcessId(metadataPath) : null;
         var ownerAlive = ownerProcessId is not null && IsProcessRunning(ownerProcessId.Value);
         var canCleanup = rootExists && !ownerAlive;
@@ -180,11 +194,22 @@ public static class DotnetBuildEnvironmentManager
                 // Holding the file open exclusively IS the lease lock — cross-platform, unlike
                 // FileStream.Lock (unsupported on macOS, CA1416). A competing holder fails the
                 // exclusive open with IOException, so we retry until the timeout.
-                return new FileStream(
+                var stream = new FileStream(
                     environment.ExecutionLockPath,
                     FileMode.OpenOrCreate,
                     FileAccess.ReadWrite,
                     FileShare.None);
+                try
+                {
+                    CleanArtifactsDirectory(environment.ArtifactsPath);
+                }
+                catch
+                {
+                    stream.Dispose();
+                    throw;
+                }
+
+                return stream;
             }
             catch (IOException)
             {
@@ -203,12 +228,15 @@ public static class DotnetBuildEnvironmentManager
         var root = GoalRoot(goalId);
         var leaseId = $"goal-{Prefix(goalId)}";
         var leaseDirectory = LeaseDirectory(goalId);
-        var artifactsPath = Path.Combine(leaseDirectory, "artifacts");
-        var executionLockPath = Path.Combine(leaseDirectory, "lease.execution.lock");
+        var slotName = StableSlotName(goalId);
+        var artifactsPath = StableSlotArtifactsPath(slotName);
+        var executionLockPath = StableSlotExecutionLockPath(slotName);
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
+        Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
         var staleLockCleared = TryClearStaleLock(lockPath);
         File.WriteAllText(lockPath, Environment.ProcessId.ToString());
         File.WriteAllText(metadataPath, JsonSerializer.Serialize(
@@ -241,6 +269,7 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
+        "--disable-build-servers",
         "-maxcpucount:1",
         "-p:UseSharedCompilation=false"
     ];
@@ -248,6 +277,50 @@ public static class DotnetBuildEnvironmentManager
     private static string LeaseDirectory(GoalId goalId)
     {
         return Path.Combine(GoalRoot(goalId), LeaseDirectoryName);
+    }
+
+    private static string StableSlotName(GoalId goalId)
+    {
+        var hash = 0;
+        foreach (var ch in Prefix(goalId))
+        {
+            hash = unchecked((hash * 31) + char.ToLowerInvariant(ch));
+        }
+
+        return $"slot-{Math.Abs(hash % StableSlotCount)}";
+    }
+
+    private static string IsolatedRootBase()
+    {
+        var overridden = Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable);
+        return string.IsNullOrWhiteSpace(overridden)
+            ? Path.Combine(Path.GetTempPath(), RootDirectoryName)
+            : overridden;
+    }
+
+    private static string StableSlotRoot(string slotName)
+    {
+        return Path.Combine(IsolatedRootBase(), "slots", slotName);
+    }
+
+    private static string StableSlotArtifactsPath(string slotName)
+    {
+        return Path.Combine(StableSlotRoot(slotName), "artifacts");
+    }
+
+    private static string StableSlotExecutionLockPath(string slotName)
+    {
+        return Path.Combine(StableSlotRoot(slotName), "lease.execution.lock");
+    }
+
+    private static void CleanArtifactsDirectory(string artifactsPath)
+    {
+        if (Directory.Exists(artifactsPath))
+        {
+            Directory.Delete(artifactsPath, recursive: true);
+        }
+
+        Directory.CreateDirectory(artifactsPath);
     }
 
     private static bool TryClearStaleLock(string lockPath)
@@ -308,6 +381,27 @@ public static class DotnetBuildEnvironmentManager
             }
 
             return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryReadArtifactsPath(string metadataPath)
+    {
+        if (!File.Exists(metadataPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
+            return document.RootElement.TryGetProperty("artifactsPath", out var artifactsPath) &&
+                artifactsPath.ValueKind == JsonValueKind.String
+                    ? artifactsPath.GetString()
+                    : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {

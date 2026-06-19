@@ -9,6 +9,17 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
+private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
+    new Dictionary<string, AgentRole>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["--planner"] = AgentRole.Planner,
+        ["--ideation"] = AgentRole.Ideation,
+        ["--researcher"] = AgentRole.Researcher,
+        ["--developer"] = AgentRole.Developer,
+        ["--tester"] = AgentRole.Tester,
+        ["--reviewer"] = AgentRole.Reviewer
+    };
+
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)
@@ -27,11 +38,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple");
                 var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
-                foreach (var flag in parts.Skip(2).Where(p =>
-                    p.StartsWith("--", StringComparison.Ordinal) &&
-                    !p.Equals("--simple", StringComparison.OrdinalIgnoreCase) &&
-                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)))
-                    simpleAliasParts.Add(flag);
+                AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file");
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
             }
             // --from-backlog: delegate to backlog-intake (objective used as heading filter)
@@ -52,19 +59,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
-                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, runObjective);
+                var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                runParts.AddRange(parts.Skip(2).Where(p =>
-                    !p.Equals("--run", StringComparison.OrdinalIgnoreCase) &&
-                    !p.Equals("--brief-file", StringComparison.OrdinalIgnoreCase)));
+                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
             var goalObjectivePlan = GoalObjectivePlanner.Build(goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjective);
+            var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
@@ -73,7 +80,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleObjectivePlan = GoalObjectivePlanner.Build(simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, simpleObjective);
+            var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
@@ -511,12 +519,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "land":
             CliArgumentParser.RequirePartCount(parts, 2, "land <goal-id-prefix>");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var landResult = LandingExecutor.Execute(context.Kernel, context.CurrentGoal, context.Workspace);
+            var landResult = LandingExecutor.Execute(context.Kernel, context.CurrentGoal, context.Workspace, context.Channel);
             Console.WriteLine($"Land {landResult.GoalPrefix}: {landResult.Message}");
             Console.WriteLine($"  decision: {(landResult.Decision is LandingDecision.Promote ? "Promote" : $"Escalate({((LandingDecision.Escalate)landResult.Decision).Reason})")}");
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");
             Console.WriteLine($"  main-advanced: {landResult.MainAdvanced}");
             return landResult.MainAdvanced;
+
+        case "goals-prune":
+            return HandleGoalsPrune(context, parts);
 
         case "conduct":
             if (HasCliConfirmation(parts, "--loop"))
@@ -565,11 +576,26 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Workspace,
                     context.AcceptanceVerifier,
                     context.Agents,
-                    context.WorkerProfiles);
+                    context.WorkerProfiles,
+                    context.Channel);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
-                var loopSummary = new ConductorBatchLoop().Run(
+
+                // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
+                // start of every tick. Without this the loop holds a goal at Running forever — the worker
+                // finishes but its result is never recorded — and a stop/restart re-dispatches the same
+                // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
+                Action<AgentOrchestratorKernel> reconcileSweep = loopKernel =>
+                {
+                    foreach (var loopGoal in loopKernel.Goals.ToArray())
+                    {
+                        try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
+                        catch { /* per-goal isolation */ }
+                    }
+                };
+                var loopSummary = new ConductorBatchLoop(reconcileSweep).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
-                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration);
+                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
+                    persistTick: context.PersistCheckpoint);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -587,7 +613,35 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace,
                 context.AcceptanceVerifier,
                 context.Agents,
-                context.WorkerProfiles);
+                context.WorkerProfiles,
+                context.Channel);
+
+            // Single-goal continuous mode: drive just this goal to its next checkpoint without the
+            // whole-kernel loop, so adding a goal never requires stopping a running loop and other
+            // goals/ghosts aren't touched. Reuses the batch loop scoped to one goal.
+            if (HasCliConfirmation(parts, "--watch"))
+            {
+                var watchGoalId = context.CurrentGoal.Id.Value;
+                var watchPollSeconds = int.TryParse(
+                    GetFlagValue(parts, "--poll-seconds") ?? GetFlagValue(parts, "--watch-interval"),
+                    out var wps) && wps > 0 ? wps : ConductorBatchLoop.DefaultWatchIntervalSeconds;
+                TimeSpan? watchMax = int.TryParse(GetFlagValue(parts, "--max-duration"), out var wmd)
+                    ? TimeSpan.FromSeconds(wmd) : null;
+                Action<AgentOrchestratorKernel> watchSweep = wk =>
+                {
+                    var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
+                    if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }
+                };
+                var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
+                var watchSummary = new ConductorBatchLoop(watchSweep).Run(
+                    context.Kernel, conductDriver, conductPolicy, watchStopPath,
+                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
+                    onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
+                Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
+                return watchSummary.Escalated == 0;
+            }
+
             var conductResult = conductDriver.AdvanceOnce(context.CurrentGoal, conductPolicy);
             Console.WriteLine($"Conduct {conductResult.GoalPrefix} [{conductResult.PolicyName}]: {conductResult.Outcome switch {
                 ConductorAdvanceOutcome.Executed e => $"executed from {e.FromState} — {e.Description}",
@@ -1123,6 +1177,70 @@ private static string? GetOptionalArgument(IReadOnlyList<string> parts, params s
     return null;
 }
 
+private static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
+    IReadOnlyList<string> parts,
+    IReadOnlyList<AgentDefinition> agents)
+{
+    var catalog = new AgentCatalog(agents);
+    foreach (var (flag, role) in GoalRoleAgentFlags)
+    {
+        var agentId = GetFlagValue(parts, flag);
+        if (agentId is null && !HasCliConfirmation(parts, flag))
+        {
+            continue;
+        }
+
+        if (string.IsNullOrWhiteSpace(agentId) || agentId.StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{flag} requires <agentId>.");
+        }
+
+        var agent = catalog.FindById(agentId)
+            ?? throw new ArgumentException($"Unknown agent id '{agentId}' for {flag}.");
+        if (agent.Role != role)
+        {
+            throw new ArgumentException(
+                $"Agent id '{agentId}' has role {agent.Role}; {flag} requires an agent with role {role}.");
+        }
+
+        catalog = catalog.UpsertRole(agent);
+    }
+
+    return catalog.Agents;
+}
+
+private static void AppendGoalAliasFlags(
+    IReadOnlyList<string> parts,
+    List<string> target,
+    bool includeRoleAgentFlags,
+    params string[] excludedFlags)
+{
+    for (var i = 2; i < parts.Count; i++)
+    {
+        var part = parts[i];
+        if (!part.StartsWith("--", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        if (excludedFlags.Any(flag => part.Equals(flag, StringComparison.OrdinalIgnoreCase)) ||
+            (!includeRoleAgentFlags && GoalRoleAgentFlags.ContainsKey(part)))
+        {
+            if (IsCliValueFlag(part))
+            {
+                i++;
+            }
+            continue;
+        }
+
+        target.Add(part);
+        if (IsCliValueFlag(part) && i + 1 < parts.Count)
+        {
+            target.Add(parts[++i]);
+        }
+    }
+}
+
 private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     var createGoal = HasCliConfirmation(parts, "--create-goal");
@@ -1415,6 +1533,17 @@ private static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
     return null;
 }
 
+private static IReadOnlyList<string> GetFlagValues(IReadOnlyList<string> parts, string flag)
+{
+    var results = new List<string>();
+    for (var i = 1; i < parts.Count - 1; i++)
+    {
+        if (parts[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            results.Add(parts[i + 1]);
+    }
+    return results;
+}
+
 private static List<string> RemoveFlagWithValue(IReadOnlyList<string> parts, string flag)
 {
     var result = new List<string>(parts.Count);
@@ -1536,7 +1665,8 @@ private static string? GetFirstNonFlagArgument(IReadOnlyList<string> parts, int 
 
 private static bool IsCliValueFlag(string part)
 {
-    return part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
+    return GoalRoleAgentFlags.ContainsKey(part) ||
+        part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
@@ -1636,6 +1766,23 @@ private static bool HasGoalStopConfirmation(IReadOnlyList<string> parts) =>
 
 private static string RemoveFlag(string value, string flag) =>
     value.Replace(flag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+
+private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    {
+        throw new InvalidOperationException(
+            "goals-prune requires a git work tree; the execution directory is not inside a git repository.");
+    }
+
+    var confirm = HasCliConfirmation(parts, "--confirm-prune");
+    var plan = confirm
+        ? GoalsPrunePlanner.Apply(context.Kernel, context.Workspace.ExecutionDirectory)
+        : GoalsPrunePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory);
+
+    ConsoleViews.PrintGoalsPrunePlan(plan);
+    return plan.PrunedCount > 0;
+}
 
 private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {

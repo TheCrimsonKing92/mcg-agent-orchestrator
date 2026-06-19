@@ -106,8 +106,14 @@ public sealed class GoalDependencyTests
             getFacts: _ => GoalLifecycleFacts.None,
             getRunningPaidWorkerCount: () => 0,
             createWorkspace: g => { workspacesCreated.Add(g.Id.Value); return "/tmp/ws"; },
-            dispatchAndStart: _ => true,
-            runAcceptanceVerification: _ => true,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            startRecordedDispatches: null,
+            buildServerShutdown: null,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            retryTask: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
             cleanup: _ => { },
@@ -168,8 +174,14 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: _ => true,
-            runAcceptanceVerification: _ => true,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            startRecordedDispatches: null,
+            buildServerShutdown: null,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            retryTask: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g =>
             {
                 if (g.Id == a.Id) aMerged = true;
@@ -215,8 +227,16 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: g => g.Id != a.Id, // A fails to dispatch → escalated
-            runAcceptanceVerification: _ => true,
+            dispatchAndStart: g => g.Id == a.Id // A fails → escalated
+                ? DispatchStartOutcome.EmptyBatch("Dispatch failed for A")
+                : DispatchStartOutcome.Started(),
+            startRecordedDispatches: null,
+            buildServerShutdown: null,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            retryTask: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
             cleanup: _ => { },

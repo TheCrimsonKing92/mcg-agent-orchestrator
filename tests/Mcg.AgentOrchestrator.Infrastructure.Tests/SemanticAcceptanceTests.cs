@@ -108,6 +108,68 @@ public sealed class SemanticAcceptanceTests
         Assert.True(context.Contains("core tests: Passed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_evidence_context_includes_per_file_diff_hunks")]
+    public void EvidenceContextIncludesPerFileDiffHunks()
+    {
+        var inputs = new SemanticAcceptanceInputs(
+            "Wire judge evidence to real diffs",
+            ["judge sees implementation hunks"],
+            ["src/Feature.cs", "tests/FeatureTests.cs"],
+            "diff --git a/src/Feature.cs b/src/Feature.cs\n...(whole diff truncated at 80 chars)",
+            "tests passed",
+            [
+                ("src/Feature.cs", "diff --git a/src/Feature.cs b/src/Feature.cs\n@@ -1,3 +1,4 @@\n+public sealed class Feature { }"),
+                ("tests/FeatureTests.cs", "diff --git a/tests/FeatureTests.cs b/tests/FeatureTests.cs\n@@ -5,6 +5,7 @@\n+Assert.True(context.Contains(\"Feature\"));")
+            ]);
+
+        var context = SemanticAcceptancePlanner.BuildEvidenceContext(inputs);
+
+        Assert.True(context.Contains("## Per-file unified diffs", StringComparison.Ordinal));
+        Assert.True(context.Contains("### src/Feature.cs", StringComparison.Ordinal));
+        Assert.True(context.Contains("@@ -1,3 +1,4 @@", StringComparison.Ordinal));
+        Assert.True(context.Contains("+public sealed class Feature { }", StringComparison.Ordinal));
+        Assert.True(context.Contains("### tests/FeatureTests.cs", StringComparison.Ordinal));
+        Assert.True(context.Contains("+Assert.True(context.Contains(\"Feature\"));", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_evidence_context_includes_bounded_oversized_per_file_diff")]
+    public void EvidenceContextIncludesBoundedOversizedPerFileDiff()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        var path = Path.Combine(root, "src", "Large.cs");
+        File.WriteAllText(path, "public sealed class Large\n{\n}\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+        RunGit(root, "checkout", "-b", "goal/test");
+
+        var body = string.Join(Environment.NewLine, Enumerable.Range(0, 100).Select(i => $"    public int Value{i} => {i};"));
+        File.WriteAllText(path, $"public sealed class Large{Environment.NewLine}{{{Environment.NewLine}{body}{Environment.NewLine}}}{Environment.NewLine}");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "large change");
+
+        var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(root, perFileMaxChars: 220);
+        var context = SemanticAcceptancePlanner.BuildEvidenceContext(new SemanticAcceptanceInputs(
+            "Keep oversized changed-file evidence visible",
+            [],
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root),
+            GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(root, maxChars: 80),
+            null,
+            perFileDiffs));
+
+        var (_, diff) = Xunit.Assert.Single(perFileDiffs);
+        Assert.True(diff.Length < 320);
+        Assert.True(context.Contains("### src/Large.cs", StringComparison.Ordinal));
+        Assert.True(context.Contains("@@", StringComparison.Ordinal));
+        Assert.True(context.Contains("...(per-file diff truncated at 220 chars)", StringComparison.Ordinal));
+        Assert.True(context.Contains("## Unified diff (may be truncated)", StringComparison.Ordinal));
+        Assert.True(context.Contains("...(diff truncated at 80 chars)", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_aggregates_agreeing_judges_into_consensus")]
     public async Task EvaluatorAggregatesAgreeingJudges()
     {
@@ -257,6 +319,7 @@ public sealed class SemanticAcceptanceTests
 
         Assert.True(verdict.IsValid);
         Assert.True(verdict.CriteriaMet);
+        Assert.True(verdict.Reasons.Any(reason => reason.Contains("2 of 2 files judged", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_falls_back_to_whole_diff_when_no_per_file_diffs")]
@@ -483,7 +546,6 @@ public sealed class SemanticAcceptanceTests
     public async Task RecursiveJudgeSubscriptionCliLeafJudgesWholeDiffInSingleCall()
     {
         var callCount = 0;
-        string? capturedDiff = null;
         Task<string> CountingRunner(string command, string workingDirectory, CancellationToken ct)
         {
             callCount++;
@@ -517,16 +579,14 @@ public sealed class SemanticAcceptanceTests
         Assert.True(verdict.CriteriaMet);
     }
 
-    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_falls_back_to_whole_diff_when_file_count_exceeds_cap")]
-    public async Task RecursiveJudgeFallsBackWhenFileCountExceedsCap()
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_judges_each_substantive_file_when_file_count_exceeds_cap")]
+    public async Task RecursiveJudgeJudgesEachSubstantiveFileWhenFileCountExceedsCap()
     {
-        var callCount = 0;
-        string? capturedDiff = null;
+        var capturedFiles = new List<string>();
         var leaf = new FakeJudge("leaf", inputs =>
         {
-            callCount++;
-            capturedDiff = inputs.DiffExcerpt;
-            return new SemanticAcceptanceVerdict(true, "high", ["whole diff ok"], [], []);
+            capturedFiles.Add(inputs.ChangedFiles[0]);
+            return new SemanticAcceptanceVerdict(true, "high", [$"{inputs.ChangedFiles[0]} ok"], [], []);
         });
 
         var judge = new RecursivePerFileSemanticJudge(leaf);
@@ -545,10 +605,98 @@ public sealed class SemanticAcceptanceTests
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
-        // Must fall back to one whole-diff call, not fan out per file.
-        Assert.Equal(1, callCount);
-        Assert.Equal("whole diff excerpt", capturedDiff);
+        Assert.Equal(fileCount, capturedFiles.Count);
+        Assert.True(perFileDiffs.All(file => capturedFiles.Contains(file.Item1)));
         Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+        Assert.True(verdict.Reasons.Any(reason => reason.Contains($"{fileCount} of {fileCount} files judged", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_budgets_oversized_single_file_diff")]
+    public async Task RecursiveJudgeBudgetsOversizedSingleFileDiff()
+    {
+        string? capturedDiff = null;
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            capturedDiff = inputs.DiffExcerpt;
+            return new SemanticAcceptanceVerdict(true, "high", ["large file judged"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var oversizedDiff = "+" + new string('x', RecursivePerFileSemanticJudge.MaxPerFileDiffChars + 250);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [],
+            ["src/Large.cs"],
+            "whole diff excerpt",
+            null,
+            [("src/Large.cs", oversizedDiff)]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.True(verdict.IsValid);
+        Assert.True(verdict.CriteriaMet);
+        Assert.True(capturedDiff is not null);
+        Assert.True(capturedDiff!.Length < oversizedDiff.Length);
+        Assert.True(capturedDiff.Contains("oversized single-file change still judged", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_reports_partial_coverage_when_one_file_has_no_verdict")]
+    public async Task RecursiveJudgeReportsPartialCoverageWhenOneFileHasNoVerdict()
+    {
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            var file = inputs.ChangedFiles[0];
+            return file == "src/B.cs"
+                ? SemanticAcceptanceVerdict.Invalid("Judge produced no output.")
+                : new SemanticAcceptanceVerdict(true, "high", [$"{file} ok"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [],
+            ["src/A.cs", "src/B.cs", "src/C.cs"],
+            string.Empty,
+            null,
+            [("src/A.cs", "+int a = 1;"), ("src/B.cs", "+int b = 2;"), ("src/C.cs", "+int c = 3;")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.True(verdict.IsValid);
+        Assert.False(verdict.CriteriaMet);
+        Assert.Equal("low", verdict.Confidence);
+        Assert.True(verdict.Reasons.Any(reason => reason.Contains("2 of 3 files judged", StringComparison.Ordinal)));
+        Assert.True(verdict.Reasons.Any(reason => reason.Contains("src/B.cs: Judge produced no output.", StringComparison.Ordinal)));
+        Assert.True(verdict.UnmetCriteria.Contains("src/B.cs: no valid per-file verdict"));
+    }
+
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_reports_partial_coverage_when_one_file_throws")]
+    public async Task RecursiveJudgeReportsPartialCoverageWhenOneFileThrows()
+    {
+        var leaf = new FakeJudge("leaf", inputs =>
+        {
+            var file = inputs.ChangedFiles[0];
+            if (file == "src/B.cs")
+            {
+                throw new InvalidOperationException("boom");
+            }
+
+            return new SemanticAcceptanceVerdict(true, "high", [$"{file} ok"], [], []);
+        });
+
+        var judge = new RecursivePerFileSemanticJudge(leaf);
+        var inputs = new SemanticAcceptanceInputs(
+            "objective", [],
+            ["src/A.cs", "src/B.cs"],
+            string.Empty,
+            null,
+            [("src/A.cs", "+int a = 1;"), ("src/B.cs", "+int b = 2;")]);
+
+        var verdict = await judge.JudgeAsync(inputs, default);
+
+        Assert.True(verdict.IsValid);
+        Assert.False(verdict.CriteriaMet);
+        Assert.True(verdict.Reasons.Any(reason => reason.Contains("1 of 2 files judged", StringComparison.Ordinal)));
+        Assert.True(verdict.Reasons.Any(reason => reason.Contains("Per-file judge failed for src/B.cs: boom", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_skips_whitespace_only_files_during_fan_out")]
@@ -675,6 +823,15 @@ public sealed class SemanticAcceptanceTests
         new(ModelFunctionPurposes.AcceptanceJudge, lane,
             new ModelProfile(provider, model, ModelCapability.Text,
                 lane == ModelLane.Local ? SubscriptionMode.LocalBridge : SubscriptionMode.ApiKey));
+
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Error}");
+        }
+    }
 
     private sealed class FakeJudge(string name, Func<SemanticAcceptanceInputs, SemanticAcceptanceVerdict> verdict) : ISemanticJudge
     {

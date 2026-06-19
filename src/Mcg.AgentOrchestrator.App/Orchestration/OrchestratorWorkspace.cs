@@ -20,12 +20,19 @@ internal sealed record OrchestratorWorkspace(
 {
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";
-    private const string SolutionFileName = "Mcg.AgentOrchestrator.sln";
+    public const string RepoRootEnvironmentVariable = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";
+    private const string GitDirectoryName = ".git";
 
-    // Walks up from startDirectory (then AppContext.BaseDirectory) looking for the
-    // solution file to find a stable repo root regardless of launch CWD.
+    // Configuration wins for deployed layouts where the orchestrator binary is
+    // outside the target repository tree.
     public static string ResolveRepoRoot(string? startDirectory = null, string? fallbackDirectory = null)
     {
+        var configuredRoot = Environment.GetEnvironmentVariable(RepoRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            return Path.GetFullPath(configuredRoot);
+        }
+
         var candidates = new[]
         {
             startDirectory ?? Environment.CurrentDirectory,
@@ -40,7 +47,7 @@ internal sealed record OrchestratorWorkspace(
             var dir = new DirectoryInfo(Path.GetFullPath(candidate));
             while (dir != null)
             {
-                if (File.Exists(Path.Combine(dir.FullName, SolutionFileName)))
+                if (Directory.Exists(Path.Combine(dir.FullName, GitDirectoryName)))
                     return dir.FullName;
                 dir = dir.Parent;
             }
@@ -81,6 +88,8 @@ internal sealed record OrchestratorWorkspace(
 
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 
+    public string OperatorChannelPath => Path.Combine(OrchestratorDirectory, "operator-channel.json");
+
     public string DashboardUrlFilePath => Path.Combine(OrchestratorDirectory, ".dashboard-url");
 
     // Append-only advisory log of semantic-acceptance verdicts (one JSON object per line), kept in
@@ -91,6 +100,10 @@ internal sealed record OrchestratorWorkspace(
     // Registry of orchestrator-internal model functions (acceptance-judge lanes, future samplers,
     // etc.) — separate from the worker agent catalog so internal model uses never touch task routing.
     public string ModelFunctionCatalogPath => Path.Combine(OrchestratorDirectory, "model-functions.json");
+
+    // Answered spec-clarification forks recorded as precedents so a second goal with the same
+    // forkKind reuses the recorded choice rather than re-asking.
+    public string SpecRefinerPrecedentsPath => Path.Combine(OrchestratorDirectory, "spec-refiner-precedents.json");
 
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.

@@ -51,22 +51,45 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
-$stamp = Get-Date -Format "yyyyMMdd-HHmmssfff"
-$suffix = [guid]::NewGuid().ToString("N").Substring(0, 8)
+function Get-StableSlotName {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "manual"
+    }
+
+    [int64]$hash = 0
+    foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
+        $hash = (($hash * 31) + [int][char]$ch) % 2147483647
+    }
+
+    return "slot-$([Math]::Abs($hash % 4))"
+}
+
+function Clear-ArtifactsDirectory {
+    param([string]$Path)
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+}
+
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
-    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\runs"
-    $artifactsPath = Join-Path $runRoot "attempts\$safeAttemptName-$stamp-$PID-$suffix"
-    $leaseId = "run-$stamp-$PID-$suffix"
-    $executionLockPath = $null
+    $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
+    $artifactsPath = Join-Path $slotRoot "artifacts"
+    $leaseId = "run-slot-manual"
+    $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
 }
 else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
+    $slotName = Get-StableSlotName -Value $safeGoalPrefix
     $leaseId = "goal-$safeGoalPrefix"
     $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\goals\$safeGoalPrefix"
+    $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\$slotName"
     $leaseRoot = Join-Path $runRoot "lease"
-    $artifactsPath = Join-Path $leaseRoot "artifacts"
-    $executionLockPath = Join-Path $leaseRoot "lease.execution.lock"
+    $artifactsPath = Join-Path $slotRoot "artifacts"
+    $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
     New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
     $lockPath = Join-Path $leaseRoot "lease.lock"
     $staleLockCleared = $false
@@ -112,25 +135,24 @@ $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
 $lockStream = $null
 $lockHeld = $false
 try {
-    if ($null -ne $executionLockPath) {
-        $lockDirectory = Split-Path -Parent $executionLockPath
-        New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
-        $deadline = [DateTime]::UtcNow.AddMinutes(5)
-        while (-not $lockHeld) {
-            $lockStream = [System.IO.File]::Open($executionLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
-            try {
-                $lockStream.Lock(0, 1)
-                $lockHeld = $true
+    $lockDirectory = Split-Path -Parent $executionLockPath
+    New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
+    $deadline = [DateTime]::UtcNow.AddMinutes(5)
+    while (-not $lockHeld) {
+        $lockStream = [System.IO.File]::Open($executionLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+        try {
+            $lockStream.Lock(0, 1)
+            $lockHeld = $true
+            Clear-ArtifactsDirectory -Path $artifactsPath
+        }
+        catch [System.IO.IOException] {
+            $lockStream.Dispose()
+            $lockStream = $null
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw "Timed out waiting for build lease execution lock: $executionLockPath"
             }
-            catch [System.IO.IOException] {
-                $lockStream.Dispose()
-                $lockStream = $null
-                if ([DateTime]::UtcNow -ge $deadline) {
-                    throw "Timed out waiting for build lease execution lock: $executionLockPath"
-                }
 
-                Start-Sleep -Milliseconds 100
-            }
+            Start-Sleep -Milliseconds 100
         }
     }
 

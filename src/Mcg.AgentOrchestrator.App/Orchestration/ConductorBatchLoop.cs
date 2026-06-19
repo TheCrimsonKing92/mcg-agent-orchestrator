@@ -27,7 +27,9 @@ internal sealed class ConductorBatchLoop
         TimeSpan? watchInterval = null,
         Action<BatchTickSummary>? onTick = null,
         Func<TimeSpan, bool>? sleepFunc = null,
-        TimeSpan? maxDuration = null)
+        TimeSpan? maxDuration = null,
+        string? onlyGoalId = null,
+        Action<AgentOrchestratorKernel>? persistTick = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -68,7 +70,8 @@ internal sealed class ConductorBatchLoop
             _sweep(kernel);
 
             var eligible = kernel.Goals
-                .Where(g => !excludedGoals.Contains(g.Id.Value)
+                .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
+                    && !excludedGoals.Contains(g.Id.Value)
                     && g.Status is not GoalStatus.Cancelled
                     && g.Status is not GoalStatus.Superseded)
                 .ToArray();
@@ -166,6 +169,12 @@ internal sealed class ConductorBatchLoop
 
             EmitProgress($"TICK_END tick={totalTicks} advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} done={tickDone}", tickLines);
             Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
+
+            // Durably checkpoint this tick's progress (dispatches started, reconcile results, escalations).
+            // Without this the loop's mutations live only in memory until the whole command returns, so a
+            // long-running watch loop never persists and a killed loop loses every dispatch on rollback —
+            // the goal then re-dispatches the same stage forever and can never advance.
+            persistTick?.Invoke(kernel);
 
             var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false)
             {

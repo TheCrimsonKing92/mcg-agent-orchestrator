@@ -12,8 +12,16 @@ internal static class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
     {
+        if (IsModelOutcomesScorecard(args))
+        {
+            var records = stateRepository.BuildModelOutcomeScorecardAsync().GetAwaiter().GetResult();
+            ConsoleViews.PrintModelOutcomeScorecard(records);
+            return false;
+        }
+
         if (IsMetadataOnlyListing(args))
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
@@ -21,9 +29,18 @@ internal static class CliPersistentStateRunner
             return false;
         }
 
+        // Long-running conductor loops persist per tick and must NOT run inside the single wrapping
+        // state transaction: that transaction only commits when the command returns, so a watch loop
+        // (which may never return) never persists its dispatches, and a killed loop rolls back every
+        // dispatch it started — the goal then re-dispatches the same stage forever and can't advance.
+        if (IsConductLoop(args))
+        {
+            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         var nextAgents = agents;
@@ -46,7 +63,9 @@ internal static class CliPersistentStateRunner
                         ref commandAgents,
                         providers,
                         ref commandProfiles,
-                        ref commandGoal);
+                        ref commandGoal,
+                        channel,
+                        () => stateRepository.LoadAsync().GetAwaiter().GetResult());
 
                     nextAgents = commandAgents;
                     nextWorkerProfiles = commandProfiles;
@@ -71,6 +90,20 @@ internal static class CliPersistentStateRunner
         return args.Count == 1 && args[0].Equals("goals", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool IsModelOutcomesScorecard(IReadOnlyList<string> args)
+    {
+        return args.Count == 1 && args[0].Equals("model-outcomes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool SkipsKernelState(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+            return false;
+
+        return args[0].Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("operator-channel", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool ShouldRunInStateTransaction(string command)
     {
         return command.ToLowerInvariant() switch
@@ -81,9 +114,60 @@ internal static class CliPersistentStateRunner
             "simple-hosted-dashboard" or
             "open-dashboard" or
             "monitor-goal" or
+            "operator-channel" or
             "state-rollback" => false,
             _ => true
         };
+    }
+
+    // A conduct command running the batch loop (--loop) or single-goal continuous mode (--watch).
+    internal static bool IsConductLoop(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0 || !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return args.Any(a =>
+            a.Equals("--loop", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("--watch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
+    // progress via an independent SaveAsync (passed to the loop as PersistCheckpoint). This makes a
+    // started dispatch durable the moment its tick completes — so a stopped/killed/long-running loop
+    // never loses dispatch records, and reconcile can recognize a finished worker instead of
+    // re-dispatching it. A pre-loop sweep and a final save mirror the transactional path's bookkeeping.
+    private static bool ExecuteConductLoopOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+
+        void Persist(AgentOrchestratorKernel checkpoint) =>
+            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            Persist);
+
+        // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
+        Persist(kernel);
+        return shouldSave;
     }
 
     private static bool ExecuteCommandWithoutTransaction(
@@ -93,7 +177,8 @@ internal static class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -104,7 +189,9 @@ internal static class CliPersistentStateRunner
             ref agents,
             providers,
             ref workerProfiles,
-            ref currentGoal);
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult());
 
         if (shouldSave)
         {

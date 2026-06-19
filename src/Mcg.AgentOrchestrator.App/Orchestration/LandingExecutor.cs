@@ -19,7 +19,8 @@ internal static class LandingExecutor
     public static LandingResult Execute(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        IOperatorChannel? channel = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -57,7 +58,7 @@ internal static class LandingExecutor
         if (!mergeSucceeded)
         {
             var conflictReason = $"merge conflict integrating {goalBranch} into {IntegrationBranchName}";
-            OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName, channel);
             var conflictDecision = new LandingDecision.Escalate(conflictReason);
             return new LandingResult(goal.Id.Value, goalPrefix, conflictDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {conflictReason}");
@@ -78,7 +79,7 @@ internal static class LandingExecutor
             if (merge.ExitCode != 0)
             {
                 var unexpectedReason = $"integration->main fast-forward failed: {merge.Error}";
-                OperatorInbox.RecordLandingEscalation(workspace, goal, unexpectedReason, IntegrationBranchName);
+                OperatorInbox.RecordLandingEscalation(workspace, goal, unexpectedReason, IntegrationBranchName, channel);
                 var fallback = new LandingDecision.Escalate(unexpectedReason);
                 return new LandingResult(goal.Id.Value, goalPrefix, fallback, IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {unexpectedReason}");
@@ -89,7 +90,7 @@ internal static class LandingExecutor
         }
 
         var escalate = (LandingDecision.Escalate)decision;
-        OperatorInbox.RecordLandingEscalation(workspace, goal, escalate.Reason, IntegrationBranchName);
+        OperatorInbox.RecordLandingEscalation(workspace, goal, escalate.Reason, IntegrationBranchName, channel);
         return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
             false, $"Parked on {IntegrationBranchName}: {escalate.Reason}");
     }

@@ -12,9 +12,12 @@ public static bool ExecuteCommand(
     ref IReadOnlyList<AgentDefinition> agents,
     IModelProviderRegistry providers,
     ref WorkerProfileCatalog workerProfiles,
-    ref Goal? currentGoal)
+    ref Goal? currentGoal,
+    IOperatorChannel? channel = null,
+    Func<AgentOrchestratorKernel>? reloadKernel = null,
+    Action<AgentOrchestratorKernel>? persistKernel = null)
 {
-    var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles, currentGoal);
+    var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles, currentGoal, channel, reloadKernel, persistKernel);
     var changed = CliCommandHandlers.Execute(parts, context);
     agents = context.Agents;
     workerProfiles = context.WorkerProfiles;

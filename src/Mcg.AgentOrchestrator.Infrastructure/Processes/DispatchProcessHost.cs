@@ -29,12 +29,157 @@ public static class DispatchProcessHost
         string ExitCodePath,
         string? HeartbeatPath,
         bool ShutdownBuildServerOnExit,
-        bool DisableSharedCompilation);
+        bool DisableSharedCompilation,
+        // OS worker sandbox: when SandboxLowIntegrity is set, the worker runs at LOW integrity (same
+        // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP.
+        // The worker can only EDIT the worktree (the shared .git stays medium and out of reach); the
+        // orchestrator commits the worker's edits afterwards. Default = run at medium integrity.
+        bool SandboxLowIntegrity = false);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
         File.WriteAllText(path, JsonSerializer.Serialize(parameters, JsonOptions));
         return path;
+    }
+
+    // OS worker sandbox via Mandatory Integrity Control. The worker runs at LOW integrity as the SAME
+    // operator user — so the toolchain (node/codex) and codex auth are reachable (reads aren't
+    // MIC-restricted) — but it can only WRITE Low-labeled objects (the worktree + a Low CODEX_HOME/TEMP),
+    // never the medium-integrity profile or main repo. The host runs at medium and cannot launch a Low
+    // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
+    // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
+    private static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
+    {
+        if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Label ONLY the worktree Low so the Low worker can edit it. The shared git common dir is
+        // deliberately left at medium integrity: it lives OUTSIDE the worktree (in the main repo's
+        // .git/worktrees), so the worker must not be able to write it — that is the write-confinement
+        // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
+        // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
+        // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
+        SetLowIntegrity(parameters.WorkingDirectory);
+
+        // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
+        // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
+        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+        var tempDir = Path.Combine(sandboxRoot, "temp");
+        Directory.CreateDirectory(codexHome);
+        Directory.CreateDirectory(tempDir);
+        SeedCodexAuth(codexHome);
+        SetLowIntegrity(sandboxRoot);
+
+        // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
+        // the worktree must read as clean after the orchestrator commits the worker's real edits.
+        ExcludeSandboxFromGit(parameters.WorkingDirectory);
+
+        startInfo.Environment["CODEX_HOME"] = codexHome;
+        startInfo.Environment["TEMP"] = tempDir;
+        startInfo.Environment["TMP"] = tempDir;
+
+        // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
+        // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
+        var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
+        File.WriteAllText(dropScript, DropToLowScript);
+        var lastIndex = startInfo.ArgumentList.Count - 1;
+        if (lastIndex >= 0)
+        {
+            startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
+        }
+    }
+
+    // Appends ".mcg-sandbox/" to the worktree's local git exclude (.git/info/exclude, resolved via
+    // rev-parse so linked worktrees resolve correctly). Local-only and untracked, so it confines the
+    // sandbox scratch without dirtying the goal branch. Idempotent.
+    private static void ExcludeSandboxFromGit(string worktree)
+    {
+        try
+        {
+            var pathResult = GitCli.Run(worktree, "rev-parse", "--git-path", "info/exclude");
+            if (!pathResult.Succeeded || string.IsNullOrWhiteSpace(pathResult.Output))
+            {
+                return;
+            }
+
+            var excludeRaw = pathResult.Output.Trim();
+            var excludePath = Path.IsPathRooted(excludeRaw)
+                ? excludeRaw
+                : Path.GetFullPath(Path.Combine(worktree, excludeRaw));
+            Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
+
+            var existing = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
+            if (existing.Contains(".mcg-sandbox", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var prefix = existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : string.Empty;
+            File.AppendAllText(excludePath, prefix + ".mcg-sandbox/\n");
+        }
+        catch
+        {
+            // Best-effort: if git ignores fail to write, the worktree inspection will simply see the
+            // scratch dir; the commit recovery still excludes it via pathspec.
+        }
+    }
+
+    // PowerShell that lowers the current process to Low integrity (lowering one's own token needs no
+    // privilege). Dot-sourced before the worker command so the worker + its children run Low.
+    private const string DropToLowScript = @"Add-Type -Namespace P -Name N -MemberDefinition @'
+[DllImport(""kernel32.dll"")] public static extern System.IntPtr GetCurrentProcess();
+[DllImport(""advapi32.dll"", SetLastError=true)] public static extern bool OpenProcessToken(System.IntPtr h, uint a, out System.IntPtr t);
+[DllImport(""advapi32.dll"", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool ConvertStringSidToSidW(string s, out System.IntPtr sid);
+[DllImport(""advapi32.dll"", SetLastError=true)] public static extern bool SetTokenInformation(System.IntPtr t, int c, ref TML info, int len);
+[StructLayout(LayoutKind.Sequential)] public struct SAA { public System.IntPtr Sid; public uint Attr; }
+[StructLayout(LayoutKind.Sequential)] public struct TML { public SAA Label; }
+public static void DropToLow() {
+    System.IntPtr tok, sid;
+    if (!OpenProcessToken(GetCurrentProcess(), 0x0088, out tok)) throw new System.ComponentModel.Win32Exception();
+    if (!ConvertStringSidToSidW(""S-1-16-4096"", out sid)) throw new System.ComponentModel.Win32Exception();
+    var t = new TML(); t.Label.Sid = sid; t.Label.Attr = 0x20;
+    if (!SetTokenInformation(tok, 25, ref t, Marshal.SizeOf(typeof(TML))+16)) throw new System.ComponentModel.Win32Exception();
+}
+'@
+[P.N]::DropToLow()
+";
+
+    private static void SetLowIntegrity(string path)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "icacls",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add(path);
+            psi.ArgumentList.Add("/setintegritylevel");
+            psi.ArgumentList.Add("(OI)(CI)L");
+            psi.ArgumentList.Add("/T");
+            using var process = Process.Start(psi);
+            process?.WaitForExit(120000);
+        }
+        catch { /* best-effort */ }
+    }
+
+    private static void SeedCodexAuth(string codexHome)
+    {
+        try
+        {
+            var src = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
+            if (File.Exists(src))
+            {
+                File.Copy(src, Path.Combine(codexHome, "auth.json"), overwrite: true);
+            }
+        }
+        catch { /* best-effort */ }
     }
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
@@ -114,6 +259,13 @@ public static class DispatchProcessHost
                 WorkingDirectory = parameters.WorkingDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // Redirect stdin so we can close it immediately: CLI workers (e.g. claude-cli, a
+                // node shim) otherwise inherit the orchestrator's stdin. Under a background/detached
+                // launch that handle is an open pipe that never reaches EOF, so the worker blocks
+                // indefinitely waiting for stdin (the CLI's 3s "no stdin" skip only applies to a
+                // TTY, not an inherited pipe). Closing stdin gives an immediate EOF and prevents
+                // the startup hang.
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
@@ -131,9 +283,15 @@ public static class DispatchProcessHost
                 startInfo.Environment["UseSharedCompilation"] = "false";
             }
 
+            ApplyWorkerSandbox(startInfo, parameters);
+
             WriteHeartbeat("starting");
             worker = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start worker process.");
+
+            // Close the worker's stdin immediately so it reads EOF instead of blocking on an
+            // inherited/open pipe (see RedirectStandardInput note above).
+            try { worker.StandardInput.Close(); } catch { /* worker may have already exited */ }
 
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
             using var stdout = new FileStream(parameters.StdoutPath, FileMode.Create, FileAccess.Write, FileShare.Read);
@@ -163,9 +321,13 @@ public static class DispatchProcessHost
             try { stderr.Flush(); } catch { }
             exitCode = worker.ExitCode;
         }
-        catch
+        catch (Exception ex)
         {
             exitCode = 1;
+            // Capture launch/setup failures (e.g. launch-as-user under the OS sandbox) — otherwise the
+            // worker never starts and nothing explains why (no worker means no redirected stderr).
+            try { File.AppendAllText(parameters.StderrPath, $"[dispatch-host] worker launch/run failed: {ex}\n"); }
+            catch { /* diagnostics are best-effort */ }
         }
         finally
         {

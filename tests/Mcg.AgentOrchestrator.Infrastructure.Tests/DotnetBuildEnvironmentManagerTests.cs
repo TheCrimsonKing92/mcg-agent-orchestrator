@@ -19,16 +19,18 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal(first.RootPath, second.RootPath);
             Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
             Assert.True(second.ReusedGoalLease);
-            Assert.True(first.ArtifactsPath.Contains(Path.Combine("goals", "feedbeef", "lease", "artifacts"), StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId), first.ArtifactsPath);
+            Assert.True(first.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(first.ArtifactsPath));
             Assert.True(Directory.Exists(second.ArtifactsPath));
             Assert.False(string.IsNullOrWhiteSpace(second.LeaseMetadataPath));
             Assert.True(File.Exists(second.LeaseMetadataPath));
             Assert.True(first.Arguments.Contains("--artifacts-path"));
+            Assert.True(first.Arguments.Contains("--disable-build-servers"));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
-            Assert.False(first.ArtifactsPath.Equals(other.ArtifactsPath, StringComparison.OrdinalIgnoreCase));
+            Assert.True(other.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
             Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(otherGoalId));
             using var metadata = JsonDocument.Parse(File.ReadAllText(second.LeaseMetadataPath!));
             Assert.Equal(goalId.Value, metadata.RootElement.GetProperty("goalId").GetString());
@@ -42,6 +44,20 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_stable_manual_slot")]
+    public void DotnetBuildEnvironmentManagerReusesStableManualSlot()
+    {
+        var first = DotnetBuildEnvironmentManager.CreateAttempt(null, "Acceptance");
+        var second = DotnetBuildEnvironmentManager.CreateAttempt(null, "Retry");
+
+        Assert.Equal("run-slot-manual", first.LeaseId);
+        Assert.Equal(first.RootPath, second.RootPath);
+        Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
+        Assert.True(first.ArtifactsPath.Contains(Path.Combine("slots", "manual", "artifacts"), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(first.ExecutionLockPath, second.ExecutionLockPath);
+        Assert.True(first.Arguments.Contains(first.ArtifactsPath));
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_detects_stale_locks_and_rotates_goal_lease")]
