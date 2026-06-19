@@ -777,6 +777,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
+        // The acceptance suite verifies the CODE and must run hermetically — NOT under the operator's
+        // live worker-dispatch runtime config. MCG_WORKER_SANDBOX (and friends) control how real
+        // workers are launched (low integrity); several tests read WorkerSandboxOptions.FromEnvironment(),
+        // so when the operator runs `conduct` with MCG_WORKER_SANDBOX=1 that var is inherited by this
+        // child process and flips those tests' expected sandbox mode — failing acceptance INSIDE the
+        // watch while the same suite passes when `acceptance` is run standalone (without the var). Strip
+        // the worker-dispatch vars so the suite always runs against the default configuration.
+        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.EnabledVariable);
+        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.AccountVariable);
+        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.CredentialTargetVariable);
+
         // Isolate the test run's build/lease slot root so tests that exercise the real lease-execution
         // lock don't deadlock against the slot lock this acceptance already holds in the shared
         // default location (a fixed test goalId can hash to the very slot we're holding).
