@@ -2138,18 +2138,40 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
         return;
     }
 
+    var executionDirectory = context.Workspace.ExecutionDirectory;
+    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    if (worktree is null)
+    {
+        return;
+    }
+
+    // Tasks that failed only because a Low-IL worker could not self-commit under OS confinement
+    // (a benign signature — the edits are real, not broken) are eligible for the same git-ground-truth
+    // verification as un-run tasks. If their edits still sit uncommitted in the worktree, commit them
+    // at Medium so the clean-worktree check below confirms real changes against main. The acceptance
+    // suite always runs before any merge, so this only clears bookkeeping — it never lands unproven work.
+    var sandboxBlockedIds = goal.Tasks
+        .Where(t => t.Status == WorkTaskStatus.Failed &&
+            t.LastVerification is { Succeeded: false } verification &&
+            DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification))
+        .Select(t => t.Id)
+        .ToHashSet();
+
+    if (sandboxBlockedIds.Count > 0 && !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id))
+    {
+        TryCommitSandboxBlockedEdits(worktree, goal);
+    }
+
     var pending = goal.Tasks
-        .Where(t => t.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+        .Where(t => t.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running ||
+            sandboxBlockedIds.Contains(t.Id))
         .ToList();
     if (pending.Count == 0)
     {
         return;
     }
 
-    var executionDirectory = context.Workspace.ExecutionDirectory;
-    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-    if (worktree is null ||
-        !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
+    if (!GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
         !GoalWorktrees.HasChangesAgainstMain(executionDirectory, goal.Id))
     {
         return;
@@ -2165,6 +2187,27 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
             task.Id,
             ManualVerificationRecorder.Create(true, note, worktree, DateTimeOffset.UtcNow));
         Console.WriteLine($"Auto-verified task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} from git ground truth.");
+    }
+}
+
+// Commit a sandbox-blocked worker's uncommitted edits on the orchestrator's behalf (Medium
+// integrity, so .git is writable). Plain `add -A` honours the worktree's .mcg-sandbox exclude.
+private static void TryCommitSandboxBlockedEdits(string worktreePath, Goal goal)
+{
+    if (!GitCli.Run(worktreePath, "add", "-A").Succeeded)
+    {
+        return;
+    }
+
+    var commit = GitCli.Run(
+        worktreePath,
+        "commit",
+        "-m",
+        $"Orchestrator-committed sandbox-blocked worker edits for goal {goal.Id.Value}");
+    if (commit.Succeeded)
+    {
+        Console.WriteLine(
+            $"Committed sandbox-blocked worker edits for goal {goal.Id.Value[..8]} (worker could not self-commit under the sandbox).");
     }
 }
 

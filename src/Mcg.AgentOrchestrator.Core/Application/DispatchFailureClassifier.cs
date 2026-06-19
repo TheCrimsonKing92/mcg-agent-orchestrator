@@ -90,6 +90,36 @@ public static class DispatchFailureClassifier
              ExitCodeZeroPattern.IsMatch(output));
     }
 
+    // A Low-IL (sandboxed) worker can do valid work but be structurally unable to self-commit — it
+    // cannot write .git (Medium integrity), and therefore cannot run the git-dependent suite to
+    // produce verification evidence. That failure is benign: the edits are real, only the commit was
+    // blocked by OS confinement. We recognise it (git permission/index.lock signature + the worker
+    // having produced useful work) so the orchestrator can commit the edits at Medium and let the
+    // acceptance suite — which always runs before any merge to main — be the authoritative gate.
+    public static bool IsSandboxCommitBlockedFailure(TaskVerificationRecord verification)
+    {
+        if (verification.Succeeded)
+        {
+            return false;
+        }
+
+        var output = $"{verification.StandardOutput}\n{verification.StandardError}";
+        var commitBlocked =
+            output.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
+            (output.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
+             output.Contains("Permission denied", StringComparison.OrdinalIgnoreCase));
+
+        // The worker must have reported doing real work — the WORKER_RESULT contract marker, or any
+        // other useful-output signal. The downstream auto-verify additionally requires committed
+        // changes against main and the acceptance suite, so this is the lightest of several gates.
+        var didUsefulWork =
+            verification.StandardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
+            HasUsefulPreWorkOutput(verification.StandardOutput);
+
+        return commitBlocked && didUsefulWork;
+    }
+
     public static bool HasProviderNeutralProgressStallFailure(TaskSpec task)
     {
         return task.Status == WorkTaskStatus.Failed &&
