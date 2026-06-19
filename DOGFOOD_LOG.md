@@ -1681,3 +1681,10 @@ Goal 019a2b2b: # Judge-input increment 2: aggregate true PER-FILE verdicts + bud
 
 - Operator gate: Planner: not-run (exit 0); Developer: pass; semantic focused 38/38, core 356/356, infrastructure 930/930; build succeeded 0 warnings/errors (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped multi-file judge behavior change - enough reasoning for edge cases and test coverage.
+
+## 2026-06-19 - # Resolve the orchestrator repo root from configuration, not by discovering a...
+
+Goal 0c762f38: # Resolve the orchestrator repo root from configuration, not by discovering a hardcoded .sln  ## Why `OrchestratorWor.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 75c54be). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Researcher: not-run (exit 0); Developer: pass - focused WorkspaceConsolidatorTests, 4 passed (exit 0); Tester: pass - 4 passed (ResolveRepoRootFindsGitRootFromNestedSubdirectory, ResolveRepoRootFallsBackToStartDirectoryWhenNoGitRootFound, ResolveRepoRootUsesFallbackDirectoryWhenStartDirectoryHasNoGitRoot, ResolveRepoRootUsesConfiguredRepoRootBeforeStartOrFallback) (exit 0); Reviewer: not-run (review task; 4 WorkspaceConsolidatorTests passed per Developer evidence at commit 75c54be) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - reviewer task on a small focused change - reading 5 implementation files plus prior evidence was sufficient; no ambiguity or scale requiring a larger model.
