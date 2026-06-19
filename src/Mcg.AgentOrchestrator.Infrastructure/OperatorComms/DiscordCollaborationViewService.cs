@@ -4,6 +4,10 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+// Surfaces the operator attention queue in Discord as ONE persistent message PER GOAL that needs
+// attention — a per-goal priority list, edited in place as items are raised/resolved. A goal with no
+// open attention items gets NO message (silence is the default). This replaces the old per-item delivery
+// (a new message per CollaborationItem) which spammed a message for every escalation.
 public sealed class DiscordCollaborationViewService
 {
     private const string RefsFileName = "discord-collaboration-refs.json";
@@ -35,26 +39,32 @@ public sealed class DiscordCollaborationViewService
 
     public async Task ReconcileAsync(CancellationToken cancellationToken = default)
     {
-        var items = await _store.GetAttentionQueueAsync(cancellationToken);
-        foreach (var item in items)
+        var queue = await _store.GetAttentionQueueAsync(cancellationToken);
+        var refs = LoadRefs();
+
+        // Group the (already prioritized) open attention items by goal.
+        var byGoal = queue
+            .Where(item => !string.IsNullOrWhiteSpace(item.CorrelationKey))
+            .GroupBy(GoalKey)
+            .ToDictionary(group => group.Key, OrderItems);
+
+        // One aggregated message per goal that currently needs attention.
+        foreach (var (goalKey, items) in byGoal)
         {
-            if (string.IsNullOrWhiteSpace(item.CorrelationKey))
-                continue;
-
-            var refs = LoadRefs();
-            if (!refs.Items.TryGetValue(item.Id, out var messageRef))
-            {
-                await DeliverAsync(item, cancellationToken);
-                continue;
-            }
-
-            await _api.EditMessageAsync(
-                messageRef.ThreadId,
-                messageRef.MessageId,
-                BuildContent(item),
-                BuildButtons(item, disabled: false),
-                cancellationToken);
+            await UpsertGoalMessageAsync(refs, goalKey, items, cancellationToken);
+            foreach (var item in items)
+                await _store.TryMarkDeliveredAsync(item.CorrelationKey!, cancellationToken);
         }
+
+        // A goal that previously had a message but is now clear gets its message retired (all resolved),
+        // never left dangling with stale buttons.
+        foreach (var goalKey in refs.GoalMessages.Keys.ToArray())
+        {
+            if (!byGoal.ContainsKey(goalKey))
+                await RetireGoalMessageAsync(refs, goalKey, cancellationToken);
+        }
+
+        SaveRefs(refs);
     }
 
     public async Task<DiscordInteractionResult> ApplyInteractionAsync(
@@ -69,112 +79,129 @@ public sealed class DiscordCollaborationViewService
 
         var correlationKey = result.Decision.InboxItemId;
         var resolution = result.Decision.Command;
-        var changed = await _store.TryResolveAsync(correlationKey, resolution, cancellationToken);
-        var item = (await _store.ListAsync(null, cancellationToken))
+        await _store.TryResolveAsync(correlationKey, resolution, cancellationToken);
+
+        var resolvedItem = (await _store.ListAsync(null, cancellationToken))
             .FirstOrDefault(candidate => candidate.CorrelationKey == correlationKey);
-        if (item is null)
+        if (resolvedItem is null)
             return new DiscordInteractionResult(null, false, null, $"No collaboration item for '{correlationKey}'.");
 
+        // Re-render the resolved item's goal message in place: drop the resolved item; if it was the
+        // goal's last open item, the message becomes "all resolved" with no buttons.
+        var goalKey = GoalKey(resolvedItem);
         var refs = LoadRefs();
-        if (refs.Items.TryGetValue(item.Id, out var messageRef))
+        if (refs.GoalMessages.TryGetValue(goalKey, out var messageRef))
         {
-            var resolvedItem = item with
+            var remaining = OrderItems(
+                (await _store.GetAttentionQueueAsync(cancellationToken))
+                    .Where(item => !string.IsNullOrWhiteSpace(item.CorrelationKey) && GoalKey(item) == goalKey));
+
+            if (remaining.Count == 0)
             {
-                Status = CollaborationItemStatus.Resolved,
-                Resolution = item.Resolution ?? resolution,
-                ResolvedAt = item.ResolvedAt ?? DateTimeOffset.UtcNow
-            };
-            await _api.EditMessageAsync(
-                messageRef.ThreadId,
-                messageRef.MessageId,
-                BuildContent(resolvedItem, $" by {userId}"),
-                BuildButtons(resolvedItem, disabled: true),
-                cancellationToken);
-            if (changed)
+                await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId,
+                    BuildAllResolvedContent(goalKey, userId), [], cancellationToken);
+            }
+            else
             {
-                await _api.SendMessageAsync(
-                    messageRef.ThreadId,
-                    $"Applied: {resolution}",
-                    [],
-                    cancellationToken);
+                await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId,
+                    BuildGoalContent(goalKey, remaining, $"✅ resolved one by {userId}"),
+                    BuildGoalButtons(remaining), cancellationToken);
             }
         }
 
         return result;
     }
 
-    private async Task DeliverAsync(CollaborationItem item, CancellationToken cancellationToken)
+    private async Task UpsertGoalMessageAsync(
+        DiscordCollaborationRefs refs, string goalKey, IReadOnlyList<CollaborationItem> items, CancellationToken cancellationToken)
     {
-        var refs = LoadRefs();
-        var threadKey = ThreadKey(item);
+        var content = BuildGoalContent(goalKey, items, footer: null);
+        var buttons = BuildGoalButtons(items);
 
-        if (!refs.Threads.TryGetValue(threadKey, out var threadId))
+        if (refs.GoalMessages.TryGetValue(goalKey, out var messageRef))
         {
-            // First escalation for this id/goal: open one thread for it.
-            var title = BuildThreadTitle(item);
-            threadId = await _api.CreateThreadAsync(_forumChannelId, title, BuildContent(item), cancellationToken);
-            refs.Threads[threadKey] = threadId;
+            await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId, content, buttons, cancellationToken);
+            return;
         }
 
-        // Every escalation for the same id posts as a message in that one thread rather than
-        // spawning a new thread, so a goal's escalations stay grouped and trackable.
-        var messageId = await _api.SendMessageAsync(
-            threadId,
-            BuildContent(item),
-            BuildButtons(item, disabled: false),
-            cancellationToken);
-
-        refs.Items[item.Id] = new DiscordItemMessageRef(threadId, messageId);
-        SaveRefs(refs);
-        await _store.TryMarkDeliveredAsync(item.CorrelationKey!, cancellationToken);
+        var threadId = await _api.CreateThreadAsync(_forumChannelId, BuildGoalThreadTitle(goalKey), content, cancellationToken);
+        var messageId = await _api.SendMessageAsync(threadId, content, buttons, cancellationToken);
+        refs.GoalMessages[goalKey] = new GoalMessageRef(threadId, messageId);
     }
 
-    // One Discord thread per goal id (the thread title is already goal-scoped); orchestrator-level
-    // items without a goal share a single "orchestrator" thread.
-    private static string ThreadKey(CollaborationItem item) =>
+    private async Task RetireGoalMessageAsync(
+        DiscordCollaborationRefs refs, string goalKey, CancellationToken cancellationToken)
+    {
+        var messageRef = refs.GoalMessages[goalKey];
+        await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId,
+            BuildAllResolvedContent(goalKey, null), [], cancellationToken);
+    }
+
+    private static string GoalKey(CollaborationItem item) =>
         string.IsNullOrWhiteSpace(item.GoalId) ? "orchestrator" : item.GoalId;
 
-    private static string BuildThreadTitle(CollaborationItem item)
-    {
-        var goal = string.IsNullOrWhiteSpace(item.GoalId)
-            ? "orchestrator"
-            : item.GoalId[..Math.Min(8, item.GoalId.Length)];
-        return $"[{goal}] {item.Type}: {item.Subject}";
-    }
+    private static IReadOnlyList<CollaborationItem> OrderItems(IEnumerable<CollaborationItem> items) =>
+        items
+            .OrderBy(item => CollaborationItemLifecycle.AttentionPriority(item.Type))
+            .ThenBy(item => item.RaisedAt)
+            .ToList();
 
-    private static string BuildContent(CollaborationItem item, string resolvedBy = "")
+    private static string GoalLabel(string goalKey) =>
+        goalKey == "orchestrator" ? "orchestrator" : goalKey[..Math.Min(8, goalKey.Length)];
+
+    private static string BuildGoalThreadTitle(string goalKey) => $"[{GoalLabel(goalKey)}] needs attention";
+
+    private static string BuildGoalContent(string goalKey, IReadOnlyList<CollaborationItem> items, string? footer)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"**[{item.Type}]** {item.Subject}");
+        sb.AppendLine($"**Goal `{GoalLabel(goalKey)}` — {items.Count} item(s) need attention:**");
         sb.AppendLine();
-        sb.AppendLine(item.Body);
-        sb.AppendLine();
-        sb.AppendLine(item.Status == CollaborationItemStatus.Resolved
-            ? $"✅ {item.Resolution}{resolvedBy}"
-            : "Status: unresolved");
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            sb.AppendLine($"{i + 1}. **[{item.Type}]** {item.Subject}");
+            if (!string.IsNullOrWhiteSpace(item.Body))
+                sb.AppendLine($"> {Truncate(item.Body, 220)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(footer))
+        {
+            sb.AppendLine();
+            sb.AppendLine(footer);
+        }
+
         return sb.ToString().Trim();
     }
 
-    private static IReadOnlyList<DiscordButtonDefinition> BuildButtons(CollaborationItem item, bool disabled)
-    {
-        if (string.IsNullOrWhiteSpace(item.CorrelationKey))
-            return [];
+    private static string BuildAllResolvedContent(string goalKey, string? resolvedBy) =>
+        $"✅ Goal `{GoalLabel(goalKey)}` — all attention items resolved{(resolvedBy is null ? "" : $" (last by {resolvedBy})")}.";
 
-        var label = item.Type switch
+    // One button per open item (numbered to match the list). Capped at Discord's 25-button limit; a
+    // single goal essentially never exceeds it, but if it does the overflow stays in the text list.
+    private static IReadOnlyList<DiscordButtonDefinition> BuildGoalButtons(IReadOnlyList<CollaborationItem> items)
+    {
+        var buttons = new List<DiscordButtonDefinition>();
+        for (var i = 0; i < items.Count && buttons.Count < 25; i++)
         {
-            CollaborationItemType.Verify => "Verified",
-            CollaborationItemType.Clarification => "Answered",
-            _ => "Resolve"
-        };
-        var resolution = item.Type switch
-        {
-            CollaborationItemType.Verify => "verified",
-            CollaborationItemType.Clarification => "answered",
-            _ => "resolved"
-        };
-        var customId = DiscordInteractionHandler.BuildDirectCustomId(item.CorrelationKey, resolution);
-        return [new DiscordButtonDefinition(label, customId, disabled ? DiscordButtonStyle.Secondary : DiscordButtonStyle.Success, disabled)];
+            var item = items[i];
+            if (string.IsNullOrWhiteSpace(item.CorrelationKey))
+                continue;
+
+            var (verb, resolution) = item.Type switch
+            {
+                CollaborationItemType.Verify => ("Verify", "verified"),
+                CollaborationItemType.Clarification => ("Answer", "answered"),
+                _ => ("Resolve", "resolved")
+            };
+            var customId = DiscordInteractionHandler.BuildDirectCustomId(item.CorrelationKey, resolution);
+            buttons.Add(new DiscordButtonDefinition($"{verb} #{i + 1}", customId, DiscordButtonStyle.Success));
+        }
+
+        return buttons;
     }
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + "…";
 
     private DiscordCollaborationRefs LoadRefs()
     {
@@ -186,10 +213,10 @@ public sealed class DiscordCollaborationViewService
                 var refs = JsonSerializer.Deserialize<DiscordCollaborationRefs>(File.ReadAllText(path), JsonOptions);
                 if (refs is not null)
                 {
-                    // Tolerate older ref files written before per-goal thread grouping (no Threads map).
+                    // Tolerate older ref files (per-item Items / per-goal Threads maps) by ignoring them —
+                    // the per-goal message model rebuilds its own refs on the next reconcile.
                     return new DiscordCollaborationRefs(
-                        refs.Items ?? new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase),
-                        refs.Threads ?? new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase));
+                        refs.GoalMessages ?? new Dictionary<string, GoalMessageRef>(StringComparer.OrdinalIgnoreCase));
                 }
             }
             catch
@@ -198,9 +225,7 @@ public sealed class DiscordCollaborationViewService
             }
         }
 
-        return new DiscordCollaborationRefs(
-            new Dictionary<string, DiscordItemMessageRef>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase));
+        return new DiscordCollaborationRefs(new Dictionary<string, GoalMessageRef>(StringComparer.OrdinalIgnoreCase));
     }
 
     private void SaveRefs(DiscordCollaborationRefs refs)
@@ -209,9 +234,7 @@ public sealed class DiscordCollaborationViewService
         File.WriteAllText(Path.Combine(_stateDirectory, RefsFileName), JsonSerializer.Serialize(refs, JsonOptions));
     }
 
-    private sealed record DiscordCollaborationRefs(
-        Dictionary<string, DiscordItemMessageRef> Items,
-        Dictionary<string, ulong> Threads);
+    private sealed record DiscordCollaborationRefs(Dictionary<string, GoalMessageRef> GoalMessages);
 
-    private sealed record DiscordItemMessageRef(ulong ThreadId, ulong MessageId);
+    private sealed record GoalMessageRef(ulong ThreadId, ulong MessageId);
 }
