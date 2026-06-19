@@ -259,12 +259,33 @@ public sealed class BackgroundDispatchRunner
         {
             if (!worktreeEvidence.IsClean)
             {
-                exitCode = 1;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
-                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                    $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
+                // The worker produced edits but did not commit them — a low-integrity worker cannot
+                // write the medium-integrity .git, and codex's Windows sandbox can poison before it
+                // commits. When the worker also showed verification evidence (a "dirty-useful"
+                // dispatch — it did and verified the work, just couldn't land the commit), recover by
+                // committing the worktree from the orchestrator (medium); the acceptance gate then
+                // re-verifies. This is the linchpin for autonomy: such a worker only needs to EDIT the
+                // worktree, never to commit. Dirty-but-UNVERIFIED edits are still failed (not blindly
+                // committed) so they surface for retry/escalation rather than landing unproven work.
+                if (DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) &&
+                    TryCommitWorktreeEdits(processRecord.WorkingDirectory, goalId) &&
+                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+                    worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
+                {
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Orchestrator committed the worker's uncommitted worktree edits. " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+                }
+                else
+                {
+                    exitCode = 1;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Developer/Tester dispatch exited 0 but left the worktree dirty and it could not be recovered. " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                        $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
+                }
             }
             else if (RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
                 !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
@@ -385,6 +406,39 @@ public sealed class BackgroundDispatchRunner
         catch
         {
             return null;
+        }
+    }
+
+    // Commits the worker's uncommitted worktree edits from the orchestrator (medium integrity). A
+    // low-integrity worker cannot write the medium .git, and codex's Windows sandbox can poison
+    // before it commits — in both cases the worker EDITS the worktree but never lands a commit. The
+    // orchestrator finishes the job so the dispatch can be verified by the acceptance gate. The
+    // sandbox scratch dir (.mcg-sandbox) is excluded so it never enters the goal branch.
+    private static bool TryCommitWorktreeEdits(string workingDirectory, GoalId goalId)
+    {
+        try
+        {
+            var add = GitCli.Run(workingDirectory, "add", "-A", "--", ".", ":(exclude).mcg-sandbox");
+            if (!add.Succeeded)
+            {
+                return false;
+            }
+
+            var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--name-only");
+            if (staged.ExitCode != 0 || string.IsNullOrWhiteSpace(staged.Output))
+            {
+                // Nothing to commit once the sandbox scratch is excluded (e.g. only .mcg-sandbox was
+                // dirty) — leave the dispatch to fail/report rather than create an empty commit.
+                return false;
+            }
+
+            var message = $"Orchestrator-committed worker edits for goal {goalId.Value}";
+            var commit = GitCli.Run(workingDirectory, "commit", "-m", message);
+            return commit.Succeeded;
+        }
+        catch
+        {
+            return false;
         }
     }
 

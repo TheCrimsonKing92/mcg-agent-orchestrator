@@ -2835,6 +2835,32 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=?? dirty.txt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_with_verification_evidence_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerFileRoleDirtyWorktreeWithVerificationEvidenceIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    // The worker edited the worktree AND showed verification evidence but never committed (a
+    // low-integrity sandbox cannot write the medium .git, and codex's Windows sandbox can poison
+    // before it commits). The orchestrator commits the edits so the dispatch advances — this is the
+    // recovery that keeps goals moving autonomously without the worker needing to write .git.
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's uncommitted worktree edits", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
     public void BackgroundDispatchRunnerFileRoleWithCommittedChangePasses()
 {
