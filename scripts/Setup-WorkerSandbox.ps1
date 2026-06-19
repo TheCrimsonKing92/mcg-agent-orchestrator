@@ -46,8 +46,11 @@ if (-not $isAdmin) {
 
 # --- generate a strong random password ---
 function New-StrongPassword {
+    # Use an RNG instance + GetBytes (available in both Windows PowerShell 5.1 / .NET Framework
+    # and PowerShell 7 / .NET); the static RandomNumberGenerator.Fill is .NET Core only.
     $bytes = [byte[]]::new(24)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
     # Base64 is mixed-case + digits; append fixed symbols to satisfy complexity policy deterministically.
     return ([Convert]::ToBase64String($bytes) -replace '[/+=]', 'x') + '!Aa9'
 }
