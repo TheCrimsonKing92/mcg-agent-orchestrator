@@ -55,6 +55,18 @@ public static class DispatchProcessHost
         }
 
         var account = parameters.SandboxAccount;
+
+        // pwsh resolves to the per-user WindowsApps execution alias, which the sandbox account cannot
+        // access (Win32 1920 "file cannot be accessed"). Launch via system-wide Windows PowerShell,
+        // which every user can execute; the base args (-NoProfile -ExecutionPolicy Bypass -Command)
+        // and the PowerShell-dialect worker command both run there unchanged.
+        if (startInfo.FileName is "pwsh" or "pwsh.exe")
+        {
+            startInfo.FileName = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "WindowsPowerShell", "v1.0", "powershell.exe");
+        }
+
         WorkerSandboxAcl.GrantModify(parameters.WorkingDirectory, account);
         if (!string.IsNullOrWhiteSpace(parameters.SandboxGitCommonDir))
         {
