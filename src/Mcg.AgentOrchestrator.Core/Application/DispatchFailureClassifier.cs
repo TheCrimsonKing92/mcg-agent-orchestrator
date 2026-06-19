@@ -39,6 +39,13 @@ public static class DispatchFailureClassifier
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
+    public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
+    {
+        return verification.ExitCode == 0 &&
+            string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+            string.IsNullOrWhiteSpace(verification.StandardError);
+    }
+
     public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)
     {
         recovery = DirtyDispatchRecovery.None;
