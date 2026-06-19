@@ -114,8 +114,7 @@ internal static class CliPersistentStateRunner
             "simple-hosted-dashboard" or
             "open-dashboard" or
             "monitor-goal" or
-            "operator-channel" or
-            "state-rollback" => false,
+            "operator-channel" => false,
             _ => true
         };
     }

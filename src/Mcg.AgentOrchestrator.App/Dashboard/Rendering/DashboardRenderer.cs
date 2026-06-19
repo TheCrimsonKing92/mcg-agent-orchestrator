@@ -24,7 +24,7 @@ public sealed record DashboardRenderOptions(
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,
-    string StatePath,
+    string SqliteStatePath,
     string ExecutionDirectory,
     string PromptDirectory,
     string LogDirectory,
@@ -43,7 +43,7 @@ public sealed record DashboardWorkspaceContext(
 {
     public DashboardWorkspaceContext(
         string rootDirectory,
-        string statePath,
+        string sqliteStatePath,
         string executionDirectory,
         string promptDirectory,
         string logDirectory,
@@ -52,7 +52,7 @@ public sealed record DashboardWorkspaceContext(
         int dashboardProcessId)
         : this(
             rootDirectory,
-            statePath,
+            sqliteStatePath,
             executionDirectory,
             promptDirectory,
             logDirectory,

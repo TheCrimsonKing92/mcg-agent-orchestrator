@@ -89,7 +89,6 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     }
 }
 
-await SqliteStateJsonMigrator.MigrateIfNeededAsync(workspace.StatePath, workspace.SqliteStatePath);
 ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
 var kernel = await stateRepository.LoadAsync();
 var currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
@@ -110,7 +109,7 @@ if (startupArgs.Count > 0)
 
 Console.WriteLine("MCG Agent Orchestrator");
 Console.WriteLine($"Tenant: {workspace.TenantName}");
-Console.WriteLine($"State: {workspace.StatePath}");
+Console.WriteLine($"State: {workspace.SqliteStatePath}");
 Console.WriteLine();
 Console.WriteLine("Fundamentals:");
 Console.WriteLine("  next [goal-id] [--full] [--autonomy <policy>]");
@@ -122,7 +121,7 @@ Console.WriteLine("  goal <objective> [--simple] [--from-backlog] [--run --confi
 Console.WriteLine("    Create a goal. --simple: single Developer task. --from-backlog: read from BACKLOG.md. --run: create and start.");
 Console.WriteLine("  accept [goal-id] [--skip-verify] [--autonomy <policy>]");
 Console.WriteLine("    Accept a completed goal: run acceptance checks, merge workspace, and clean up worktree.");
-Console.WriteLine("  stop <goal-id> <reason> --as cancel|park|rollback|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-rollback|--confirm-goal-abandon]");
+Console.WriteLine("  stop <goal-id> <reason> --as cancel|park|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-abandon]");
 Console.WriteLine("    Stop a goal using the specified disposal mode.");
 Console.WriteLine("  config <agents|profiles|policy|doctor>");
 Console.WriteLine("    View configuration: agents=agent catalog, profiles=worker profiles, policy=autonomy policies, doctor=health check.");
@@ -133,7 +132,7 @@ Console.WriteLine("Advanced/Internal (used by automation, tests, and advanced wo
 Console.WriteLine("  Inspection verbs folded into 'next --full': status, monitor, readiness, evidence, stages, gates,");
 Console.WriteLine("    verify-needed, input-needed, subscription-plan, model-outcomes, loop-health, failure-triage,");
 Console.WriteLine("    goal-recovery, supervisor, operator-inbox. All still work standalone.");
-Console.WriteLine("  doctor, architecture, tenant, state-rollback --confirm-state-rollback");
+Console.WriteLine("  doctor, architecture, tenant");
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
 Console.WriteLine("  prototype [objective], prototype-ui [url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  serve-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");

@@ -1087,7 +1087,7 @@ public sealed class DashboardRenderingTests
     var staticHtml = DashboardRenderer.Render(kernel);
     var workspace = new DashboardWorkspaceContext(
         @"C:\repo\.orchestrator",
-        @"C:\repo\.orchestrator\state.json",
+        @"C:\repo\.orchestrator\state.db",
         @"C:\repo",
         @"C:\repo\.orchestrator\prompts",
         @"C:\repo\.orchestrator\logs",
