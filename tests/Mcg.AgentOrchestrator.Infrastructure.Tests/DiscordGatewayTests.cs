@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -321,6 +322,69 @@ public sealed class DiscordGatewayTests
         Assert.Equal(2, api.CreatedThreads.Count);
         Assert.Equal(2, api.SentMessages.Count);
         Assert.True(api.SentMessages[0].ThreadId != api.SentMessages[1].ThreadId);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_renders_escalation_raised_by_operator_channel")]
+    public async Task DiscordCollaborationViewRendersEscalationRaisedByOperatorChannel()
+    {
+        var root = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(root);
+        var api = new FakeDiscordForumApi();
+        var channel = new DiscordOperatorChannel(store);
+        var escalation = new OperatorEscalation(
+            "inbox-render-001",
+            "goal-render-123456",
+            "render12",
+            "LandingEscalation",
+            "Landing needs review",
+            "Goal: Render escalation through queue\nReason: integration conflict",
+            "acceptance output tail",
+            [new OperatorEscalationAction("Accept Goal", "acceptance render12 --autonomy supervised-auto", RequiresConfirm: true)],
+            null);
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await channel.SendEscalationAsync(escalation);
+        await view.ReconcileAsync();
+
+        Assert.Equal(1, api.CreatedThreads.Count);
+        var message = api.SentMessages.Single();
+        Assert.Contains(message.Content, s => s.Contains("Landing needs review"));
+        Assert.Contains(message.Content, s => s.Contains("LandingEscalation"));
+        Assert.Equal(1, message.Buttons.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorListen_collaboration_reconcile_loop_surfaces_newly_raised_item")]
+    public async Task OperatorListenCollaborationReconcileLoopSurfacesNewlyRaisedItem()
+    {
+        var root = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(root);
+        var api = new FakeDiscordForumApi();
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        using var cts = new CancellationTokenSource();
+        var delayCalls = 0;
+
+        Task Delay(TimeSpan _, CancellationToken cancellationToken)
+        {
+            delayCalls++;
+            if (delayCalls == 1)
+            {
+                return store.RaiseAsync(
+                    CollaborationItemType.Decision,
+                    "goal-loop-123",
+                    "Loop surfaced decision",
+                    "Body",
+                    "corr-loop-1",
+                    cancellationToken);
+            }
+
+            cts.Cancel();
+            return Task.FromCanceled(cts.Token);
+        }
+
+        await CliCommandHandlers.RunCollaborationReconcileLoopAsync(view, TimeSpan.FromSeconds(15), cts.Token, Delay);
+
+        var message = api.SentMessages.Single();
+        Assert.Contains(message.Content, s => s.Contains("Loop surfaced decision"));
     }
 
     [Xunit.Fact(DisplayName = "DiscordProgressView_reconcile_skips_identical_status_content")]

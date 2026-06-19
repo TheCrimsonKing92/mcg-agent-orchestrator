@@ -141,15 +141,25 @@ internal static partial class CliCommandHandlers
                     return false;
                 }
 
-                Console.WriteLine("operator-listen: Discord listener running. Progress view refreshes every 15 minutes. Press Ctrl+C to stop.");
+                Console.WriteLine("operator-listen: Discord listener running. Collaboration view refreshes every 15 seconds; progress view refreshes every 15 minutes. Press Ctrl+C to stop.");
                 using var cts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, eventArgs) =>
                 {
                     eventArgs.Cancel = true;
                     cts.Cancel();
                 };
-                RunOperatorListenLoopAsync(context, store, runtime.ProgressView, cts.Token).GetAwaiter().GetResult();
-                runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    var progressLoop = RunOperatorListenLoopAsync(context, store, runtime.ProgressView, cts.Token);
+                    var collaborationLoop = RunCollaborationReconcileLoopAsync(runtime.CollaborationView, TimeSpan.FromSeconds(15), cts.Token);
+                    Task.WhenAny(progressLoop, collaborationLoop).GetAwaiter().GetResult();
+                    cts.Cancel();
+                    Task.WhenAll(progressLoop, collaborationLoop).GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
                 return false;
             }
 
@@ -251,6 +261,28 @@ internal static partial class CliCommandHandlers
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(15), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
+    internal static async Task RunCollaborationReconcileLoopAsync(
+        DiscordCollaborationViewService collaborationView,
+        TimeSpan reconcileInterval,
+        CancellationToken cancellationToken,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        delay ??= Task.Delay;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await collaborationView.ReconcileAsync(cancellationToken);
+
+            try
+            {
+                await delay(reconcileInterval, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
