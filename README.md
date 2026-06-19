@@ -439,6 +439,14 @@ The conductor drives a goal through its full lifecycle in discrete, policy-gated
 conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]
 ```
 
+### Autonomous execution
+
+For a full SDLC goal, the conductor advances the worker chain from Planner → Researcher → Developer → Tester → Reviewer.
+Workers make edits only in the goal worktree; the orchestrator owns committing verified worker edits.
+After review, the acceptance gate runs the configured build and test suite against that worktree.
+If the goal is clean and low risk under the active policy, the conductor auto-promotes it by merging to `main` without human sign-off.
+Risky landings, failed gates, conflicts, human-input states, or repeatedly troubled attempts escalate to the operator for review instead of landing automatically.
+
 ### Lifecycle states
 
 The conductor follows a deterministic state machine:
