@@ -348,13 +348,23 @@ public static class WorkerProfileDispatcher
             })
             .ToList();
 
+        // When the Low-IL sandbox is active, the worker runs at low integrity and physically cannot
+        // write the medium-integrity .git (it lives outside the worktree). The .git-reference preflight
+        // guard exists to stop a worker from targeting VCS internals — a risk the OS already eliminates
+        // here — so it is redundant under the sandbox. Relaxing it lets the conductor autonomously
+        // dispatch tasks whose briefs legitimately mention .git (e.g. repo-root resolution goals)
+        // instead of dropping them from the ready batch and escalating a generic "no ready tasks".
+        var sandboxConfinesWrites = WorkerSandboxOptions.FromEnvironment().Enabled;
+
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var selection in selections)
         {
             var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
             var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
             var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel);
-            var preflight = PreflightSubscriptionTask(goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt);
+            var preflight = PreflightSubscriptionTask(
+                goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
+                allowGitReference: sandboxConfinesWrites);
             if (!preflight.Allowed)
             {
                 continue;
