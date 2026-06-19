@@ -1744,3 +1744,11 @@ Goal 5a543e36: # Wire the meta-planner (goal refinement) into the goal lifecycle
 
 - Operator gate: Developer: build passed; GoalRefinement tests passed 20/20; exact collaboration lock regression passed 1/1; full suite not clean due repo Git metadata/ref-lock permission failures (exit 0); Tester: build passed; GoalRefinement tests passed 20/20; exact collaboration lock regression passed 1/1; verified acceptance criteria met (exit 0); Reviewer: build passed; GoalRefinement 20/20 per Developer+Tester evidence; independent re-run blocked by Low-IL ACL in worktree (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file reviewer role with evidence synthesis - sufficient for tracing dispatch guards, spotting conductor policy deviation, and evaluating plan-vs-implementation gaps.
+
+
+## 2026-06-19 - # Remove the legacy JSON file-store apparatus and the backup/rollback/vacuum ...
+
+Goal 8f44b544: # Remove the legacy JSON file-store apparatus and the backup/rollback/vacuum commands  ## Why State was consolidated .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via (no receipt) (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
