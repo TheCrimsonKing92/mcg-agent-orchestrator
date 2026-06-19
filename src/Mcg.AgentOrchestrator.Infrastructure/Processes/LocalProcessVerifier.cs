@@ -178,17 +178,27 @@ public sealed class LocalProcessVerifier
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start process: {args[0]}");
+        using var processGroup = OwnedProcessGroup.Attach(process);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(CommandTimeout);
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+        try
+        {
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
 
-        await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
 
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-        return new CommandResult(process.ExitCode, stdout, stderr);
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            return new CommandResult(process.ExitCode, stdout, stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            try { processGroup.Kill(); } catch { /* best effort */ }
+            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            throw;
+        }
     }
 }

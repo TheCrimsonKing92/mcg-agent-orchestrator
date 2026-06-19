@@ -269,6 +269,60 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(task.LastVerification.StandardError.Contains("Reaped", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_reaps_all_tracked_owned_pids_when_exit_file_exists")]
+    public void RefreshLatestProcessReapsAllTrackedOwnedPidsWhenExitFileExists()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh reaps tracked pids");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "done");
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(
+        111,
+        "fake-cmd",
+        root,
+        stdoutPath,
+        stderrPath,
+        exitPath,
+        DateTimeOffset.UtcNow,
+        null,
+        null,
+        OwnedProcessIds: [111, 222]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    var killed = new List<int>();
+    var running = new HashSet<int> { 111, 222 };
+
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: pid => running.Contains(pid),
+        tryKillOwnedProcess: pid => { killed.Add(pid); running.Remove(pid); return true; });
+
+    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(killed.SequenceEqual([111, 222]));
+    Assert.False(task.LastProcess!.IsRunning);
+}
+
+    [Xunit.Fact(DisplayName = "Build_daemon_reaping_requires_command_line_ownership_evidence")]
+    public void BuildDaemonReapingRequiresCommandLineOwnershipEvidence()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    Directory.CreateDirectory(worktree);
+
+    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, null));
+    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, ""));
+    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, "VBCSCompiler.exe -shared"));
+    Assert.True(BackgroundDispatchRunner.ShouldReapBuildDaemon(
+        worktree,
+        $"VBCSCompiler.exe -keepalive \"{Path.Combine(worktree, "obj", "Debug", "Core.dll")}\""));
+}
+
     [Xunit.Fact(DisplayName = "RecordCompletedProcess_leaves_non_matching_processes_alone")]
     public void RecordCompletedProcessLeavesNonMatchingProcessesAlone()
 {

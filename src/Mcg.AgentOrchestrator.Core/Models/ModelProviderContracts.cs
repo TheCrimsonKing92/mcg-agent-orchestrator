@@ -72,9 +72,15 @@ public sealed record TaskProcessRecord(
     DateTimeOffset StartedAt,
     DateTimeOffset? CompletedAt,
     int? ExitCode,
-    bool WasCancelled = false)
+    bool WasCancelled = false,
+    IReadOnlyList<int>? OwnedProcessIds = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
+
+    public IReadOnlyList<int> TrackedProcessIds =>
+        OwnedProcessIds is { Count: > 0 }
+            ? OwnedProcessIds
+            : [ProcessId];
 }
 
 public interface IModelProvider

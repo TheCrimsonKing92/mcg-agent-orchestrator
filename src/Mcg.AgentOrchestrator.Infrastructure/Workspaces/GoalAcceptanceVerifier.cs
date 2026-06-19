@@ -787,6 +787,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
+            using var processGroup = OwnedProcessGroup.Attach(process);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(CommandTimeout);
@@ -797,6 +798,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (OperationCanceledException)
             {
+                try { processGroup.Kill(); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 throw;
             }

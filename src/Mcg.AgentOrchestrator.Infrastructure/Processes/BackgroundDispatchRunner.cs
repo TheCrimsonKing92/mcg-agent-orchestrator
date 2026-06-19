@@ -16,6 +16,7 @@ public sealed class BackgroundDispatchRunner
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly TimeSpan _progressStallTimeout;
     private readonly Func<int, bool> _isStillRunning;
+    private readonly Func<int, bool> _tryKillOwnedProcess;
     private readonly bool _processStartDisabled;
     private readonly Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>> _findBuildDaemons;
     private readonly Func<int, bool> _tryKillBuildDaemon;
@@ -24,6 +25,7 @@ public sealed class BackgroundDispatchRunner
         IClock? clock = null,
         TimeSpan? postOutputIdleTimeout = null,
         Func<int, bool>? isStillRunning = null,
+        Func<int, bool>? tryKillOwnedProcess = null,
         bool? disableProcessStart = null,
         Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>>? findBuildDaemons = null,
         Func<int, bool>? tryKillBuildDaemon = null,
@@ -33,6 +35,7 @@ public sealed class BackgroundDispatchRunner
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
         _progressStallTimeout = progressStallTimeout ?? DefaultProgressStallTimeout;
         _isStillRunning = isStillRunning ?? IsStillRunning;
+        _tryKillOwnedProcess = tryKillOwnedProcess ?? TryKillProcess;
         _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
         _findBuildDaemons = findBuildDaemons ?? FindBuildDaemons;
         _tryKillBuildDaemon = tryKillBuildDaemon ?? TryKillBuildDaemonProcess;
@@ -130,7 +133,8 @@ public sealed class BackgroundDispatchRunner
             exitCodePath,
             _clock.UtcNow,
             null,
-            null);
+            null,
+            OwnedProcessIds: [process.Id]);
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
         return record;
@@ -173,9 +177,9 @@ public sealed class BackgroundDispatchRunner
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
         if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
-            if (_isStillRunning(processRecord.ProcessId))
+            if (AnyTrackedProcessStillRunning(processRecord))
             {
-                TryKillProcess(processRecord.ProcessId);
+                TryKillTrackedProcesses(processRecord, waitForExit: true);
             }
 
             return RecordCompletedProcess(kernel, goalId, taskId, processRecord, exitCode);
@@ -185,7 +189,7 @@ public sealed class BackgroundDispatchRunner
         {
             if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
             {
-                TryKillProcess(processRecord.ProcessId);
+                TryKillTrackedProcesses(processRecord, waitForExit: true);
                 if (RequiresFileChangeEvidence(task) &&
                     TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
                     wt.IsClean && wt.HasRelevantCommitAfterDispatch)
@@ -204,7 +208,7 @@ public sealed class BackgroundDispatchRunner
 
             if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
             {
-                TryKillProcess(processRecord.ProcessId);
+                TryKillTrackedProcesses(processRecord, waitForExit: true);
                 if (RequiresFileChangeEvidence(task) &&
                     TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
                     wt.IsClean && wt.HasRelevantCommitAfterDispatch)
@@ -223,7 +227,7 @@ public sealed class BackgroundDispatchRunner
 
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
             {
-                TryKillProcess(processRecord.ProcessId);
+                TryKillTrackedProcesses(processRecord, waitForExit: true);
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
                 return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, stallDiagnostic);
             }
@@ -238,6 +242,7 @@ public sealed class BackgroundDispatchRunner
             return processRecord;
         }
 
+        TryKillTrackedProcesses(processRecord, waitForExit: false);
         return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1);
     }
 
@@ -589,9 +594,7 @@ public sealed class BackgroundDispatchRunner
         {
             try
             {
-                var process = Process.GetProcessById(processRecord.ProcessId);
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(5000);
+                TryKillTrackedProcesses(processRecord, waitForExit: true);
             }
             catch (ArgumentException)
             {
@@ -665,7 +668,6 @@ public sealed class BackgroundDispatchRunner
 
     private static List<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(string workingDirectory)
     {
-        var normalizedPath = Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var processesByPid = new Dictionary<int, string>();
 
         foreach (var name in BuildServerCandidates)
@@ -696,17 +698,25 @@ public sealed class BackgroundDispatchRunner
         foreach (var (pid, name) in processesByPid)
         {
             commandLines.TryGetValue(pid, out var cmdLine);
-            var referencesPath = cmdLine is not null &&
-                (cmdLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-                 cmdLine.Contains(workingDirectory, StringComparison.OrdinalIgnoreCase));
-
-            if (referencesPath || cmdLine is null)
+            if (ShouldReapBuildDaemon(workingDirectory, cmdLine))
             {
                 result.Add((pid, name, cmdLine));
             }
         }
 
         return result;
+    }
+
+    internal static bool ShouldReapBuildDaemon(string workingDirectory, string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return false;
+        }
+
+        var normalizedPath = Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return commandLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
+               commandLine.Contains(workingDirectory, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryKillBuildDaemonProcess(int processId)
@@ -1068,7 +1078,30 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static void TryKillProcess(int processId)
+    private bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord)
+    {
+        return processRecord.TrackedProcessIds.Any(_isStillRunning);
+    }
+
+    private void TryKillTrackedProcesses(TaskProcessRecord processRecord, bool waitForExit)
+    {
+        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
+        {
+            _tryKillOwnedProcess(processId);
+            if (!waitForExit)
+            {
+                continue;
+            }
+
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (_isStillRunning(processId) && DateTimeOffset.UtcNow < deadline)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    private static bool TryKillProcess(int processId)
     {
         try
         {
@@ -1081,10 +1114,14 @@ public sealed class BackgroundDispatchRunner
         }
         catch (ArgumentException)
         {
+            return true;
         }
         catch (InvalidOperationException)
         {
+            return true;
         }
+
+        return true;
     }
 
     // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next

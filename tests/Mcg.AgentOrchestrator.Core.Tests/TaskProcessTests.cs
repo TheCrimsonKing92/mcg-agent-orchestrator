@@ -194,7 +194,7 @@ public sealed class TaskProcessTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", clock.UtcNow));
-    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(5678, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(5678, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null, OwnedProcessIds: [5678, 6789]));
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
@@ -202,6 +202,7 @@ public sealed class TaskProcessTests
     Assert.Equal(5678, restoredTask.LastProcess!.ProcessId);
     Assert.Equal("dotnet test", restoredTask.LastProcess.Command);
     Assert.True(restoredTask.LastProcess.IsRunning);
+    Assert.True(restoredTask.LastProcess.TrackedProcessIds.SequenceEqual([5678, 6789]));
 }
     [Xunit.Fact(DisplayName = "RecordTaskProcessCancelled_marks_task_cancelled")]
     public void RecordTaskProcessCancelledMarksTaskCancelled()
