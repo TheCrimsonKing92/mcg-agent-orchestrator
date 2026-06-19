@@ -59,6 +59,69 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_ensure_fast_forwards_undriven_stale_worktree_to_base")]
+    public void GoalWorktreesEnsureFastForwardsUndrivenStaleWorktreeToBase()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            // A fix lands on the base branch AFTER the goal worktree was created.
+            File.WriteAllText(Path.Combine(repo, "landed-fix.txt"), "fix on main");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Landed fix on base");
+
+            // The goal worktree is undriven (no commits of its own, clean) but now behind base.
+            Assert.False(File.Exists(Path.Combine(path, "landed-fix.txt")));
+
+            // Re-ensuring brings the undriven worktree up to the current base so a worker never
+            // builds on a stale base (which would conflict at acceptance with the landed fix).
+            var reEnsured = GoalWorktrees.Ensure(repo, goalId);
+
+            Assert.Equal(path, reEnsured);
+            Assert.True(File.Exists(Path.Combine(path, "landed-fix.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_ensure_leaves_driven_divergent_worktree_untouched")]
+    public void GoalWorktreesEnsureLeavesDrivenDivergentWorktreeUntouched()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            // The goal branch has its own committed work (driven).
+            File.WriteAllText(Path.Combine(path, "goal-work.txt"), "developer work");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Developer work");
+
+            // The base branch advances divergently.
+            File.WriteAllText(Path.Combine(repo, "landed-fix.txt"), "fix on main");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Landed fix on base");
+
+            // Re-ensuring must NOT fast-forward (it would discard the goal work); the divergent branch
+            // is left as-is for TryRebaseOntoMain/acceptance to reconcile.
+            var reEnsured = GoalWorktrees.Ensure(repo, goalId);
+
+            Assert.Equal(path, reEnsured);
+            Assert.True(File.Exists(Path.Combine(path, "goal-work.txt")));
+            Assert.False(File.Exists(Path.Combine(path, "landed-fix.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_fast_forwards_goal_branch_on_merge")]
     public void GoalWorktreesFastForwardsGoalBranchOnMerge()
     {

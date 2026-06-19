@@ -74,6 +74,7 @@ public static class GoalWorktrees
         var existing = TryResolve(executionDirectory, goalId);
         if (existing is not null)
         {
+            FastForwardToBaseIfStale(executionDirectory, existing);
             return existing;
         }
 
@@ -89,7 +90,36 @@ public static class GoalWorktrees
             throw new InvalidOperationException($"Failed to create goal workspace at '{path}': {result.Error}");
         }
 
+        FastForwardToBaseIfStale(executionDirectory, path);
         return path;
+    }
+
+    // Brings an UNDRIVEN goal worktree up to the base branch (main) before a worker runs, so workers
+    // never build on a stale base — building on an old main and then failing to merge over fixes that
+    // landed meanwhile is the stale-base conflict that otherwise forces a manual re-dispatch. Only
+    // fast-forwards: a branch that has diverged (its own commits ahead of base) or a dirty worktree is
+    // left untouched, because that is real in-progress work reconciled by TryRebaseOntoMain/acceptance,
+    // not here. Best-effort: never blocks dispatch.
+    private static void FastForwardToBaseIfStale(string executionDirectory, string worktreePath)
+    {
+        try
+        {
+            if (GitCli.IsWorktreeDirty(worktreePath))
+            {
+                return;
+            }
+
+            var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+            // --ff-only fast-forwards when the branch is strictly behind base, is a no-op when already
+            // up to date, and fails harmlessly (branch left as-is) when the branch has diverged with
+            // its own commits — exactly the "only advance undriven branches" semantics we want.
+            GitCli.Run(worktreePath, "merge", "--ff-only", baseBranch);
+        }
+        catch
+        {
+            // Freshness is best-effort; a worker building on a slightly stale base still goes through
+            // the acceptance gate, which catches a genuine conflict.
+        }
     }
 
     public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId)
