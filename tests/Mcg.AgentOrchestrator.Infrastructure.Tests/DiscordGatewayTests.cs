@@ -243,8 +243,8 @@ public sealed class DiscordGatewayTests
         Assert.False(api.SentMessages[0].Buttons[0].Disabled);
     }
 
-    [Xunit.Fact(DisplayName = "DiscordCollaborationView_groups_same_goal_escalations_under_one_thread")]
-    public async Task DiscordCollaborationViewGroupsSameGoalEscalationsUnderOneThread()
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_aggregates_same_goal_items_into_one_message")]
+    public async Task DiscordCollaborationViewAggregatesSameGoalItemsIntoOneMessage()
     {
         var root = CreateTempDirectory();
         var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
@@ -255,14 +255,16 @@ public sealed class DiscordGatewayTests
 
         await view.ReconcileAsync();
 
-        // Both escalations for goal-abc123 land in ONE thread (posted as two messages), not two threads.
+        // Both items for goal-abc123 share ONE aggregated message (not a message per item), each with a button.
         Assert.Equal(1, api.CreatedThreads.Count);
-        Assert.Equal(2, api.SentMessages.Count);
-        Assert.Equal(api.SentMessages[0].ThreadId, api.SentMessages[1].ThreadId);
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.Equal(2, api.SentMessages[0].Buttons.Count);
+        Assert.True(api.SentMessages[0].Content.Contains("First escalation"));
+        Assert.True(api.SentMessages[0].Content.Contains("Second escalation"));
     }
 
-    [Xunit.Fact(DisplayName = "DiscordCollaborationView_duplicate_tap_resolves_once_and_posts_result_once")]
-    public async Task DiscordCollaborationViewDuplicateTapResolvesOnceAndPostsResultOnce()
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_resolving_last_item_clears_the_goal_message_no_spam")]
+    public async Task DiscordCollaborationViewResolvingLastItemClearsTheGoalMessage()
     {
         var root = CreateTempDirectory();
         var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
@@ -277,9 +279,11 @@ public sealed class DiscordGatewayTests
 
         var items = await store.ListAsync();
         Assert.Equal(CollaborationItemStatus.Resolved, items[0].Status);
-        Assert.Equal(2, api.SentMessages.Count);
-        Assert.Equal(2, api.EditedMessages.Count);
-        Assert.True(api.EditedMessages.Last().Buttons[0].Disabled);
+        // One aggregated message, edited in place — no per-tap "Applied" reply spam, and once the goal's
+        // last item is resolved the message has no buttons.
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.True(api.EditedMessages.Count >= 1);
+        Assert.Equal(0, api.EditedMessages[^1].Buttons.Count);
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_restart_reconcile_refreshes_existing_open_message")]
@@ -299,6 +303,24 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, api.SentMessages.Count);
         Assert.Equal(1, api.EditedMessages.Count);
         Assert.False(api.EditedMessages[0].Buttons[0].Disabled);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_separate_goals_get_separate_messages")]
+    public async Task DiscordCollaborationViewSeparateGoalsGetSeparateMessages()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-aaaaaaa", "Goal A needs a decision", "Body", "corr-a");
+        await store.RaiseAsync(CollaborationItemType.Verify, "goal-bbbbbbb", "Goal B needs verify", "Body", "corr-b");
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        // Two distinct goals → two messages (one per goal), each in its own thread.
+        Assert.Equal(2, api.CreatedThreads.Count);
+        Assert.Equal(2, api.SentMessages.Count);
+        Assert.True(api.SentMessages[0].ThreadId != api.SentMessages[1].ThreadId);
     }
 
     [Xunit.Fact(DisplayName = "DiscordProgressView_reconcile_skips_identical_status_content")]

@@ -173,7 +173,7 @@ internal static class OperatorIntentTemplates
             [
                 "Run acceptance-queue dry run before apply.",
                 "Run retention-plan for accepted or abandoned goals.",
-                "Use state rollback only with explicit confirmation."
+                "Use git history and SQLite durability for state recovery."
             ],
             [
                 "acceptance-queue.",

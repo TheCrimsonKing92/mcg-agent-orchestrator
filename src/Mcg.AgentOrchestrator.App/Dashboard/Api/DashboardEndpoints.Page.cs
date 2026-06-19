@@ -39,7 +39,7 @@ internal static partial class DashboardEndpoints
                 health,
                 new DashboardWorkspaceContext(
                     services.Workspace.RootDirectory,
-                    services.Workspace.StatePath,
+                    services.Workspace.SqliteStatePath,
                     services.Workspace.ExecutionDirectory,
                     services.Workspace.PromptDirectory,
                     services.Workspace.LogDirectory,

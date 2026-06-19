@@ -15,7 +15,7 @@ public static class PrototypeWorkspaceSeeder
         var orchestratorDirectory = Path.Combine(workspace, ".orchestrator");
         Directory.CreateDirectory(orchestratorDirectory);
 
-        var statePath = Path.Combine(orchestratorDirectory, "state.json");
+        var statePath = Path.Combine(orchestratorDirectory, "state.db");
         var agentCatalogPath = Path.Combine(orchestratorDirectory, "agents.json");
         var workerProfilePath = Path.Combine(orchestratorDirectory, "workers.json");
         var agents = LoadPrototypeAgents(agentCatalogPath, defaultAgents).Agents;
@@ -51,7 +51,7 @@ public static class PrototypeWorkspaceSeeder
         kernel.ActivateGoal(goal.Id, agents);
         SeedGoal(kernel, goal, agents, workspace);
 
-        OrchestratorStateStore.Save(statePath, kernel);
+        new SqliteOrchestratorStateRepository(statePath).SaveAsync(kernel).GetAwaiter().GetResult();
         AgentCatalogStore.Save(agentCatalogPath, new AgentCatalog(agents));
         WorkerProfileStore.Save(workerProfilePath, workerProfiles);
     }

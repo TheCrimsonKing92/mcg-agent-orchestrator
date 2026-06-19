@@ -633,7 +633,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var agents = new AgentCatalog(
     [
         new AgentDefinition(
@@ -695,7 +695,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var primary = new AgentDefinition(
         new AgentId("primary-planner"),
         "Primary Planner",
@@ -763,7 +763,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var agents = new AgentCatalog(
     [
         new AgentDefinition(
@@ -837,7 +837,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Restore bounded continuation text", [new TaskSpec(TaskId.New(), "Wait", AgentRole.Developer)]);
     await repository.SaveAsync(kernel);
@@ -891,7 +891,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var agents = AgentCatalog.Default();
     AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
     WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
@@ -952,7 +952,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 3);
     using var lifetime = new FakeHostLifetime();
     var services = new DashboardEndpointServices(

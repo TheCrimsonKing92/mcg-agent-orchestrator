@@ -100,8 +100,18 @@ internal static class CliPersistentStateRunner
         if (args.Count == 0)
             return false;
 
-        return args[0].Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("operator-channel", StringComparison.OrdinalIgnoreCase);
+        return args[0].ToLowerInvariant() switch
+        {
+            "operator-listen" or "operator-channel" => true,
+            // Backlog commands operate solely on the independent BacklogStore, never the orchestrator
+            // kernel/state.db. Running them with an empty kernel — no state load, no write lock, no
+            // process sweep — keeps them fully concurrent with a running conductor instead of
+            // contending on the per-tick write transaction. A future backlog command that DOES touch
+            // the kernel must NOT be listed here.
+            "backlog-list" or "backlog-add" or "backlog-show" or "backlog-close" or
+            "backlog-reopen" or "backlog-import" or "backlog-view" => true,
+            _ => false,
+        };
     }
 
     private static bool ShouldRunInStateTransaction(string command)
@@ -114,8 +124,7 @@ internal static class CliPersistentStateRunner
             "simple-hosted-dashboard" or
             "open-dashboard" or
             "monitor-goal" or
-            "operator-channel" or
-            "state-rollback" => false,
+            "operator-channel" => false,
             _ => true
         };
     }

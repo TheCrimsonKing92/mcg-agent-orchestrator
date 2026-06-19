@@ -47,19 +47,19 @@ private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionC
     return true;
 }
 
-// stop <goal-id-prefix> <reason> --as cancel|park|rollback|abandon|supersede [--confirm-*]
+// stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede [--confirm-*]
 // Delegates to the appropriate disposal command based on --as mode.
 private static bool HandleStopAlias(IReadOnlyList<string> parts, CliExecutionContext context)
 {
     if (parts.Count < 3)
     {
-        throw new ArgumentException("Usage: stop <goal-id-prefix> <reason> --as cancel|park|rollback|abandon|supersede");
+        throw new ArgumentException("Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede");
     }
 
     var asMode = GetFlagValue(parts, "--as");
     if (string.IsNullOrWhiteSpace(asMode))
     {
-        throw new ArgumentException("stop requires --as cancel|park|rollback|abandon|supersede");
+        throw new ArgumentException("stop requires --as cancel|park|abandon|supersede");
     }
 
     var goalPart = parts[1];
@@ -82,18 +82,13 @@ private static bool HandleStopAlias(IReadOnlyList<string> parts, CliExecutionCon
             var delegateParts = BuildStopDelegateParts("park-goal", goalPart, reason, parts, "--confirm-goal-park");
             return TryExecuteGoalCommand("park-goal", delegateParts, context)!.Value;
         }
-        case "rollback":
-        {
-            var delegateParts = BuildStopDelegateParts("rollback-goal", goalPart, reason, parts, "--confirm-goal-rollback");
-            return TryExecuteGoalCommand("rollback-goal", delegateParts, context)!.Value;
-        }
         case "abandon":
         {
             var delegateParts = BuildStopDelegateParts("abandon-goal", goalPart, reason, parts, "--confirm-goal-abandon");
             return TryExecuteGoalCommand("abandon-goal", delegateParts, context)!.Value;
         }
         default:
-            throw new ArgumentException($"Unknown stop mode '{asMode}'. Use: cancel|park|rollback|abandon|supersede");
+            throw new ArgumentException($"Unknown stop mode '{asMode}'. Use: cancel|park|abandon|supersede");
     }
 }
 

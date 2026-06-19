@@ -38,7 +38,7 @@ public static partial class DashboardRenderer
             html.AppendLine("<dl>");
             html.AppendLine($"<dt>State workspace</dt><dd><code>{Encode(workspace.RootDirectory)}</code></dd>");
             html.AppendLine($"<dt>Execution directory</dt><dd><code>{Encode(workspace.ExecutionDirectory)}</code></dd>");
-            html.AppendLine($"<dt>State</dt><dd><code>{Encode(workspace.StatePath)}</code></dd>");
+            html.AppendLine($"<dt>State</dt><dd><code>{Encode(workspace.SqliteStatePath)}</code></dd>");
             html.AppendLine($"<dt>Prompts</dt><dd><code>{Encode(workspace.PromptDirectory)}</code></dd>");
             html.AppendLine($"<dt>Logs</dt><dd><code>{Encode(workspace.LogDirectory)}</code></dd>");
             html.AppendLine($"<dt>Workers</dt><dd><code>{Encode(workspace.WorkerProfilePath)}</code></dd>");

@@ -55,6 +55,33 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
+    // Additive merge: ingest goals (and their human-input requests) from the snapshot that this kernel
+    // does NOT already track, leaving every already-tracked goal's live in-flight state untouched. This
+    // is the dynamic-goal-pickup primitive — a long-lived kernel (the daemon's continuous conductor
+    // loop, or an interim per-tick reload) calls it to discover goals submitted AFTER it loaded, without
+    // the clobber that FromSnapshot/ReplaceWithSnapshot would inflict on goals it is actively driving.
+    // Returns the number of newly ingested goals.
+    public int IngestNewGoals(OrchestratorSnapshot snapshot)
+    {
+        var ingested = 0;
+        foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
+        {
+            if (!_goals.TryAdd(goal.Id, goal))
+            {
+                continue;
+            }
+
+            ingested++;
+        }
+
+        foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
+        {
+            _humanInputRequests.TryAdd(request.Id, request);
+        }
+
+        return ingested;
+    }
+
 
 
 

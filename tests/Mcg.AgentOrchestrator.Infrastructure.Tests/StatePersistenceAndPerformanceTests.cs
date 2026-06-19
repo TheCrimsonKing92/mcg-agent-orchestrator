@@ -15,15 +15,15 @@ public sealed class StatePersistenceAndPerformanceTests
         var root = CreateTempDirectory();
         var workspace = PrototypeWorkspaceSeeder.Create(root);
         var expectedWorkspace = Path.Combine(root, PrototypeWorkspaceSeeder.PrototypeDirectoryName, PrototypeWorkspaceSeeder.PrototypeWorkspaceName);
-        var statePath = Path.Combine(workspace, ".orchestrator", "state.json");
+        var statePath = Path.Combine(workspace, ".orchestrator", "state.db");
         var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
 
         Assert.Equal(expectedWorkspace, workspace);
         Assert.True(File.Exists(statePath));
 
-        var kernel = OrchestratorStateStore.Load(statePath);
+        var kernel = LoadState(statePath);
         kernel.CreateGoal("Persisted dogfood goal");
-        OrchestratorStateStore.Save(statePath, kernel);
+        SaveState(statePath, kernel);
         WorkerProfileStore.Save(
             workerPath,
             new WorkerProfileCatalog(
@@ -34,7 +34,7 @@ public sealed class StatePersistenceAndPerformanceTests
             ]));
 
         var secondWorkspace = PrototypeWorkspaceSeeder.Create(root);
-        var restored = OrchestratorStateStore.Load(statePath);
+        var restored = LoadState(statePath);
         var restoredWorkers = WorkerProfileStore.Load(workerPath);
 
         Assert.Equal(workspace, secondWorkspace);
@@ -57,7 +57,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(workspace, repairedWorkspace);
         Assert.True(File.Exists(workerPath));
         Assert.True(File.Exists(Path.Combine(workspace, ".orchestrator", "agents.json")));
-        Assert.True(OrchestratorStateStore.Load(statePath).Goals.Any(goal => goal.Objective == "Persisted dogfood goal"));
+        Assert.True(LoadState(statePath).Goals.Any(goal => goal.Objective == "Persisted dogfood goal"));
         Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
         Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
         Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
@@ -104,13 +104,13 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var statePath = Path.Combine(workspace, ".orchestrator", "state.json");
+        var statePath = Path.Combine(workspace, ".orchestrator", "state.db");
         var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
         const string customCodex = "codex exec --sandbox {sandboxMode} --cd {workingDirectory} --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} (Get-Content -Raw {promptPath})";
 
-        var kernel = OrchestratorStateStore.Load(statePath);
+        var kernel = LoadState(statePath);
         kernel.CreateGoal("Keep custom subscription profile");
-        OrchestratorStateStore.Save(statePath, kernel);
+        SaveState(statePath, kernel);
         WorkerProfileStore.Save(
             workerPath,
             WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", customCodex)));
@@ -119,7 +119,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         var restoredWorkers = WorkerProfileStore.Load(workerPath);
         Assert.Equal(customCodex, restoredWorkers.GetRequired("codex-cli").CommandTemplate);
-        Assert.True(OrchestratorStateStore.Load(statePath).Goals.Any(goal => goal.Objective == "Keep custom subscription profile"));
+        Assert.True(LoadState(statePath).Goals.Any(goal => goal.Objective == "Keep custom subscription profile"));
     }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_upgrades_readonly_codex_subscription_profiles")]
     public void PrototypeWorkspaceSeederUpgradesReadonlyCodexSubscriptionProfiles()
@@ -214,11 +214,12 @@ public sealed class StatePersistenceAndPerformanceTests
         AssertPrototypeAgent(restored.GetRequired(AgentRole.Tester), "openai-tester");
         AssertPrototypeAgent(restored.GetRequired(AgentRole.Reviewer), "openai-reviewer");
     }
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_roundtrips_kernel_snapshot")]
-    public async Task OrchestratorStateStoreRoundtripsKernelSnapshot()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_kernel_snapshot")]
+    public async Task SqliteOrchestratorStateRepositoryRoundtripsKernelSnapshot()
     {
         var root = CreateTempDirectory();
-        var path = Path.Combine(root, "state.json");
+        var path = Path.Combine(root, "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Persist state");
         var agent = new AgentDefinition(
@@ -234,8 +235,8 @@ public sealed class StatePersistenceAndPerformanceTests
             .RunAsync(goal.Id, task.Id);
         var promptCharacterCount = task.LastExecution!.PromptCharacterCount;
 
-        OrchestratorStateStore.Save(path, kernel);
-        var restored = OrchestratorStateStore.Load(path);
+        await repository.SaveAsync(kernel);
+        var restored = await repository.LoadAsync();
 
         Assert.Equal(goal.Id, restored.Goals.Single().Id);
         Assert.Equal("Persist state", restored.Goals.Single().Objective);
@@ -253,12 +254,12 @@ public sealed class StatePersistenceAndPerformanceTests
 
         Assert.Equal("default", defaultWorkspace.TenantName);
         Assert.False(defaultWorkspace.IsTenantScoped);
-        Assert.True(defaultWorkspace.StatePath.EndsWith(Path.Combine(".orchestrator", "state.json"), StringComparison.Ordinal));
+        Assert.True(defaultWorkspace.SqliteStatePath.EndsWith(Path.Combine(".orchestrator", "state.db"), StringComparison.Ordinal));
         Assert.Equal("tenant_a", tenantWorkspace.TenantName);
         Assert.True(tenantWorkspace.IsTenantScoped);
-        Assert.True(tenantWorkspace.StatePath.Contains(Path.Combine(".orchestrator", "tenants", "tenant_a", "state.json"), StringComparison.Ordinal));
+        Assert.True(tenantWorkspace.SqliteStatePath.Contains(Path.Combine(".orchestrator", "tenants", "tenant_a", "state.db"), StringComparison.Ordinal));
         Assert.True(tenantWorkspace.ContinuationStorePath.Contains(Path.Combine(".orchestrator", "tenants", "tenant_a", DashboardContinuationService.StoreFileName), StringComparison.Ordinal));
-        Assert.False(defaultWorkspace.StatePath.Equals(tenantWorkspace.StatePath, StringComparison.Ordinal));
+        Assert.False(defaultWorkspace.SqliteStatePath.Equals(tenantWorkspace.SqliteStatePath, StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorTenantSelection_accepts_cli_override_and_rejects_path_segments")]
@@ -273,93 +274,12 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Throws<ArgumentException>(() => OrchestratorTenantSelection.FromArgs(["--tenant=../bad", "goals"], null));
     }
 
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_recovers_from_backup_when_primary_state_is_corrupt")]
-    public void OrchestratorStateStoreRecoversFromBackupWhenPrimaryStateIsCorrupt()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_handles_concurrent_saves")]
+    public async Task SqliteOrchestratorStateRepositoryHandlesConcurrentSaves()
     {
         var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var kernel = new AgentOrchestratorKernel();
-        kernel.CreateGoal("Recoverable state");
-        OrchestratorStateStore.Save(path, kernel);
-        File.WriteAllText(path, "{not-json");
-
-        var restored = OrchestratorStateStore.Load(path);
-
-        Assert.Equal("Recoverable state", restored.Goals.Single().Objective);
-        Assert.True(File.Exists(path + ".bak"));
-    }
-
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_keeps_previous_valid_backup_after_replacement")]
-    public void OrchestratorStateStoreKeepsPreviousValidBackupAfterReplacement()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var first = new AgentOrchestratorKernel();
-        first.CreateGoal("Previous valid state");
-        OrchestratorStateStore.Save(path, first);
-        var second = new AgentOrchestratorKernel();
-        second.CreateGoal("Current valid state");
-        OrchestratorStateStore.Save(path, second);
-        File.WriteAllText(path, "{not-json");
-
-        var restored = OrchestratorStateStore.Load(path);
-
-        Assert.Equal("Previous valid state", restored.Goals.Single().Objective);
-    }
-
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_explicit_rollback_restores_backup_and_archives_primary")]
-    public void OrchestratorStateStoreExplicitRollbackRestoresBackupAndArchivesPrimary()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var first = new AgentOrchestratorKernel();
-        first.CreateGoal("Rollback target");
-        OrchestratorStateStore.Save(path, first);
-        var second = new AgentOrchestratorKernel();
-        second.CreateGoal("Archive current primary");
-        OrchestratorStateStore.Save(path, second);
-
-        var rollback = OrchestratorStateStore.RestoreBackup(path);
-        var restored = OrchestratorStateStore.Load(path);
-
-        Assert.Equal("Rollback target", restored.Goals.Single().Objective);
-        Assert.Equal(Path.GetFullPath(path), rollback.StatePath);
-        Assert.Equal(Path.GetFullPath(path) + ".bak", rollback.BackupPath);
-        Xunit.Assert.NotNull(rollback.ArchivedStatePath);
-        Assert.True(File.Exists(rollback.ArchivedStatePath!));
-        Assert.Equal("Archive current primary", OrchestratorStateStore.Load(rollback.ArchivedStatePath!).Goals.Single().Objective);
-        Assert.Equal(1, rollback.GoalCount);
-    }
-
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_retries_transient_rollback_replace_access_denial")]
-    public async Task OrchestratorStateStoreRetriesTransientRollbackReplaceAccessDenial()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var first = new AgentOrchestratorKernel();
-        first.CreateGoal("Rollback retry target");
-        OrchestratorStateStore.Save(path, first);
-        var second = new AgentOrchestratorKernel();
-        second.CreateGoal("Locked current primary");
-        OrchestratorStateStore.Save(path, second);
-
-        await using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var rollback = OrchestratorStateStore.RestoreBackupAsync(path);
-        await Task.Delay(125);
-        await hold.DisposeAsync();
-        await rollback;
-
-        var restored = OrchestratorStateStore.Load(path);
-        Assert.Equal("Rollback retry target", restored.Goals.Single().Objective);
-        Assert.Equal(0, Directory.EnumerateFiles(Path.GetDirectoryName(path)!, ".state.json.rollback.*.tmp").Count());
-    }
-
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_handles_concurrent_atomic_saves")]
-    public async Task OrchestratorStateStoreHandlesConcurrentAtomicSaves()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var repository = new FileOrchestratorStateRepository(path);
+        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
 
         var writes = Enumerable.Range(0, 16)
             .Select(index => Task.Run(async () =>
@@ -373,16 +293,19 @@ public sealed class StatePersistenceAndPerformanceTests
         await Task.WhenAll(writes);
 
         var restored = await repository.LoadAsync();
-        Assert.Equal(1, restored.Goals.Count);
-        Assert.True(restored.Goals.Single().Objective.StartsWith("Concurrent save ", StringComparison.Ordinal));
+        Assert.Equal(16, restored.Goals.Count);
+        for (var index = 0; index < 16; index++)
+        {
+            Assert.True(restored.Goals.Any(goal => goal.Objective == $"Concurrent save {index}"));
+        }
     }
 
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_transaction_preserves_concurrent_mutations")]
-    public async Task OrchestratorStateStoreTransactionPreservesConcurrentMutations()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_transaction_preserves_concurrent_mutations")]
+    public async Task SqliteOrchestratorStateRepositoryTransactionPreservesConcurrentMutations()
     {
         var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var repository = new FileOrchestratorStateRepository(path);
+        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
         await repository.SaveAsync(new AgentOrchestratorKernel());
 
         var writes = Enumerable.Range(0, 12)
@@ -405,54 +328,12 @@ public sealed class StatePersistenceAndPerformanceTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_transactions_write_durable_journal")]
-    public async Task OrchestratorStateStoreTransactionsWriteDurableJournal()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var repository = new FileOrchestratorStateRepository(path);
-
-        await repository.TransactAsync(
-            (kernel, _) =>
-            {
-                kernel.CreateGoal("Journaled mutation");
-                return Task.FromResult((true, true));
-            });
-
-        var journalPath = path + OrchestratorStateStore.TransactionJournalExtension;
-        Assert.True(File.Exists(journalPath));
-        var journal = await File.ReadAllTextAsync(journalPath);
-        Assert.Contains(journal, text => text.Contains("\"Status\":\"begin\"", StringComparison.Ordinal));
-        Assert.Contains(journal, text => text.Contains("\"Status\":\"commit\"", StringComparison.Ordinal));
-    }
-
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_retries_transient_atomic_replace_access_denial")]
-    public async Task OrchestratorStateStoreRetriesTransientAtomicReplaceAccessDenial()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, "{}");
-
-        await using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var kernel = new AgentOrchestratorKernel();
-        kernel.CreateGoal("Retry transient destination lock");
-
-        var save = OrchestratorStateStore.SaveAsync(path, kernel);
-        await Task.Delay(125);
-        await hold.DisposeAsync();
-        await save;
-
-        var restored = OrchestratorStateStore.Load(path);
-        Assert.Equal("Retry transient destination lock", restored.Goals.Single().Objective);
-        Assert.Equal(0, Directory.EnumerateFiles(Path.GetDirectoryName(path)!, ".state.json.*.tmp").Count());
-    }
     [Xunit.Fact(DisplayName = "Dashboard_and_state_persistence_have_reasonable_smoke_performance")]
     public async Task DashboardAndStatePersistenceHaveReasonableSmokePerformance()
     {
         var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
-        var repository = new FileOrchestratorStateRepository(path);
+        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
         var agents = AgentCatalog.Default().Agents;
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Render a large local dashboard smoke scenario");
@@ -479,11 +360,12 @@ public sealed class StatePersistenceAndPerformanceTests
         Xunit.Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), $"Persistence/render smoke took {elapsed.Elapsed}.");
     }
 
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_bounds_verification_output_when_path_set_and_text_is_large")]
-    public void OrchestratorStateStoreBoundsVerificationOutputWhenPathSetAndTextIsLarge()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_bounds_verification_output_when_path_set_and_text_is_large")]
+    public async Task SqliteOrchestratorStateRepositoryBoundsVerificationOutputWhenPathSetAndTextIsLarge()
     {
         var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Bound large stdout");
         var agent = new AgentDefinition(
@@ -503,21 +385,10 @@ public sealed class StatePersistenceAndPerformanceTests
             StandardOutputPath: logPath,
             StandardErrorPath: logPath + ".err"));
 
-        OrchestratorStateStore.Save(path, kernel);
-
-        var json = File.ReadAllText(path);
-        var fileSize = new FileInfo(path).Length;
-
-        // File must be much smaller than the raw 440KB of output alone
-        Xunit.Assert.True(fileSize < 60_000, $"state.json should be <60KB but was {fileSize} bytes");
-        // Path references must be present
-        Assert.Contains(json, text => text.Contains(logPath, StringComparison.Ordinal));
-        // The bulk repeated text must NOT appear in the JSON
-        Xunit.Assert.False(json.Contains(new string('A', 10_000), StringComparison.Ordinal), "Full stdout should not be embedded");
-        Xunit.Assert.False(json.Contains(new string('E', 10_000), StringComparison.Ordinal), "Full stderr should not be embedded");
+        await repository.SaveAsync(kernel);
 
         // Load must succeed; path reference and exit code preserved
-        var restored = OrchestratorStateStore.Load(path);
+        var restored = await repository.LoadAsync();
         var restoredTask = restored.GetTask(goal.Id, task.Id);
         Xunit.Assert.NotNull(restoredTask.LastVerification);
         Assert.Equal(logPath, restoredTask.LastVerification!.StandardOutputPath);
@@ -528,11 +399,12 @@ public sealed class StatePersistenceAndPerformanceTests
             text => text.StartsWith(new string('A', 4096), StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "OrchestratorStateStore_preserves_full_inline_output_when_no_path_is_set")]
-    public void OrchestratorStateStorePreservesFullInlineOutputWhenNoPathIsSet()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_preserves_full_inline_output_when_no_path_is_set")]
+    public async Task SqliteOrchestratorStateRepositoryPreservesFullInlineOutputWhenNoPathIsSet()
     {
         var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.json");
+        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("No path keeps full text");
         var agent = new AgentDefinition(
@@ -550,10 +422,10 @@ public sealed class StatePersistenceAndPerformanceTests
             largeOutput, string.Empty,
             DateTimeOffset.UtcNow));   // no StandardOutputPath
 
-        OrchestratorStateStore.Save(path, kernel);
+        await repository.SaveAsync(kernel);
 
         // Full text must be round-tripped when no path reference exists
-        var restored = OrchestratorStateStore.Load(path);
+        var restored = await repository.LoadAsync();
         var restoredTask = restored.GetTask(goal.Id, task.Id);
         Xunit.Assert.NotNull(restoredTask.LastVerification);
         Assert.Equal(largeOutput, restoredTask.LastVerification!.StandardOutput);
@@ -578,6 +450,16 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
         Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel.ReasoningEffort);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
+    }
+
+    private static AgentOrchestratorKernel LoadState(string path)
+    {
+        return new SqliteOrchestratorStateRepository(path).LoadAsync().GetAwaiter().GetResult();
+    }
+
+    private static void SaveState(string path, AgentOrchestratorKernel kernel)
+    {
+        new SqliteOrchestratorStateRepository(path).SaveAsync(kernel).GetAwaiter().GetResult();
     }
 }
 

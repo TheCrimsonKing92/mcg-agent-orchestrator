@@ -11,7 +11,7 @@ public sealed class SourceSurveyTests
         Write(root, "src/bin/Debug/generated.cs");
         Write(root, "src/obj/Debug/generated.cs");
         Write(root, ".scratch/browser-profile/file.json");
-        Write(root, ".orchestrator-prototype/workspace/.orchestrator/state.json");
+        Write(root, ".orchestrator-prototype/workspace/.orchestrator/state.db");
 
         var report = SourceSurvey.Build(root);
 

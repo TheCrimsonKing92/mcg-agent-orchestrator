@@ -20,6 +20,9 @@ private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
         ["--reviewer"] = AgentRole.Reviewer
     };
 
+private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
+    GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
+
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)
@@ -56,7 +59,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (HasCliConfirmation(parts, "--run"))
             {
                 var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run");
-                var runObjectivePlan = GoalObjectivePlanner.Build(runObjective, simple: false);
+                var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -67,7 +70,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
-            var goalObjectivePlan = GoalObjectivePlanner.Build(goalObjective, simple: false);
+            var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -77,7 +80,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "simple-goal":
             var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path>");
-            var simpleObjectivePlan = GoalObjectivePlanner.Build(simpleObjective, simple: true);
+            var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -564,6 +567,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 if (GetFlagValue(parts, "--max-duration") is { } mdStr)
                     maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
 
+                // --daemon: run as a PERSISTENT conductor — never exit on an empty backlog. The loop stays
+                // alive and polls, so goals submitted later (via a separate `goal` command, backlog
+                // promotion, or the dashboard) are ingested by the per-tick sweep and driven without a
+                // restart. Implies watch behavior; defaults the poll interval when not given. Stop via the
+                // .conduct-stop file or --max-duration.
+                var loopDaemon = HasCliConfirmation(parts, "--daemon");
+                if (loopDaemon && watchInterval is null)
+                {
+                    watchInterval = TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds);
+                    Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {ConductorBatchLoop.DefaultWatchIntervalSeconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
+                }
+
                 // SSE push: discover dashboard URL and build onTick callback.
                 Action<BatchTickSummary>? onTick = null;
                 var dashboardUrl = GetFlagValue(parts, "--dashboard-url")
@@ -590,6 +605,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 Action<AgentOrchestratorKernel> reconcileSweep = loopKernel =>
                 {
+                    // Dynamic goal pickup: ingest goals submitted (via a separate `goal` command, backlog
+                    // promotion, or a future API) AFTER this loop loaded, so a long-running batch loop
+                    // drives them without a restart. Additive merge only — never clobbers the in-flight
+                    // goals this loop is already driving. Best-effort: a reload hiccup must not kill a tick.
+                    try { loopKernel.IngestNewGoals(context.ReloadKernel().ExportSnapshot()); }
+                    catch { /* dynamic pickup is best-effort */ }
+
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
                     {
                         try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
@@ -602,7 +624,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
-                    persistTick: context.PersistCheckpoint);
+                    persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -822,7 +844,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
             $"Usage: {commandName} <objective> --confirm-batch-start [{SubscriptionPromptCostGuard.CliConfirmationFlag}]");
     }
 
-    var objectivePlan = GoalObjectivePlanner.Build(objective, simple);
+    var objectivePlan = BuildGoalObjectivePlan(context, objective, simple);
     GoalObjectivePlanner.ThrowIfBlocked(objectivePlan);
     ConsoleViews.PrintGoalObjectivePlan(objectivePlan);
 
@@ -1484,7 +1506,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
     var direction = parts[1];
     var confirmPlan = HasCliConfirmation(parts, "--confirm-plan");
 
-    var objPlan = GoalObjectivePlanner.Build(direction, simple: true);
+    var objPlan = BuildGoalObjectivePlan(context, direction, simple: true);
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
     ConsoleViews.PrintGoalObjectivePlan(objPlan);
 
@@ -2138,18 +2160,40 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
         return;
     }
 
+    var executionDirectory = context.Workspace.ExecutionDirectory;
+    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    if (worktree is null)
+    {
+        return;
+    }
+
+    // Tasks that failed only because a Low-IL worker could not self-commit under OS confinement
+    // (a benign signature — the edits are real, not broken) are eligible for the same git-ground-truth
+    // verification as un-run tasks. If their edits still sit uncommitted in the worktree, commit them
+    // at Medium so the clean-worktree check below confirms real changes against main. The acceptance
+    // suite always runs before any merge, so this only clears bookkeeping — it never lands unproven work.
+    var sandboxBlockedIds = goal.Tasks
+        .Where(t => t.Status == WorkTaskStatus.Failed &&
+            t.LastVerification is { Succeeded: false } verification &&
+            DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification))
+        .Select(t => t.Id)
+        .ToHashSet();
+
+    if (sandboxBlockedIds.Count > 0 && !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id))
+    {
+        TryCommitSandboxBlockedEdits(worktree, goal);
+    }
+
     var pending = goal.Tasks
-        .Where(t => t.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+        .Where(t => t.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running ||
+            sandboxBlockedIds.Contains(t.Id))
         .ToList();
     if (pending.Count == 0)
     {
         return;
     }
 
-    var executionDirectory = context.Workspace.ExecutionDirectory;
-    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-    if (worktree is null ||
-        !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
+    if (!GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
         !GoalWorktrees.HasChangesAgainstMain(executionDirectory, goal.Id))
     {
         return;
@@ -2165,6 +2209,27 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
             task.Id,
             ManualVerificationRecorder.Create(true, note, worktree, DateTimeOffset.UtcNow));
         Console.WriteLine($"Auto-verified task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} from git ground truth.");
+    }
+}
+
+// Commit a sandbox-blocked worker's uncommitted edits on the orchestrator's behalf (Medium
+// integrity, so .git is writable). Plain `add -A` honours the worktree's .mcg-sandbox exclude.
+private static void TryCommitSandboxBlockedEdits(string worktreePath, Goal goal)
+{
+    if (!GitCli.Run(worktreePath, "add", "-A").Succeeded)
+    {
+        return;
+    }
+
+    var commit = GitCli.Run(
+        worktreePath,
+        "commit",
+        "-m",
+        $"Orchestrator-committed sandbox-blocked worker edits for goal {goal.Id.Value}");
+    if (commit.Succeeded)
+    {
+        Console.WriteLine(
+            $"Committed sandbox-blocked worker edits for goal {goal.Id.Value[..8]} (worker could not self-commit under the sandbox).");
     }
 }
 

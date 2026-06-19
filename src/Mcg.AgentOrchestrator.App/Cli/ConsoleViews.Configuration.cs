@@ -55,19 +55,10 @@ internal static partial class ConsoleViews
     {
         Console.WriteLine($"Tenant: {workspace.TenantName}");
         Console.WriteLine($"Tenant scoped: {workspace.IsTenantScoped}");
-        Console.WriteLine($"State: {workspace.StatePath}");
+        Console.WriteLine($"State: {workspace.SqliteStatePath}");
         Console.WriteLine($"Agents: {workspace.AgentCatalogPath}");
         Console.WriteLine($"Workers: {workspace.WorkerProfilePath}");
         Console.WriteLine($"Continuations: {workspace.ContinuationStorePath}");
-    }
-
-    public static void PrintStateRollback(OrchestratorStateRollbackResult rollback)
-    {
-        Console.WriteLine("State rollback restored backup.");
-        Console.WriteLine($"  state: {rollback.StatePath}");
-        Console.WriteLine($"  backup: {rollback.BackupPath}");
-        Console.WriteLine($"  archived previous state: {rollback.ArchivedStatePath ?? "none"}");
-        Console.WriteLine($"  restored goals: {rollback.GoalCount}; human inputs: {rollback.HumanInputRequestCount}");
     }
 
     public static void PrintWorkerProfileChecks(AgentCatalog agents, WorkerProfileCatalog catalog, string? name)
@@ -111,7 +102,6 @@ internal static partial class ConsoleViews
         Console.WriteLine($"  continuations: {report.ContinuationStorePath}");
         Console.WriteLine($"  providers: {report.ProviderCount}; agents: {report.AgentCount}");
         Console.WriteLine($"  persistence: {report.Persistence}");
-        Console.WriteLine($"  rollback: {report.RollbackSafety}");
         Console.WriteLine($"  subscriptions: {report.SubscriptionWorkers}");
         Console.WriteLine("  state stores:");
         foreach (var store in report.StateStores)

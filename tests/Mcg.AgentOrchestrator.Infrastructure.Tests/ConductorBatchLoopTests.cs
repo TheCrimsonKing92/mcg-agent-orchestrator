@@ -104,6 +104,90 @@ public sealed class ConductorBatchLoopTests
         Assert.False(summary.StopRequested);
     }
 
+    // ── Dynamic goal pickup: a goal ingested mid-run via the sweep is driven ──
+
+    [Xunit.Fact(DisplayName = "BatchLoop_picks_up_a_goal_ingested_mid_run_via_the_sweep")]
+    public void BatchLoop_PicksUpGoalIngestedMidRunViaSweep()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal A");
+
+        // A store snapshot carrying a brand-new goal B, simulating a goal submitted after the loop loaded.
+        var store = new AgentOrchestratorKernel();
+        var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(store, DefaultAgents(), "goal B");
+        var snapshot = store.ExportSnapshot();
+
+        var dispatchedIds = new List<string>();
+        var ingestedOnce = false;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => 0,
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                dispatchedIds.Add(g.Id.Value);
+                return DispatchStartOutcome.Started();
+            });
+
+        // The sweep ingests B on the first tick — exactly how the live --loop pulls in newly-submitted goals.
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            if (!ingestedOnce) { loopKernel.IngestNewGoals(snapshot); ingestedOnce = true; }
+        };
+
+        new ConductorBatchLoop(sweep).Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 3);
+
+        Assert.True(dispatchedIds.Contains(goalA.Id.Value));
+        Assert.True(dispatchedIds.Contains(goalB.Id.Value)); // B was picked up mid-run and driven
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_keepAliveWhenIdle_stays_running_and_drives_a_goal_that_arrives_later")]
+    public void BatchLoop_KeepAliveStaysRunningAndDrivesLaterGoal()
+    {
+        var kernel = new AgentOrchestratorKernel(); // starts with NO goals — a one-shot loop would exit immediately
+
+        var store = new AgentOrchestratorKernel();
+        var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(store, DefaultAgents(), "goal B");
+        var snapshot = store.ExportSnapshot();
+
+        var dispatchedIds = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => 0,
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.First(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                dispatchedIds.Add(g.Id.Value);
+                return DispatchStartOutcome.Started();
+            });
+
+        // The goal arrives on the 2nd sweep — i.e. AFTER the loop has already gone idle at least once.
+        var sweeps = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            sweeps++;
+            if (sweeps == 2) { loopKernel.IngestNewGoals(snapshot); }
+        };
+
+        // sleepFunc bounds the test: it returns "stop" after a handful of idle/no-progress sleeps, so the
+        // loop terminates even though keep-alive would otherwise poll forever on an empty backlog.
+        var sleepCalls = 0;
+        Func<TimeSpan, bool> sleepFunc = _ => ++sleepCalls >= 6;
+
+        new ConductorBatchLoop(sweep).Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+            maxIterations: 10,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: sleepFunc,
+            keepAliveWhenIdle: true);
+
+        // Without keep-alive the loop would have exited on the first empty tick and never seen B.
+        Assert.True(dispatchedIds.Contains(goalB.Id.Value));
+    }
+
     // ── Loop scheduling: concurrent cap limits active dispatches ─────────
 
     [Xunit.Fact(DisplayName = "BatchLoop_cap_holds_third_goal_when_two_already_dispatched")]

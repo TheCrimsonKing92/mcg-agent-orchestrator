@@ -27,6 +27,8 @@ internal sealed class FakeClock : IClock
     public DateTimeOffset UtcNow => _utcNow;
 
     public void Advance() => _utcNow = _utcNow.AddSeconds(1);
+
+    public void Advance(TimeSpan duration) => _utcNow = _utcNow.Add(duration);
 }
 
 internal sealed class FakeModelProvider : IModelProvider

@@ -30,29 +30,6 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;
 
-            case "state-compact":
-            {
-                var sizeBefore = File.Exists(context.StatePath) ? new FileInfo(context.StatePath).Length : 0L;
-                OrchestratorStateStore.Save(context.StatePath, context.Kernel);
-                var sizeAfter = new FileInfo(context.StatePath).Length;
-                Console.WriteLine($"State compacted: {sizeBefore:N0} → {sizeAfter:N0} bytes");
-                Console.WriteLine($"State: {Path.GetFullPath(context.StatePath)}");
-                return false;
-            }
-
-            case "state-rollback":
-                if (!parts.Any(part => part.Equals("--confirm-state-rollback", StringComparison.OrdinalIgnoreCase)))
-                {
-                    throw new InvalidOperationException("State rollback restores state.json from state.json.bak. Re-run with --confirm-state-rollback after confirming no dashboard or worker is writing state.");
-                }
-
-                var rollback = OrchestratorStateStore.RestoreBackup(context.StatePath);
-                var restored = OrchestratorStateStore.Load(context.StatePath);
-                context.Kernel.ReplaceWithSnapshot(restored.ExportSnapshot());
-                context.CurrentGoal = OrchestratorEntityResolver.GetLatestGoal(context.Kernel);
-                ConsoleViews.PrintStateRollback(rollback);
-                return false;
-
             case "provider-smoke":
                 var smokeArgs = parts.Skip(1)
                     .Where(part => !part.Equals("--confirm-all", StringComparison.OrdinalIgnoreCase))
@@ -104,6 +81,10 @@ internal static partial class CliCommandHandlers
 
             case "model-outcomes":
                 ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
+                return false;
+
+            case "durations":
+                ConsoleViews.PrintTaskDurationStats(context.Kernel.BuildTaskDurationStats(HasCliConfirmation(parts, "--by-model")));
                 return false;
 
             case "loop-health":

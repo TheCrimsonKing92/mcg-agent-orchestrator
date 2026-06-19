@@ -35,7 +35,7 @@ public sealed class DashboardHostTests
             ref profiles,
             ref currentGoal);
         var goal = currentGoal ?? throw new InvalidOperationException("Expected simple-goal to create a current goal.");
-        await new FileOrchestratorStateRepository(workspace.StatePath).SaveAsync(kernel);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         var task = goal.Tasks.Single();
         var port = GetAvailablePort();
         var url = $"http://localhost:{port}/";
@@ -63,11 +63,6 @@ public sealed class DashboardHostTests
             using var getTaskOperationResponse = await client.GetAsync(
                 new Uri(new Uri(url), $"api/goals/{goal.Id.Value}/tasks/1/refresh"));
             var getTaskOperation = await getTaskOperationResponse.Content.ReadAsStringAsync();
-            using var rollbackResponse = await client.PostAsync(
-                new Uri(new Uri(url), "api/system/state-rollback?confirm=state-rollback"),
-                new StringContent(string.Empty));
-            var rollback = await rollbackResponse.Content.ReadAsStringAsync();
-
             using (var hostDocument = JsonDocument.Parse(dashboardHostMetadata))
             {
                 var host = hostDocument.RootElement;
@@ -77,23 +72,21 @@ public sealed class DashboardHostTests
                 Assert.True(host.GetProperty("RestartCommand").GetString()!.Contains("simple-hosted-dashboard", StringComparison.Ordinal));
                 Assert.Equal("default", host.GetProperty("TenantName").GetString());
                 Assert.False(host.GetProperty("TenantScoped").GetBoolean());
-                Assert.Equal(workspace.StatePath, host.GetProperty("StatePath").GetString());
+                Assert.Equal(workspace.SqliteStatePath, host.GetProperty("StatePath").GetString());
             }
 
             using (var architectureDocument = JsonDocument.Parse(architecture))
             {
                 var report = architectureDocument.RootElement;
                 Assert.Equal("default", report.GetProperty("TenantName").GetString());
-                Assert.Equal(workspace.StatePath, report.GetProperty("StatePath").GetString());
-                Assert.True(report.GetProperty("Persistence").GetString()?.Contains("backup recovery", StringComparison.Ordinal) is true);
-                Assert.True(report.GetProperty("RollbackSafety").GetString()?.Contains("Goal worktrees", StringComparison.Ordinal) is true);
+                Assert.Equal(workspace.SqliteStatePath, report.GetProperty("StatePath").GetString());
+                Assert.True(report.GetProperty("Persistence").GetString()?.Contains("SQLite state.db", StringComparison.Ordinal) is true);
                 Assert.False(report.GetProperty("OperatorControlsEnabled").GetBoolean());
                 AssertArchitectureArrayContains(report.GetProperty("ApiSurfaces"), "/api/system/architecture");
                 AssertArchitectureArrayContains(report.GetProperty("DashboardModes"), "simple-hosted-dashboard");
                 AssertArchitectureArrayContains(report.GetProperty("StateStores"), workspace.ContinuationStorePath);
                 AssertArchitectureArrayContains(report.GetProperty("DistributedBoundaries"), "Subscription execution leaves process boundaries");
                 AssertArchitectureArrayContains(report.GetProperty("SafetyGates"), "Tenant names are normalized");
-                AssertArchitectureArrayContains(report.GetProperty("RollbackProcedure"), "state.json.bak");
             }
 
             using (var goalSummaryDocument = JsonDocument.Parse(goalWorkSummary))
@@ -122,62 +115,6 @@ public sealed class DashboardHostTests
             Assert.True(createGoal.Contains("dashboard read-only", StringComparison.Ordinal));
             Assert.Equal(HttpStatusCode.Forbidden, getTaskOperationResponse.StatusCode);
             Assert.True(getTaskOperation.Contains("dashboard read-only", StringComparison.Ordinal));
-            Assert.Equal(HttpStatusCode.Forbidden, rollbackResponse.StatusCode);
-            Assert.True(rollback.Contains("dashboard read-only", StringComparison.Ordinal));
-        }
-        finally
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
-        }
-    }
-
-    [Xunit.Fact(DisplayName = "Operator_dashboard_state_rollback_requires_confirmation_and_restores_backup")]
-    public async Task OperatorDashboardStateRollbackRequiresConfirmationAndRestoresBackup()
-    {
-        var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        var first = new AgentOrchestratorKernel();
-        first.CreateGoal("Rollback dashboard target");
-        await new FileOrchestratorStateRepository(workspace.StatePath).SaveAsync(first);
-        var second = new AgentOrchestratorKernel();
-        second.CreateGoal("Dashboard current primary");
-        await new FileOrchestratorStateRepository(workspace.StatePath).SaveAsync(second);
-        var port = GetAvailablePort();
-        var url = $"http://localhost:{port}/";
-        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
-        using var process = StartDashboardProcess(appProject, root, "serve-dashboard", url);
-
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            await WaitForHealthAsync(client, url, process);
-
-            using var unconfirmedResponse = await client.PostAsync(
-                new Uri(new Uri(url), "api/system/state-rollback"),
-                new StringContent(string.Empty));
-            var unconfirmed = await unconfirmedResponse.Content.ReadAsStringAsync();
-            using var confirmedResponse = await client.PostAsync(
-                new Uri(new Uri(url), "api/system/state-rollback?confirm=state-rollback"),
-                new StringContent(string.Empty));
-            var confirmed = await confirmedResponse.Content.ReadAsStringAsync();
-            var restored = OrchestratorStateStore.Load(workspace.StatePath);
-
-            Assert.Equal(HttpStatusCode.BadRequest, unconfirmedResponse.StatusCode);
-            Assert.True(unconfirmed.Contains("confirm=state-rollback", StringComparison.Ordinal));
-            Assert.Equal(HttpStatusCode.OK, confirmedResponse.StatusCode);
-            using (var confirmedDocument = JsonDocument.Parse(confirmed))
-            {
-                var rollback = confirmedDocument.RootElement;
-                Assert.Equal(1, rollback.GetProperty("GoalCount").GetInt32());
-                Assert.Equal(Path.GetFullPath(workspace.StatePath), rollback.GetProperty("StatePath").GetString());
-            }
-
-            Assert.Equal("Rollback dashboard target", restored.Goals.Single().Objective);
-            Assert.True(Directory.EnumerateFiles(Path.GetDirectoryName(workspace.StatePath)!, "state.json.pre-rollback-*.json").Any());
         }
         finally
         {

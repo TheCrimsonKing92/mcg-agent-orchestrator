@@ -136,54 +136,6 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("Pre-failure goal", restored.Goals.Single().Objective);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_json_to_sqlite_migration_preserves_goals_tasks_status")]
-    public async Task JsonToSqliteMigrationPreservesGoalsTasksStatus()
-    {
-        var root = CreateTempDirectory();
-        var jsonPath = Path.Combine(root, "state.json");
-        var dbPath = Path.Combine(root, "state.db");
-
-        var kernel = new AgentOrchestratorKernel();
-        var agent = new AgentDefinition(
-            AgentId.New(), "Developer", AgentRole.Developer,
-            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
-            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
-        var goal = kernel.CreateGoal("Migrated goal");
-        kernel.ActivateGoal(goal.Id, [agent]);
-        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
-        await new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([new FakeSmokeProvider()]))
-            .RunAsync(goal.Id, task.Id);
-        OrchestratorStateStore.Save(jsonPath, kernel);
-
-        var migrated = await SqliteStateJsonMigrator.MigrateIfNeededAsync(jsonPath, dbPath);
-        Assert.True(migrated);
-        Assert.True(File.Exists(dbPath));
-        Assert.True(File.Exists(jsonPath + ".pre-sqlite-migration.bak"));
-
-        var repo = new SqliteOrchestratorStateRepository(dbPath);
-        var restored = await repo.LoadAsync();
-
-        Assert.Equal(goal.Id, restored.Goals.Single().Id);
-        Assert.Equal("Migrated goal", restored.Goals.Single().Objective);
-        Assert.Equal(GoalStatus.Active, restored.Goals.Single().Status);
-        Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
-    }
-
-    [Xunit.Fact(DisplayName = "SqliteStateJsonMigrator_skips_migration_when_db_already_exists")]
-    public async Task MigratorSkipsWhenDbExists()
-    {
-        var root = CreateTempDirectory();
-        var jsonPath = Path.Combine(root, "state.json");
-        var dbPath = Path.Combine(root, "state.db");
-
-        File.WriteAllText(jsonPath, "{}");
-        File.WriteAllText(dbPath, "existing");
-
-        var migrated = await SqliteStateJsonMigrator.MigrateIfNeededAsync(jsonPath, dbPath);
-        Assert.False(migrated);
-        Assert.Equal("existing", File.ReadAllText(dbPath));
-    }
-
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_concurrent_transactions_serialize_mutations")]
     public async Task ConcurrentTransactionsSerializeMutations()
     {
@@ -382,12 +334,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(ModelOutcomeRecommendation.Prefer, best.Recommendation);
     }
 
-    [Xunit.Fact(DisplayName = "FileOrchestratorStateRepository_lists_goal_metadata")]
-    public async Task FileRepositoryListsGoalMetadata()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_goal_metadata")]
+    public async Task SqliteRepositoryListsGoalMetadata()
     {
-        var dir = CreateTempDirectory();
-        var path = Path.Combine(dir, "state.json");
-        var repo = new FileOrchestratorStateRepository(path);
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
         var kernel = new AgentOrchestratorKernel();
         kernel.CreateGoal("First goal");
         kernel.CreateGoal("Second goal");

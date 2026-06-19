@@ -27,8 +27,6 @@ public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persi
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 
-public string StatePath => Workspace.StatePath;
-
 public string AgentCatalogPath => Workspace.AgentCatalogPath;
 
 public IModelProviderRegistry Providers { get; } = providers;

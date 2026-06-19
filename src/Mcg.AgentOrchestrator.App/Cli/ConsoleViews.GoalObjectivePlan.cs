@@ -20,6 +20,7 @@ internal static partial class ConsoleViews
             workflow = plan.Workflow,
             disposition = plan.Disposition.ToString(),
             estimatedComplexity = plan.EstimatedComplexity.ToString(),
+            historicalTimeEstimate = plan.HistoricalTimeEstimate,
             riskLabels = plan.RiskLabels,
             fileScopes = plan.FileScopes,
             requiredTools = plan.RequiredTools,

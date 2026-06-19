@@ -56,7 +56,6 @@ internal static partial class DashboardEndpoints
             api.MapGet("/system/build-test-runs/log", async Task<IResult> (HttpContext context) => await Safe(() => BuildTestRunLog(context, services)));
             api.MapPost("/system/run-build-test-cycle", () => Safe(() => RunBuildTestCycle(services)));
             api.MapPost("/system/stop-dashboard", () => Safe(() => StopDashboard(services)));
-            api.MapPost("/system/state-rollback", async Task<IResult> (HttpContext context) => await Safe(() => RestoreStateBackupAsync(context, services)));
             api.MapMethods("/provider-smoke", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleProviderSmokeAsync(context)));
             api.MapMethods("/agents", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleAgentsAsync(context, services)));
             api.MapMethods("/worker-profiles", GetAndPost, async Task<IResult> (HttpContext context) => await Safe(() => HandleWorkerProfilesAsync(context, services)));
@@ -68,7 +67,6 @@ internal static partial class DashboardEndpoints
             api.MapPost("/goals", () => ReadOnly());
             api.MapPost("/system/run-build-test-cycle", () => ReadOnly());
             api.MapPost("/system/stop-dashboard", () => ReadOnly());
-            api.MapPost("/system/state-rollback", () => ReadOnly());
         }
 
         api.MapGet("/goals/{goalId}", (string goalId) => Safe(() => GetGoalAsync(goalId, services)));

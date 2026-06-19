@@ -16,6 +16,16 @@ public static class DispatchProcessHost
     public const string SubcommandName = "__dispatch-run";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
 
+    // Dispatch supervision: an unbounded wait lets a hung worker — or a stuck grandchild such as a
+    // git process wedged on an index.lock — hold the owned job open indefinitely, which blocks the
+    // conductor loop and strands the goal (observed: a git child kept a dispatch alive 34 minutes,
+    // jamming a --watch loop for its full budget). The watchdog enforces a hard max runtime and an
+    // idle-stall cap (no stdout/stderr growth), then reaps the whole tree. Both are overridable via
+    // env so an operator can widen them for an unusually long legitimate dispatch.
+    private static readonly TimeSpan DefaultMaxRuntime = TimeSpan.FromMinutes(60);
+    private static readonly TimeSpan DefaultMaxIdle = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan WatchdogProbeInterval = TimeSpan.FromSeconds(15);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -305,7 +315,31 @@ public static void DropToLow() {
 
             heartbeatTimer.Change(HeartbeatInterval, HeartbeatInterval);
 
-            worker.WaitForExit();
+            // Bounded supervision instead of an unbounded WaitForExit: reap the whole tree if the
+            // worker exceeds its max runtime or stalls (no log growth past the idle cap). lastProgressAt
+            // is maintained by the heartbeat from stdout/stderr byte growth, so a genuinely working
+            // worker (which streams continuously) is never killed; only a wedged tree is.
+            var maxRuntime = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_RUNTIME_MIN", DefaultMaxRuntime);
+            var maxIdle = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_IDLE_MIN", DefaultMaxIdle);
+            while (!worker.WaitForExit((int)WatchdogProbeInterval.TotalMilliseconds))
+            {
+                var now = DateTimeOffset.UtcNow;
+                var runFor = now - startedAt;
+                var idleFor = now - lastProgressAt;
+                if (runFor < maxRuntime && idleFor < maxIdle)
+                {
+                    continue;
+                }
+
+                var reason = runFor >= maxRuntime
+                    ? $"exceeded max runtime {maxRuntime.TotalMinutes:0} min"
+                    : $"stalled {idleFor.TotalMinutes:0} min with no output (idle cap {maxIdle.TotalMinutes:0} min)";
+                try { File.AppendAllText(parameters.StderrPath, $"\n[dispatch-host] terminating worker tree: {reason}.\n"); }
+                catch { /* diagnostics are best-effort */ }
+                TryKillWorkerTree(worker, workerGroup);
+                worker.WaitForExit(5000);
+                break;
+            }
 
             // Drain with a bounded timeout. A grandchild that inherits the pipe handle
             // (e.g. claude-cli's node child) keeps CopyToAsync alive indefinitely after
@@ -379,6 +413,19 @@ public static void DropToLow() {
         {
             // Best-effort: worker may have already exited.
         }
+    }
+
+    private static TimeSpan ResolveWatchdogTimeout(string environmentVariable, TimeSpan fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        if (!string.IsNullOrWhiteSpace(raw) &&
+            int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var minutes) &&
+            minutes > 0)
+        {
+            return TimeSpan.FromMinutes(minutes);
+        }
+
+        return fallback;
     }
 
     private static void TryWriteExitCode(string path, int exitCode)
