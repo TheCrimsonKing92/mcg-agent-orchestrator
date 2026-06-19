@@ -33,7 +33,8 @@ internal sealed class ConductorBatchLoop
         Func<TimeSpan, bool>? sleepFunc = null,
         TimeSpan? maxDuration = null,
         string? onlyGoalId = null,
-        Action<AgentOrchestratorKernel>? persistTick = null)
+        Action<AgentOrchestratorKernel>? persistTick = null,
+        bool keepAliveWhenIdle = false)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -89,6 +90,27 @@ internal sealed class ConductorBatchLoop
 
             if (eligible.Length == 0)
             {
+                // Daemon keep-alive: when configured (and watching), an empty backlog is NOT a reason to
+                // exit — sleep and keep polling so goals submitted later are ingested by the sweep and
+                // driven. A one-shot `conduct --loop` (keepAliveWhenIdle=false) still completes here.
+                if (keepAliveWhenIdle && watchInterval is not null)
+                {
+                    EmitProgress($"IDLE_SLEEP seconds={(int)watchInterval.Value.TotalSeconds}");
+                    var idleStop = sleepFunc is not null
+                        ? sleepFunc(watchInterval.Value)
+                        : SleepWithStopCheck(watchInterval.Value, stopFilePath);
+                    if (idleStop)
+                    {
+                        stopRequested = true;
+                        EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-while-idle");
+                        ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                        persistTick?.Invoke(kernel);
+                        break;
+                    }
+
+                    continue;
+                }
+
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=all-done-or-escalated");
                 Console.WriteLine($"[conduct --loop] All goals done or escalated; loop complete after {totalTicks} ticks.");
                 break;
