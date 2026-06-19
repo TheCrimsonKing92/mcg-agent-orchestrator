@@ -394,12 +394,16 @@ public sealed class BackgroundDispatchRunner
     // low-integrity worker cannot write the medium .git, and codex's Windows sandbox can poison
     // before it commits — in both cases the worker EDITS the worktree but never lands a commit. The
     // orchestrator finishes the job so the dispatch can be verified by the acceptance gate. The
-    // sandbox scratch dir (.mcg-sandbox) is excluded so it never enters the goal branch.
+    // sandbox scratch dir (.mcg-sandbox) is kept out of the commit via the worktree's local git
+    // exclude (ExcludeSandboxFromGit), so a plain `add -A` honours that exclusion. We must NOT pass an
+    // explicit ":(exclude).mcg-sandbox" pathspec here: combined with the ignore entry, git treats the
+    // ignored path as explicitly requested and exits non-zero ("paths are ignored ... Use -f") AFTER
+    // partially staging the real files — which previously left edits staged-but-uncommitted.
     private static bool TryCommitWorktreeEdits(string workingDirectory, GoalId goalId)
     {
         try
         {
-            var add = GitCli.Run(workingDirectory, "add", "-A", "--", ".", ":(exclude).mcg-sandbox");
+            var add = GitCli.Run(workingDirectory, "add", "-A");
             if (!add.Succeeded)
             {
                 return false;
@@ -408,8 +412,8 @@ public sealed class BackgroundDispatchRunner
             var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--name-only");
             if (staged.ExitCode != 0 || string.IsNullOrWhiteSpace(staged.Output))
             {
-                // Nothing to commit once the sandbox scratch is excluded (e.g. only .mcg-sandbox was
-                // dirty) — leave the dispatch to fail/report rather than create an empty commit.
+                // Nothing to commit (e.g. only the excluded sandbox scratch was dirty) — leave the
+                // dispatch to fail/report rather than create an empty commit.
                 return false;
             }
 
