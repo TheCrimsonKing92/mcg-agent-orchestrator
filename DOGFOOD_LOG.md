@@ -1709,3 +1709,10 @@ Goal 86358ddf: # Add a short docs note describing the conductor loop  ## What Cr
 
 - Operator gate: Developer: not-run; docs-only change verified by file content, 10 total lines, and `git status --short` showing only `?? docs/conductor-loop.md` (exit 0); Reviewer: not-run (docs-only; no test coverage applicable) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - docs review task - file exists, committed, content accurate; no complex analysis needed.
+
+## 2026-06-19 - # Add a short docs note describing the acceptance gate  ## What Create a new ...
+
+Goal 7dc55e0a: # Add a short docs note describing the acceptance gate  ## What Create a new markdown file `docs/acceptance-gate.md` .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit cfceee7). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run (exit 0); Developer: pass - docs/acceptance-gate.md exists, 9 lines, git status shows only ?? docs/acceptance-gate.md (exit 0); Tester: pass - file exists with 9 lines, all 5 spec requirements present and accurate (exit 0); Reviewer: pass - docs/acceptance-gate.md exists (9 lines, all 5 spec points covered), only file in HEAD commit cfceee7, no non-markdown files changed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - overkill - docs-only review task - a haiku-class model would handle this adequately.

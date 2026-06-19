@@ -11,10 +11,14 @@ internal sealed class ConductorBatchLoop
     internal const int WatchStopPollIntervalSeconds = 5;
 
     private readonly Action<AgentOrchestratorKernel> _sweep;
+    private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
 
-    public ConductorBatchLoop(Action<AgentOrchestratorKernel>? sweep = null)
+    public ConductorBatchLoop(
+        Action<AgentOrchestratorKernel>? sweep = null,
+        Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null)
     {
         _sweep = sweep ?? (_ => { });
+        _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
     }
 
     public BatchLoopSummary Run(
@@ -34,6 +38,7 @@ internal sealed class ConductorBatchLoop
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
         var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
+        var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
         var retryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var totalTicks = 0;
         var totalAdvanced = 0;
@@ -50,6 +55,8 @@ internal sealed class ConductorBatchLoop
                 stopRequested = true;
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
+                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                persistTick?.Invoke(kernel);
                 break;
             }
 
@@ -57,6 +64,8 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
+                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                persistTick?.Invoke(kernel);
                 break;
             }
 
@@ -64,6 +73,8 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
+                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                persistTick?.Invoke(kernel);
                 break;
             }
 
@@ -109,6 +120,7 @@ internal sealed class ConductorBatchLoop
                     {
                         escalatedGoals.Add(goal.Id.Value);
                         excludedGoals.Add(goal.Id.Value);
+                        ReapGoalOnce(kernel, goal, reapedGoals);
                         tickEscalated++;
                     }
                     else
@@ -132,6 +144,7 @@ internal sealed class ConductorBatchLoop
                     kernel.RecordGoalPolicyDecision(goal.Id, msg);
                     escalatedGoals.Add(goal.Id.Value);
                     excludedGoals.Add(goal.Id.Value);
+                    ReapGoalOnce(kernel, goal, reapedGoals);
                     tickEscalated++;
                     continue;
                 }
@@ -158,7 +171,7 @@ internal sealed class ConductorBatchLoop
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); ReapGoalOnce(kernel, goal, reapedGoals); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
             }
 
@@ -187,6 +200,8 @@ internal sealed class ConductorBatchLoop
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     onTick?.Invoke(tickSummary);
+                    ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                    persistTick?.Invoke(kernel);
                     break;
                 }
 
@@ -204,6 +219,8 @@ internal sealed class ConductorBatchLoop
                     stopRequested = true;
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
+                    ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                    persistTick?.Invoke(kernel);
                     break;
                 }
 
@@ -260,6 +277,41 @@ internal sealed class ConductorBatchLoop
 
         return null;
     }
+
+    private void ReapNonTerminalEligibleGoals(
+        AgentOrchestratorKernel kernel,
+        string? onlyGoalId,
+        HashSet<string> excludedGoals,
+        HashSet<string> reapedGoals)
+    {
+        foreach (var goal in kernel.Goals)
+        {
+            if (onlyGoalId is not null && goal.Id.Value != onlyGoalId)
+            {
+                continue;
+            }
+
+            if (excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal))
+            {
+                continue;
+            }
+
+            ReapGoalOnce(kernel, goal, reapedGoals);
+        }
+    }
+
+    private void ReapGoalOnce(AgentOrchestratorKernel kernel, Goal goal, HashSet<string> reapedGoals)
+    {
+        if (!reapedGoals.Add(goal.Id.Value))
+        {
+            return;
+        }
+
+        _reapGoalRunningDispatches(kernel, goal);
+    }
+
+    private static bool IsTerminalGoal(Goal goal) =>
+        goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
     private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Escalated esc

@@ -592,7 +592,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         catch { /* per-goal isolation */ }
                     }
                 };
-                var loopSummary = new ConductorBatchLoop(reconcileSweep).Run(
+                var loopReaper = new BackgroundDispatchRunner();
+                var loopSummary = new ConductorBatchLoop(
+                    reconcileSweep,
+                    (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint);
@@ -634,7 +637,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 };
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
-                var watchSummary = new ConductorBatchLoop(watchSweep).Run(
+                var watchReaper = new BackgroundDispatchRunner();
+                var watchSummary = new ConductorBatchLoop(
+                    watchSweep,
+                    (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
