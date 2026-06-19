@@ -353,7 +353,9 @@ public static async Task RunDashboardHostAsync(
     DashboardHostArgs args,
     AgentCatalog? agentCatalogFallback = null)
 {
-    var repository = new FileOrchestratorStateRepository(workspace.StatePath);
+    // The server shares the CLI's SQLite state store (the single source of truth) so it always
+    // reflects live state, and so the daemon model can run on one kernel.
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.UseUrls(args.UrlPrefix);
 
