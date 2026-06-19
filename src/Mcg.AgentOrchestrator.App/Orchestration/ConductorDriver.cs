@@ -161,8 +161,11 @@ internal sealed class ConductorDriver
                         : $"Acceptance passed (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:acceptance",
-                    $"Acceptance failed (exit {verification.ExitCode}).");
-            return new AcceptanceVerificationSummary(verification.Passed, unmetCriteria);
+                    $"Acceptance failed (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}");
+            return new AcceptanceVerificationSummary(
+                verification.Passed,
+                unmetCriteria,
+                verification.Passed ? null : verification.OutputTail);
         };
 
         _retryTask = kernel.RetryTask;
@@ -272,6 +275,29 @@ internal sealed class ConductorDriver
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
 
+        // A goal failed ONLY because a task hit a transient empty-output dispatch flake (the worker
+        // exited 0 but produced nothing — a known intermittent claude/codex headless behaviour) is
+        // self-healed by re-dispatching that task, bounded by MaxTransientDispatchRetries, instead of
+        // escalating to a human. Without this, a single flaky empty response kills an otherwise-healthy
+        // goal — exactly what blocked an end-to-end autonomous run. A genuine failure (non-zero exit or
+        // any output) is NOT matched here and still escalates.
+        if (state == GoalLifecycleState.Failed)
+        {
+            var flakedTask = goal.Tasks.FirstOrDefault(t =>
+                t.Status == WorkTaskStatus.Failed &&
+                t.LastVerification is { } latest && IsEmptyOutputFlake(latest) &&
+                t.VerificationHistory.Count(IsEmptyOutputFlake) <= MaxTransientDispatchRetries);
+            if (flakedTask is not null)
+            {
+                _retryTask(goal.Id, flakedTask.Id,
+                    "Auto-retry transient dispatch flake: worker exited 0 with no output (verification could not be confirmed)");
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Executed(
+                        GoalLifecycleState.Failed,
+                        $"Auto-retried transient empty-output dispatch flake on task {flakedTask.Id.Value[..8]}"));
+            }
+        }
+
         // Error states always escalate regardless of policy
         if (state is GoalLifecycleState.Failed
                   or GoalLifecycleState.Blocked
@@ -366,14 +392,59 @@ internal sealed class ConductorDriver
             : $"Dispatch recorded but no process was startable: {skippedReason}";
     }
 
+    // Cap on auto-retrying a transient empty-output dispatch flake before escalating to a human; a
+    // worker that keeps exiting 0 with no output is a genuine problem, not a flake.
+    private const int MaxTransientDispatchRetries = 2;
+
+    // Appends a bounded tail of the acceptance build/test output to an escalation/journal line so an
+    // operator (or the conductor's own retry diagnostics) can see WHY acceptance failed — the detail
+    // was previously dropped, leaving only a generic "Acceptance verification failed".
+    private static string FormatFailureTail(string? outputTail)
+    {
+        if (string.IsNullOrWhiteSpace(outputTail))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = outputTail.Trim();
+        const int maxChars = 600;
+        var tail = trimmed.Length > maxChars ? "..." + trimmed[^maxChars..] : trimmed;
+        return $" Acceptance output tail: {tail}";
+    }
+
+    // A dispatch that exited 0 but produced no output at all — the orchestrator cannot confirm the
+    // work happened (RecordTaskProcessRefreshed flags this). It is almost always an intermittent
+    // headless-CLI flake (an empty model response), so the conductor retries it rather than failing
+    // the whole goal on it.
+    private static bool IsEmptyOutputFlake(TaskVerificationRecord verification) =>
+        verification.ExitCode == 0 &&
+        string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+        string.IsNullOrWhiteSpace(verification.StandardError);
+
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        // Gate 1: acceptance verification (test suite quality check).
+        // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
+        // criteria, landing) operates on the ACTUAL integrated result that will land — not the
+        // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
+        // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
+        // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
+        // a wasted (expensive) acceptance run when the branch cannot integrate at all.
+        var rebase = _rebaseOntoMain(goal);
+        if (!rebase.UpdatedBranch)
+        {
+            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
+                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
+                : $"pre-landing rebase failed: {rebase.Message}";
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+        }
+
+        // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
         var acceptance = _runAcceptanceVerification(goal);
         if (!acceptance.Passed)
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                "Acceptance verification failed; review and fix before landing");
+                "Acceptance verification failed; review and fix before landing." +
+                FormatFailureTail(acceptance.FailureDetail));
         }
 
         if (acceptance.UnmetCriteria.Count > 0)
@@ -407,7 +478,7 @@ internal sealed class ConductorDriver
             _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
-        // Gate 2: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
+        // Gate 3: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
         var changeRisk = _classifyChangeRisk(goal);
         if (changeRisk.HasValue)
         {
@@ -419,18 +490,7 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 3: rebase goal branch onto current main before integration merge.
-        // Without this, any main advance (even disjoint) fails the integration fast-forward.
-        var rebase = _rebaseOntoMain(goal);
-        if (!rebase.UpdatedBranch)
-        {
-            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
-                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
-                : $"pre-landing rebase failed: {rebase.Message}";
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
-        }
-
-        // Gate 4: land via integration branch.
+        // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landResult = _land(goal);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {

@@ -207,6 +207,7 @@ public static void DropToLow() {
         long lastStderrBytes = -1;
         var exitCode = 1;
         Process? worker = null;
+        OwnedProcessGroup? workerGroup = null;
 
         void WriteHeartbeat(string state)
         {
@@ -228,6 +229,7 @@ public static void DropToLow() {
             {
                 pid = Environment.ProcessId,
                 childPid = worker is { HasExited: false } ? worker.Id : (int?)null,
+                ownedPids = workerGroup?.ProcessIds ?? [],
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
                 lastProgressAt = lastProgressAt.ToString("o"),
@@ -288,6 +290,7 @@ public static void DropToLow() {
             WriteHeartbeat("starting");
             worker = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start worker process.");
+            workerGroup = OwnedProcessGroup.Attach(worker);
 
             // Close the worker's stdin immediately so it reads EOF instead of blocking on an
             // inherited/open pipe (see RedirectStandardInput note above).
@@ -313,7 +316,7 @@ public static void DropToLow() {
             if (!Task.WaitAll(drainTasks, DrainTimeoutMs))
             {
                 drainCts.Cancel();
-                TryKillWorkerTree(worker);
+                TryKillWorkerTree(worker, workerGroup);
                 try { Task.WaitAll(drainTasks, 2000); } catch { }
             }
 
@@ -337,6 +340,7 @@ public static void DropToLow() {
                 TryShutdownBuildServer(parameters.WorkingDirectory);
             }
 
+            workerGroup?.Dispose();
             WriteHeartbeat("exiting");
             TryWriteExitCode(parameters.ExitCodePath, exitCode);
         }
@@ -356,8 +360,17 @@ public static void DropToLow() {
         }
     }
 
-    private static void TryKillWorkerTree(Process worker)
+    private static void TryKillWorkerTree(Process worker, OwnedProcessGroup? workerGroup)
     {
+        try
+        {
+            workerGroup?.Kill();
+        }
+        catch
+        {
+            // Best-effort: fall back to direct tree kill below.
+        }
+
         try
         {
             worker.Kill(entireProcessTree: true);

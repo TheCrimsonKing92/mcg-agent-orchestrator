@@ -755,6 +755,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_subscription_tasks_by_assigned_provider")]
     public void WorkerProfileDispatcherPreparesSubscriptionTasksByAssignedProvider()
 {
+    // Hermetic: clear the operator's MCG_WORKER_SANDBOX so this asserts the default dispatch mode
+    // regardless of how the suite was launched (see ClearWorkerSandboxEnv).
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
@@ -3279,6 +3282,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_uses_workspace_write_codex_sandbox")]
     public void WorkerProfileDispatcherDeveloperDispatchUsesWorkspaceWriteCodexSandbox()
 {
+    // Hermetic: this asserts the DEFAULT (no-OS-sandbox) dispatch mode, which reads
+    // WorkerSandboxOptions.FromEnvironment(). Clear the operator's MCG_WORKER_SANDBOX so the test is
+    // deterministic even when the suite is run under `conduct`/acceptance with the var set.
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
@@ -4067,6 +4074,23 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "\"exitFileExists\":false" +
         "}");
 }
+
+    // Clears the operator's MCG_WORKER_SANDBOX for the duration of a test so dispatch-mode assertions
+    // are hermetic — WorkerProfileDispatcher reads WorkerSandboxOptions.FromEnvironment(), so a test
+    // asserting the default (workspace-write) sandbox mode would otherwise fail when the suite is run
+    // under `conduct`/acceptance with MCG_WORKER_SANDBOX=1 set. Restores the prior value on dispose.
+    private static IDisposable ClearWorkerSandboxEnv()
+    {
+        var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, null);
+        return new WorkerSandboxEnvRestore(previous);
+    }
+
+    private sealed class WorkerSandboxEnvRestore(string? previous) : IDisposable
+    {
+        public void Dispose() =>
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
+    }
 
     private static string CreateSeededDispatchRepository()
 {

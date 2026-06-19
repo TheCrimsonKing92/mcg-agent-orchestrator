@@ -166,9 +166,16 @@ internal static class LandingExecutor
             .ToArray();
     }
 
+    // Counts DISTINCT tasks that hit a verification failure — NOT the raw sum of every failed
+    // verification. The landing gate uses this to flag a goal that struggled enough to warrant human
+    // review; a single role that needed several (usually transient: provider poisoning, flake, infra
+    // contention) retries before succeeding is not "troubled" — its final result still passes the
+    // acceptance gate. The old raw-sum counting inflated past the threshold for any goal that ever hit
+    // a couple of transient failures, so effectively nothing could auto-land. Counting distinct failed
+    // tasks instead escalates only when MULTIPLE roles struggled, which is the real review signal.
     private static int CountFailedVerifications(Goal goal)
     {
-        return goal.Tasks.Sum(t => t.VerificationHistory.Count(v => !v.Succeeded));
+        return goal.Tasks.Count(t => t.VerificationHistory.Any(v => !v.Succeeded));
     }
 
 }

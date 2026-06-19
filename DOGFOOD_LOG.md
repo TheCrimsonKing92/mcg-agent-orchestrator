@@ -1681,3 +1681,31 @@ Goal 019a2b2b: # Judge-input increment 2: aggregate true PER-FILE verdicts + bud
 
 - Operator gate: Planner: not-run (exit 0); Developer: pass; semantic focused 38/38, core 356/356, infrastructure 930/930; build succeeded 0 warnings/errors (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped multi-file judge behavior change - enough reasoning for edge cases and test coverage.
+
+## 2026-06-19 - # Resolve the orchestrator repo root from configuration, not by discovering a...
+
+Goal 0c762f38: # Resolve the orchestrator repo root from configuration, not by discovering a hardcoded .sln  ## Why `OrchestratorWor.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 75c54be). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Researcher: not-run (exit 0); Developer: pass - focused WorkspaceConsolidatorTests, 4 passed (exit 0); Tester: pass - 4 passed (ResolveRepoRootFindsGitRootFromNestedSubdirectory, ResolveRepoRootFallsBackToStartDirectoryWhenNoGitRootFound, ResolveRepoRootUsesFallbackDirectoryWhenStartDirectoryHasNoGitRoot, ResolveRepoRootUsesConfiguredRepoRootBeforeStartOrFallback) (exit 0); Reviewer: not-run (review task; 4 WorkspaceConsolidatorTests passed per Developer evidence at commit 75c54be) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - reviewer task on a small focused change - reading 5 implementation files plus prior evidence was sufficient; no ambiguity or scale requiring a larger model.
+
+## 2026-06-19 - # Robust process-lifecycle reaping for spawned workers and build/test childre...
+
+Goal 493c248f: # Robust process-lifecycle reaping for spawned workers and build/test children  ## Why During the 2026-06-18 gate deb.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run (Planner role — no code changes) (exit 0); Researcher: not-run (Researcher role — no code execution) (exit 0); Developer: pass - Infrastructure 52/52, Core 21/21, git diff --check clean; first infra attempt hit CS2012 lock and passed after build-server shutdown retry (exit 0); Tester: pass - Core 9/9, Infrastructure 51/51, DispatchProcessHost 2/2; critical safety tests confirmed (scoped PID reaping, unrecorded process avoidance, orphan sweep) (exit 0); Reviewer: not-run (Reviewer role — no code changes; independent test run recommended per verification plan) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - multi-file review task requiring cross-platform safety reasoning and evidence validation - correctly identified the Linux-crash residual risk and the Tester's file citation error that Haiku missed.
+
+## 2026-06-19 - # Document the autonomous-execution flow in the README  ## What Add a concise...
+
+Goal 51aedc52: # Document the autonomous-execution flow in the README  ## What Add a concise "Autonomous execution" subsection to th.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 03a6600). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Reviewer role — no file modifications)). Acceptance passed.
+
+- Operator gate: Developer: pass - README-only diff; `git diff --check -- README.md` exited 0 (exit 0); Tester: pass - README section present, correctly formatted, all 7 acceptance criteria documented (exit 0); Reviewer: not-run (docs-only; no test suite applicable) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - structured review task - docs-only diff with clear acceptance criteria; no architectural judgment required.
+
+## 2026-06-19 - # Add a short docs note describing the conductor loop  ## What Create a new m...
+
+Goal 86358ddf: # Add a short docs note describing the conductor loop  ## What Create a new markdown file `docs/conductor-loop.md` (c.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (reviewer role; no changes made)). Acceptance passed.
+
+- Operator gate: Developer: not-run; docs-only change verified by file content, 10 total lines, and `git status --short` showing only `?? docs/conductor-loop.md` (exit 0); Reviewer: not-run (docs-only; no test coverage applicable) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - docs review task - file exists, committed, content accurate; no complex analysis needed.

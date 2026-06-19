@@ -91,7 +91,8 @@ public sealed record TaskProcessSnapshot(
     DateTimeOffset StartedAt,
     DateTimeOffset? CompletedAt,
     int? ExitCode,
-    bool WasCancelled = false);
+    bool WasCancelled = false,
+    IReadOnlyList<int>? OwnedProcessIds = null);
 
 public sealed record ProgressEventSnapshot(
     string GoalId,

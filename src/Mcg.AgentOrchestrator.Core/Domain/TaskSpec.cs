@@ -126,7 +126,8 @@ public sealed class TaskSpec
                     LastProcess.StartedAt,
                     LastProcess.CompletedAt,
                     LastProcess.ExitCode,
-                    LastProcess.WasCancelled),
+                    LastProcess.WasCancelled,
+                    LastProcess.TrackedProcessIds),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -227,7 +228,8 @@ public sealed class TaskSpec
                 snapshot.LastProcess.StartedAt,
                 snapshot.LastProcess.CompletedAt,
                 snapshot.LastProcess.ExitCode,
-                snapshot.LastProcess.WasCancelled));
+                snapshot.LastProcess.WasCancelled,
+                snapshot.LastProcess.OwnedProcessIds));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
