@@ -66,7 +66,7 @@ if ($existing -and -not $Rotate) {
     Write-Output "Rotated password for existing local user '$UserName'."
 } else {
     New-LocalUser -Name $UserName -Password $securePassword -FullName 'MCG Orchestrator Worker' `
-        -Description 'Low-privilege account that orchestrator implementation workers run as (OS sandbox).' `
+        -Description 'Low-priv worker account (OS sandbox).' `
         -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
     Write-Output "Created low-privilege local user '$UserName'."
 }
