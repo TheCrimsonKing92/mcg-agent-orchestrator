@@ -1752,3 +1752,10 @@ Goal 8f44b544: # Remove the legacy JSON file-store apparatus and the backup/roll
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-19 - ## Why Time estimates for orchestrator work are currently guessed (e
+
+Goal 0e066872: ## Why Time estimates for orchestrator work are currently guessed (e.g. an assistant saying "30-60 min") with no grou.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 7f97ff7 Orchestrator-committed worker edits for goal 0e0668724d814e679c3a561674a8fb57). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run (exit 0); Developer: focused pass; full suite failed in existing git worktree/rebase tests with permission-denied creating .git lock/ref files, unrelated to duration changes (exit 0); Tester: pass - unit/integration duration tests 8/8 passing; Core suite 364/364 passing; 5 pre-existing git-worktree failures unrelated to duration feature (exit 0); Reviewer: pass - 364/364 Core; 8/8 focused duration tests; 5 pre-existing git-worktree failures unrelated (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - review/analysis task spanning 8 implementation files + test evidence - thorough code-level review without implementation work needed.
