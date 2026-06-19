@@ -134,7 +134,7 @@ internal sealed class GoalRefinementService
     public static bool HasOpenClarification(IReadOnlyList<CollaborationItem> goalItems) =>
         goalItems.Any(item =>
             item.Type == CollaborationItemType.Clarification &&
-            item.Status == CollaborationItemStatus.Raised &&
+            !CollaborationItemLifecycle.IsTerminal(item.Status) &&
             item.CorrelationKey?.StartsWith(CorrelationKeyPrefix, StringComparison.Ordinal) == true);
 
     private async Task<SpecRefinementOutput> RunRefinerAsync(

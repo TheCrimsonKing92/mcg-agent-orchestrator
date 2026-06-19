@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -10,8 +11,15 @@ public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTas
     OrchestratorWorkspace workspace,
     Goal goal,
     WorkerProfile profile,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var results = new List<WorkerProfileDispatchResult>();
     foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
     {
@@ -27,8 +35,15 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
     Goal goal,
     TaskSpec task,
     WorkerProfile profile,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
     return WorkerProfileDispatcher.PrepareTask(
         kernel,
@@ -108,8 +123,15 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
     OrchestratorWorkspace workspace,
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
-    WorkerProfileCatalog profiles)
+    WorkerProfileCatalog profiles,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     return WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
@@ -130,8 +152,15 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
     DispatchModelOverride? modelOverride = null,
-    bool allowGitReference = false)
+    bool allowGitReference = false,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     return WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -150,8 +179,15 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     OrchestratorWorkspace workspace,
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
-    WorkerProfileCatalog profiles)
+    WorkerProfileCatalog profiles,
+    IModelProviderRegistry? providers = null)
 {
+    GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        goal);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     var dispatches = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,

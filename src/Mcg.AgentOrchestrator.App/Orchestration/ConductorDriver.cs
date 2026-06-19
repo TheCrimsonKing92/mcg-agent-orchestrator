@@ -31,7 +31,8 @@ internal sealed class ConductorDriver
         IGoalAcceptanceVerifier acceptanceVerifier,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        IOperatorChannel? channel = null)
+        IOperatorChannel? channel = null,
+        IModelProviderRegistry? providers = null)
     {
         var dir = workspace.ExecutionDirectory;
 
@@ -50,7 +51,8 @@ internal sealed class ConductorDriver
                 // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
                 // acceptance on a missing worktree and spam ghost escalations every tick.
                 || (!workspaceExists && goal.Status == GoalStatus.Completed);
-            return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp);
+            var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
+            return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
 
         _getRunningPaidWorkerCount = () =>
@@ -70,7 +72,13 @@ internal sealed class ConductorDriver
             SubscriptionStartResult result;
             try
             {
-                result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles);
+                result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+                    kernel,
+                    workspace,
+                    goal,
+                    agents,
+                    profiles,
+                    providers ?? new InMemoryModelProviderRegistry([]));
             }
             catch (Exception ex)
             {
@@ -301,6 +309,7 @@ internal sealed class ConductorDriver
         // Error states always escalate regardless of policy
         if (state is GoalLifecycleState.Failed
                   or GoalLifecycleState.Blocked
+                  or GoalLifecycleState.AwaitingClarification
                   or GoalLifecycleState.AwaitingHumanInput)
         {
             return Escalate(goal, goalPrefix, policy, state,
