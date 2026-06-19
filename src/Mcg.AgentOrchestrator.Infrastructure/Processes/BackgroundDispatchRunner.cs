@@ -80,6 +80,13 @@ public sealed class BackgroundDispatchRunner
 
         var isLocalDispatch = IsLocalDispatch(dispatch);
         var parametersPath = Path.Combine(logRoot, $"{prefix}.dispatch.json");
+
+        // OS worker sandbox: for write-capable subscription dispatches (Developer/Tester), run the
+        // worker AS the dedicated low-priv account, confined by ACL to the worktree + git common dir.
+        var sandbox = WorkerSandboxOptions.FromEnvironment();
+        var useSandbox = sandbox.Enabled && !isLocalDispatch &&
+            task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatch.Command,
             dispatch.WorkingDirectory,
@@ -88,7 +95,10 @@ public sealed class BackgroundDispatchRunner
             exitCodePath,
             heartbeatPath,
             ShutdownBuildServerOnExit: !isLocalDispatch,
-            DisableSharedCompilation: !isLocalDispatch));
+            DisableSharedCompilation: !isLocalDispatch,
+            SandboxAccount: useSandbox ? sandbox.Account : null,
+            SandboxCredentialTarget: useSandbox ? sandbox.CredentialTarget : null,
+            SandboxGitCommonDir: useSandbox ? ResolveGitCommonDir(dispatch.WorkingDirectory) : null));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
@@ -355,6 +365,28 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole != AgentRole.Developer &&
             HasExplicitNoChangeRationale(standardOutput, standardError);
+    }
+
+    // Resolves the repository's common .git directory for a worktree (where its commits actually
+    // land: objects/refs and .git/worktrees/<name>), so the sandboxed worker can be granted write
+    // there in addition to the worktree itself — without it, git commit fails inside the sandbox.
+    private static string? ResolveGitCommonDir(string worktree)
+    {
+        try
+        {
+            var result = GitCli.Run(worktree, "rev-parse", "--git-common-dir");
+            if (!result.Succeeded || string.IsNullOrWhiteSpace(result.Output))
+            {
+                return null;
+            }
+
+            var common = result.Output.Trim();
+            return Path.IsPathRooted(common) ? common : Path.GetFullPath(Path.Combine(worktree, common));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool TryInspectGoalWorktree(

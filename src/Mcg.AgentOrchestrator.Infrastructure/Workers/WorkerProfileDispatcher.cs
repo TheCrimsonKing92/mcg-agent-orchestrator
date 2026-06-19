@@ -634,10 +634,16 @@ public static class WorkerProfileDispatcher
         IReadOnlyDictionary<string, string?>? variables)
     {
         var isWriteCapable = role == AgentRole.Developer || role == AgentRole.Tester;
+        // When the OS worker sandbox is active, codex's own sandbox is set to danger-full-access so it
+        // uses ordinary CreateProcess (no CreateProcessAsUserW poisoning); the OS account+ACL enforces
+        // confinement instead. Otherwise keep codex's enforced workspace-write sandbox.
+        var osSandbox = WorkerSandboxOptions.FromEnvironment().Enabled;
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["workingDirectory"] = workingDirectory,
-            ["sandboxMode"] = isWriteCapable ? "workspace-write" : "read-only",
+            ["sandboxMode"] = isWriteCapable
+                ? (osSandbox ? "danger-full-access" : "workspace-write")
+                : "read-only",
             ["permissionMode"] = isWriteCapable ? "bypassPermissions" : "plan"
         };
 

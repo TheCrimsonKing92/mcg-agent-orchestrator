@@ -29,12 +29,54 @@ public static class DispatchProcessHost
         string ExitCodePath,
         string? HeartbeatPath,
         bool ShutdownBuildServerOnExit,
-        bool DisableSharedCompilation);
+        bool DisableSharedCompilation,
+        // OS worker sandbox: when SandboxAccount is set, the worker command is launched AS that
+        // low-priv account (password read from SandboxCredentialTarget) with Modify granted on the
+        // worktree + SandboxGitCommonDir, so the OS confines its writes. Null = run as the operator.
+        string? SandboxAccount = null,
+        string? SandboxCredentialTarget = null,
+        string? SandboxGitCommonDir = null);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
         File.WriteAllText(path, JsonSerializer.Serialize(parameters, JsonOptions));
         return path;
+    }
+
+    // When the OS worker sandbox is configured for this dispatch, grant the low-priv account Modify
+    // on the per-run writable set and launch the worker AS that account. The confinement boundary is
+    // set once at the root; children inherit it via ordinary CreateProcess, so the worker's writes are
+    // OS-confined and codex (run danger-full-access) never touches its fragile CreateProcessAsUserW path.
+    private static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
+    {
+        if (string.IsNullOrWhiteSpace(parameters.SandboxAccount) || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var account = parameters.SandboxAccount;
+        WorkerSandboxAcl.GrantModify(parameters.WorkingDirectory, account);
+        if (!string.IsNullOrWhiteSpace(parameters.SandboxGitCommonDir))
+        {
+            WorkerSandboxAcl.GrantModify(parameters.SandboxGitCommonDir, account);
+        }
+
+        var password = string.IsNullOrWhiteSpace(parameters.SandboxCredentialTarget)
+            ? null
+            : WindowsWorkerCredential.TryReadPassword(parameters.SandboxCredentialTarget);
+        if (string.IsNullOrEmpty(password))
+        {
+            throw new InvalidOperationException(
+                $"OS worker sandbox is enabled (account '{account}') but its credential could not be read from " +
+                "Credential Manager. Run scripts/Setup-WorkerSandbox.ps1 and ensure the credential is readable non-elevated.");
+        }
+
+        // Launch the worker AS the low-priv account (CreateProcessWithLogonW). WorkingDirectory is the
+        // worktree, which the account can reach because GrantModify above granted it. Redirected stdio
+        // uses handles this host opened as the operator, so worker logging is unaffected by its ACLs.
+        startInfo.UserName = account;
+        startInfo.Domain = ".";
+        startInfo.PasswordInClearText = password;
     }
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
@@ -137,6 +179,8 @@ public static class DispatchProcessHost
                 startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
                 startInfo.Environment["UseSharedCompilation"] = "false";
             }
+
+            ApplyWorkerSandbox(startInfo, parameters);
 
             WriteHeartbeat("starting");
             worker = Process.Start(startInfo)
