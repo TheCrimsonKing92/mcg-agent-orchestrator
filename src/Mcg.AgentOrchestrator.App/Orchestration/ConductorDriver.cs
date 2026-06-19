@@ -368,7 +368,22 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        // Gate 1: acceptance verification (test suite quality check).
+        // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
+        // criteria, landing) operates on the ACTUAL integrated result that will land — not the
+        // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
+        // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
+        // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
+        // a wasted (expensive) acceptance run when the branch cannot integrate at all.
+        var rebase = _rebaseOntoMain(goal);
+        if (!rebase.UpdatedBranch)
+        {
+            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
+                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
+                : $"pre-landing rebase failed: {rebase.Message}";
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+        }
+
+        // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
         var acceptance = _runAcceptanceVerification(goal);
         if (!acceptance.Passed)
         {
@@ -407,7 +422,7 @@ internal sealed class ConductorDriver
             _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
-        // Gate 2: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
+        // Gate 3: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
         var changeRisk = _classifyChangeRisk(goal);
         if (changeRisk.HasValue)
         {
@@ -419,18 +434,7 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 3: rebase goal branch onto current main before integration merge.
-        // Without this, any main advance (even disjoint) fails the integration fast-forward.
-        var rebase = _rebaseOntoMain(goal);
-        if (!rebase.UpdatedBranch)
-        {
-            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
-                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
-                : $"pre-landing rebase failed: {rebase.Message}";
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
-        }
-
-        // Gate 4: land via integration branch.
+        // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landResult = _land(goal);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {

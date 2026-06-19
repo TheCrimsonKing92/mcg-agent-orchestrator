@@ -251,6 +251,31 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Escalated)result.Outcome).State);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_rebase_conflict_escalates_before_acceptance")]
+    public void ConductorDriverVerifiedRebaseConflictEscalatesBeforeAcceptance()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var acceptanceCalled = false;
+        string? escalationReason = null;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.Conflict, "goal/test", "conflict", ["src/Foo.cs"], "workspace rebase"),
+            runAcceptance: _ => { acceptanceCalled = true; return true; },
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        // Rebase-before-acceptance: an un-integrable branch escalates without spending an acceptance run,
+        // and acceptance never verifies the pre-integration branch.
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.False(acceptanceCalled);
+        Assert.Contains(escalationReason!, text => text.Contains("pre-landing rebase conflict", StringComparison.Ordinal));
+        Assert.Contains(escalationReason!, text => text.Contains("src/Foo.cs", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_retries_task_with_feedback")]
     public void ConductorDriverVerifiedUnmetAcceptanceCriterionRetriesTaskWithFeedback()
     {
