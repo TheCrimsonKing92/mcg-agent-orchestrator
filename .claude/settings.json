@@ -54,6 +54,8 @@
       "Bash(cd /c/Users/miles/vcs/mcg-agent-orchestrator*)",
       "Bash(cd .orchestrator-worktrees/*)",
       "Bash(./mcg-orchestrator.cmd *)",
+      "Bash(MCG_WORKER_SANDBOX=1 ./mcg-orchestrator.cmd *)",
+      "Bash(MCG_WORKER_SANDBOX=1 ./mcg-orchestrator.cmd conduct *)",
       "Bash(git status*)",
       "Bash(git log *)",
       "Bash(git diff *)",
