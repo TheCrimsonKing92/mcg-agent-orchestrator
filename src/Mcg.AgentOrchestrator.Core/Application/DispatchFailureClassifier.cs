@@ -17,6 +17,16 @@ public static class DispatchFailureClassifier
     private static readonly Regex PassedCountPattern = new(
         @"\bPassed:\s*[1-9]\d*\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // Common test-runner phrasings the colon form misses: "4 passed", "4 tests passed",
+    // "4 of 4 passed", and "tests: pass" / "tests pass". Test runners and agents report results
+    // these ways far more often than "Passed: N", so recognising them prevents false "no evidence"
+    // failures on genuinely-verified work (the acceptance gate remains the authoritative check).
+    private static readonly Regex PassedWordPattern = new(
+        @"\b[1-9]\d*\s+(?:[\w.-]+\s+){0,3}passed\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex TestsPassPattern = new(
+        @"\btests?\s*[:=]?\s*pass(?:ed|es|ing)?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FractionPattern = new(
         @"\b\d+\s*/\s*\d+\b",
         RegexOptions.CultureInvariant);
@@ -67,6 +77,8 @@ public static class DispatchFailureClassifier
 
         return hasVerificationTerm &&
             (PassedCountPattern.IsMatch(output) ||
+             PassedWordPattern.IsMatch(output) ||
+             TestsPassPattern.IsMatch(output) ||
              FractionPattern.IsMatch(output) ||
              ExitCodeZeroPattern.IsMatch(output));
     }
