@@ -14,6 +14,28 @@ internal static partial class CliCommandHandlers
             case "attention":
             {
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+
+                // `attention dismiss <goal-id-prefix>`: resolve all of a goal's open attention items
+                // out-of-band (e.g. a goal abandoned or handled outside Discord). The collaboration view
+                // retires the goal's message on the next reconcile, so stale items stop being rendered.
+                if (parts.Count > 1 && parts[1].Equals("dismiss", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts.Count < 3)
+                        throw new ArgumentException("Usage: attention dismiss <goal-id-prefix>");
+
+                    var goalPrefix = parts[2];
+                    var open = store.GetAttentionQueueAsync().GetAwaiter().GetResult()
+                        .Where(item =>
+                            !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                            (item.GoalId?.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase) ?? false))
+                        .ToList();
+
+                    var dismissed = open.Count(item =>
+                        store.TryResolveAsync(item.CorrelationKey!, "dismissed by operator").GetAwaiter().GetResult());
+                    Console.WriteLine($"Dismissed {dismissed} open attention item(s) for goal '{goalPrefix}'.");
+                    return false;
+                }
+
                 var queue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
                 ConsoleViews.PrintAttentionQueue(queue);
                 return false;
@@ -138,13 +160,18 @@ internal static partial class CliCommandHandlers
                     context.Workspace.OrchestratorDirectory,
                     (correlationKey, answer, cancellationToken) =>
                     {
+                        // operator-listen runs with an EMPTY kernel and no write lock (SkipsKernelState)
+                        // so it stays concurrent with a running conductor. Resolve purely against the
+                        // collaboration store (no kernel needed): this clears the clarification in Discord
+                        // and records the precedent. The conductor's AwaitingClarification gate reads the
+                        // store, so the goal resumes on its next tick, and EnsureRefined then writes the
+                        // answer into the goal's RefinedSpec.
                         var service = new GoalRefinementService(
                             context.Providers,
                             ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
                             store,
                             new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
                         return service.TryResolveOpenClarificationAsync(
-                            context.Kernel,
                             correlationKey,
                             answer,
                             cancellationToken);
@@ -270,7 +297,10 @@ internal static partial class CliCommandHandlers
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await ReconcileProgressViewAsync(context, collaborationStore, progressView, cancellationToken);
+            await RunDiscordRefreshWithRetryAsync(
+                "progress view",
+                token => ReconcileProgressViewAsync(context, collaborationStore, progressView, token),
+                cancellationToken);
 
             try
             {
@@ -292,7 +322,11 @@ internal static partial class CliCommandHandlers
         delay ??= Task.Delay;
         while (!cancellationToken.IsCancellationRequested)
         {
-            await collaborationView.ReconcileAsync(cancellationToken);
+            await RunDiscordRefreshWithRetryAsync(
+                "collaboration view",
+                collaborationView.ReconcileAsync,
+                cancellationToken,
+                delay);
 
             try
             {
@@ -303,6 +337,55 @@ internal static partial class CliCommandHandlers
                 break;
             }
         }
+    }
+
+    internal static async Task RunDiscordRefreshWithRetryAsync(
+        string operationName,
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        delay ??= Task.Delay;
+        var attempt = 0;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await operation(cancellationToken);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex) when (DiscordOperatorFaultClassifier.IsTransient(ex))
+            {
+                attempt++;
+                var backoff = ComputeDiscordRetryBackoff(attempt);
+                Console.Error.WriteLine(
+                    $"operator-listen: transient Discord error while refreshing {operationName}: {ex.Message}. Retrying in {backoff.TotalSeconds:0.#}s.");
+                try
+                {
+                    await delay(backoff, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex) when (DiscordOperatorFaultClassifier.IsFatal(ex))
+            {
+                Console.Error.WriteLine(
+                    $"operator-listen: fatal Discord authorization error while refreshing {operationName}: {ex.Message}");
+                throw;
+            }
+        }
+    }
+
+    private static TimeSpan ComputeDiscordRetryBackoff(int attempt)
+    {
+        var seconds = Math.Min(60, Math.Pow(2, Math.Min(attempt - 1, 5)));
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private static async Task ReconcileProgressViewAsync(

@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Net;
 
 public sealed class DiscordGatewayTests
 {
@@ -265,6 +266,29 @@ public sealed class DiscordGatewayTests
         Assert.True(api.SentMessages[0].Content.Contains("Second escalation"));
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_caps_oversized_goal_message_to_discord_limit")]
+    public async Task DiscordCollaborationViewCapsOversizedGoalMessageToDiscordLimit()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        // Eight long clarifications for one goal would otherwise blow past Discord's 2000-char limit (50035).
+        var longBody = new string('x', 600);
+        for (var i = 0; i < 8; i++)
+        {
+            await store.RaiseAsync(
+                CollaborationItemType.Clarification, "goal-abc123",
+                $"Spec clarification {i}: " + new string('q', 180), longBody, $"corr-{i}");
+        }
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.True(api.SentMessages[0].Content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+        Assert.True(api.SentMessages[0].Content.Contains("truncated to fit"));
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_resolving_last_item_clears_the_goal_message_no_spam")]
     public async Task DiscordCollaborationViewResolvingLastItemClearsTheGoalMessage()
     {
@@ -467,6 +491,72 @@ public sealed class DiscordGatewayTests
         Assert.Contains(message.Content, s => s.Contains("Loop surfaced decision"));
     }
 
+    [Xunit.Fact(DisplayName = "OperatorListen_collaboration_reconcile_loop_retries_transient_discord_refresh_error")]
+    public async Task OperatorListenCollaborationReconcileLoopRetriesTransientDiscordRefreshError()
+    {
+        var root = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(root);
+        var api = new FakeDiscordForumApi();
+        api.CreateThreadFailures.Enqueue(new HttpRequestException(
+            "The server responded with error 503: ServiceUnavailable",
+            null,
+            HttpStatusCode.ServiceUnavailable));
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        using var cts = new CancellationTokenSource();
+        var delays = new List<TimeSpan>();
+        await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            "goal-transient-123",
+            "Retry surfaced decision",
+            "Body",
+            "corr-transient-1");
+
+        Task Delay(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            delays.Add(delay);
+            if (delays.Count == 2)
+            {
+                cts.Cancel();
+                return Task.FromCanceled(cts.Token);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        await CliCommandHandlers.RunCollaborationReconcileLoopAsync(view, TimeSpan.FromSeconds(15), cts.Token, Delay);
+
+        Assert.Equal(2, api.CreateThreadAttempts);
+        Assert.Equal(TimeSpan.FromSeconds(1), delays[0]);
+        Assert.Equal(TimeSpan.FromSeconds(15), delays[1]);
+        var message = api.SentMessages.Single();
+        Assert.Contains(message.Content, s => s.Contains("Retry surfaced decision"));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorListen_collaboration_reconcile_loop_exits_on_unauthorized_discord_refresh_error")]
+    public async Task OperatorListenCollaborationReconcileLoopExitsOnUnauthorizedDiscordRefreshError()
+    {
+        var root = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(root);
+        var api = new FakeDiscordForumApi();
+        api.CreateThreadFailures.Enqueue(new HttpRequestException(
+            "The server responded with error 401: Unauthorized",
+            null,
+            HttpStatusCode.Unauthorized));
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            "goal-auth-123",
+            "Unauthorized decision",
+            "Body",
+            "corr-auth-1");
+
+        await Xunit.Assert.ThrowsAsync<HttpRequestException>(() =>
+            CliCommandHandlers.RunCollaborationReconcileLoopAsync(view, TimeSpan.FromSeconds(15), CancellationToken.None));
+
+        Assert.Equal(1, api.CreateThreadAttempts);
+        Xunit.Assert.Empty(api.SentMessages);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordProgressView_reconcile_skips_identical_status_content")]
     public async Task DiscordProgressViewReconcileSkipsIdenticalStatusContent()
     {
@@ -503,6 +593,8 @@ public sealed class DiscordGatewayTests
         public List<(ulong ForumChannelId, string Title, string Content)> CreatedThreads { get; } = [];
         public List<(ulong ThreadId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> SentMessages { get; } = [];
         public List<(ulong ThreadId, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> EditedMessages { get; } = [];
+        public Queue<Exception> CreateThreadFailures { get; } = [];
+        public int CreateThreadAttempts { get; private set; }
 
         public Task<ulong> CreateThreadAsync(
             ulong forumChannelId,
@@ -510,6 +602,10 @@ public sealed class DiscordGatewayTests
             string initialContent,
             CancellationToken cancellationToken = default)
         {
+            CreateThreadAttempts++;
+            if (CreateThreadFailures.TryDequeue(out var exception))
+                return Task.FromException<ulong>(exception);
+
             CreatedThreads.Add((forumChannelId, title, initialContent));
             return Task.FromResult((ulong)CreatedThreads.Count + 1000UL);
         }

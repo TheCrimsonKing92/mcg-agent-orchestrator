@@ -82,9 +82,24 @@ public sealed class DiscordCollaborationViewService
         // One aggregated message per goal that currently needs attention.
         foreach (var (goalKey, items) in byGoal)
         {
-            await UpsertGoalMessageAsync(refs, goalKey, items, cancellationToken);
-            foreach (var item in items)
-                await _store.TryMarkDeliveredAsync(item.CorrelationKey!, cancellationToken);
+            try
+            {
+                await UpsertGoalMessageAsync(refs, goalKey, items, cancellationToken);
+                foreach (var item in items)
+                    await _store.TryMarkDeliveredAsync(item.CorrelationKey!, cancellationToken);
+            }
+            catch (Exception ex) when (
+                !cancellationToken.IsCancellationRequested &&
+                !DiscordOperatorFaultClassifier.IsFatal(ex) &&
+                !DiscordOperatorFaultClassifier.IsTransient(ex))
+            {
+                // A non-transient, non-fatal render failure for one goal (e.g. a Discord validation
+                // error like 50035) must not crash the listener or block other goals' messages. Skip
+                // it this cycle; it retries on the next reconcile. Transient (retry) and fatal (exit)
+                // errors still propagate to the listener's fault handler.
+                Console.Error.WriteLine(
+                    $"operator-listen: skipped rendering attention for goal {GoalLabel(goalKey)}: {ex.Message}");
+            }
         }
 
         // A goal that previously had a message but is now clear gets its message retired (all resolved),
@@ -200,17 +215,34 @@ public sealed class DiscordCollaborationViewService
 
     private static string BuildGoalThreadTitle(string goalKey) => $"[{GoalLabel(goalKey)}] needs attention";
 
+    // Discord rejects message content longer than 2000 characters with error 50035. A goal that
+    // accumulates several long items (e.g. multiple verbose clarifications) would otherwise blow past
+    // this and crash the listener, so the aggregated per-goal message is capped.
+    internal const int DiscordMessageLimit = 2000;
+
     private static string BuildGoalContent(string goalKey, IReadOnlyList<CollaborationItem> items, string? footer)
     {
+        // Reserve headroom for the footer + the truncation notice so the rendered body stays under the limit.
+        var budget = DiscordMessageLimit - 220;
         var sb = new StringBuilder();
         sb.AppendLine($"**Goal `{GoalLabel(goalKey)}` — {items.Count} item(s) need attention:**");
         sb.AppendLine();
+        var rendered = 0;
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            sb.AppendLine($"{i + 1}. **[{item.Type}]** {item.Subject}");
-            if (!string.IsNullOrWhiteSpace(item.Body))
-                sb.AppendLine($"> {Truncate(item.Body, 220)}");
+            var line = $"{i + 1}. **[{item.Type}]** {Truncate(item.Subject, 180)}";
+            var body = string.IsNullOrWhiteSpace(item.Body) ? null : $"> {Truncate(item.Body, 220)}";
+            if (rendered > 0 && sb.Length + line.Length + (body?.Length ?? 0) + 4 > budget)
+            {
+                sb.AppendLine($"_…and {items.Count - rendered} more item(s) — truncated to fit Discord's {DiscordMessageLimit}-char limit. Resolve some to see the rest._");
+                break;
+            }
+
+            sb.AppendLine(line);
+            if (body is not null)
+                sb.AppendLine(body);
+            rendered++;
         }
 
         if (!string.IsNullOrWhiteSpace(footer))
@@ -219,7 +251,9 @@ public sealed class DiscordCollaborationViewService
             sb.AppendLine(footer);
         }
 
-        return sb.ToString().Trim();
+        var result = sb.ToString().Trim();
+        // Hard safety net so a single oversized item or footer can never exceed the limit.
+        return result.Length <= DiscordMessageLimit ? result : result[..(DiscordMessageLimit - 1)] + "…";
     }
 
     private static string BuildAllResolvedContent(string goalKey, string? resolvedBy) =>

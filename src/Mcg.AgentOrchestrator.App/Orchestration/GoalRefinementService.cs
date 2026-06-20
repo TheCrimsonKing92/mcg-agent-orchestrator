@@ -28,17 +28,23 @@ internal sealed class GoalRefinementService
     private readonly ModelFunctionCatalog _catalog;
     private readonly ICollaborationItemStore _collaboration;
     private readonly SpecRefinerPrecedentStore _precedents;
+    private readonly WorkerProfileCatalog? _workerProfiles;
+    private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
 
     public GoalRefinementService(
         IModelProviderRegistry providers,
         ModelFunctionCatalog catalog,
         ICollaborationItemStore collaboration,
-        SpecRefinerPrecedentStore precedents)
+        SpecRefinerPrecedentStore precedents,
+        WorkerProfileCatalog? workerProfiles = null,
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null)
     {
         _providers = providers;
         _catalog = catalog;
         _collaboration = collaboration;
         _precedents = precedents;
+        _workerProfiles = workerProfiles;
+        _subscriptionCompleterFactory = subscriptionCompleterFactory;
     }
 
     public async Task<RefinementResult> RefineAsync(
@@ -146,7 +152,10 @@ internal sealed class GoalRefinementService
         var goalId = new GoalId(goalIdValue);
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
         if (goal is null)
-            return false;
+            // The goal is absent from this kernel (e.g. an empty/stale listener kernel). Degrade to the
+            // store-only resolve so the clarification still clears in Discord and the precedent is
+            // recorded, rather than rejecting the operator's answer outright.
+            return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
         var spec = goal.RefinedSpec;
         if (spec is null)
             return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
@@ -188,6 +197,54 @@ internal sealed class GoalRefinementService
         return true;
     }
 
+    // Applies operator answers recorded in the collaboration store (resolved clarification items) into
+    // the goal's RefinedSpec open questions. Run by the goal-owning process (the conductor, via the
+    // refinement gate): an answer submitted through the listener only resolves the store item, so this
+    // is where that answer takes effect on the spec and the goal resumes with the operator's decision.
+    // Returns the current (possibly updated) RefinedSpec for the goal.
+    public RefinedSpec? SyncAnsweredClarifications(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
+        if (goal?.RefinedSpec is not { } spec || !spec.HasOpenQuestions)
+            return goal?.RefinedSpec;
+
+        var answers = _collaboration.ListAsync(goalId.Value).GetAwaiter().GetResult()
+            .Where(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                !string.IsNullOrWhiteSpace(item.Resolution))
+            .GroupBy(item => item.CorrelationKey!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Resolution!, StringComparer.Ordinal);
+
+        if (answers.Count == 0)
+            return spec;
+
+        var changed = false;
+        var decisions = new List<RefinedSpecDecision>(spec.Decisions);
+        var questions = spec.OpenQuestions
+            .Select(question =>
+            {
+                if (string.Equals(question.Status, "Answered", StringComparison.OrdinalIgnoreCase) ||
+                    !answers.TryGetValue(question.Id, out var answer))
+                    return question;
+
+                changed = true;
+                decisions.Add(new RefinedSpecDecision(
+                    question.Question, answer, $"Answered by operator (key: {question.Id})."));
+                return question with { Status = "Answered", Answer = answer };
+            })
+            .ToList();
+
+        if (!changed)
+            return spec;
+
+        var updated = spec with { Decisions = decisions, OpenQuestions = questions };
+        kernel.SetGoalRefinedSpec(goalId, updated);
+        kernel.RecordGoalPolicyDecision(goalId, "Synced operator answers from resolved clarification items into the RefinedSpec.");
+        return updated;
+    }
+
     // Returns true when a goal has at least one open Clarification item in the collaboration store.
     // Used by the App layer to populate GoalLifecycleFacts.HasOpenClarification.
     public static bool HasOpenClarification(IReadOnlyList<CollaborationItem> goalItems) =>
@@ -205,6 +262,12 @@ internal sealed class GoalRefinementService
             return SpecRefinementOutput.Invalid("No spec-refiner model function configured.");
 
         var binding = bindings[0];
+        var prompt = SpecRefinerPlanner.BuildPrompt(objective);
+        if (binding.Subscription is { } subscription && _workerProfiles is not null)
+        {
+            return await RunSubscriptionRefinerAsync(subscription, prompt, cancellationToken).ConfigureAwait(false);
+        }
+
         IModelProvider provider;
         try
         {
@@ -215,7 +278,6 @@ internal sealed class GoalRefinementService
             return SpecRefinementOutput.Invalid($"Spec-refiner provider '{binding.Model.ProviderName}' not found: {ex.Message}");
         }
 
-        var prompt = SpecRefinerPlanner.BuildPrompt(objective);
         var request = new ModelRequest(
             "You are a specification refiner. Output only a fenced JSON object.",
             [new ModelMessage("user", prompt)],
@@ -229,6 +291,34 @@ internal sealed class GoalRefinementService
         catch (Exception ex)
         {
             return SpecRefinementOutput.Invalid($"Spec refiner model call failed: {ex.Message}");
+        }
+    }
+
+    private async Task<SpecRefinementOutput> RunSubscriptionRefinerAsync(
+        SubscriptionLaunchProfile subscription,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var completer = _subscriptionCompleterFactory?.Invoke(subscription)
+                ?? new SubscriptionCliCompleter(
+                    _workerProfiles!,
+                    subscription.WorkerProfileName,
+                    subscription.ModelAlias ?? string.Empty,
+                    subscription.ReasoningEffort);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(SubscriptionCliCompleter.DefaultTimeout);
+            var stdout = await completer.CompleteAsync(prompt, "spec-refiner-prompt.md", cts.Token).ConfigureAwait(false);
+            return SpecRefinerPlanner.Parse(stdout);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return SpecRefinementOutput.Invalid($"Subscription spec refiner '{subscription.WorkerProfileName}' timed out.");
+        }
+        catch (Exception ex)
+        {
+            return SpecRefinementOutput.Invalid($"Subscription spec refiner '{subscription.WorkerProfileName}' failed: {ex.Message}");
         }
     }
 

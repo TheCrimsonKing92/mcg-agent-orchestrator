@@ -1766,3 +1766,31 @@ Goal d5fc6b25: # Unify Discord escalation delivery through the per-goal priority
 
 - Operator gate: Researcher: not-run (research phase only) (exit 0); Developer: focused pass: 66/66 OperatorChannelTests|DiscordGatewayTests; full Infrastructure.Tests fail after retry: 947 passed, 5 failed, all unrelated git worktree/ref permission failures (exit 0); Tester: 945 Passed / 7 Failed (failures pre-existing: git worktree permission issues unrelated to Discord changes). Discord-specific tests all passing. (exit 0)
 - Model fit: Model fit: Haiku 4.5 is ADEQUATE
+
+## 2026-06-20 - # Close the meta-planner clarification loop in Discord: answer via modal, wri...
+
+Goal fec30f89: # Close the meta-planner clarification loop in Discord: answer via modal, write back to the spec, resume — aggression.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 02c7f03cded15cf742efc58224e3983ba470b8d9). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Researcher: not-run (research task; test evidence read from existing test files) (exit 0); Developer: focused pass, 26/26. Full suite: Core pass 364/364; Infrastructure 955/960 pass, 5 existing worktree/git tests fail with git ref lock permission/rebase failures. NuGet vulnerability cache warning also present. (exit 0); Tester: Focused 26/26 PASS. Full suite: Core 364/364 PASS; Infrastructure 955/960 PASS (5 pre-existing Windows git-permission test failures) (exit 0)
+- Model fit: Anthropic/claude-haiku-4-5 - adequate - verification of pre-completed Discord/refinement implementation with test review - Reading committed code, spot-checking key methods, and running test suite is within Haiku scope; no research or complex analysis needed
+
+## 2026-06-20 - The meta-planner's spec-refiner can only use the direct API / Ollama path tod...
+
+Goal a856c620: The meta-planner's spec-refiner can only use the direct API / Ollama path today; it cannot use the subscription CLIs .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit 5337af4). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run (exit 0); Developer: pass - focused 62/62; full Infrastructure.Tests 962/962 (exit 0); Tester: pass - focused GoalRefinement 24/24, full Infrastructure.Tests 962/962 (exit 0); Reviewer: pass - 962/962 Infrastructure.Tests (Tester verified), 24/24 GoalRefinement, 2 new subscription tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review / SDLC Reviewer role - reading diffs, mapping implementation to spec, identifying test gaps and risk; no implementation needed.
+
+## 2026-06-20 - The shared SubscriptionCliCompleter (src/Mcg
+
+Goal 6fb30947: The shared SubscriptionCliCompleter (src/Mcg.AgentOrchestrator.App/Orchestration/SubscriptionCliCompleter.cs) hardcod.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 834141b). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 834141b (Fix claude subscription completion mode)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass; focused 63/63, full Infrastructure.Tests 963/963 (exit 0); Tester: Pass - 63 tests passed in targeted filter; Pass - 963 tests passed in full Infrastructure.Tests suite; no regressions (exit 0); Reviewer: 63 passed (GoalRefinementTests|SemanticAcceptanceTests, Tester-reported); fresh run blocked by permission prompt (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review with diff inspection and test coverage analysis - read-only review with no synthesis gap.
+
+## 2026-06-20 - The operator-listen Discord listener exits on a transient Discord error inste...
+
+Goal ca4e2218: The operator-listen Discord listener exits on a transient Discord error instead of staying up. Observed 2026-06-20: a.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit d64d342). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit d64d342). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass; DiscordGatewayTests 25/25, full Infrastructure.Tests 964/964 (exit 0); Tester: pass; DiscordGatewayTests 25/25 (transient retry + fatal exit), Infrastructure.Tests 964/964 (exit 0); Reviewer: pass; Developer+Tester both confirmed DiscordGatewayTests 25/25, Infrastructure.Tests 964/964, exit 0 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review of focused resilience change across 3 files - classification correctness, backoff math, test coverage gaps, and residual risk are exactly what Sonnet handles well; no overkill.
