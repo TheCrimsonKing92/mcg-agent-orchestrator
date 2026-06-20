@@ -580,6 +580,58 @@ public sealed class GoalRefinementTests
             evt.Message.Contains("Goal refinement attached", StringComparison.Ordinal)));
     }
 
+    // --- Answer-back: a store-only resolution (the listener path) is synced into the spec by the gate ---
+
+    [Xunit.Fact(DisplayName = "GoalRefinementGate_EnsureRefined_syncs_store_resolved_answer_into_spec_and_resumes")]
+    public async Task EnsureRefinedSyncsStoreResolvedAnswerIntoSpecAndResumes()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var provider = new FakeSmokeProvider(
+            text: """
+                ```json
+                {"behavioralContract":"Integrate billing.","acceptanceCriteria":["works"],"verificationClass":"TestVerifiable","decisions":[],"forks":[{"kind":"external-contract","refinerConfidence":"low","blastRadius":"high","question":"Which API version?","choice":"","rationale":"unspecified"}]}
+                ```
+                """,
+            providerName: "fake-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel, AgentCatalog.Default().Agents, "Integrate API with unspecified version", workspace, providers);
+
+        // Refinement raised a clarification: goal is awaiting and the spec has an open question.
+        Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
+        Xunit.Assert.True(kernel.GetGoal(goal.Id).RefinedSpec!.HasOpenQuestions);
+
+        // Listener path: resolve in the collaboration store ONLY (no kernel / no write lock).
+        var item = (await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync(goal.Id.Value)).Single();
+        await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).TryResolveAsync(item.CorrelationKey!, "v2");
+        Xunit.Assert.False(GoalRefinementGate.HasOpenClarification(workspace, goal));
+
+        // Conductor/gate path: EnsureRefined syncs the stored answer into the spec and clears AwaitingClarification.
+        var result = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, kernel.GetGoal(goal.Id));
+
+        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
+        Xunit.Assert.False(result.Spec.HasOpenQuestions);
+        Xunit.Assert.Contains(result.Spec.Decisions, decision => decision.Choice == "v2");
+        Xunit.Assert.False(kernel.GetGoal(goal.Id).RefinedSpec!.HasOpenQuestions);
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_BuildStartInfo_uses_utf8_stdio_encoding")]
+    public void SubscriptionCliCompleterBuildStartInfoUsesUtf8StdioEncoding()
+    {
+        var startInfo = SubscriptionCliCompleter.BuildStartInfo("claude -p prompt", CreateTempDirectory());
+
+        Xunit.Assert.Equal(System.Text.Encoding.UTF8, startInfo.StandardOutputEncoding);
+        Xunit.Assert.Equal(System.Text.Encoding.UTF8, startInfo.StandardErrorEncoding);
+    }
+
     // --- Helpers ---
 
     private static (

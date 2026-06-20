@@ -152,7 +152,10 @@ internal sealed class GoalRefinementService
         var goalId = new GoalId(goalIdValue);
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
         if (goal is null)
-            return false;
+            // The goal is absent from this kernel (e.g. an empty/stale listener kernel). Degrade to the
+            // store-only resolve so the clarification still clears in Discord and the precedent is
+            // recorded, rather than rejecting the operator's answer outright.
+            return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
         var spec = goal.RefinedSpec;
         if (spec is null)
             return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
@@ -192,6 +195,54 @@ internal sealed class GoalRefinementService
         });
         kernel.RecordGoalPolicyDecision(goalId, $"Spec clarification answered: {correlationKey}");
         return true;
+    }
+
+    // Applies operator answers recorded in the collaboration store (resolved clarification items) into
+    // the goal's RefinedSpec open questions. Run by the goal-owning process (the conductor, via the
+    // refinement gate): an answer submitted through the listener only resolves the store item, so this
+    // is where that answer takes effect on the spec and the goal resumes with the operator's decision.
+    // Returns the current (possibly updated) RefinedSpec for the goal.
+    public RefinedSpec? SyncAnsweredClarifications(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
+        if (goal?.RefinedSpec is not { } spec || !spec.HasOpenQuestions)
+            return goal?.RefinedSpec;
+
+        var answers = _collaboration.ListAsync(goalId.Value).GetAwaiter().GetResult()
+            .Where(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                !string.IsNullOrWhiteSpace(item.Resolution))
+            .GroupBy(item => item.CorrelationKey!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Resolution!, StringComparer.Ordinal);
+
+        if (answers.Count == 0)
+            return spec;
+
+        var changed = false;
+        var decisions = new List<RefinedSpecDecision>(spec.Decisions);
+        var questions = spec.OpenQuestions
+            .Select(question =>
+            {
+                if (string.Equals(question.Status, "Answered", StringComparison.OrdinalIgnoreCase) ||
+                    !answers.TryGetValue(question.Id, out var answer))
+                    return question;
+
+                changed = true;
+                decisions.Add(new RefinedSpecDecision(
+                    question.Question, answer, $"Answered by operator (key: {question.Id})."));
+                return question with { Status = "Answered", Answer = answer };
+            })
+            .ToList();
+
+        if (!changed)
+            return spec;
+
+        var updated = spec with { Decisions = decisions, OpenQuestions = questions };
+        kernel.SetGoalRefinedSpec(goalId, updated);
+        kernel.RecordGoalPolicyDecision(goalId, "Synced operator answers from resolved clarification items into the RefinedSpec.");
+        return updated;
     }
 
     // Returns true when a goal has at least one open Clarification item in the collaboration store.

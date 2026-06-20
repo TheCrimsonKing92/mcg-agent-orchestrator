@@ -138,13 +138,18 @@ internal static partial class CliCommandHandlers
                     context.Workspace.OrchestratorDirectory,
                     (correlationKey, answer, cancellationToken) =>
                     {
+                        // operator-listen runs with an EMPTY kernel and no write lock (SkipsKernelState)
+                        // so it stays concurrent with a running conductor. Resolve purely against the
+                        // collaboration store (no kernel needed): this clears the clarification in Discord
+                        // and records the precedent. The conductor's AwaitingClarification gate reads the
+                        // store, so the goal resumes on its next tick, and EnsureRefined then writes the
+                        // answer into the goal's RefinedSpec.
                         var service = new GoalRefinementService(
                             context.Providers,
                             ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
                             store,
                             new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
                         return service.TryResolveOpenClarificationAsync(
-                            context.Kernel,
                             correlationKey,
                             answer,
                             cancellationToken);

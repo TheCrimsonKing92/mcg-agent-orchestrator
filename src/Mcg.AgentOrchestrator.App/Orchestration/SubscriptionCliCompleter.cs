@@ -95,7 +95,11 @@ internal sealed class SubscriptionCliCompleter
             RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
+            WorkingDirectory = workingDirectory,
+            // Force UTF-8 so non-ASCII model output (em-dashes, smart quotes) is decoded correctly
+            // rather than via the legacy console code page, which mojibakes clarification text.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
         foreach (var arg in WorkerShell.BaseArguments())
         {
