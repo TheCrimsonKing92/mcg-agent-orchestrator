@@ -19,7 +19,7 @@ internal sealed class ConductorDriver
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
-    private readonly Func<Goal, LandingResult> _land;
+    private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
     private readonly Action<Goal> _record;
     private readonly Action<Goal> _cleanup;
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
@@ -182,10 +182,10 @@ internal sealed class ConductorDriver
 
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
 
-        _land = goal =>
+        _land = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:land", "Landing goal via integration branch.");
-            var result = LandingExecutor.Execute(kernel, goal, workspace, channel);
+            var result = LandingExecutor.Execute(kernel, goal, workspace, channel, policy);
             if (result.MainAdvanced)
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else
@@ -248,7 +248,7 @@ internal sealed class ConductorDriver
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback,
         Action<GoalId, TaskId>? clearCriterionRetryFeedback,
         Func<Goal, GoalWorktreeRebaseResult> rebaseOntoMain,
-        Func<Goal, LandingResult> land,
+        Func<Goal, ConductorAutonomyPolicy, LandingResult> land,
         Action<Goal> record,
         Action<Goal> cleanup,
         Action<Goal, GoalLifecycleState, string> writeEscalation,
@@ -491,7 +491,7 @@ internal sealed class ConductorDriver
         }
 
         // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
-        var landResult = _land(goal);
+        var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, escalate.Reason);

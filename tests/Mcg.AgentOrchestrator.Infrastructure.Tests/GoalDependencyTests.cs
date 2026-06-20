@@ -114,7 +114,7 @@ public sealed class GoalDependencyTests
             recordCriterionRetryFeedback: null,
             clearCriterionRetryFeedback: null,
             rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
-            land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
+            land: (g, _) => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
             cleanup: _ => { },
             writeEscalation: (_, _, _) => { },
@@ -182,7 +182,7 @@ public sealed class GoalDependencyTests
             recordCriterionRetryFeedback: null,
             clearCriterionRetryFeedback: null,
             rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
-            land: g =>
+            land: (g, _) =>
             {
                 if (g.Id == a.Id) aMerged = true;
                 return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
@@ -237,7 +237,7 @@ public sealed class GoalDependencyTests
             recordCriterionRetryFeedback: null,
             clearCriterionRetryFeedback: null,
             rebaseOntoMain: _ => new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null),
-            land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
+            land: (g, _) => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             record: _ => { },
             cleanup: _ => { },
             writeEscalation: (_, _, _) => { },
