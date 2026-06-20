@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -121,13 +122,46 @@ internal static class SpecRefinerPlanner
     }
 
     public static SpecForkDisposition ClassifyFork(SpecRefinementFork fork)
+        => ClassifyFork(fork, ConductorAutonomyPolicy.Permissive);
+
+    public static SpecForkDisposition ClassifyFork(SpecRefinementFork fork, ConductorAutonomyPolicy policy)
     {
         var confidence = ParseConfidence(fork.RefinerConfidence);
         var blast = ParseBlastRadius(fork.BlastRadius);
-        return confidence == SpecRefinerConfidence.Low && blast == SpecBlastRadius.High
-            ? SpecForkDisposition.Ask
-            : SpecForkDisposition.Decide;
+        var kind = fork.Kind.Trim().ToLowerInvariant();
+
+        if (IsFullAuto(policy))
+        {
+            return confidence == SpecRefinerConfidence.Low
+                && blast == SpecBlastRadius.High
+                && IsAutonomousStopKind(kind)
+                    ? SpecForkDisposition.Ask
+                    : SpecForkDisposition.Decide;
+        }
+
+        if (string.Equals(policy.Name, ConductorAutonomyPolicy.Conservative.Name, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(policy.Name, ConductorAutonomyPolicy.Manual.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return confidence == SpecRefinerConfidence.High && blast == SpecBlastRadius.Low
+                ? SpecForkDisposition.Decide
+                : SpecForkDisposition.Ask;
+        }
+
+        return (confidence == SpecRefinerConfidence.Low && blast == SpecBlastRadius.High)
+            || (blast == SpecBlastRadius.High && IsBalancedHighStakesKind(kind))
+                ? SpecForkDisposition.Ask
+                : SpecForkDisposition.Decide;
     }
+
+    private static bool IsFullAuto(ConductorAutonomyPolicy policy) =>
+        policy.Name.Equals("full-auto", StringComparison.OrdinalIgnoreCase) ||
+        policy.Name.Equals("fullauto", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsBalancedHighStakesKind(string kind) =>
+        kind is "external-contract" or "ownership-lifecycle" or "reversibility" or "architecture" or "scope";
+
+    private static bool IsAutonomousStopKind(string kind) =>
+        kind is "reversibility" or "security" or "security-sensitive" or "blocking" or "genuinely-blocking";
 
     private static SpecRefinerConfidence ParseConfidence(string value) => value.ToLowerInvariant() switch
     {

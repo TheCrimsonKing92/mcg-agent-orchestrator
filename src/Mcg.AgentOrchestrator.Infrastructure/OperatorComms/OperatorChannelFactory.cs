@@ -4,6 +4,7 @@ public static class OperatorChannelFactory
 {
     public sealed record DiscordOperatorRuntime(
         DiscordGatewayListener Listener,
+        DiscordCollaborationViewService CollaborationView,
         DiscordProgressViewService ProgressView,
         IAsyncDisposable Api) : IAsyncDisposable
     {
@@ -14,16 +15,30 @@ public static class OperatorChannelFactory
         }
     }
 
+    // Resolves the Discord bot token from the process environment, falling back on Windows to the
+    // persistent User-scoped variable. The harness/process tree may have started before the operator
+    // set it, so it's absent from the process env yet present in the User registry; this lets a bare
+    // `operator-listen` find the token without an inline env-assignment prefix (which trips approvals).
+    public static string? ResolveBotToken()
+    {
+        var token = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+        if (string.IsNullOrWhiteSpace(token) && OperatingSystem.IsWindows())
+        {
+            token = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN", EnvironmentVariableTarget.User);
+        }
+
+        return token;
+    }
+
     public static IOperatorChannel Create(
         OperatorChannelCatalog catalog,
         string? botToken,
         string stateDirectory)
     {
-        if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
+        if (!IsDiscordConfigured(catalog, botToken, out _))
             return NullOperatorChannel.Instance;
 
-        var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        return new DiscordOperatorChannel(api, forumChannelId, stateDirectory, catalog.DashboardBaseUrl);
+        return new DiscordOperatorChannel(CollaborationItemStore.ForDirectory(stateDirectory));
     }
 
     public static IOperatorChannel CreateWithApi(
@@ -34,24 +49,25 @@ public static class OperatorChannelFactory
         if (catalog.IsNull ||
             !catalog.ChannelType.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(catalog.ForumChannelId) ||
-            !ulong.TryParse(catalog.ForumChannelId, out var forumChannelId))
+            !ulong.TryParse(catalog.ForumChannelId, out _))
             return NullOperatorChannel.Instance;
 
-        return new DiscordOperatorChannel(api, forumChannelId, stateDirectory, catalog.DashboardBaseUrl);
+        return new DiscordOperatorChannel(CollaborationItemStore.ForDirectory(stateDirectory));
     }
 
     public static DiscordGatewayListener? CreateGatewayListener(
         OperatorChannelCatalog catalog,
         string? botToken,
         ICollaborationItemStore store,
-        string stateDirectory)
+        string stateDirectory,
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
+        var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds, resolveClarificationAnswer);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view)
             .GetAwaiter().GetResult();
     }
@@ -61,18 +77,19 @@ public static class OperatorChannelFactory
         string catalogPath,
         string? botToken,
         ICollaborationItemStore store,
-        string stateDirectory)
+        string stateDirectory,
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var collaborationView = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
+        var collaborationView = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds, resolveClarificationAnswer);
         var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView)
             .GetAwaiter().GetResult();
         var progressView = new DiscordProgressViewService(api, forumChannelId, catalogPath);
-        return new DiscordOperatorRuntime(listener, progressView, api);
+        return new DiscordOperatorRuntime(listener, collaborationView, progressView, api);
     }
 
     public static async Task SendTestEscalationAsync(IOperatorChannel channel, TextWriter output)
@@ -97,7 +114,7 @@ public static class OperatorChannelFactory
             null);
 
         await channel.SendEscalationAsync(testEscalation);
-        await output.WriteLineAsync($"Test escalation sent via {channel.ChannelType}. Check the Discord forum channel for the new thread.");
+        await output.WriteLineAsync($"Test escalation queued via {channel.ChannelType}. The operator-listen collaboration view will render it in Discord.");
     }
 
     private static bool IsDiscordConfigured(OperatorChannelCatalog catalog, string? botToken, out ulong forumChannelId)

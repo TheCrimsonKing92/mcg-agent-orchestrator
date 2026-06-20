@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -127,29 +128,52 @@ internal static partial class CliCommandHandlers
             case "operator-listen":
             {
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var botToken = OperatorChannelFactory.ResolveBotToken();
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
                 var runtime = OperatorChannelFactory.CreateDiscordRuntime(
                     catalog,
                     context.Workspace.OperatorChannelPath,
                     botToken,
                     store,
-                    context.Workspace.OrchestratorDirectory);
+                    context.Workspace.OrchestratorDirectory,
+                    (correlationKey, answer, cancellationToken) =>
+                    {
+                        var service = new GoalRefinementService(
+                            context.Providers,
+                            ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
+                            store,
+                            new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
+                        return service.TryResolveOpenClarificationAsync(
+                            context.Kernel,
+                            correlationKey,
+                            answer,
+                            cancellationToken);
+                    });
                 if (runtime is null)
                 {
                     Console.WriteLine("operator-listen: Discord not configured or MCGO_DISCORD_BOT_TOKEN missing.");
                     return false;
                 }
 
-                Console.WriteLine("operator-listen: Discord listener running. Progress view refreshes every 15 minutes. Press Ctrl+C to stop.");
+                Console.WriteLine("operator-listen: Discord listener running. Collaboration view refreshes every 15 seconds; progress view refreshes every 15 minutes. Press Ctrl+C to stop.");
                 using var cts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, eventArgs) =>
                 {
                     eventArgs.Cancel = true;
                     cts.Cancel();
                 };
-                RunOperatorListenLoopAsync(context, store, runtime.ProgressView, cts.Token).GetAwaiter().GetResult();
-                runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    var progressLoop = RunOperatorListenLoopAsync(context, store, runtime.ProgressView, cts.Token);
+                    var collaborationLoop = RunCollaborationReconcileLoopAsync(runtime.CollaborationView, TimeSpan.FromSeconds(15), cts.Token);
+                    Task.WhenAny(progressLoop, collaborationLoop).GetAwaiter().GetResult();
+                    cts.Cancel();
+                    Task.WhenAll(progressLoop, collaborationLoop).GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
                 return false;
             }
 
@@ -259,6 +283,28 @@ internal static partial class CliCommandHandlers
         }
     }
 
+    internal static async Task RunCollaborationReconcileLoopAsync(
+        DiscordCollaborationViewService collaborationView,
+        TimeSpan reconcileInterval,
+        CancellationToken cancellationToken,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        delay ??= Task.Delay;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await collaborationView.ReconcileAsync(cancellationToken);
+
+            try
+            {
+                await delay(reconcileInterval, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
     private static async Task ReconcileProgressViewAsync(
         CliExecutionContext context,
         ICollaborationItemStore collaborationStore,
@@ -310,7 +356,7 @@ internal static partial class CliCommandHandlers
             case "show":
             {
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var botToken = OperatorChannelFactory.ResolveBotToken();
                 Console.WriteLine($"Operator channel: type={catalog.ChannelType}");
                 Console.WriteLine($"  forumChannelId: {catalog.ForumChannelId ?? "(none)"}");
                 Console.WriteLine($"  progressThreadId: {catalog.ProgressThreadId ?? "(none)"}");
@@ -334,7 +380,7 @@ internal static partial class CliCommandHandlers
                 }
 
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var botToken = OperatorChannelFactory.ResolveBotToken();
                 var channel = OperatorChannelFactory.Create(catalog, botToken, context.Workspace.OrchestratorDirectory);
                 OperatorChannelFactory.SendTestEscalationAsync(channel, Console.Out).GetAwaiter().GetResult();
                 return false;

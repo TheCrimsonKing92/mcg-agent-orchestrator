@@ -388,45 +388,51 @@ public sealed class OperatorChannelTests
         Assert.False(result);
     }
 
-    // ---- DiscordOperatorChannel (outbound, with mocked IDiscordForumApi) ----
+    // ---- DiscordOperatorChannel (outbound, via collaboration store) ----
 
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_send_creates_thread_and_posts")]
-    public async Task DiscordOperatorChannelSendCreatesThreadAndPosts()
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_send_raises_decision_item")]
+    public async Task DiscordOperatorChannelSendRaisesDecisionItem()
     {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 999UL);
         var stateDir = CreateTempDirectory();
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
         var escalation = BuildEscalation("inbox-101", goalPrefix: "abc123");
 
         await channel.SendEscalationAsync(escalation);
 
-        Assert.Equal(1, fakeApi.CreatedThreads.Count);
-        Assert.Equal(1, fakeApi.SentMessages.Count);
-        Assert.Contains(fakeApi.CreatedThreads[0].Title, s => s.Contains("abc123"));
+        var item = (await store.GetAttentionQueueAsync()).Single();
+        Assert.Equal(CollaborationItemType.Decision, item.Type);
+        Assert.Equal(escalation.GoalId, item.GoalId);
+        Assert.Equal(escalation.InboxItemId, item.CorrelationKey);
+        Assert.Equal(escalation.Title, item.Subject);
     }
 
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_second_escalation_reuses_existing_thread")]
-    public async Task DiscordOperatorChannelSecondEscalationReusesExistingThread()
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_second_escalation_raises_second_queue_item")]
+    public async Task DiscordOperatorChannelSecondEscalationRaisesSecondQueueItem()
     {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 888UL);
         var stateDir = CreateTempDirectory();
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
         var e1 = BuildEscalation("inbox-201", goalPrefix: "abc123");
         var e2 = BuildEscalation("inbox-202", goalPrefix: "abc123");
 
         await channel.SendEscalationAsync(e1);
         await channel.SendEscalationAsync(e2);
 
-        Assert.Equal(1, fakeApi.CreatedThreads.Count);
-        Assert.Equal(2, fakeApi.SentMessages.Count);
+        var items = await store.GetAttentionQueueAsync();
+        Assert.Equal(2, items.Count);
+        foreach (var item in items)
+        {
+            Assert.Equal("goal-test-123", item.GoalId);
+        }
     }
 
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_confirm_button_uses_confirm_custom_id")]
-    public async Task DiscordOperatorChannelConfirmButtonUsesConfirmCustomId()
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_confirm_action_is_preserved_in_item_body")]
+    public async Task DiscordOperatorChannelConfirmActionIsPreservedInItemBody()
     {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 777UL);
         var stateDir = CreateTempDirectory();
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
         var escalation = new OperatorEscalation(
             "inbox-301",
             "goal-id-123",
@@ -440,18 +446,17 @@ public sealed class OperatorChannelTests
 
         await channel.SendEscalationAsync(escalation);
 
-        var buttons = fakeApi.SentMessages[0].Buttons;
-        Assert.Equal(1, buttons.Count);
-        Assert.Contains(buttons[0].CustomId, s => s.StartsWith("mcgo-confirm|", StringComparison.Ordinal));
-        Assert.Equal(DiscordButtonStyle.Danger, buttons[0].Style);
+        var item = (await store.GetAttentionQueueAsync()).Single();
+        Assert.Contains(item.Body, s => s.Contains("`land abc123`"));
+        Assert.Contains(item.Body, s => s.Contains("**Response:**"));
     }
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_message_includes_goal_reason_command_and_response")]
     public async Task DiscordOperatorChannelMessageIncludesGoalReasonCommandAndResponse()
     {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 778UL);
         var stateDir = CreateTempDirectory();
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
         var escalation = new OperatorEscalation(
             "inbox-actionable",
             "goal-id-abc123456",
@@ -465,7 +470,7 @@ public sealed class OperatorChannelTests
 
         await channel.SendEscalationAsync(escalation);
 
-        var content = fakeApi.SentMessages[0].Content;
+        var content = (await store.GetAttentionQueueAsync()).Single().Body;
         Assert.Contains(content, s => s.Contains("`abc12345`"));
         Assert.Contains(content, s => s.Contains("Improve escalation content"));
         Assert.Contains(content, s => s.Contains("Acceptance output tail: test failure"));
@@ -573,20 +578,22 @@ public sealed class OperatorChannelTests
         Assert.Contains(text, s => s.Contains("MCGO_DISCORD_BOT_TOKEN"));
     }
 
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_configured_channel_calls_send_once_with_safe_button")]
-    public async Task OperatorChannelFactorySendTestEscalationConfiguredChannelCallsSendOnceWithSafeButton()
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_configured_channel_raises_queue_item")]
+    public async Task OperatorChannelFactorySendTestEscalationConfiguredChannelRaisesQueueItem()
     {
         var fakeApi = new FakeDiscordForumApi(nextThreadId: 100UL);
         var catalog = new OperatorChannelCatalog("discord", null, "42");
-        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
+        var stateDir = CreateTempDirectory();
+        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, stateDir);
         var output = new StringWriter();
 
         await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
 
-        Assert.Equal(1, fakeApi.SentMessages.Count);
-        var buttons = fakeApi.SentMessages[0].Buttons;
-        Assert.Equal(1, buttons.Count);
-        Assert.False(buttons[0].CustomId.StartsWith("mcgo-confirm|", StringComparison.Ordinal));
+        Assert.Equal(0, fakeApi.SentMessages.Count);
+        var item = (await CollaborationItemStore.ForDirectory(stateDir).GetAttentionQueueAsync()).Single();
+        Assert.Equal(CollaborationItemType.Decision, item.Type);
+        Assert.Equal("test-goal-id", item.GoalId);
+        Assert.True(item.CorrelationKey is not null && item.CorrelationKey.StartsWith("test-", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "OperatorChannel_spine_test_seed_raises_attention_queue_item_with_correlation_key")]
@@ -611,31 +618,40 @@ public sealed class OperatorChannelTests
 
     // ---- Escalation path: SendEscalationAsync called on RecordLandingEscalation ----
 
-    [Xunit.Fact(DisplayName = "RecordLandingEscalation_calls_channel_send_when_configured")]
-    public void RecordLandingEscalationCallsChannelSendWhenConfigured()
+    [Xunit.Fact(DisplayName = "RecordLandingEscalation_raises_collaboration_item_when_configured")]
+    public async Task RecordLandingEscalationRaisesCollaborationItemWhenConfigured()
     {
         var workspace = BuildTestWorkspace();
         var goal = BuildTestGoal();
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 500UL);
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, workspace.OrchestratorDirectory);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var channel = new DiscordOperatorChannel(store);
 
         Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
             workspace, goal, "conflict on integration", "integration", channel);
 
-        Assert.Equal(1, fakeApi.SentMessages.Count);
-        Assert.Contains(fakeApi.SentMessages[0].Content, s => s.Contains("LandingEscalation"));
+        var item = (await store.GetAttentionQueueAsync())
+            .First(item =>
+                item.Type == CollaborationItemType.Decision &&
+                item.GoalId == goal.Id.Value &&
+                item.Body.Contains("conflict on integration", StringComparison.Ordinal) &&
+                item.Body.Contains("**Response:**", StringComparison.Ordinal));
+        Assert.Equal(goal.Id.Value, item.GoalId);
+        Assert.Equal(CollaborationItemType.Decision, item.Type);
+        Assert.Equal(CollaborationItemStatus.Raised, item.Status);
+        Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
+        Assert.Contains(item.Body, s => s.Contains("LandingEscalation"));
     }
 
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_conductor_escalation_uses_state_aware_actionable_content")]
-    public void RecordLandingEscalationConductorEscalationUsesStateAwareActionableContent()
+    public async Task RecordLandingEscalationConductorEscalationUsesStateAwareActionableContent()
     {
         var workspace = BuildTestWorkspace();
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Test objective", [
             new TaskSpec(TaskId.New(), "Test task", AgentRole.Developer)
         ]);
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 501UL);
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, workspace.OrchestratorDirectory);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var channel = new DiscordOperatorChannel(store);
 
         Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
             workspace,
@@ -644,9 +660,16 @@ public sealed class OperatorChannelTests
             "conductor:Verified",
             channel);
 
-        var content = fakeApi.SentMessages[0].Content;
+        var queued = (await store.GetAttentionQueueAsync())
+            .First(item =>
+                item.Type == CollaborationItemType.Decision &&
+                item.GoalId == goal.Id.Value &&
+                item.Body.Contains("Acceptance output tail: Unit test failed", StringComparison.Ordinal) &&
+                item.Body.Contains("**Response:**", StringComparison.Ordinal));
+        var content = queued.Body;
+        Assert.Equal(goal.Id.Value, queued.GoalId);
+        Assert.Equal(CollaborationItemType.Decision, queued.Type);
         Assert.Contains(content, s => s.Contains(goal.Id.Value[..8]));
-        Assert.Contains(content, s => s.Contains("Test objective"));
         Assert.Contains(content, s => s.Contains("Acceptance output tail: Unit test failed"));
         Assert.Contains(content, s => s.Contains($"`acceptance {goal.Id.Value[..8]} --autonomy supervised-auto`"));
         Assert.Contains(content, s => s.Contains("**Response:**"));
@@ -682,15 +705,15 @@ public sealed class OperatorChannelTests
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_renders_deep_link_in_content")]
     public async Task DiscordOperatorChannelRendersDeepLinkInContent()
     {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 600UL);
         var stateDir = CreateTempDirectory();
-        var channel = new DiscordOperatorChannel(fakeApi, forumChannelId: 42UL, stateDir);
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
         var escalation = BuildEscalation("inbox-deep-link", goalPrefix: "abc123")
             with { DashboardDeepLink = "https://localhost:5001/goals/abc123" };
 
         await channel.SendEscalationAsync(escalation);
 
-        var sentContent = fakeApi.SentMessages[0].Content;
+        var sentContent = (await store.GetAttentionQueueAsync()).Single().Body;
         Assert.Contains(sentContent, s => s.Contains("https://localhost:5001/goals/abc123"));
     }
 

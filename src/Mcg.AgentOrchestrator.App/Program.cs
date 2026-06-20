@@ -40,7 +40,7 @@ var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.O
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
-var operatorBotToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+var operatorBotToken = OperatorChannelFactory.ResolveBotToken();
 IOperatorChannel operatorChannel;
 if (SkipsStartupOperatorChannel(startupArgs))
 {

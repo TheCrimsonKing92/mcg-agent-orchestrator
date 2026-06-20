@@ -36,6 +36,35 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("inbox-deadbeef1234", listed[0].CorrelationKey);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_raise_is_idempotent_on_correlation_key_while_open")]
+    public async Task RaiseIsIdempotentOnCorrelationKeyWhileOpen()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        var first = await store.RaiseAsync(CollaborationItemType.Decision, "goal-x", "Acceptance failed", "body v1", "corr-dup");
+        var second = await store.RaiseAsync(CollaborationItemType.Decision, "goal-x", "Acceptance failed", "body v2", "corr-dup");
+
+        // No duplicate while one is pending: still ONE item, same id, body refreshed to the latest raise.
+        var listed = await store.ListAsync();
+        Xunit.Assert.Single(listed);
+        Xunit.Assert.Equal(first.Id, second.Id);
+        Xunit.Assert.Equal("body v2", listed[0].Body);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_raise_after_resolve_creates_a_new_item")]
+    public async Task RaiseAfterResolveCreatesNewItem()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        var first = await store.RaiseAsync(CollaborationItemType.Decision, "goal-x", "Issue", "body", "corr-reraise");
+        await store.TryResolveAsync("corr-reraise", "resolved");
+        var second = await store.RaiseAsync(CollaborationItemType.Decision, "goal-x", "Issue again", "body2", "corr-reraise");
+
+        // Idempotency applies only while OPEN; a fresh issue after resolution is legitimately a new item.
+        Xunit.Assert.NotEqual(first.Id, second.Id);
+        Xunit.Assert.Equal(2, (await store.ListAsync()).Count);
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_list_returns_all_items")]
     public async Task ListReturnsAllItems()
     {

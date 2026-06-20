@@ -12,7 +12,8 @@ public sealed record RefinedSpecOpenQuestion(
     string Id,
     string Question,
     string ForkKind,
-    string Status);
+    string Status,
+    string? Answer = null);
 
 public sealed record RefinedSpec(
     string BehavioralContract,

@@ -23,7 +23,12 @@ public sealed record RefinedSpecSnapshot(
 
 public sealed record RefinedSpecDecisionSnapshot(string Question, string Choice, string Rationale);
 
-public sealed record RefinedSpecOpenQuestionSnapshot(string Id, string Question, string ForkKind, string Status);
+public sealed record RefinedSpecOpenQuestionSnapshot(
+    string Id,
+    string Question,
+    string ForkKind,
+    string Status,
+    string? Answer = null);
 
 public sealed record TaskSnapshot(
     string Id,

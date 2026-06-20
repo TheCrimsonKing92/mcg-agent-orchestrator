@@ -16,6 +16,7 @@ public sealed class DiscordCollaborationViewService
     private readonly ulong _forumChannelId;
     private readonly string _stateDirectory;
     private readonly IReadOnlyList<string> _allowedUserIds;
+    private readonly Func<string, string, CancellationToken, Task<bool>>? _resolveClarificationAnswer;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -28,13 +29,43 @@ public sealed class DiscordCollaborationViewService
         IDiscordForumApi api,
         ulong forumChannelId,
         string stateDirectory,
-        IReadOnlyList<string> allowedUserIds)
+        IReadOnlyList<string> allowedUserIds,
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
     {
         _store = store;
         _api = api;
         _forumChannelId = forumChannelId;
         _stateDirectory = stateDirectory;
         _allowedUserIds = allowedUserIds;
+        _resolveClarificationAnswer = resolveClarificationAnswer;
+    }
+
+    public DiscordClarificationAnswerModalRequest? TryBuildAnswerModalRequest(
+        string customId,
+        string userId,
+        out string? errorMessage) =>
+        DiscordInteractionHandler.TryBuildAnswerModalRequest(customId, userId, _allowedUserIds, out errorMessage);
+
+    public async Task<DiscordInteractionResult> ApplyAnswerModalAsync(
+        string modalCustomId,
+        string answer,
+        string userId,
+        string interactionId,
+        CancellationToken cancellationToken = default)
+    {
+        var submit = DiscordInteractionHandler.ProcessAnswerModalSubmit(
+            modalCustomId, answer, userId, interactionId, _allowedUserIds);
+        if (submit.ErrorMessage is not null)
+            return new DiscordInteractionResult(null, false, null, submit.ErrorMessage);
+
+        var resolved = _resolveClarificationAnswer is null
+            ? await _store.TryResolveAsync(submit.CorrelationKey, submit.Answer, cancellationToken)
+            : await _resolveClarificationAnswer(submit.CorrelationKey, submit.Answer, cancellationToken);
+
+        if (!resolved)
+            return new DiscordInteractionResult(null, false, null, $"No open clarification for '{submit.CorrelationKey}'.");
+
+        return await RefreshResolvedGoalMessageAsync(submit.CorrelationKey, submit.UserId, cancellationToken);
     }
 
     public async Task ReconcileAsync(CancellationToken cancellationToken = default)
@@ -81,6 +112,15 @@ public sealed class DiscordCollaborationViewService
         var resolution = result.Decision.Command;
         await _store.TryResolveAsync(correlationKey, resolution, cancellationToken);
 
+        var refresh = await RefreshResolvedGoalMessageAsync(correlationKey, userId, cancellationToken);
+        return refresh.ErrorMessage is null ? result : refresh;
+    }
+
+    private async Task<DiscordInteractionResult> RefreshResolvedGoalMessageAsync(
+        string correlationKey,
+        string userId,
+        CancellationToken cancellationToken)
+    {
         var resolvedItem = (await _store.ListAsync(null, cancellationToken))
             .FirstOrDefault(candidate => candidate.CorrelationKey == correlationKey);
         if (resolvedItem is null)
@@ -109,7 +149,11 @@ public sealed class DiscordCollaborationViewService
             }
         }
 
-        return result;
+        return new DiscordInteractionResult(
+            new OperatorDecision(correlationKey, resolvedItem.Resolution ?? "resolved", null, $"discord:{userId}", correlationKey),
+            false,
+            null,
+            null);
     }
 
     private async Task UpsertGoalMessageAsync(
@@ -144,6 +188,11 @@ public sealed class DiscordCollaborationViewService
         items
             .OrderBy(item => CollaborationItemLifecycle.AttentionPriority(item.Type))
             .ThenBy(item => item.RaisedAt)
+            // Collapse duplicate escalations: a conductor that re-raises the same goal+reason each tick
+            // produces many items sharing one correlation key — which would render as duplicate Discord
+            // button customIds (Discord rejects with 50035) and a wall of repeated text. Show one per
+            // key; key-less items stay distinct by id.
+            .DistinctBy(item => string.IsNullOrWhiteSpace(item.CorrelationKey) ? item.Id : item.CorrelationKey)
             .ToList();
 
     private static string GoalLabel(string goalKey) =>
@@ -193,7 +242,9 @@ public sealed class DiscordCollaborationViewService
                 CollaborationItemType.Clarification => ("Answer", "answered"),
                 _ => ("Resolve", "resolved")
             };
-            var customId = DiscordInteractionHandler.BuildDirectCustomId(item.CorrelationKey, resolution);
+            var customId = item.Type == CollaborationItemType.Clarification
+                ? DiscordInteractionHandler.BuildAnswerCustomId(item.CorrelationKey)
+                : DiscordInteractionHandler.BuildDirectCustomId(item.CorrelationKey, resolution);
             buttons.Add(new DiscordButtonDefinition($"{verb} #{i + 1}", customId, DiscordButtonStyle.Success));
         }
 

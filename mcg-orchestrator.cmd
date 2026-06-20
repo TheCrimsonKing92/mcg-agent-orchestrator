@@ -44,7 +44,15 @@ if %BUILD_EXIT% neq 0 goto build_failed
 del "%BUILD_LOG%" 2>nul
 
 :run_app
-dotnet "%APP_DLL%" %*
+:: Run from a per-build ISOLATED copy of the binary, not the in-tree output. A live run then holds its own
+:: copy (under %TEMP%\mcg-run\<build-hash>), leaving the in-tree binary free to rebuild while it runs -- so
+:: builds and real runs stop interfering. Content-addressed by the App.dll hash: identical builds reuse one
+:: copy, a new build gets a fresh one, and copies unused for 7 days are pruned (a live copy's dll is locked,
+:: so it survives the prune). Falls back to the in-tree binary if the isolation step fails.
+set "RUNDIR="
+for /f "usebackq delims=" %%R in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\resolve-run-dir.ps1" "%APP_DLL%"`) do set "RUNDIR=%%R"
+if not defined RUNDIR set "RUNDIR=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0"
+dotnet "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %*
 exit /b %ERRORLEVEL%
 
 :build_failed
