@@ -438,7 +438,7 @@ public sealed class ConductorBatchLoopTests
                     onlyGoalId: watchedGoal.Id.Value);
 
             Assert.True(summary.StopRequested);
-            Assert.Empty(killed);
+            Xunit.Assert.Empty(killed);
             Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(watchedGoal.Id, watchedTask.Id).Status);
             Assert.False(kernel.GetTask(watchedGoal.Id, watchedTask.Id).LastProcess!.WasCancelled);
             Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);
