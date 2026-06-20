@@ -1794,3 +1794,17 @@ Goal ca4e2218: The operator-listen Discord listener exits on a transient Discord
 
 - Operator gate: Developer: pass; DiscordGatewayTests 25/25, full Infrastructure.Tests 964/964 (exit 0); Tester: pass; DiscordGatewayTests 25/25 (transient retry + fatal exit), Infrastructure.Tests 964/964 (exit 0); Reviewer: pass; Developer+Tester both confirmed DiscordGatewayTests 25/25, Infrastructure.Tests 964/964, exit 0 (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review of focused resilience change across 3 files - classification correctness, backoff math, test coverage gaps, and residual risk are exactly what Sonnet handles well; no overkill.
+
+## 2026-06-20 - # Remove the legacy JSON file-store apparatus and the backup/rollback/vacuum ...
+
+Goal 8f44b544: # Remove the legacy JSON file-store apparatus and the backup/rollback/vacuum commands  ## Why State was consolidated .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none (researcher role is read-only; removal committed at 2e20abc)). Developer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 2e20abc (verified via ancestry to current HEAD a9c2b84)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Reviewer role — no code changes)). Acceptance passed.
+
+- Operator gate: Researcher: not-run (build blocked by file-lock contention on stale process) (exit 0); Tester: 968 passed, 0 failed (Infrastructure.Tests) (exit 0); Reviewer: 968 passed, 0 failed (Tester evidence); build 0 errors (Tester evidence) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - evidence review + grep verification - straightforward symbol-removal audit with direct grep validation; no implementation work
+
+## 2026-06-20 - testhost Windows Firewall prompts halt unattended dotnet test runs - the docu...
+
+Goal 0e404fa8: testhost Windows Firewall prompts halt unattended dotnet test runs - the documented #1 cause of overnight worker hang.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit cea2556). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit cea2556). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run (planner role; no implementation permitted) (exit 0); Researcher: not-run (researcher role; implementation verification belongs to developer/tester) (exit 0); Developer: not-run; per new worker-context prohibition I did not run dotnet build/test. `git diff --check` attempted twice but sandbox launch failed with CreateProcessAsUserW 1312. (exit 0); Tester: pass - FirewallSetupCommandTests 2/2, WorkerContextArtifactsVerificationTests 1/1, Full Infrastructure.Tests 971/971 (exit 0); Reviewer: not-run (source review only; acceptance gate must run Infrastructure.Tests) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review / evidence verification - bounded source reading task with deterministic acceptance criteria; no ambiguity required deeper reasoning.
