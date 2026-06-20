@@ -1941,6 +1941,19 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
             var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+            if (merge is { FastForwarded: false })
+            {
+                // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
+                // onto main and retry the ff instead of punting the merge to the operator. A rebase
+                // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
+                var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+                Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
+                if (rebase.UpdatedBranch)
+                {
+                    merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+                }
+            }
+
             if (merge is null)
             {
                 return new AcceptanceMergeCommitResult(true, null);
