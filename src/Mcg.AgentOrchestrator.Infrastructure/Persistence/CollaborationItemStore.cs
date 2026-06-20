@@ -90,26 +90,60 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         string? correlationKey = null,
         CancellationToken cancellationToken = default)
     {
-        var id = Guid.NewGuid().ToString("n");
-        var raisedAt = DateTimeOffset.UtcNow;
-        var item = new CollaborationItem(
-            id, type, goalId, CollaborationItemStatus.Raised,
-            subject, body, correlationKey, raisedAt, null, null);
-
         await using var conn = OpenConnection();
         await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
         await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
         try
         {
+            // Idempotent on correlation key: if an OPEN (non-terminal) item already exists for this key,
+            // refresh its subject/body and return it rather than inserting a duplicate. Without this, a
+            // conductor that re-escalates the same goal+reason each tick piles up identical items
+            // (observed: 12 copies of one landing escalation), which also collide as duplicate Discord
+            // button customIds. Raising "another one" while one is pending is the bug — not the rendering.
+            if (!string.IsNullOrWhiteSpace(correlationKey))
+            {
+                var existing = await TryReadOpenItemByCorrelationKeyAsync(conn, correlationKey!, cancellationToken);
+                if (existing is not null)
+                {
+                    await using var refresh = conn.CreateCommand();
+                    refresh.CommandText = "UPDATE collaboration_items SET subject = $subject, body = $body WHERE id = $id";
+                    refresh.Parameters.AddWithValue("$subject", subject);
+                    refresh.Parameters.AddWithValue("$body", body);
+                    refresh.Parameters.AddWithValue("$id", existing.Id);
+                    await refresh.ExecuteNonQueryAsync(cancellationToken);
+                    await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                    return existing with { Subject = subject, Body = body };
+                }
+            }
+
+            var item = new CollaborationItem(
+                Guid.NewGuid().ToString("n"), type, goalId, CollaborationItemStatus.Raised,
+                subject, body, correlationKey, DateTimeOffset.UtcNow, null, null);
             await InsertItemAsync(conn, item, cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            return item;
         }
         catch
         {
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
             throw;
         }
-        return item;
+    }
+
+    private async Task<CollaborationItem?> TryReadOpenItemByCorrelationKeyAsync(
+        Microsoft.Data.Sqlite.SqliteConnection conn, string correlationKey, CancellationToken cancellationToken)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution
+            FROM collaboration_items
+            WHERE correlation_key = $key AND status NOT IN ('Resolved', 'Closed')
+            ORDER BY raised_at ASC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$key", correlationKey);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadItem(reader) : null;
     }
 
     public async Task<bool> TryResolveAsync(

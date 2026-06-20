@@ -144,6 +144,11 @@ public sealed class DiscordCollaborationViewService
         items
             .OrderBy(item => CollaborationItemLifecycle.AttentionPriority(item.Type))
             .ThenBy(item => item.RaisedAt)
+            // Collapse duplicate escalations: a conductor that re-raises the same goal+reason each tick
+            // produces many items sharing one correlation key — which would render as duplicate Discord
+            // button customIds (Discord rejects with 50035) and a wall of repeated text. Show one per
+            // key; key-less items stay distinct by id.
+            .DistinctBy(item => string.IsNullOrWhiteSpace(item.CorrelationKey) ? item.Id : item.CorrelationKey)
             .ToList();
 
     private static string GoalLabel(string goalKey) =>
