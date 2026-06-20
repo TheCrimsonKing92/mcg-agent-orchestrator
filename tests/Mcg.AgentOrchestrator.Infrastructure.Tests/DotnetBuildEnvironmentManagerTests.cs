@@ -2,6 +2,15 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+// These tests mutate the process-global MCG_DOTNET_ISOLATED_ROOT env var (via EnvVarScope). xUnit
+// runs distinct test classes in parallel, so without a shared collection they clobber each other's
+// root and flake. Pinning every env-var-mutating class to one non-parallel collection serializes them.
+[Xunit.CollectionDefinition("IsolatedDotnetRoot", DisableParallelization = true)]
+public sealed class IsolatedDotnetRootCollection
+{
+}
+
+[Xunit.Collection("IsolatedDotnetRoot")]
 public sealed class DotnetBuildEnvironmentManagerTests
 {
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]
@@ -90,7 +99,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_inspects_and_cleans_orphaned_goal_lease")]
     public void DotnetBuildEnvironmentManagerInspectsAndCleansOrphanedGoalLease()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var envScope = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("0badcafe0badcafe0badcafe0badcafe");
         try
         {
@@ -171,7 +180,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
                         $"{configuration.ToLowerInvariant()}_net10.0",
                         "testhost.exe"));
 
-                    Assert.Contains(derivedTesthostPath, firewallPaths);
+                    Assert.True(firewallPaths.Contains(derivedTesthostPath));
                 }
             }
         }
@@ -189,7 +198,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             }
         }
 
-        Assert.InRange(index, 0, arguments.Count - 2);
+        Assert.True(index >= 0 && index <= arguments.Count - 2);
         return arguments[index + 1];
     }
 
