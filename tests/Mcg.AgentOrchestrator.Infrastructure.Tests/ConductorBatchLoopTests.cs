@@ -329,6 +329,103 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_readmits_awaiting_clarification_goal_when_blocker_clears")]
+    public void BatchLoopReadmitsAwaitingClarificationGoalWhenBlockerClears()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var hasOpenClarification = true;
+        var workspaceCreates = 0;
+        var escalations = 0;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(HasOpenClarification: hasOpenClarification),
+            createWorkspace: _ =>
+            {
+                workspaceCreates++;
+                return "C:\\goal";
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                hasOpenClarification = false;
+                return false;
+            });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, escalations);
+        Assert.Equal(1, workspaceCreates);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_keeps_unresolved_clarification_set_aside_without_reescalating")]
+    public void BatchLoopKeepsUnresolvedClarificationSetAsideWithoutReescalating()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var blockedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "blocked goal");
+        var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active goal");
+        var workspaces = new HashSet<string>(StringComparer.Ordinal);
+        var blockedClarificationPolls = 0;
+        var escalations = 0;
+        var dispatches = 0;
+
+        var driver = MakeDriver(
+            getFacts: goal =>
+            {
+                if (goal.Id == blockedGoal.Id)
+                {
+                    blockedClarificationPolls++;
+                    return new GoalLifecycleFacts(HasOpenClarification: true);
+                }
+
+                return new GoalLifecycleFacts(WorkspaceExists: workspaces.Contains(goal.Id.Value));
+            },
+            createWorkspace: goal =>
+            {
+                workspaces.Add(goal.Id.Value);
+                return "C:\\active";
+            },
+            dispatchAndStart: goal =>
+            {
+                if (goal.Id == activeGoal.Id)
+                {
+                    var task = goal.Tasks.Single();
+                    kernel.RecordTaskDispatch(goal.Id, task.Id,
+                        new TaskDispatchRecord("test-worker", "test.exe", "C:\\active", DateTimeOffset.UtcNow));
+                    kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+                        new TaskProcessRecord(123, "test.exe", "C:\\active", "out.log", "err.log", "exit.txt",
+                            DateTimeOffset.UtcNow, null, null));
+                    dispatches++;
+                }
+
+                return DispatchStartOutcome.Started();
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, escalations);
+        Assert.Equal(1, dispatches);
+        Assert.True(blockedClarificationPolls >= 3);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_escalated_goal_reaps_only_its_owned_running_dispatches")]
     public void BatchLoopEscalatedGoalReapsOnlyItsOwnedRunningDispatches()
     {

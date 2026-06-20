@@ -280,7 +280,7 @@ internal sealed class ConductorDriver
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
 
-        var facts = _getFacts(goal);
+        var facts = GetFacts(goal);
         var state = GoalLifecycle.ResolveState(goal, facts);
 
         if (state == GoalLifecycleState.CleanedUp)
@@ -346,6 +346,8 @@ internal sealed class ConductorDriver
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
     }
+
+    internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
     private ConductorAdvanceResult ExecuteCreateWorkspace(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
