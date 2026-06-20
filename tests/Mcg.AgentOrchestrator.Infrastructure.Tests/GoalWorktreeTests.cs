@@ -1131,6 +1131,49 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_recover_resets_cancelled_tasks_without_disturbing_completed_or_running_tasks")]
+    public void CliRecoverResetsCancelledTasksWithoutDisturbingCompletedOrRunningTasks()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelledOne = new TaskSpec(TaskId.New(), "Cancelled one", AgentRole.Planner);
+            var cancelledTwo = new TaskSpec(TaskId.New(), "Cancelled two", AgentRole.Researcher);
+            var completed = new TaskSpec(TaskId.New(), "Completed", AgentRole.Developer);
+            var running = new TaskSpec(TaskId.New(), "Running", AgentRole.Tester);
+            var goal = kernel.CreateGoal("Recover cancelled tasks", [cancelledOne, cancelledTwo, completed, running]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+
+            kernel.ReportTaskProgress(goal.Id, completed.Id, WorkTaskStatus.Completed, "Already done.");
+            RecordCancelledProcess(kernel, goal.Id, cancelledOne.Id, 111, repo);
+            RecordCancelledProcess(kernel, goal.Id, cancelledTwo.Id, 222, repo);
+            var runningStartedAt = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                running.Id,
+                new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, runningStartedAt));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                running.Id,
+                new TaskProcessRecord(333, "codex exec prompt.md", repo, "out.log", "err.log", "exit.txt", runningStartedAt, null, null));
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "retry cancelled work"], context));
+
+            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledOne.Id).Status);
+            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledTwo.Id).Status);
+            Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, completed.Id).Status);
+            var runningTask = kernel.GetTask(goal.Id, running.Id);
+            Assert.Equal(WorkTaskStatus.Running, runningTask.Status);
+            Assert.True(runningTask.LastProcess is { IsRunning: true });
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_safe_auto_blocks_merge")]
     public void CliAcceptanceSafeAutoBlocksMerge()
     {
@@ -1939,6 +1982,28 @@ public sealed class GoalWorktreeTests
         {
             AcceptanceVerifier = fakeVerifier
         };
+    }
+
+    private static void RecordCancelledProcess(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        int processId,
+        string workingDirectory)
+    {
+        var startedAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        kernel.RecordTaskDispatch(
+            goalId,
+            taskId,
+            new TaskDispatchRecord("codex-cli", "codex exec prompt.md", workingDirectory, startedAt));
+        kernel.RecordTaskProcessStarted(
+            goalId,
+            taskId,
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, null, null));
+        kernel.RecordTaskProcessCancelled(
+            goalId,
+            taskId,
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, DateTimeOffset.UtcNow, null, WasCancelled: true));
     }
 
     private sealed class FakeAcceptanceVerifier(

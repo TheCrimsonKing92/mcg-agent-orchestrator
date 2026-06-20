@@ -2151,13 +2151,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
     foreach (var task in goal.Tasks)
     {
-        if (task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled ||
-            task.LastProcess is { IsRunning: true })
+        if (task.Status is WorkTaskStatus.Completed || task.LastProcess is { IsRunning: true })
         {
             continue;
         }
 
-        var stuck = task.Status is WorkTaskStatus.Failed or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman ||
+        var stuck = task.Status is WorkTaskStatus.Failed or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Cancelled ||
             task.LastVerification is { Succeeded: false } ||
             task.SubscriptionRetryAfter is not null;
         if (!stuck)
@@ -2165,8 +2164,8 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        // RetryTask refuses Running/WaitingForHuman; normalize to Failed first (the dance's middle step).
-        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
+        // RetryTask refuses Running/WaitingForHuman/Cancelled; normalize to Failed first (the dance's middle step).
+        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Cancelled)
         {
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
