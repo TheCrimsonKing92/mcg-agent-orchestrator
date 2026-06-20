@@ -328,6 +328,44 @@ public sealed class StatePersistenceAndPerformanceTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_mixed_concurrent_writers_do_not_throw_locked")]
+    public async Task SqliteOrchestratorStateRepositoryMixedConcurrentWritersDoNotThrowLocked()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var repository = new SqliteOrchestratorStateRepository(path);
+        await repository.SaveAsync(new AgentOrchestratorKernel());
+
+        // Mirrors the conduct --loop crash: per-tick SaveAsync checkpoints racing goal-create
+        // TransactAsync mutations. The fix is that contention serializes/retries instead of throwing
+        // an unhandled SQLITE_BUSY "database is locked" that would kill the loop.
+        var writers = new List<Task>();
+        for (var i = 0; i < 6; i++)
+        {
+            writers.Add(Task.Run(async () => await repository.SaveAsync(await repository.LoadAsync())));
+            var index = i;
+            writers.Add(Task.Run(() => repository.TransactAsync(
+                (kernel, _) =>
+                {
+                    kernel.CreateGoal($"Concurrent create {index}");
+                    return Task.FromResult((true, true));
+                })));
+        }
+
+        // Throws if any writer surfaced an unhandled lock error; completion is the core assertion.
+        await Task.WhenAll(writers);
+
+        // The repository is still functional and consistent after the contention storm.
+        await repository.TransactAsync((kernel, _) =>
+        {
+            kernel.CreateGoal("post-contention write");
+            return Task.FromResult((true, true));
+        });
+        var restored = await repository.LoadAsync();
+        var objectives = restored.Goals.Select(goal => goal.Objective).ToList();
+        Assert.True(objectives.Contains("post-contention write"));
+    }
+
     [Xunit.Fact(DisplayName = "Dashboard_and_state_persistence_have_reasonable_smoke_performance")]
     public async Task DashboardAndStatePersistenceHaveReasonableSmokePerformance()
     {
