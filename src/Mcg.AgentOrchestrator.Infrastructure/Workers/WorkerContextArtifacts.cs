@@ -262,6 +262,17 @@ public static class WorkerContextArtifacts
             task.Description
         };
 
+        if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
+        {
+            lines.InsertRange(6,
+            [
+                string.Empty,
+                "## DO NOT RUN",
+                "- Do not run `dotnet test` or `dotnet build` yourself.",
+                "- The orchestrator acceptance gate performs all build/test verification from stable build slots; report implementation evidence and rely on that gate."
+            ]);
+        }
+
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
             lines.Add(string.Empty);

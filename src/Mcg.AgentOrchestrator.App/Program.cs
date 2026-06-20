@@ -82,6 +82,10 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
         CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
         return 0;
     }
+    catch (CliExitException ex)
+    {
+        return ex.ExitCode;
+    }
     catch (Exception ex)
     {
         Console.Error.WriteLine($"Error: {ex.Message}");
@@ -99,6 +103,10 @@ if (startupArgs.Count > 0)
     {
         CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
         return 0;
+    }
+    catch (CliExitException ex)
+    {
+        return ex.ExitCode;
     }
     catch (Exception ex)
     {

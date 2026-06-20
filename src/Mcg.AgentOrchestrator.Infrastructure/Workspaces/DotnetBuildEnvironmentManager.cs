@@ -27,6 +27,12 @@ public sealed record DotnetBuildLeaseStatus(
     bool CanCleanup,
     string Detail);
 
+public sealed record DotnetTesthostFirewallPath(
+    int SlotIndex,
+    string Project,
+    string Configuration,
+    string Path);
+
 public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
@@ -76,6 +82,33 @@ public static class DotnetBuildEnvironmentManager
     public static string GoalArtifactsPath(GoalId goalId)
     {
         return StableSlotArtifactsPath(StableSlotName(goalId));
+    }
+
+    public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTesthostFirewallPaths()
+    {
+        DotnetTesthostFirewallPath[] paths = new DotnetTesthostFirewallPath[StableSlotCount * 4];
+        var index = 0;
+        for (var slot = 0; slot < StableSlotCount; slot++)
+        {
+            foreach (var project in TesthostFirewallProjects)
+            {
+                foreach (var configuration in TesthostFirewallConfigurations)
+                {
+                    paths[index++] = new DotnetTesthostFirewallPath(
+                        slot,
+                        project.RuleProject,
+                        configuration,
+                        Path.Combine(
+                            StableSlotArtifactsPath($"slot-{slot}"),
+                            "bin",
+                            project.ArtifactProject,
+                            $"{configuration.ToLowerInvariant()}_net10.0",
+                            "testhost.exe"));
+                }
+            }
+        }
+
+        return paths;
     }
 
     public static bool TryRotateGoalLease(GoalId goalId, string reason)
@@ -312,6 +345,14 @@ public static class DotnetBuildEnvironmentManager
     {
         return Path.Combine(StableSlotRoot(slotName), "lease.execution.lock");
     }
+
+    private static readonly (string RuleProject, string ArtifactProject)[] TesthostFirewallProjects =
+    [
+        ("Core", "Mcg.AgentOrchestrator.Core.Tests"),
+        ("Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.Tests")
+    ];
+
+    private static readonly string[] TesthostFirewallConfigurations = ["Debug", "Release"];
 
     private static void CleanArtifactsDirectory(string artifactsPath)
     {

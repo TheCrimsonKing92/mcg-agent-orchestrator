@@ -109,7 +109,8 @@ internal static class CliPersistentStateRunner
             // contending on the per-tick write transaction. A future backlog command that DOES touch
             // the kernel must NOT be listed here.
             "backlog-list" or "backlog-add" or "backlog-show" or "backlog-close" or
-            "backlog-reopen" or "backlog-import" or "backlog-view" => true,
+            "backlog-reopen" or "backlog-import" or "backlog-view" or
+            "firewall-setup" => true,
             _ => false,
         };
     }
