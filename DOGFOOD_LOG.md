@@ -1773,3 +1773,10 @@ Goal fec30f89: # Close the meta-planner clarification loop in Discord: answer vi
 
 - Operator gate: Researcher: not-run (research task; test evidence read from existing test files) (exit 0); Developer: focused pass, 26/26. Full suite: Core pass 364/364; Infrastructure 955/960 pass, 5 existing worktree/git tests fail with git ref lock permission/rebase failures. NuGet vulnerability cache warning also present. (exit 0); Tester: Focused 26/26 PASS. Full suite: Core 364/364 PASS; Infrastructure 955/960 PASS (5 pre-existing Windows git-permission test failures) (exit 0)
 - Model fit: Anthropic/claude-haiku-4-5 - adequate - verification of pre-completed Discord/refinement implementation with test review - Reading committed code, spot-checking key methods, and running test suite is within Haiku scope; no research or complex analysis needed
+
+## 2026-06-20 - The meta-planner's spec-refiner can only use the direct API / Ollama path tod...
+
+Goal a856c620: The meta-planner's spec-refiner can only use the direct API / Ollama path today; it cannot use the subscription CLIs .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit 5337af4). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run (exit 0); Developer: pass - focused 62/62; full Infrastructure.Tests 962/962 (exit 0); Tester: pass - focused GoalRefinement 24/24, full Infrastructure.Tests 962/962 (exit 0); Reviewer: pass - 962/962 Infrastructure.Tests (Tester verified), 24/24 GoalRefinement, 2 new subscription tests (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review / SDLC Reviewer role - reading diffs, mapping implementation to spec, identifying test gaps and risk; no implementation needed.
