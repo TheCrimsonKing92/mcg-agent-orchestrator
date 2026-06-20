@@ -1780,3 +1780,10 @@ Goal a856c620: The meta-planner's spec-refiner can only use the direct API / Oll
 
 - Operator gate: Researcher: not-run (exit 0); Developer: pass - focused 62/62; full Infrastructure.Tests 962/962 (exit 0); Tester: pass - focused GoalRefinement 24/24, full Infrastructure.Tests 962/962 (exit 0); Reviewer: pass - 962/962 Infrastructure.Tests (Tester verified), 24/24 GoalRefinement, 2 new subscription tests (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review / SDLC Reviewer role - reading diffs, mapping implementation to spec, identifying test gaps and risk; no implementation needed.
+
+## 2026-06-20 - The shared SubscriptionCliCompleter (src/Mcg
+
+Goal 6fb30947: The shared SubscriptionCliCompleter (src/Mcg.AgentOrchestrator.App/Orchestration/SubscriptionCliCompleter.cs) hardcod.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit 834141b). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 834141b (Fix claude subscription completion mode)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass; focused 63/63, full Infrastructure.Tests 963/963 (exit 0); Tester: Pass - 63 tests passed in targeted filter; Pass - 963 tests passed in full Infrastructure.Tests suite; no regressions (exit 0); Reviewer: 63 passed (GoalRefinementTests|SemanticAcceptanceTests, Tester-reported); fresh run blocked by permission prompt (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review with diff inspection and test coverage analysis - read-only review with no synthesis gap.
