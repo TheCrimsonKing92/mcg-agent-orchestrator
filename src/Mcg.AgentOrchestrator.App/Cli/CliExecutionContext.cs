@@ -12,7 +12,8 @@ internal sealed class CliExecutionContext(
     Goal? currentGoal,
     IOperatorChannel? channel = null,
     Func<AgentOrchestratorKernel>? reloadKernel = null,
-    Action<AgentOrchestratorKernel>? persistKernel = null)
+    Action<AgentOrchestratorKernel>? persistKernel = null,
+    Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -41,5 +42,18 @@ public Goal? CurrentGoal { get; set; } = currentGoal;
 
 public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier();
 
+public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
+    finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
+
 public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
 }
+
+internal sealed record AcceptanceMergeCommitRequest(
+    GoalId GoalId,
+    string ExpectedGoalFingerprint,
+    string? TestedWorktreeHead,
+    Func<AcceptanceMergeCommitResult> Merge);
+
+internal sealed record AcceptanceMergeCommitResult(
+    bool FastForwarded,
+    string? Message);
