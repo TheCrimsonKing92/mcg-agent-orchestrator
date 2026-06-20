@@ -2771,6 +2771,31 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_with_worker_result_passes")]
+    public void BackgroundDispatchRunnerTesterCleanDispatchWithWorkerResultPasses()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "structured verification of behavioral contract\nconfidence: high\nblockers: none\nEND_WORKER_RESULT",
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+
+    // A verify-only Tester on a clean worktree that reported via WORKER_RESULT (no "N passed" line, and
+    // a non-zero exit that is unreliable under the sandbox) must NOT be false-failed for lacking
+    // file-change evidence — it did exactly its job, and the acceptance suite re-runs the real tests.
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.False(task.LastVerification!.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_without_passing_evidence_fails")]
     public void BackgroundDispatchRunnerTesterCleanDispatchWithoutPassingEvidenceFails()
 {

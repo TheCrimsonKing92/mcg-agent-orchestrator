@@ -25,6 +25,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("build-lease-cleanup", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("firewall-setup", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("drain-goals", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||

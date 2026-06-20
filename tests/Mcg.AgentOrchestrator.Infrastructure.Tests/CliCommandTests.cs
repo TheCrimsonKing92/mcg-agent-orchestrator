@@ -3717,6 +3717,18 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(["dispatch", goalPrefix, "1", "local", "dotnet test --no-build"], dispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_recover_normalizes_one_shot_goal_and_multi_word_note")]
+    public void CliRecoverNormalizesOneShotGoalAndMultiWordNote()
+    {
+        // Regression: recover fell through to the default that collapsed `<goal> <note>` into a single
+        // arg, so HandleRecover saw < 3 parts and rejected every one-shot invocation via the launcher.
+        var single = CliArgumentParser.NormalizeArgs(["recover", "abc123ef", "reconcile"]);
+        var multi = CliArgumentParser.NormalizeArgs(["recover", "abc123ef", "reconcile", "after", "crash"]);
+
+        Xunit.Assert.Equal(["recover", "abc123ef", "reconcile"], single);
+        Xunit.Assert.Equal(["recover", "abc123ef", "reconcile after crash"], multi);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_task_commands_normalize_one_shot_legacy_task_notes")]
     public void CliTaskCommandsNormalizeOneShotLegacyTaskNotes()
     {

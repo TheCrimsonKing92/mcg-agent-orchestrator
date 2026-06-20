@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("IsolatedDotnetRoot")]
 public sealed class FirewallSetupCommandTests
 {
     [Xunit.Fact(DisplayName = "FirewallSetupCommand_computes_stable_slot_testhost_rules_idempotently")]
