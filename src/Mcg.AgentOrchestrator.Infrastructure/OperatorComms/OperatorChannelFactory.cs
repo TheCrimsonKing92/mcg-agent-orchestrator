@@ -15,6 +15,21 @@ public static class OperatorChannelFactory
         }
     }
 
+    // Resolves the Discord bot token from the process environment, falling back on Windows to the
+    // persistent User-scoped variable. The harness/process tree may have started before the operator
+    // set it, so it's absent from the process env yet present in the User registry; this lets a bare
+    // `operator-listen` find the token without an inline env-assignment prefix (which trips approvals).
+    public static string? ResolveBotToken()
+    {
+        var token = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+        if (string.IsNullOrWhiteSpace(token) && OperatingSystem.IsWindows())
+        {
+            token = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN", EnvironmentVariableTarget.User);
+        }
+
+        return token;
+    }
+
     public static IOperatorChannel Create(
         OperatorChannelCatalog catalog,
         string? botToken,

@@ -127,7 +127,7 @@ internal static partial class CliCommandHandlers
             case "operator-listen":
             {
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var botToken = OperatorChannelFactory.ResolveBotToken();
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
                 var runtime = OperatorChannelFactory.CreateDiscordRuntime(
                     catalog,
@@ -342,7 +342,7 @@ internal static partial class CliCommandHandlers
             case "show":
             {
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var botToken = OperatorChannelFactory.ResolveBotToken();
                 Console.WriteLine($"Operator channel: type={catalog.ChannelType}");
                 Console.WriteLine($"  forumChannelId: {catalog.ForumChannelId ?? "(none)"}");
                 Console.WriteLine($"  progressThreadId: {catalog.ProgressThreadId ?? "(none)"}");
@@ -366,7 +366,7 @@ internal static partial class CliCommandHandlers
                 }
 
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var botToken = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+                var botToken = OperatorChannelFactory.ResolveBotToken();
                 var channel = OperatorChannelFactory.Create(catalog, botToken, context.Workspace.OrchestratorDirectory);
                 OperatorChannelFactory.SendTestEscalationAsync(channel, Console.Out).GetAwaiter().GetResult();
                 return false;
