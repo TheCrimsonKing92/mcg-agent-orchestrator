@@ -621,7 +621,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var loopReaper = new BackgroundDispatchRunner();
                 var loopSummary = new ConductorBatchLoop(
                     reconcileSweep,
-                    (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                    (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
@@ -667,7 +669,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchReaper = new BackgroundDispatchRunner();
                 var watchSummary = new ConductorBatchLoop(
                     watchSweep,
-                    (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id)).Run(
+                    (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
+                    (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
+                    wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);

@@ -398,8 +398,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_stop_reaps_watched_goal_running_dispatch")]
-    public void BatchLoopStopReapsWatchedGoalRunningDispatch()
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_detaches_watched_goal_running_dispatch")]
+    public void BatchLoopStopDetachesWatchedGoalRunningDispatch()
     {
         var kernel = new AgentOrchestratorKernel();
         var watchedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "watched goal");
@@ -420,19 +420,17 @@ public sealed class ConductorBatchLoopTests
                 now, null, null, OwnedProcessIds: [555]));
 
         var killed = new List<int>();
-        var runner = new BackgroundDispatchRunner(
-            isStillRunning: _ => false,
-            tryKillOwnedProcess: pid =>
-            {
-                killed.Add(pid);
-                return true;
-            });
+        var runner = new BackgroundDispatchRunner(tryKillOwnedProcess: pid =>
+        {
+            killed.Add(pid);
+            return true;
+        });
         var stopFile = ExistingStopPath();
 
         try
         {
             var summary = new ConductorBatchLoop(
-                reapGoalRunningDispatches: (loopKernel, goal) => runner.CancelRunningProcessesForGoal(loopKernel, goal.Id)).Run(
+                detachGoalRunningDispatches: (loopKernel, goal) => runner.DetachRunningProcessesForGoal(loopKernel, goal.Id)).Run(
                     kernel,
                     MakeDriver(),
                     ConductorAutonomyPolicy.Conservative,
@@ -440,14 +438,135 @@ public sealed class ConductorBatchLoopTests
                     onlyGoalId: watchedGoal.Id.Value);
 
             Assert.True(summary.StopRequested);
-            Xunit.Assert.Equal([444], killed);
-            Assert.True(kernel.GetTask(watchedGoal.Id, watchedTask.Id).LastProcess!.WasCancelled);
+            Assert.Empty(killed);
+            Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(watchedGoal.Id, watchedTask.Id).Status);
+            Assert.False(kernel.GetTask(watchedGoal.Id, watchedTask.Id).LastProcess!.WasCancelled);
             Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);
         }
         finally
         {
             File.Delete(stopFile);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_detached_orphan_running_task_is_requeued_and_dispatched")]
+    public void BatchLoopStopDetachedOrphanRunningTaskIsRequeuedAndDispatched()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "interrupted goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("test-worker", "first.exe", "C:\\goal", now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(444, "first.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [444]));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        var stopFile = ExistingStopPath();
+        try
+        {
+            new ConductorBatchLoop(
+                detachGoalRunningDispatches: (loopKernel, loopGoal) => runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                    kernel,
+                    MakeDriver(),
+                    ConductorAutonomyPolicy.Conservative,
+                    stopFile,
+                    onlyGoalId: goal.Id.Value);
+        }
+        finally
+        {
+            File.Delete(stopFile);
+        }
+
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var ready = g.Tasks.Single(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, ready.Id,
+                    new TaskDispatchRecord("test-worker", "second.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, ready.Id,
+                    new TaskProcessRecord(777, "second.exe", "C:\\goal", "out2.log", "err2.log", "exit2.txt",
+                        DateTimeOffset.UtcNow, null, null, OwnedProcessIds: [777]));
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop(
+            recoverInterruptedDispatches: loopKernel => runner.RequeueInterruptedDispatches(loopKernel)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, dispatches);
+        var recoveredTask = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Running, recoveredTask.Status);
+        Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_prior_cancelled_sdlc_task_is_requeued_before_ready_batch")]
+    public void BatchLoopPriorCancelledSdlcTaskIsRequeuedBeforeReadyBatch()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("five stage goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var planner = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Planner);
+        var researcher = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Researcher);
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Planner done.");
+        kernel.ReportTaskProgress(goal.Id, researcher.Id, WorkTaskStatus.Completed, "Researcher done.");
+        kernel.RecordTaskDispatch(goal.Id, developer.Id,
+            new TaskDispatchRecord("test-worker", "dev.exe", "C:\\goal", now));
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id,
+            new TaskProcessRecord(444, "dev.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [444]));
+        new BackgroundDispatchRunner(isStillRunning: _ => false, tryKillOwnedProcess: _ => true)
+            .CancelRunningProcessesForGoal(kernel, goal.Id);
+
+        Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, developer.Id).Status);
+
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var ready = g.Tasks.Single(t => t.Status == WorkTaskStatus.Assigned && t.RequiredRole == AgentRole.Developer);
+                kernel.RecordTaskDispatch(g.Id, ready.Id,
+                    new TaskDispatchRecord("test-worker", "dev-redo.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, ready.Id,
+                    new TaskProcessRecord(777, "dev-redo.exe", "C:\\goal", "out2.log", "err2.log", "exit2.txt",
+                        DateTimeOffset.UtcNow, null, null, OwnedProcessIds: [777]));
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+
+        var summary = new ConductorBatchLoop(
+            recoverInterruptedDispatches: loopKernel => runner.RequeueInterruptedDispatches(loopKernel)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(1, dispatches);
+        var recoveredDeveloper = kernel.GetTask(goal.Id, developer.Id);
+        Assert.Equal(WorkTaskStatus.Running, recoveredDeveloper.Status);
+        Assert.Equal(777, recoveredDeveloper.LastProcess!.ProcessId);
     }
 
     // ── Watch mode: continues when all held instead of breaking ──────────
