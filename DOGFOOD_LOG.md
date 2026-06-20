@@ -1787,3 +1787,10 @@ Goal 6fb30947: The shared SubscriptionCliCompleter (src/Mcg.AgentOrchestrator.Ap
 
 - Operator gate: Developer: pass; focused 63/63, full Infrastructure.Tests 963/963 (exit 0); Tester: Pass - 63 tests passed in targeted filter; Pass - 963 tests passed in full Infrastructure.Tests suite; no regressions (exit 0); Reviewer: 63 passed (GoalRefinementTests|SemanticAcceptanceTests, Tester-reported); fresh run blocked by permission prompt (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review with diff inspection and test coverage analysis - read-only review with no synthesis gap.
+
+## 2026-06-20 - The operator-listen Discord listener exits on a transient Discord error inste...
+
+Goal ca4e2218: The operator-listen Discord listener exits on a transient Discord error instead of staying up. Observed 2026-06-20: a.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit d64d342). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit d64d342). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass; DiscordGatewayTests 25/25, full Infrastructure.Tests 964/964 (exit 0); Tester: pass; DiscordGatewayTests 25/25 (transient retry + fatal exit), Infrastructure.Tests 964/964 (exit 0); Reviewer: pass; Developer+Tester both confirmed DiscordGatewayTests 25/25, Infrastructure.Tests 964/964, exit 0 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review of focused resilience change across 3 files - classification correctness, backoff math, test coverage gaps, and residual risk are exactly what Sonnet handles well; no overkill.
