@@ -16,7 +16,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         EnsureSchema();
     }
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;";
+    // Pooling=False matters under WAL: a POOLED connection can be returned to the pool still holding
+    // a WAL read/lock slot, so a later writer meets "database is locked" that busy_timeout cannot wait
+    // out (it is not a plain lock-wait). The sibling CollaborationItemStore already does this; the
+    // state repo did not, which let a goal-create issued during a conduct --loop tick crash the loop.
+    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     private SqliteConnection OpenConnection()
     {
@@ -29,6 +33,54 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         // (and concurrent goal drivers) wait out the short write window, which WAL already keeps small.
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         return conn;
+    }
+
+    // Cap on retrying a transient SQLITE_BUSY/LOCKED before giving up. busy_timeout (30s) handles the
+    // simple lock-wait, but the deadlock-avoidance path (and pooling artifacts) can still surface an
+    // immediate BUSY; this bounded retry turns that into a brief wait instead of a fatal throw that
+    // would kill a conduct --loop on a concurrent writer.
+    private const int MaxBusyRetries = 6;
+
+    private static bool IsTransientLock(SqliteException ex) =>
+        ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
+
+    private static async Task<T> WithBusyRetryAsync<T>(Func<Task<T>> operation, CancellationToken ct)
+    {
+        var delayMs = 50;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (SqliteException ex) when (attempt < MaxBusyRetries && IsTransientLock(ex))
+            {
+                await Task.Delay(delayMs, ct);
+                delayMs = Math.Min(delayMs * 2, 1000);
+            }
+        }
+    }
+
+    // Opens a connection and acquires the write lock (BEGIN IMMEDIATE) with bounded retry. Only the
+    // lock ACQUISITION is retried — once it returns, the caller runs its body exactly once, so no
+    // side-effecting transaction delegate is ever re-executed.
+    private async Task<SqliteConnection> BeginWriteAsync(CancellationToken cancellationToken)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            var conn = OpenConnection();
+            try
+            {
+                await SetBusyTimeoutAsync(conn, cancellationToken);
+                await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+                return conn;
+            }
+            catch
+            {
+                await conn.DisposeAsync();
+                throw;
+            }
+        }, cancellationToken);
     }
 
     private void EnsureSchema()
@@ -85,15 +137,16 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
     public async Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        return await LoadFromConnectionAsync(conn, cancellationToken);
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            return await LoadFromConnectionAsync(conn, cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await SetBusyTimeoutAsync(conn, cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+        await using var conn = await BeginWriteAsync(cancellationToken);
         try
         {
             await WriteSnapshotAsync(conn, kernel, cancellationToken);
@@ -119,9 +172,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await SetBusyTimeoutAsync(conn, cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+        await using var conn = await BeginWriteAsync(cancellationToken);
         try
         {
             var kernel = await LoadFromConnectionAsync(conn, cancellationToken);
