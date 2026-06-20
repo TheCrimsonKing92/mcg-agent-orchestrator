@@ -4,19 +4,28 @@ public static class ParallelExecutionPlanner
 {
     public static ParallelExecutionPlan Build(
         IReadOnlyList<ParallelExecutionIntent> intents,
-        IReadOnlyList<ParallelExecutionProviderQuota>? providerQuotas = null)
+        IReadOnlyList<ParallelExecutionProviderQuota>? providerQuotas = null,
+        bool approveHighRiskOwnership = false)
     {
         var quotas = providerQuotas?.ToDictionary(quota => quota.ProviderKey, StringComparer.OrdinalIgnoreCase)
             ?? new Dictionary<string, ParallelExecutionProviderQuota>(StringComparer.OrdinalIgnoreCase);
         var decisions = new List<ParallelExecutionDecision>();
         var batches = new List<ParallelExecutionBatch>();
         var remaining = new List<ParallelExecutionIntent>();
+        var ownershipAutoApproved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var intent in intents)
         {
             var guard = RepositoryOwnershipMap.GuardWriteSet(intent.TargetPaths);
             var guardedIntent = ApplyWriteSetGuard(intent, guard);
-            if (intent.RequiresOperatorApproval || guard.RequiresOperatorApproval)
+            // An explicit intent-level approval flag is never auto-granted, and generated/noisy paths
+            // (bin, obj, .scratch, worktrees, ...) always need operator cleanup first. A purely
+            // HIGH-RISK ownership block (scripts, shared infra, build system, config, ...) is
+            // auto-granted only when the autonomy policy opts in via approveHighRiskOwnership —
+            // recorded for audit on the batch decision.
+            var hasGeneratedPath = guard.Paths.Any(path => path.IsGeneratedOrNoisy);
+            var ownershipAutoApprovable = approveHighRiskOwnership && !hasGeneratedPath;
+            if (intent.RequiresOperatorApproval || (guard.RequiresOperatorApproval && !ownershipAutoApprovable))
             {
                 decisions.Add(new ParallelExecutionDecision(
                     intent.Id,
@@ -24,6 +33,11 @@ public static class ParallelExecutionPlanner
                     null,
                     BuildApprovalReasons(intent, guard)));
                 continue;
+            }
+
+            if (guard.RequiresOperatorApproval)
+            {
+                ownershipAutoApproved.Add(intent.Id);
             }
 
             remaining.Add(guardedIntent);
@@ -74,11 +88,19 @@ public static class ParallelExecutionPlanner
             foreach (var intent in batchItems)
             {
                 scheduled.Add(intent.Id);
+                var reasons = batchNumber == 1
+                    ? new List<string> { "safe to run in this batch" }
+                    : BuildSerializedReasons(intent);
+                if (ownershipAutoApproved.Contains(intent.Id))
+                {
+                    reasons.Add("high-risk ownership auto-approved by autonomy policy");
+                }
+
                 decisions.Add(new ParallelExecutionDecision(
                     intent.Id,
                     batchNumber == 1 ? ParallelExecutionDisposition.Concurrent : ParallelExecutionDisposition.Serialized,
                     batchNumber,
-                    batchNumber == 1 ? ["safe to run in this batch"] : BuildSerializedReasons(intent)));
+                    reasons));
             }
 
             remaining = deferred;

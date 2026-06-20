@@ -82,6 +82,38 @@ public sealed class ConductorDriverTests
             classifyRisk ?? (_ => null));
     }
 
+    // ── Empty-batch escalation diagnostics ───────────────────────────────
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_operator_approval_reasons")]
+    public void ConductorDriverEmptyBatchSurfacesOperatorApprovalReasons()
+    {
+        var plan = new ParallelExecutionPlan(
+            [],
+            [
+                new ParallelExecutionDecision(
+                    "task-1",
+                    ParallelExecutionDisposition.RequiresOperatorApproval,
+                    null,
+                    ["high-risk ownership area requires operator approval: Script scripts/Invoke-TestSummary.ps1"])
+            ]);
+
+        var reason = ConductorDriver.DescribeEmptyBatch(plan);
+
+        Assert.True(reason.Contains("require operator approval", StringComparison.OrdinalIgnoreCase));
+        Assert.True(reason.Contains("scripts/Invoke-TestSummary.ps1", StringComparison.Ordinal));
+        Assert.False(reason.Contains("no assigned or ready tasks", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_without_approval_blocks_uses_generic_reason")]
+    public void ConductorDriverEmptyBatchWithoutApprovalBlocksUsesGenericReason()
+    {
+        var plan = new ParallelExecutionPlan([], []);
+
+        var reason = ConductorDriver.DescribeEmptyBatch(plan);
+
+        Assert.True(reason.Contains("no assigned or ready tasks", StringComparison.Ordinal));
+    }
+
     // ── Created state ─────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Created_creates_workspace_and_returns_Executed")]

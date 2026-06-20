@@ -113,6 +113,14 @@ public sealed record ConductorAutonomyPolicy(
         return baseDecision;
     }
 
+    // Whether the conductor may auto-approve dispatch of tasks whose write-set touches a high-risk
+    // ownership area (scripts, shared infrastructure, build system, configuration, dashboard API,
+    // skills) without human sign-off. Tied to the most permissive auto-promote envelope (Broad), so
+    // Conservative (DocsOnly) and Manual (null) still require explicit operator approval. Without
+    // this, any goal touching those areas escalates at WorkspaceReady and cannot run unattended.
+    public bool AllowsAutonomousHighRiskOwnership =>
+        AutoPromoteRiskThreshold == ChangeRiskTier.Broad;
+
     // Returns all validation errors. Empty list means valid.
     public IReadOnlyList<string> Validate()
     {
