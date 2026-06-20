@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -134,7 +135,20 @@ internal static partial class CliCommandHandlers
                     context.Workspace.OperatorChannelPath,
                     botToken,
                     store,
-                    context.Workspace.OrchestratorDirectory);
+                    context.Workspace.OrchestratorDirectory,
+                    (correlationKey, answer, cancellationToken) =>
+                    {
+                        var service = new GoalRefinementService(
+                            context.Providers,
+                            ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
+                            store,
+                            new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
+                        return service.TryResolveOpenClarificationAsync(
+                            context.Kernel,
+                            correlationKey,
+                            answer,
+                            cancellationToken);
+                    });
                 if (runtime is null)
                 {
                     Console.WriteLine("operator-listen: Discord not configured or MCGO_DISCORD_BOT_TOKEN missing.");

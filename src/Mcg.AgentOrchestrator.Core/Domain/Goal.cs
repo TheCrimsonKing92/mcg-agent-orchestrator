@@ -63,7 +63,7 @@ public sealed class Goal
                 RefinedSpec.AcceptanceCriteria.ToList(),
                 RefinedSpec.VerificationClass.ToString(),
                 RefinedSpec.Decisions.Select(d => new RefinedSpecDecisionSnapshot(d.Question, d.Choice, d.Rationale)).ToList(),
-                RefinedSpec.OpenQuestions.Select(q => new RefinedSpecOpenQuestionSnapshot(q.Id, q.Question, q.ForkKind, q.Status)).ToList()));
+                RefinedSpec.OpenQuestions.Select(q => new RefinedSpecOpenQuestionSnapshot(q.Id, q.Question, q.ForkKind, q.Status, q.Answer)).ToList()));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -96,7 +96,7 @@ public sealed class Goal
                 rs.AcceptanceCriteria,
                 Enum.TryParse<VerificationClass>(rs.VerificationClass, out var vc) ? vc : VerificationClass.TestVerifiable,
                 rs.Decisions.Select(d => new RefinedSpecDecision(d.Question, d.Choice, d.Rationale)).ToList(),
-                rs.OpenQuestions.Select(q => new RefinedSpecOpenQuestion(q.Id, q.Question, q.ForkKind, q.Status)).ToList()));
+                rs.OpenQuestions.Select(q => new RefinedSpecOpenQuestion(q.Id, q.Question, q.ForkKind, q.Status, q.Answer)).ToList()));
         }
 
         return goal;

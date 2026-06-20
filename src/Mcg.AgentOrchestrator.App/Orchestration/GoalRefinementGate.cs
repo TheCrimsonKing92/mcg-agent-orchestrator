@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -17,7 +18,8 @@ internal static class GoalRefinementGate
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        Goal goal)
+        Goal goal,
+        ConductorAutonomyPolicy? policy = null)
     {
         if (goal.RefinedSpec is { } existing)
         {
@@ -28,7 +30,7 @@ internal static class GoalRefinementGate
         }
 
         var service = CreateService(workspace, providers);
-        var result = service.RefineAsync(kernel, goal.Id).GetAwaiter().GetResult();
+        var result = service.RefineAsync(kernel, goal.Id, policy ?? ConductorAutonomyPolicy.Conservative).GetAwaiter().GetResult();
         kernel.RecordGoalPolicyDecision(
             goal.Id,
             result.Outcome == RefinementOutcome.AwaitingClarification

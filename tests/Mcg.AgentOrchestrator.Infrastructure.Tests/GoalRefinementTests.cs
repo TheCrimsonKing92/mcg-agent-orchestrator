@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalRefinementTests
@@ -323,12 +324,55 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(SpecForkDisposition.Ask, SpecRefinerPlanner.ClassifyFork(fork));
     }
 
-    [Xunit.Fact(DisplayName = "ClassifyFork_med_confidence_high_blast_radius_returns_Decide")]
-    public void ClassifyForkMedConfidenceHighBlastReturnsDecide()
+    [Xunit.Fact(DisplayName = "ClassifyFork_med_confidence_high_blast_radius_non_high_stakes_returns_Decide")]
+    public void ClassifyForkMedConfidenceHighBlastNonHighStakesReturnsDecide()
     {
-        var fork = new SpecRefinementFork("external-contract", "med", "high", "Which API?", "REST", "Standard.");
+        var fork = new SpecRefinementFork("other", "med", "high", "Which API?", "REST", "Standard.");
 
         Xunit.Assert.Equal(SpecForkDisposition.Decide, SpecRefinerPlanner.ClassifyFork(fork));
+    }
+
+    [Xunit.Fact(DisplayName = "ClassifyFork_same_ambiguity_Conservative_asks_full_auto_decides")]
+    public void ClassifyForkSameAmbiguityConservativeAsksFullAutoDecides()
+    {
+        var fork = new SpecRefinementFork("external-contract", "med", "high", "Which API?", "REST", "Standard.");
+        var fullAuto = ConductorAutonomyPolicy.Permissive with { Name = "full-auto" };
+
+        Xunit.Assert.Equal(SpecForkDisposition.Ask, SpecRefinerPlanner.ClassifyFork(fork, ConductorAutonomyPolicy.Conservative));
+        Xunit.Assert.Equal(SpecForkDisposition.Decide, SpecRefinerPlanner.ClassifyFork(fork, fullAuto));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_same_fork_asks_under_Conservative_but_auto_decides_under_full_auto")]
+    public async Task GoalRefinementServiceSameForkAsksUnderConservativeButAutoDecidesUnderFullAuto()
+    {
+        var json = """
+            ```json
+            {
+              "behavioralContract": "The system integrates with an external API.",
+              "acceptanceCriteria": ["Endpoint responds correctly"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "refinerConfidence": "med", "blastRadius": "high", "question": "Which API version to target?", "choice": "REST v2", "rationale": "Likely current default."}]
+            }
+            ```
+            """;
+        var conservative = BuildScenario(responseJson: json);
+        var fullAuto = BuildScenario(responseJson: json);
+
+        var conservativeResult = await conservative.Service.RefineAsync(
+            conservative.Kernel,
+            conservative.GoalId,
+            ConductorAutonomyPolicy.Conservative);
+        var fullAutoResult = await fullAuto.Service.RefineAsync(
+            fullAuto.Kernel,
+            fullAuto.GoalId,
+            ConductorAutonomyPolicy.Permissive with { Name = "full-auto" });
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, conservativeResult.Outcome);
+        Xunit.Assert.Single(conservative.Collaboration.Items);
+        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, fullAutoResult.Outcome);
+        Xunit.Assert.Empty(fullAuto.Collaboration.Items);
+        Xunit.Assert.Equal("REST v2", fullAuto.Kernel.GetGoal(fullAuto.GoalId).RefinedSpec!.Decisions.Single().Choice);
     }
 
     [Xunit.Fact(DisplayName = "ClassifyFork_low_confidence_low_blast_radius_returns_Decide")]

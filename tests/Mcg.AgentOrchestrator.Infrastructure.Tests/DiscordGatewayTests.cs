@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -285,6 +286,85 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, api.SentMessages.Count);
         Assert.True(api.EditedMessages.Count >= 1);
         Assert.Equal(0, api.EditedMessages[^1].Buttons.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_modal_answer_writes_back_spec_and_unblocks_clarification")]
+    public async Task DiscordCollaborationViewModalAnswerWritesBackSpecAndUnblocksClarification()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var api = new FakeDiscordForumApi();
+        var json = """
+            ```json
+            {
+              "behavioralContract": "Integrates with an external API.",
+              "acceptanceCriteria": ["Endpoint responds correctly"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "refinerConfidence": "low", "blastRadius": "high", "question": "Which API version to target?", "choice": "", "rationale": "Unclear from objective."}]
+            }
+            ```
+            """;
+        var provider = new FakeSmokeProvider(text: json, providerName: "fake-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Integrate API with unspecified version");
+        var service = new GoalRefinementService(
+            providers,
+            catalog,
+            store,
+            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
+        await service.RefineAsync(kernel, goal.Id);
+        var view = new DiscordCollaborationViewService(
+            store,
+            api,
+            42UL,
+            root,
+            ["user1"],
+            (correlationKey, answer, cancellationToken) =>
+                service.TryResolveOpenClarificationAsync(kernel, correlationKey, answer, cancellationToken));
+
+        await view.ReconcileAsync();
+        var button = api.SentMessages.Single().Buttons.Single();
+        var modal = view.TryBuildAnswerModalRequest(button.CustomId, "user1", out var modalError);
+
+        Assert.True(modalError is null);
+        Assert.True(modal is not null);
+        var result = await view.ApplyAnswerModalAsync(
+            modal!.ModalCustomId,
+            "Use v2.",
+            "user1",
+            "interaction-modal-1");
+
+        Assert.True(result.ErrorMessage is null);
+        var refreshed = kernel.GetGoal(goal.Id).RefinedSpec!;
+        Assert.False(refreshed.HasOpenQuestions);
+        Assert.Equal("Answered", refreshed.OpenQuestions.Single().Status);
+        Assert.Equal("Use v2.", refreshed.OpenQuestions.Single().Answer);
+        Assert.Equal("Use v2.", refreshed.Decisions.Single().Choice);
+        Assert.False(GoalRefinementGate.HasOpenClarification(workspace, goal));
+        Assert.Equal(0, api.EditedMessages[^1].Buttons.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordInteractionHandler_modal_submit_rejects_unauthorized_user")]
+    public void DiscordInteractionHandlerModalSubmitRejectsUnauthorizedUser()
+    {
+        var submit = DiscordInteractionHandler.ProcessAnswerModalSubmit(
+            "mcgo-modal|spec-clarification:goal:external-contract:abc",
+            "Use v2.",
+            "intruder",
+            "interaction-1",
+            ["user1"]);
+
+        Assert.True(submit.ErrorMessage is not null);
+        Assert.Contains(submit.ErrorMessage!, s => s.Contains("allowlist"));
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_restart_reconcile_refreshes_existing_open_message")]

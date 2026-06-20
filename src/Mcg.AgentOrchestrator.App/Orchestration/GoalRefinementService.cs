@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -43,6 +44,7 @@ internal sealed class GoalRefinementService
     public async Task<RefinementResult> RefineAsync(
         AgentOrchestratorKernel kernel,
         GoalId goalId,
+        ConductorAutonomyPolicy? policy = null,
         CancellationToken cancellationToken = default)
     {
         var goal = kernel.GetGoal(goalId);
@@ -60,7 +62,7 @@ internal sealed class GoalRefinementService
 
         foreach (var fork in output.Forks)
         {
-            var disposition = SpecRefinerPlanner.ClassifyFork(fork);
+            var disposition = SpecRefinerPlanner.ClassifyFork(fork, policy ?? ConductorAutonomyPolicy.Conservative);
             if (disposition == SpecForkDisposition.Ask)
             {
                 var precedent = await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
@@ -129,6 +131,63 @@ internal sealed class GoalRefinementService
         return true;
     }
 
+    // Resolves a clarification, writes the answer into the matching RefinedSpec question,
+    // and records the answer as a precedent for later goals.
+    public async Task<bool> TryResolveOpenClarificationAsync(
+        AgentOrchestratorKernel kernel,
+        string correlationKey,
+        string answer,
+        CancellationToken cancellationToken = default)
+    {
+        var goalIdValue = ExtractGoalId(correlationKey);
+        if (goalIdValue is null)
+            return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
+
+        var goalId = new GoalId(goalIdValue);
+        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
+        if (goal is null)
+            return false;
+        var spec = goal.RefinedSpec;
+        if (spec is null)
+            return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
+
+        var matched = false;
+        var questions = spec.OpenQuestions
+            .Select(question =>
+            {
+                if (!string.Equals(question.Id, correlationKey, StringComparison.Ordinal))
+                    return question;
+
+                matched = true;
+                return question with { Status = "Answered", Answer = answer };
+            })
+            .ToList();
+
+        if (!matched)
+            return false;
+
+        var resolved = await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
+        if (!resolved)
+            return false;
+
+        var decisions = spec.Decisions
+            .Concat(spec.OpenQuestions
+                .Where(question => string.Equals(question.Id, correlationKey, StringComparison.Ordinal))
+                .Select(question => new RefinedSpecDecision(
+                    question.Question,
+                    answer,
+                    $"Answered by operator (key: {correlationKey}).")))
+            .ToList();
+
+        kernel.SetGoalRefinedSpec(goalId, spec with
+        {
+            Decisions = decisions,
+            OpenQuestions = questions
+        });
+        kernel.RecordGoalPolicyDecision(goalId, $"Spec clarification answered: {correlationKey}");
+        return true;
+    }
+
     // Returns true when a goal has at least one open Clarification item in the collaboration store.
     // Used by the App layer to populate GoalLifecycleFacts.HasOpenClarification.
     public static bool HasOpenClarification(IReadOnlyList<CollaborationItem> goalItems) =>
@@ -181,8 +240,13 @@ internal sealed class GoalRefinementService
             [],
             []);
 
-    private static string BuildCorrelationKey(GoalId goalId, string forkKind) =>
-        $"{CorrelationKeyPrefix}{goalId.Value}:{forkKind}:{Guid.NewGuid():n}";
+    private static string BuildCorrelationKey(GoalId goalId, string forkKind)
+    {
+        // Keep the key short enough to fit inside Discord's 100-char custom_id once prefixed
+        // for answer buttons/modals, while retaining the full goal id for spec write-back.
+        var nonce = Guid.NewGuid().ToString("n")[..16];
+        return $"{CorrelationKeyPrefix}{goalId.Value}:{forkKind}:{nonce}";
+    }
 
     private static string BuildClarificationBody(string objective, SpecRefinementFork fork) => $"""
         Goal objective: {objective}
@@ -208,5 +272,14 @@ internal sealed class GoalRefinementService
         var afterGoalId = remainder[(firstColon + 1)..];
         var secondColon = afterGoalId.IndexOf(':', StringComparison.Ordinal);
         return secondColon < 0 ? afterGoalId : afterGoalId[..secondColon];
+    }
+
+    private static string? ExtractGoalId(string correlationKey)
+    {
+        if (!correlationKey.StartsWith(CorrelationKeyPrefix, StringComparison.Ordinal))
+            return null;
+        var remainder = correlationKey[CorrelationKeyPrefix.Length..];
+        var firstColon = remainder.IndexOf(':', StringComparison.Ordinal);
+        return firstColon < 0 ? null : remainder[..firstColon];
     }
 }

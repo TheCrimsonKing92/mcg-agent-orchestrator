@@ -59,14 +59,15 @@ public static class OperatorChannelFactory
         OperatorChannelCatalog catalog,
         string? botToken,
         ICollaborationItemStore store,
-        string stateDirectory)
+        string stateDirectory,
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
+        var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds, resolveClarificationAnswer);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view)
             .GetAwaiter().GetResult();
     }
@@ -76,14 +77,15 @@ public static class OperatorChannelFactory
         string catalogPath,
         string? botToken,
         ICollaborationItemStore store,
-        string stateDirectory)
+        string stateDirectory,
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var collaborationView = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds);
+        var collaborationView = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds, resolveClarificationAnswer);
         var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView)
             .GetAwaiter().GetResult();
         var progressView = new DiscordProgressViewService(api, forumChannelId, catalogPath);
