@@ -314,8 +314,8 @@ public sealed class GoalRefinementTests
         Xunit.Assert.False(SpecRefinerPlanner.Parse(string.Empty).IsValid);
     }
 
-    [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_writes_prompt_substitutes_plan_readonly_and_stdout_can_parse")]
-    public async Task SubscriptionCliCompleterWritesPromptSubstitutesPlanReadonlyAndStdoutCanParse()
+    [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_claude_completion_uses_direct_mode_and_stdout_can_parse")]
+    public async Task SubscriptionCliCompleterClaudeCompletionUsesDirectModeAndStdoutCanParse()
     {
         string? capturedCommand = null;
         string? capturedPrompt = null;
@@ -326,11 +326,18 @@ public sealed class GoalRefinementTests
             return Task.FromResult("""
                 ```json
                 {
-                  "behavioralContract": "Use subscription CLI for spec refinement.",
-                  "acceptanceCriteria": ["CLI stdout is parsed"],
+                  "behavioralContract": "Use subscription CLI for spec refinement and ask about ambiguous auth identity.",
+                  "acceptanceCriteria": ["CLI stdout is parsed", "Operator chooses the auth identity source"],
                   "verificationClass": "TestVerifiable",
                   "decisions": [],
-                  "forks": []
+                  "forks": [
+                    {
+                      "question": "Which auth identity source should operators use?",
+                      "options": ["single shared key", "per-operator keys", "Discord identity"],
+                      "recommended": "per-operator keys",
+                      "disposition": "ASK"
+                    }
+                  ]
                 }
                 ```
                 """);
@@ -350,12 +357,40 @@ public sealed class GoalRefinementTests
         var output = SpecRefinerPlanner.Parse(stdout);
 
         Xunit.Assert.True(output.IsValid);
-        Xunit.Assert.Equal("Use subscription CLI for spec refinement.", output.BehavioralContract);
+        Xunit.Assert.Equal("Use subscription CLI for spec refinement and ask about ambiguous auth identity.", output.BehavioralContract);
+        Xunit.Assert.Single(output.Forks);
+        Xunit.Assert.Equal("Which auth identity source should operators use?", output.Forks[0].Question);
         Xunit.Assert.Contains("Refine this goal", capturedPrompt!);
         Xunit.Assert.Contains("--model 'claude-sonnet-4-6'", capturedCommand!);
-        Xunit.Assert.Contains("--permission-mode 'plan'", capturedCommand!);
+        Xunit.Assert.False(capturedCommand!.Contains("--permission-mode 'plan'", StringComparison.Ordinal));
+        Xunit.Assert.True(capturedCommand.Contains("--permission-mode 'default'", StringComparison.Ordinal));
         Xunit.Assert.Contains("--sandbox 'read-only'", capturedCommand!);
         Xunit.Assert.Contains("reasoning='high'", capturedCommand!);
+    }
+
+    [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_codex_completion_keeps_readonly_sandbox")]
+    public async Task SubscriptionCliCompleterCodexCompletionKeepsReadonlySandbox()
+    {
+        string? capturedCommand = null;
+        Task<string> FakeRunner(string command, string workingDirectory, CancellationToken cancellationToken)
+        {
+            capturedCommand = command;
+            return Task.FromResult("{}");
+        }
+
+        var completer = new SubscriptionCliCompleter(
+            "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
+            "codex-cli",
+            "gpt-5.5",
+            "medium",
+            FakeRunner);
+
+        await completer.CompleteAsync("Return JSON", "codex-prompt.md", default);
+
+        Xunit.Assert.True(capturedCommand is not null);
+        Xunit.Assert.True(capturedCommand!.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+        Xunit.Assert.True(capturedCommand.Contains("--sandbox 'read-only'", StringComparison.Ordinal));
+        Xunit.Assert.True(capturedCommand.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_uses_subscription_cli_when_binding_has_subscription")]

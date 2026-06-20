@@ -52,7 +52,7 @@ internal sealed class SubscriptionCliCompleter
         try
         {
             await File.WriteAllTextAsync(promptPath, prompt, cancellationToken).ConfigureAwait(false);
-            var command = SubstitutePlaceholders(_commandTemplate, promptPath, _modelAlias, _reasoningEffort, tempDir);
+            var command = SubstitutePlaceholders(_commandTemplate, _profileName, promptPath, _modelAlias, _reasoningEffort, tempDir);
             return await _runner(command, tempDir, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -63,19 +63,24 @@ internal sealed class SubscriptionCliCompleter
 
     internal static string SubstitutePlaceholders(
         string template,
+        string profileName,
         string promptPath,
         string modelAlias,
         string? reasoningEffort,
         string workingDirectory)
     {
+        var permissionMode = IsClaudeCliProfile(profileName) ? "default" : "plan";
         return template
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionReasoningEffort}", Quote(string.IsNullOrWhiteSpace(reasoningEffort) ? AgentCatalog.ComplexReasoningEffort : reasoningEffort), StringComparison.OrdinalIgnoreCase)
             .Replace("{sandboxMode}", Quote("read-only"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{permissionMode}", Quote("plan"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{permissionMode}", Quote(permissionMode), StringComparison.OrdinalIgnoreCase)
             .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsClaudeCliProfile(string profileName) =>
+        profileName.Equals("claude-cli", StringComparison.OrdinalIgnoreCase);
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 

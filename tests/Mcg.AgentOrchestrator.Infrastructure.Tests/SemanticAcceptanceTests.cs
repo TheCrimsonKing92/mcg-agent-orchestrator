@@ -361,8 +361,12 @@ public sealed class SemanticAcceptanceTests
             {"criteria_met": true, "confidence": "high", "reasons": ["subscription judge approved"], "unmet_criteria": []}
             ```
             """;
-        Task<string> FakeRunner(string command, string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(stdout);
+        string? capturedCommand = null;
+        Task<string> FakeRunner(string command, string workingDirectory, CancellationToken ct)
+        {
+            capturedCommand = command;
+            return Task.FromResult(stdout);
+        }
 
         var judge = new SubscriptionCliSemanticJudge(
             "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})",
@@ -377,6 +381,9 @@ public sealed class SemanticAcceptanceTests
         Assert.True(verdict.CriteriaMet);
         Assert.Equal("high", verdict.Confidence);
         Assert.Equal("sub:claude-cli:claude-sonnet-4-6", judge.Name);
+        Assert.True(capturedCommand is not null);
+        Assert.False(capturedCommand!.Contains("--permission-mode 'plan'", StringComparison.Ordinal));
+        Assert.True(capturedCommand.Contains("--permission-mode 'default'", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "SubscriptionCliSemanticJudge_null_reasoning_effort_renders_high_in_command")]

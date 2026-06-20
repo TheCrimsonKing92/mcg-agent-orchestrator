@@ -87,7 +87,7 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
 
 // Semantic judge that runs via the subscription CLI (claude-cli / codex-cli) rather than the paid
 // API. Builds the evidence prompt, writes it to a temp file, substitutes placeholders in the worker
-// profile's CommandTemplate (read-only sandbox, plan permission mode), runs PowerShell synchronously
+// profile's CommandTemplate with completion-specific read-only/direct-output placeholders, runs PowerShell synchronously
 // capturing stdout, and parses the fenced JSON verdict. ADVISORY: CLI failures, timeouts, and parse
 // errors become invalid verdicts and never propagate to the merge gate.
 internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
