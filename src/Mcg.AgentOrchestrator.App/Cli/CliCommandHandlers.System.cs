@@ -14,6 +14,28 @@ internal static partial class CliCommandHandlers
             case "attention":
             {
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+
+                // `attention dismiss <goal-id-prefix>`: resolve all of a goal's open attention items
+                // out-of-band (e.g. a goal abandoned or handled outside Discord). The collaboration view
+                // retires the goal's message on the next reconcile, so stale items stop being rendered.
+                if (parts.Count > 1 && parts[1].Equals("dismiss", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts.Count < 3)
+                        throw new ArgumentException("Usage: attention dismiss <goal-id-prefix>");
+
+                    var goalPrefix = parts[2];
+                    var open = store.GetAttentionQueueAsync().GetAwaiter().GetResult()
+                        .Where(item =>
+                            !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                            (item.GoalId?.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase) ?? false))
+                        .ToList();
+
+                    var dismissed = open.Count(item =>
+                        store.TryResolveAsync(item.CorrelationKey!, "dismissed by operator").GetAwaiter().GetResult());
+                    Console.WriteLine($"Dismissed {dismissed} open attention item(s) for goal '{goalPrefix}'.");
+                    return false;
+                }
+
                 var queue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
                 ConsoleViews.PrintAttentionQueue(queue);
                 return false;
