@@ -270,7 +270,10 @@ internal static partial class CliCommandHandlers
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await ReconcileProgressViewAsync(context, collaborationStore, progressView, cancellationToken);
+            await RunDiscordRefreshWithRetryAsync(
+                "progress view",
+                token => ReconcileProgressViewAsync(context, collaborationStore, progressView, token),
+                cancellationToken);
 
             try
             {
@@ -292,7 +295,11 @@ internal static partial class CliCommandHandlers
         delay ??= Task.Delay;
         while (!cancellationToken.IsCancellationRequested)
         {
-            await collaborationView.ReconcileAsync(cancellationToken);
+            await RunDiscordRefreshWithRetryAsync(
+                "collaboration view",
+                collaborationView.ReconcileAsync,
+                cancellationToken,
+                delay);
 
             try
             {
@@ -303,6 +310,55 @@ internal static partial class CliCommandHandlers
                 break;
             }
         }
+    }
+
+    internal static async Task RunDiscordRefreshWithRetryAsync(
+        string operationName,
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        delay ??= Task.Delay;
+        var attempt = 0;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await operation(cancellationToken);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex) when (DiscordOperatorFaultClassifier.IsTransient(ex))
+            {
+                attempt++;
+                var backoff = ComputeDiscordRetryBackoff(attempt);
+                Console.Error.WriteLine(
+                    $"operator-listen: transient Discord error while refreshing {operationName}: {ex.Message}. Retrying in {backoff.TotalSeconds:0.#}s.");
+                try
+                {
+                    await delay(backoff, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex) when (DiscordOperatorFaultClassifier.IsFatal(ex))
+            {
+                Console.Error.WriteLine(
+                    $"operator-listen: fatal Discord authorization error while refreshing {operationName}: {ex.Message}");
+                throw;
+            }
+        }
+    }
+
+    private static TimeSpan ComputeDiscordRetryBackoff(int attempt)
+    {
+        var seconds = Math.Min(60, Math.Pow(2, Math.Min(attempt - 1, 5)));
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private static async Task ReconcileProgressViewAsync(
