@@ -313,7 +313,7 @@ public sealed class BackgroundDispatchRunner
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
                 }
                 else if (exitCode != 0 &&
-                    DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError))
+                    HasCompletedVerification(standardOutput, standardError))
                 {
                     // Clean worktree, no commit required (e.g. a Tester verifying already-committed work),
                     // and the worker produced verification evidence — but it exited non-zero. Under the
@@ -390,7 +390,19 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError);
+            HasCompletedVerification(standardOutput, standardError);
+    }
+
+    // A verification-role worker proves it did its job either with a recognised test-runner result OR
+    // by emitting its WORKER_RESULT contract block (confidence/blockers) — the way Tester/Reviewer
+    // workers actually report. The pass-count patterns in HasVerificationEvidence never match that
+    // block, so without this a Tester that verified already-committed work is false-failed for "no
+    // relevant file-change evidence". Scoped to the clean-worktree path; the acceptance suite re-runs
+    // the real tests, and a worker that errored before producing a WORKER_RESULT still fails here.
+    private static bool HasCompletedVerification(string standardOutput, string standardError)
+    {
+        return DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) ||
+            standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TesterTaskRequestsFileChanges(TaskSpec task)
