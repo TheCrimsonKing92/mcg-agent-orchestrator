@@ -7,6 +7,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]
     public void DotnetBuildEnvironmentManagerReusesGoalLeaseWithMetadataAndCleanup()
     {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("feedbeeffeedbeeffeedbeeffeedbeef");
         try
         {
@@ -63,6 +64,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_detects_stale_locks_and_rotates_goal_lease")]
     public void DotnetBuildEnvironmentManagerDetectsStaleLocksAndRotatesGoalLease()
     {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("decafbaddecafbaddecafbaddecafbad");
         try
         {
@@ -88,6 +90,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_inspects_and_cleans_orphaned_goal_lease")]
     public void DotnetBuildEnvironmentManagerInspectsAndCleansOrphanedGoalLease()
     {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("0badcafe0badcafe0badcafe0badcafe");
         try
         {
@@ -125,6 +128,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_serializes_same_goal_lease_execution")]
     public async Task DotnetBuildEnvironmentManagerSerializesSameGoalLeaseExecution()
     {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("1234abcd1234abcd1234abcd1234abcd");
         try
         {
@@ -142,6 +146,88 @@ public sealed class DotnetBuildEnvironmentManagerTests
         finally
         {
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stable_slot_build_arguments_are_firewall_covered")]
+    public void DotnetBuildEnvironmentManagerStableSlotBuildArgumentsAreFirewallCovered()
+    {
+        var firewallPaths = DotnetBuildEnvironmentManager.StableSlotTesthostFirewallPaths()
+            .Select(path => Path.GetFullPath(path.Path))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
+        {
+            var arguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(slot);
+            var artifactsPath = ArgumentValue(arguments, "--artifacts-path");
+            foreach (var project in new[] { "Mcg.AgentOrchestrator.Core.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests" })
+            {
+                foreach (var configuration in new[] { "Debug", "Release" })
+                {
+                    var derivedTesthostPath = Path.GetFullPath(Path.Combine(
+                        artifactsPath,
+                        "bin",
+                        project,
+                        $"{configuration.ToLowerInvariant()}_net10.0",
+                        "testhost.exe"));
+
+                    Assert.Contains(derivedTesthostPath, firewallPaths);
+                }
+            }
+        }
+    }
+
+    private static string ArgumentValue(IReadOnlyList<string> arguments, string name)
+    {
+        var index = -1;
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (arguments[i].Equals(name, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        Assert.InRange(index, 0, arguments.Count - 2);
+        return arguments[index + 1];
+    }
+
+    private sealed class EnvVarScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _originalValue;
+        private readonly string _root;
+
+        private EnvVarScope(string name, string value)
+        {
+            _name = name;
+            _originalValue = Environment.GetEnvironmentVariable(name);
+            _root = value;
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public static EnvVarScope ForIsolatedDotnetRoot()
+        {
+            return new EnvVarScope(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-test-{Guid.NewGuid():N}"));
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(_name, _originalValue);
+            try
+            {
+                if (Directory.Exists(_root))
+                {
+                    Directory.Delete(_root, recursive: true);
+                }
+            }
+            catch
+            {
+                // Best effort; a failed test may leave a stream open for failure inspection.
+            }
         }
     }
 }

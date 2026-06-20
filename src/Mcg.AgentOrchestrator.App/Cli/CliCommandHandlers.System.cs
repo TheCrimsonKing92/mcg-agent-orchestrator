@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -55,6 +56,10 @@ internal static partial class CliCommandHandlers
 
                 return false;
             }
+
+            case "stable-slot-dotnet":
+                RunStableSlotDotnet(parts, context);
+                return false;
 
             case "tenant":
                 ConsoleViews.PrintTenant(context.Workspace);
@@ -502,6 +507,41 @@ internal static partial class CliCommandHandlers
 
     private static bool GitCommitShaExists(string executionDirectory, string sha) =>
         GitCli.Run(executionDirectory, 5_000, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
+
+    private static void RunStableSlotDotnet(IReadOnlyList<string> parts, CliExecutionContext context)
+    {
+        if (parts.Count < 2)
+        {
+            throw new ArgumentException("Usage: stable-slot-dotnet <dotnet-arguments>");
+        }
+
+        using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = context.Workspace.RootDirectory
+        };
+
+        foreach (var part in parts.Skip(1))
+        {
+            startInfo.ArgumentList.Add(part);
+        }
+
+        foreach (var argument in lease.Environment.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start dotnet process.");
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+        {
+            throw new CliExitException(process.ExitCode);
+        }
+    }
 
     private static DistributedArchitectureDto BuildCliArchitectureReport(CliExecutionContext context)
     {

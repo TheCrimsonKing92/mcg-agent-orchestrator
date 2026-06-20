@@ -37,11 +37,8 @@ public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
 
-    // Lets a child process (notably the acceptance test run) redirect the isolated build/lease root
-    // away from the shared default. Without this, tests that exercise the real lease-execution lock
-    // collide with the slot lock the parent acceptance already holds (same %TEMP% path) and deadlock
-    // until the 5-minute lock timeout. The acceptance verifier sets this to a unique per-run
-    // directory on the test process so its locks never touch live production slots.
+    // Supported escape hatch for tests that need lease-root isolation. Production and acceptance
+    // runs normally use the default stable slots so their testhost.exe paths stay firewall-covered.
     public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
     public const int StableSlotCount = 4;
     private const string LeaseDirectoryName = "lease";
@@ -109,6 +106,42 @@ public static class DotnetBuildEnvironmentManager
         }
 
         return paths;
+    }
+
+    public static string StableSlotArtifactsPath(int slotIndex)
+    {
+        ValidateStableSlotIndex(slotIndex);
+        return StableSlotArtifactsPath($"slot-{slotIndex}");
+    }
+
+    public static IReadOnlyList<string> StableSlotBuildArguments(int slotIndex)
+    {
+        return BuildArguments(StableSlotArtifactsPath(slotIndex));
+    }
+
+    public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
+        CancellationToken cancellationToken = default)
+    {
+        var timeoutAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var slot = 0; slot < StableSlotCount; slot++)
+            {
+                var environment = CreateStableSlotEnvironment(slot);
+                if (TryAcquireLeaseExecutionLock(environment, out var stream))
+                {
+                    return new DotnetBuildEnvironmentLease(environment, stream);
+                }
+            }
+
+            if (DateTimeOffset.UtcNow >= timeoutAt)
+            {
+                throw new IOException("Timed out waiting for an available stable dotnet build slot.");
+            }
+
+            Thread.Sleep(100);
+        }
     }
 
     public static bool TryRotateGoalLease(GoalId goalId, string reason)
@@ -323,6 +356,32 @@ public static class DotnetBuildEnvironmentManager
         return $"slot-{Math.Abs(hash % StableSlotCount)}";
     }
 
+    private static DotnetBuildEnvironment CreateStableSlotEnvironment(int slotIndex)
+    {
+        ValidateStableSlotIndex(slotIndex);
+        var slotName = $"slot-{slotIndex}";
+        var root = StableSlotRoot(slotName);
+        var artifactsPath = StableSlotArtifactsPath(slotName);
+        var executionLockPath = StableSlotExecutionLockPath(slotName);
+        Directory.CreateDirectory(artifactsPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
+
+        return new DotnetBuildEnvironment(
+            $"run-{slotName}",
+            root,
+            artifactsPath,
+            executionLockPath,
+            BuildArguments(artifactsPath));
+    }
+
+    private static void ValidateStableSlotIndex(int slotIndex)
+    {
+        if (slotIndex < 0 || slotIndex >= StableSlotCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIndex), slotIndex, $"Stable slot index must be 0 through {StableSlotCount - 1}.");
+        }
+    }
+
     private static string IsolatedRootBase()
     {
         var overridden = Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable);
@@ -344,6 +403,35 @@ public static class DotnetBuildEnvironmentManager
     private static string StableSlotExecutionLockPath(string slotName)
     {
         return Path.Combine(StableSlotRoot(slotName), "lease.execution.lock");
+    }
+
+    private static bool TryAcquireLeaseExecutionLock(DotnetBuildEnvironment environment, out FileStream stream)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
+        try
+        {
+            stream = new FileStream(
+                environment.ExecutionLockPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+            try
+            {
+                CleanArtifactsDirectory(environment.ArtifactsPath);
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
+
+            return true;
+        }
+        catch (IOException)
+        {
+            stream = null!;
+            return false;
+        }
     }
 
     private static readonly (string RuleProject, string ArtifactProject)[] TesthostFirewallProjects =
@@ -478,4 +566,22 @@ public static class DotnetBuildEnvironmentManager
         DateTimeOffset LastUsedAt,
         string LastAttemptName,
         bool StaleLockCleared);
+}
+
+public sealed class DotnetBuildEnvironmentLease : IDisposable
+{
+    private readonly FileStream _stream;
+
+    internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream)
+    {
+        Environment = environment;
+        _stream = stream;
+    }
+
+    public DotnetBuildEnvironment Environment { get; }
+
+    public void Dispose()
+    {
+        _stream.Dispose();
+    }
 }

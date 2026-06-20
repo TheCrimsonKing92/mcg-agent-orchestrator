@@ -6,6 +6,8 @@
   Avoids the huge UTF-16 console dumps that are painful to grep. Writes one TRX
   (XML) file per test project under .test-results, then prints per-project
   pass/fail counts plus the name and first error line of every failing test.
+  The dotnet test process is run through the orchestrator's stable slot lease so
+  testhost.exe lands under the pre-authorized firewall paths.
 
   Exit code is 0 only when every test project reports zero failures.
 
@@ -24,6 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $results = Join-Path $repoRoot ".test-results"
+$orchestrator = Join-Path $repoRoot "mcg-orchestrator.cmd"
 
 # CS2012/VBCSCompiler lock hygiene before a fresh run.
 dotnet build-server shutdown | Out-Null
@@ -38,7 +41,7 @@ $testArgs = @($Target, '--logger', 'trx', '--results-directory', $results, '-clp
 if ($NoBuild) { $testArgs += '--no-build' }
 if ($Filter)  { $testArgs += @('--filter', $Filter) }
 
-dotnet test @testArgs *>&1 | Tee-Object -FilePath $rawLog | Out-Null
+& $orchestrator stable-slot-dotnet test @testArgs *>&1 | Tee-Object -FilePath $rawLog | Out-Null
 $testExit = $LASTEXITCODE
 
 $trxFiles = Get-ChildItem $results -Filter *.trx -ErrorAction SilentlyContinue

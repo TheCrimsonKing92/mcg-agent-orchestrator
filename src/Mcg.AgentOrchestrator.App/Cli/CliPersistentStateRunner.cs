@@ -116,7 +116,7 @@ internal static class CliPersistentStateRunner
             // the kernel must NOT be listed here.
             "backlog-list" or "backlog-add" or "backlog-show" or "backlog-close" or
             "backlog-reopen" or "backlog-import" or "backlog-view" or
-            "firewall-setup" => true,
+            "firewall-setup" or "stable-slot-dotnet" => true,
             _ => false,
         };
     }
