@@ -22,6 +22,14 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Contains(all, p => p.Name == "Manual");
     }
 
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_only_permissive_auto_approves_high_risk_ownership")]
+    public void ConductorAutonomyPolicyOnlyPermissiveAutoApprovesHighRiskOwnership()
+    {
+        Assert.True(ConductorAutonomyPolicy.Permissive.AllowsAutonomousHighRiskOwnership);
+        Assert.False(ConductorAutonomyPolicy.Conservative.AllowsAutonomousHighRiskOwnership);
+        Assert.False(ConductorAutonomyPolicy.Manual.AllowsAutonomousHighRiskOwnership);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_have_positive_budget_and_workers")]
     public void ConductorAutonomyPolicyPresetsHavePositiveBudgetAndWorkers()
     {

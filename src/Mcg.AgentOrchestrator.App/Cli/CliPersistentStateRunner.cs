@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -36,6 +37,11 @@ internal static class CliPersistentStateRunner
         if (IsConductLoop(args))
         {
             return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
+        if (IsAcceptanceCommand(args))
+        {
+            return ExecuteAcceptanceOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
@@ -141,6 +147,13 @@ internal static class CliPersistentStateRunner
             a.Equals("--watch", StringComparison.OrdinalIgnoreCase));
     }
 
+    internal static bool IsAcceptanceCommand(IReadOnlyList<string> args)
+    {
+        return args.Count > 0 &&
+            (args[0].Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("accept", StringComparison.OrdinalIgnoreCase));
+    }
+
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
     // progress via an independent SaveAsync (passed to the loop as PersistCheckpoint). This makes a
     // started dispatch durable the moment its tick completes — so a stopped/killed/long-running loop
@@ -209,6 +222,92 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool ExecuteAcceptanceOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+
+        AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
+        {
+            return stateRepository.TransactAsync(
+                    (transactionKernel, _) =>
+                    {
+                        var transactionGoal = transactionKernel.Goals.FirstOrDefault(goal => goal.Id == request.GoalId)
+                            ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
+                        if (transactionGoal.Status != GoalStatus.Completed)
+                        {
+                            throw new InvalidOperationException(
+                                $"Goal '{request.GoalId.Value[..8]}' changed during acceptance verification; retry acceptance.");
+                        }
+
+                        var currentFingerprint = BuildGoalFingerprint(transactionKernel, request.GoalId);
+                        if (!string.Equals(currentFingerprint, request.ExpectedGoalFingerprint, StringComparison.Ordinal))
+                        {
+                            throw new InvalidOperationException(
+                                $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
+                        }
+
+                        var currentHead = ResolveWorktreeHead(workspace.ExecutionDirectory, request.GoalId);
+                        if (!string.Equals(currentHead, request.TestedWorktreeHead, StringComparison.Ordinal))
+                        {
+                            throw new InvalidOperationException(
+                                $"Goal '{request.GoalId.Value[..8]}' worktree changed during acceptance verification; retry acceptance.");
+                        }
+
+                        var result = request.Merge();
+                        return Task.FromResult((result.FastForwarded, result));
+                    })
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            finalizeAcceptanceMerge: Finalize);
+
+        return shouldSave;
+    }
+
+    private static string? ResolveWorktreeHead(string executionDirectory, GoalId goalId)
+    {
+        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goalId);
+        if (worktreePath is null)
+        {
+            return null;
+        }
+
+        var head = GitCli.Run(worktreePath, "rev-parse", "HEAD");
+        if (!head.Succeeded)
+        {
+            throw new InvalidOperationException($"Failed to resolve tested worktree HEAD: {head.Error}");
+        }
+
+        return head.Output.Trim();
+    }
+
+    private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
+            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry acceptance.");
+        return JsonSerializer.Serialize(snapshot);
     }
 
     private static Goal? ResolveCurrentGoal(AgentOrchestratorKernel kernel, string? currentGoalId)

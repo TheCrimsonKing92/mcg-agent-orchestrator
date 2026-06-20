@@ -11,8 +11,8 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
-    private readonly Func<Goal, DispatchStartOutcome> _dispatchAndStart;
-    private readonly Func<Goal, DispatchStartOutcome> _startRecordedDispatches;
+    private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
+    private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Action _buildServerShutdown;
     private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
@@ -66,7 +66,7 @@ internal sealed class ConductorDriver
             return path;
         };
 
-        _dispatchAndStart = goal =>
+        _dispatchAndStart = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
             SubscriptionStartResult result;
@@ -78,7 +78,8 @@ internal sealed class ConductorDriver
                     goal,
                     agents,
                     profiles,
-                    providers ?? new InMemoryModelProviderRegistry([]));
+                    providers ?? new InMemoryModelProviderRegistry([]),
+                    approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership);
             }
             catch (Exception ex)
             {
@@ -93,7 +94,7 @@ internal sealed class ConductorDriver
                 return DispatchStartOutcome.Started();
             }
             var reason = result.Dispatches.Count == 0
-                ? "No tasks in ready batch; goal may have no assigned or ready tasks"
+                ? DescribeEmptyBatch(result.ParallelPlan)
                 : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
             GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
             return result.Dispatches.Count == 0
@@ -101,7 +102,7 @@ internal sealed class ConductorDriver
                 : DispatchStartOutcome.SpawnFailed(reason);
         };
 
-        _startRecordedDispatches = goal =>
+        _startRecordedDispatches = (goal, _) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
             ProcessBatchExecutionResult result;
@@ -257,8 +258,10 @@ internal sealed class ConductorDriver
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
-        _dispatchAndStart = dispatchAndStart;
-        _startRecordedDispatches = startRecordedDispatches ?? dispatchAndStart;
+        _dispatchAndStart = (goal, _) => dispatchAndStart(goal);
+        _startRecordedDispatches = startRecordedDispatches is null
+            ? _dispatchAndStart
+            : (goal, _) => startRecordedDispatches(goal);
         _buildServerShutdown = buildServerShutdown ?? (() => { });
         _runAcceptanceVerification = runAcceptanceVerification;
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
@@ -366,7 +369,7 @@ internal sealed class ConductorDriver
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
-        var outcome = start(goal);
+        var outcome = start(goal, policy);
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
             var firstFailure = outcome;
@@ -374,7 +377,7 @@ internal sealed class ConductorDriver
             var retryStart = fromState == GoalLifecycleState.WorkspaceReady
                 ? _startRecordedDispatches
                 : start;
-            outcome = retryStart(goal);
+            outcome = retryStart(goal, policy);
             if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
             {
                 outcome = firstFailure;
@@ -399,6 +402,25 @@ internal sealed class ConductorDriver
         return skippedReason is null
             ? "Dispatch recorded but no process was startable."
             : $"Dispatch recorded but no process was startable: {skippedReason}";
+    }
+
+    // Turns an empty subscription dispatch batch into an ACTIONABLE escalation. When the parallel
+    // planner held every ready task back for operator approval (e.g. a high-risk ownership write-set
+    // like scripts/ or src/Infrastructure under a non-permissive policy), surface those reasons so
+    // the operator knows what to approve — instead of the generic "no ready batch" that hides why
+    // nothing dispatched and forces a manual dig (see conductor-high-risk-ownership-gap).
+    internal static string DescribeEmptyBatch(ParallelExecutionPlan plan)
+    {
+        var approvalReasons = plan.Decisions
+            .Where(decision => decision.Disposition == ParallelExecutionDisposition.RequiresOperatorApproval)
+            .SelectMany(decision => decision.Reasons)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return approvalReasons.Count > 0
+            ? "No tasks dispatched; all ready tasks require operator approval (run under a policy that "
+                + "auto-approves high-risk ownership, or approve manually): "
+                + string.Join("; ", approvalReasons)
+            : "No tasks in ready batch; goal may have no assigned or ready tasks";
     }
 
     // Cap on auto-retrying a transient empty-output dispatch flake before escalating to a human; a

@@ -162,6 +162,33 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RequeueInterruptedDispatch(GoalId goalId, TaskId taskId, string message)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var retryMessage = message.Trim();
+        if (string.IsNullOrWhiteSpace(retryMessage))
+        {
+            throw new ArgumentException("Retry message cannot be empty.", nameof(message));
+        }
+
+        if (task.Status == WorkTaskStatus.WaitingForHuman ||
+            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+        {
+            throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
+        }
+
+        task.ClearLatestVerification();
+        task.ClearLastExecution();
+        task.ClearLastDispatch();
+        task.ClearLastProcess();
+        task.ClearSubscriptionRetryAfter();
+        task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+        Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        RefreshGoalStatus(goal);
+        return task;
+    }
+
     public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback)
     {
         var goal = GetGoal(goalId);

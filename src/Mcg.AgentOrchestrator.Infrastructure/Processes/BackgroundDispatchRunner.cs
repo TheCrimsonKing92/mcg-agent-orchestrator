@@ -631,6 +631,48 @@ public sealed class BackgroundDispatchRunner
         return cancelled;
     }
 
+    public int DetachRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var goal = kernel.GetGoal(goalId);
+        return goal.Tasks.Count(task => task.LastProcess is { IsRunning: true });
+    }
+
+    public int RequeueInterruptedDispatches(AgentOrchestratorKernel kernel)
+    {
+        var recovered = 0;
+        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Active).ToArray())
+        {
+            foreach (var task in goal.Tasks.ToArray())
+            {
+                if (task.Status == WorkTaskStatus.Cancelled)
+                {
+                    kernel.RequeueInterruptedDispatch(
+                        goal.Id,
+                        task.Id,
+                        "Auto-requeued interrupted dispatch after conductor loop stop.");
+                    recovered++;
+                    continue;
+                }
+
+                if (task.Status != WorkTaskStatus.Running ||
+                    task.LastProcess is not { IsRunning: true } process ||
+                    TryReadExitCode(process.ExitCodePath, out _) ||
+                    AnyTrackedProcessStillRunning(process))
+                {
+                    continue;
+                }
+
+                kernel.RequeueInterruptedDispatch(
+                    goal.Id,
+                    task.Id,
+                    "Auto-requeued orphaned running dispatch; no tracked process is alive.");
+                recovered++;
+            }
+        }
+
+        return recovered;
+    }
+
     private string? ReapWorktreeBuildDaemons(string workingDirectory)
     {
         try

@@ -15,9 +15,20 @@ public static bool ExecuteCommand(
     ref Goal? currentGoal,
     IOperatorChannel? channel = null,
     Func<AgentOrchestratorKernel>? reloadKernel = null,
-    Action<AgentOrchestratorKernel>? persistKernel = null)
+    Action<AgentOrchestratorKernel>? persistKernel = null,
+    Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null)
 {
-    var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles, currentGoal, channel, reloadKernel, persistKernel);
+    var context = new CliExecutionContext(
+        kernel,
+        workspace,
+        providers,
+        agents,
+        workerProfiles,
+        currentGoal,
+        channel,
+        reloadKernel,
+        persistKernel,
+        finalizeAcceptanceMerge);
     var changed = CliCommandHandlers.Execute(parts, context);
     agents = context.Agents;
     workerProfiles = context.WorkerProfiles;

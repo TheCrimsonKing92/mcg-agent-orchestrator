@@ -1815,3 +1815,17 @@ Goal 128f395c: Two related conductor dispatch bugs break reliable unattended con
 
 - Operator gate: Planner: not-run (exit 0); Researcher: not-run (existing test suite coverage verified at AdvanceLoopTests.cs:556, 649, 702) (exit 0); Developer: pass - AdvanceLoopTests 24/24; Infrastructure.Tests 971/971 (exit 0); Tester: pass - All 3 new dispatch tests passed; 967/971 total Infrastructure.Tests passed (4 failures unrelated to dispatch fixes, caused by lease lock timeouts) (exit 0); Reviewer: pass - 24/24 AdvanceLoopTests; 971/971 Infrastructure.Tests full suite (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review with multi-file dispatch chain analysis - needed to trace through `ParallelExecutionPlanner`, `BuildNextActions`, and `AdvanceUntilBlockedAsync` to assess residual risk; sonnet handles this depth without issue.
+
+## 2026-06-20 - LandingDecisionEngine
+
+Goal ede57daa: LandingDecisionEngine.Decide escalates a goal at landing on a Broad/Complex change classification REGARDLESS of the a.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit d27a665). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit d27a6659e5264142241f06103068dad2ef877655). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run (Planner role; implementation belongs to Developer task) (exit 0); Researcher: not-run (research phase only) (exit 0); Developer: not-run; current-task.md explicitly said not to run dotnet build/test because orchestrator acceptance gate performs verification (exit 0); Tester: LandingDecisionTests 19/19 PASSED; ConductorDriverTests 34/34 PASSED (exit 0); Reviewer: LandingDecisionTests 19/19 PASSED (from tester evidence); ConductorDriverTests 34/34 PASSED (from tester evidence); no tests run by reviewer (review role) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - structured code review with spec-trace analysis - straightforward diff inspection, call-chain trace, and test matrix; no research required beyond reading the 7 changed files.
+
+## 2026-06-20 - The acceptance/landing path holds the state
+
+Goal 6993fadb: The acceptance/landing path holds the state.db single-writer lock across the ENTIRE multi-minute build+test, even tho.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit 01e512e). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 1ba5855). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Researcher: not-run evidence (research phase only) (exit 0); Developer: not-run; current-task.md says do not run dotnet build/test locally (exit 0); Tester: Cli_acceptance_releases_state_write_lock_during_verification PASS, Cli_acceptance_rejects_stale_goal_state_before_merge_commit PASS, Cli_acceptance_rejects_stale_worktree_head_before_merge_commit PASS (3/3 tests pass, 0 failures) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review identifying cross-path integration bugs in a C# concurrency refactor - reasoning about in-memory vs SQLite kernel divergence required careful multi-file tracing; well within this model's capabilities.

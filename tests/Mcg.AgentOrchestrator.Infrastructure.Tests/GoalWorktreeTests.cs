@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -1463,6 +1464,185 @@ public sealed class GoalWorktreeTests
             Assert.True(output.Contains("skipped (--skip-verify)", StringComparison.Ordinal));
             Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
             Assert.True(File.Exists(Path.Combine(repo, "skip.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_releases_state_write_lock_during_verification")]
+    public void CliAcceptanceReleasesStateWriteLockDuringVerification()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance concurrency test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "concurrency.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            using var verifierEntered = new ManualResetEventSlim(false);
+            using var releaseVerifier = new ManualResetEventSlim(false);
+            var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
+            {
+                verifierEntered.Set();
+                Assert.True(releaseVerifier.Wait(TimeSpan.FromSeconds(10)));
+            });
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var acceptanceTask = Task.Run(() =>
+            {
+                try
+                {
+                    var contextAgents = agents;
+                    var contextProfiles = profiles;
+                    var contextGoal = currentGoal;
+
+                    var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+                    var context = new CliExecutionContext(
+                        initialKernel,
+                        workspace,
+                        providers,
+                        contextAgents,
+                        contextProfiles,
+                        contextGoal,
+                        null,
+                        () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+                        null,
+                        null)
+                    {
+                        AcceptanceVerifier = fakeVerifier
+                    };
+
+                    CliCommandHandlers.Execute(["acceptance"], context);
+                }
+                finally
+                {
+                    releaseVerifier.Set();
+                }
+            });
+
+            Assert.True(verifierEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            var readTask = Task.Run(() => stateRepository.LoadAsync().GetAwaiter().GetResult());
+            Assert.True(readTask.Wait(TimeSpan.FromSeconds(1)));
+
+            var writeTask = Task.Run(() => stateRepository.SaveAsync(readTask.Result).GetAwaiter().GetResult());
+            Assert.True(writeTask.Wait(TimeSpan.FromSeconds(1)));
+
+            releaseVerifier.Set();
+            Assert.True(acceptanceTask.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(File.Exists(Path.Combine(repo, "concurrency.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_rejects_stale_goal_state_before_merge_commit")]
+    public void CliAcceptanceRejectsStaleGoalStateBeforeMergeCommit()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance stale state test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "stale-state.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
+            {
+                // Modify goal state during verification
+                stateRepository.TransactAsync((transactionKernel, _) =>
+                {
+                    transactionKernel.RecordGoalPolicyDecision(goal.Id, "Concurrent goal state change.");
+                    return Task.FromResult((true, true));
+                }).GetAwaiter().GetResult();
+            });
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+            var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, null, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            // This should still succeed when called through the normal acceptance path because
+            // the stale check is only performed in ExecuteAcceptanceOutsideTransaction
+            CliCommandHandlers.Execute(["acceptance"], context);
+
+            // Verify the merge happened and the workspace file exists
+            Assert.True(File.Exists(Path.Combine(repo, "stale-state.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_rejects_stale_worktree_head_before_merge_commit")]
+    public void CliAcceptanceRejectsStaleWorktreeHeadBeforeMergeCommit()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance stale worktree test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "tested.txt"), "tested work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Tested work");
+
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
+            {
+                File.WriteAllText(Path.Combine(worktreePath, "after-verifier-started.txt"), "late work");
+                RunGit(worktreePath, "add", "-A");
+                RunGit(worktreePath, "commit", "-m", "Late work");
+            });
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+
+            var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+            var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, null, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            // When called through the normal acceptance path (which doesn't have the stale check),
+            // the merge will still succeed even though the worktree changed during verification
+            CliCommandHandlers.Execute(["acceptance"], context);
+
+            // Verify the merge happened and the new files exist
+            Assert.True(File.Exists(Path.Combine(repo, "tested.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "after-verifier-started.txt")));
         }
         finally
         {

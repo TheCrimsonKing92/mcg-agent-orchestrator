@@ -621,7 +621,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var loopReaper = new BackgroundDispatchRunner();
                 var loopSummary = new ConductorBatchLoop(
                     reconcileSweep,
-                    (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                    (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
@@ -667,7 +669,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchReaper = new BackgroundDispatchRunner();
                 var watchSummary = new ConductorBatchLoop(
                     watchSweep,
-                    (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id)).Run(
+                    (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
+                    (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
+                    wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
@@ -1877,8 +1881,10 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return false;
     }
 
+    var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
     var worktreePath = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
+    var testedWorktreeHead = worktreePath is null ? null : ResolveWorktreeHead(worktreePath);
     if (worktreePath is not null)
     {
         var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
@@ -1931,33 +1937,65 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     // local-vs-subscription comparison and blocking flip. Any failure is swallowed.
     RunAdvisorySemanticAcceptance(context, goal, worktreePath, verification);
 
-    var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
-    var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-    if (merge is { FastForwarded: false })
-    {
-        // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
-        // onto main and retry the ff instead of punting the merge to the operator. A rebase
-        // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
-        var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
-        Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
-        if (rebase.UpdatedBranch)
+    var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
+        goal.Id,
+        expectedGoalFingerprint,
+        testedWorktreeHead,
+        Merge: () =>
         {
-            merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-        }
-    }
+            var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
+            var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+            if (merge is { FastForwarded: false })
+            {
+                // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
+                // onto main and retry the ff instead of punting the merge to the operator. A rebase
+                // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
+                var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+                Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
+                if (rebase.UpdatedBranch)
+                {
+                    merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+                }
+            }
 
-    if (merge is not null)
+            if (merge is null)
+            {
+                return new AcceptanceMergeCommitResult(true, null);
+            }
+
+            if (merge.FastForwarded && pendingRollback is not null)
+            {
+                GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
+            }
+
+            return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
+        }));
+
+    if (mergeCommit.Message is not null)
     {
-        Console.WriteLine($"Workspace merge: {FormatWorkspaceMerge(merge)}");
-        if (merge.FastForwarded && pendingRollback is not null)
-        {
-            GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
-        }
-
-        return merge.FastForwarded;
+        Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
+        return mergeCommit.FastForwarded;
     }
 
     return true;
+}
+
+private static string ResolveWorktreeHead(string worktreePath)
+{
+    var result = GitCli.Run(worktreePath, "rev-parse", "HEAD");
+    if (!result.Succeeded)
+    {
+        throw new InvalidOperationException($"Failed to resolve worktree HEAD: {result.Error}");
+    }
+
+    return result.Output.Trim();
+}
+
+private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalId goalId)
+{
+    var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
+        ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
+    return JsonSerializer.Serialize(snapshot);
 }
 
 // Advisory semantic-acceptance pass: the configured judge lanes decide whether the diff actually

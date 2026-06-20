@@ -180,7 +180,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    bool approveHighRiskOwnership = false)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -188,7 +189,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         providers ?? new InMemoryModelProviderRegistry([]),
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
-    var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
+    var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     var dispatches = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
         goal,
@@ -206,12 +207,15 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     return new SubscriptionStartResult(dispatches, processes, safeBatch.Plan);
 }
 
-private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(Goal goal, IReadOnlyList<AgentDefinition> agents)
+private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
+    Goal goal,
+    IReadOnlyList<AgentDefinition> agents,
+    bool approveHighRiskOwnership = false)
 {
     var assigned = goal.Tasks
         .Where(IsSubscriptionStartCandidate)
         .ToList();
-    var plan = BuildReadyTaskParallelPlan(goal, agents);
+    var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership);
     var firstBatch = plan.Batches.FirstOrDefault();
     var taskIds = firstBatch is null
         ? []
@@ -222,7 +226,10 @@ private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(G
     return new ParallelSafeBatchSelection(taskIds, plan);
 }
 
-public static ParallelExecutionPlan BuildReadyTaskParallelPlan(Goal goal, IReadOnlyList<AgentDefinition>? agents = null)
+public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
+    Goal goal,
+    IReadOnlyList<AgentDefinition>? agents = null,
+    bool approveHighRiskOwnership = false)
 {
     var assigned = goal.Tasks
         .Where(IsSubscriptionStartCandidate)
@@ -241,7 +248,7 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(Goal goal, IReadO
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .Select(provider => new ParallelExecutionProviderQuota(provider, 1))
         .ToList();
-    return ParallelExecutionPlanner.Build(intents, providerQuotas);
+    return ParallelExecutionPlanner.Build(intents, providerQuotas, approveHighRiskOwnership);
 }
 
 private sealed record ParallelSafeBatchSelection(HashSet<TaskId> TaskIds, ParallelExecutionPlan Plan);

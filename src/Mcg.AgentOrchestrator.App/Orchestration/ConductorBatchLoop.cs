@@ -12,13 +12,19 @@ internal sealed class ConductorBatchLoop
 
     private readonly Action<AgentOrchestratorKernel> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
+    private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
+    private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
 
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
-        Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null)
+        Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
+        Action<AgentOrchestratorKernel, Goal>? detachGoalRunningDispatches = null,
+        Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null)
     {
         _sweep = sweep ?? (_ => { });
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
+        _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
+        _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
     }
 
     public BatchLoopSummary Run(
@@ -56,7 +62,7 @@ internal sealed class ConductorBatchLoop
                 stopRequested = true;
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
-                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 persistTick?.Invoke(kernel);
                 break;
             }
@@ -80,6 +86,7 @@ internal sealed class ConductorBatchLoop
             }
 
             _sweep(kernel);
+            _recoverInterruptedDispatches(kernel);
 
             var eligible = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
@@ -103,7 +110,7 @@ internal sealed class ConductorBatchLoop
                     {
                         stopRequested = true;
                         EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-while-idle");
-                        ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                        DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                         persistTick?.Invoke(kernel);
                         break;
                     }
@@ -222,7 +229,7 @@ internal sealed class ConductorBatchLoop
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     onTick?.Invoke(tickSummary);
-                    ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                    DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                     persistTick?.Invoke(kernel);
                     break;
                 }
@@ -241,7 +248,7 @@ internal sealed class ConductorBatchLoop
                     stopRequested = true;
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
-                    ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                    DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                     persistTick?.Invoke(kernel);
                     break;
                 }
@@ -322,6 +329,28 @@ internal sealed class ConductorBatchLoop
         }
     }
 
+    private void DetachNonTerminalEligibleGoals(
+        AgentOrchestratorKernel kernel,
+        string? onlyGoalId,
+        HashSet<string> excludedGoals,
+        HashSet<string> reapedGoals)
+    {
+        foreach (var goal in kernel.Goals)
+        {
+            if (onlyGoalId is not null && goal.Id.Value != onlyGoalId)
+            {
+                continue;
+            }
+
+            if (excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal))
+            {
+                continue;
+            }
+
+            DetachGoalOnce(kernel, goal, reapedGoals);
+        }
+    }
+
     private void ReapGoalOnce(AgentOrchestratorKernel kernel, Goal goal, HashSet<string> reapedGoals)
     {
         if (!reapedGoals.Add(goal.Id.Value))
@@ -330,6 +359,16 @@ internal sealed class ConductorBatchLoop
         }
 
         _reapGoalRunningDispatches(kernel, goal);
+    }
+
+    private void DetachGoalOnce(AgentOrchestratorKernel kernel, Goal goal, HashSet<string> reapedGoals)
+    {
+        if (!reapedGoals.Add(goal.Id.Value))
+        {
+            return;
+        }
+
+        _detachGoalRunningDispatches(kernel, goal);
     }
 
     private static bool IsTerminalGoal(Goal goal) =>

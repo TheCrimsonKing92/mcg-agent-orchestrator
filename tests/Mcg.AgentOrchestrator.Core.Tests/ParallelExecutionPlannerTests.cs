@@ -113,6 +113,26 @@ public sealed class ParallelExecutionPlannerTests
     Assert.Equal(ParallelExecutionDisposition.Concurrent, Decision(plan, "docs").Disposition);
 }
 
+    [Xunit.Fact(DisplayName = "ParallelExecutionPlanner_auto_approves_high_risk_ownership_when_policy_opts_in")]
+    public void ParallelExecutionPlannerAutoApprovesHighRiskOwnershipWhenPolicyOptsIn()
+{
+    var plan = ParallelExecutionPlanner.Build(
+    [
+        new ParallelExecutionIntent("script-change", "goal-a", ["scripts/Invoke-TestSummary.ps1"], ProviderKey: "codex"),
+        new ParallelExecutionIntent("generated-change", "goal-b", ["src/Mcg.AgentOrchestrator.App/bin/Debug/generated.dll"], ProviderKey: "claude")
+    ],
+    approveHighRiskOwnership: true);
+
+    // A purely high-risk ownership write-set (a script) is auto-approved and batched, with an audit reason.
+    Assert.Equal(ParallelExecutionDisposition.Concurrent, Decision(plan, "script-change").Disposition);
+    Assert.Contains(
+        Decision(plan, "script-change").Reasons,
+        reason => reason.Contains("auto-approved by autonomy policy", StringComparison.Ordinal));
+    // Generated/noisy paths still require operator cleanup even when ownership auto-approval is on.
+    Assert.Equal(ParallelExecutionDisposition.RequiresOperatorApproval, Decision(plan, "generated-change").Disposition);
+    Assert.True(Decision(plan, "generated-change").BatchNumber is null);
+}
+
     private static ParallelExecutionDecision Decision(ParallelExecutionPlan plan, string intentId)
 {
     return plan.Decisions.Single(decision => decision.IntentId == intentId);
