@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -20,7 +21,8 @@ internal static class LandingExecutor
         AgentOrchestratorKernel kernel,
         Goal goal,
         OrchestratorWorkspace workspace,
-        IOperatorChannel? channel = null)
+        IOperatorChannel? channel = null,
+        ConductorAutonomyPolicy? policy = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -70,7 +72,7 @@ internal static class LandingExecutor
         var cleanFastForward = IsIntegrationFastForwardableIntoMain(executionDirectory);
         var failureCount = CountFailedVerifications(goal);
 
-        var inputs = new LandingInputs(changeSummary, acceptancePassed, cleanFastForward, failureCount);
+        var inputs = new LandingInputs(changeSummary, acceptancePassed, cleanFastForward, failureCount, policy);
         var decision = LandingDecisionEngine.Decide(inputs);
 
         if (decision is LandingDecision.Promote)

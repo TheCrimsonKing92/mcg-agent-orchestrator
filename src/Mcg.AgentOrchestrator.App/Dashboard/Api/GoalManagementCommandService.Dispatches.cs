@@ -209,7 +209,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(Goal goal, IReadOnlyList<AgentDefinition> agents)
 {
     var assigned = goal.Tasks
-        .Where(task => task.Status == WorkTaskStatus.Assigned)
+        .Where(IsSubscriptionStartCandidate)
         .ToList();
     var plan = BuildReadyTaskParallelPlan(goal, agents);
     var firstBatch = plan.Batches.FirstOrDefault();
@@ -225,14 +225,15 @@ private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(G
 public static ParallelExecutionPlan BuildReadyTaskParallelPlan(Goal goal, IReadOnlyList<AgentDefinition>? agents = null)
 {
     var assigned = goal.Tasks
-        .Where(task => task.Status == WorkTaskStatus.Assigned)
+        .Where(IsSubscriptionStartCandidate)
         .ToList();
     var intents = assigned
         .Select(task => new ParallelExecutionIntent(
             task.Id.Value,
             goal.Id.Value,
             InferParallelFileScopes(goal, task),
-            ProviderKey: ResolveParallelProviderKey(task, agents)))
+            ProviderKey: ResolveParallelProviderKey(task, agents),
+            DependsOn: BuildIncompleteEarlierStageDependencies(goal, task)))
         .ToList();
     var providerQuotas = intents
         .Where(intent => !string.IsNullOrWhiteSpace(intent.ProviderKey))
@@ -244,6 +245,42 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(Goal goal, IReadO
 }
 
 private sealed record ParallelSafeBatchSelection(HashSet<TaskId> TaskIds, ParallelExecutionPlan Plan);
+
+private static bool IsSubscriptionStartCandidate(TaskSpec task)
+{
+    return task.Status == WorkTaskStatus.Assigned &&
+        task.LastProcess is not { IsRunning: true };
+}
+
+private static string[] BuildIncompleteEarlierStageDependencies(Goal goal, TaskSpec task)
+{
+    return goal.Tasks
+        .Where(candidate => IsEarlierSdlcStage(candidate.RequiredRole, task.RequiredRole))
+        .Where(candidate => candidate.Status != WorkTaskStatus.Completed)
+        .Select(candidate => candidate.Id.Value)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+}
+
+private static bool IsEarlierSdlcStage(AgentRole candidate, AgentRole current)
+{
+    return SdlcStageOrder(candidate) is { } candidateOrder &&
+        SdlcStageOrder(current) is { } currentOrder &&
+        candidateOrder < currentOrder;
+}
+
+private static int? SdlcStageOrder(AgentRole role)
+{
+    return role switch
+    {
+        AgentRole.Planner => 0,
+        AgentRole.Researcher => 1,
+        AgentRole.Developer => 2,
+        AgentRole.Tester => 3,
+        AgentRole.Reviewer => 4,
+        _ => null
+    };
+}
 
 private static string[] InferParallelFileScopes(Goal goal, TaskSpec task)
 {

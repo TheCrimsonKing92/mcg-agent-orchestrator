@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core.Conductor;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public enum ChangeRiskClass
@@ -19,7 +21,8 @@ public sealed record LandingInputs(
     RepositoryChangeSummary ChangeSummary,
     bool AcceptancePassed,
     bool IntegrationToMainIsCleanFastForward,
-    int GoalFailureRetryCount);
+    int GoalFailureRetryCount,
+    ConductorAutonomyPolicy? Policy = null);
 
 public static class LandingDecisionEngine
 {
@@ -47,15 +50,24 @@ public static class LandingDecisionEngine
         if (riskClass == ChangeRiskClass.Build)
             return new LandingDecision.Escalate("build-system change requires review");
 
-        if (riskClass == ChangeRiskClass.Broad)
-            return new LandingDecision.Escalate("broad-impact change requires review");
-
         if (!inputs.IntegrationToMainIsCleanFastForward)
             return new LandingDecision.Escalate("integration->main conflict");
 
         if (inputs.GoalFailureRetryCount >= RepeatedFailureThreshold)
             return new LandingDecision.Escalate($"repeated failures (count: {inputs.GoalFailureRetryCount})");
 
+        if (riskClass == ChangeRiskClass.Broad && !AllowsAutoLanding(inputs.Policy, riskClass))
+            return new LandingDecision.Escalate("broad-impact change requires review");
+
         return new LandingDecision.Promote();
+    }
+
+    private static bool AllowsAutoLanding(ConductorAutonomyPolicy? policy, ChangeRiskClass riskClass)
+    {
+        var effectivePolicy = policy ?? ConductorAutonomyPolicy.Conservative;
+        var riskTier = (ChangeRiskTier)(int)riskClass;
+
+        return effectivePolicy.GetTransitionDecision(GoalLifecycleState.Merged, riskTier) ==
+            ConductorTransitionDecision.Auto;
     }
 }

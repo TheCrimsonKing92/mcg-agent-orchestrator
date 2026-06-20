@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 public sealed class LandingDecisionTests
 {
@@ -76,9 +77,7 @@ public sealed class LandingDecisionTests
     public void LandingDecisionEscalateForBroadImpactChange()
     {
         // Infrastructure path triggers RequiresBroadVerification
-        var summary = RepositoryChangeClassifier.Classify([
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"
-        ]);
+        var summary = BroadChangeSummary();
 
         var inputs = new LandingInputs(
             summary,
@@ -92,6 +91,119 @@ public sealed class LandingDecisionTests
         Assert.True(escalate.Reason.Contains("broad", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("build", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Permissive_promotes_broad_change_with_green_acceptance")]
+    public void LandingDecisionPermissivePromotesBroadChangeWithGreenAcceptance()
+    {
+        var inputs = new LandingInputs(
+            BroadChangeSummary(),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: 0,
+            Policy: ConductorAutonomyPolicy.Permissive);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        Assert.True(decision is LandingDecision.Promote);
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Conservative_escalates_broad_change_with_green_acceptance")]
+    public void LandingDecisionConservativeEscalatesBroadChangeWithGreenAcceptance()
+    {
+        var inputs = new LandingInputs(
+            BroadChangeSummary(),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: 0,
+            Policy: ConductorAutonomyPolicy.Conservative);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        var escalate = Assert.IsEscalate(decision);
+        Assert.True(escalate.Reason.Contains("broad", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Manual_escalates_broad_change_with_green_acceptance")]
+    public void LandingDecisionManualEscalatesBroadChangeWithGreenAcceptance()
+    {
+        var inputs = new LandingInputs(
+            BroadChangeSummary(),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: 0,
+            Policy: ConductorAutonomyPolicy.Manual);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        var escalate = Assert.IsEscalate(decision);
+        Assert.True(escalate.Reason.Contains("broad", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Permissive_escalates_security_change")]
+    public void LandingDecisionPermissiveEscalatesSecurityChange()
+    {
+        var inputs = new LandingInputs(
+            SecurityChangeSummary(),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: 0,
+            Policy: ConductorAutonomyPolicy.Permissive);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        var escalate = Assert.IsEscalate(decision);
+        Assert.True(escalate.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Permissive_escalates_build_change")]
+    public void LandingDecisionPermissiveEscalatesBuildChange()
+    {
+        var inputs = new LandingInputs(
+            RepositoryChangeClassifier.Classify(["Directory.Build.props"]),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: 0,
+            Policy: ConductorAutonomyPolicy.Permissive);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        var escalate = Assert.IsEscalate(decision);
+        Assert.True(escalate.Reason.Contains("build", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Permissive_escalates_broad_change_with_integration_conflict")]
+    public void LandingDecisionPermissiveEscalatesBroadChangeWithIntegrationConflict()
+    {
+        var inputs = new LandingInputs(
+            BroadChangeSummary(),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: false,
+            GoalFailureRetryCount: 0,
+            Policy: ConductorAutonomyPolicy.Permissive);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        var escalate = Assert.IsEscalate(decision);
+        Assert.True(escalate.Reason.Contains("integration", StringComparison.OrdinalIgnoreCase) ||
+            escalate.Reason.Contains("conflict", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "LandingDecision_Permissive_escalates_broad_change_with_repeated_failures")]
+    public void LandingDecisionPermissiveEscalatesBroadChangeWithRepeatedFailures()
+    {
+        var inputs = new LandingInputs(
+            BroadChangeSummary(),
+            AcceptancePassed: true,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: LandingDecisionEngine.RepeatedFailureThreshold,
+            Policy: ConductorAutonomyPolicy.Permissive);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        var escalate = Assert.IsEscalate(decision);
+        Assert.True(escalate.Reason.Contains("repeated", StringComparison.OrdinalIgnoreCase) ||
+            escalate.Reason.Contains("failure", StringComparison.OrdinalIgnoreCase));
     }
 
     // --- Escalate: integration->main conflict ---
@@ -194,6 +306,16 @@ public sealed class LandingDecisionTests
     private static RepositoryChangeSummary BehaviorChangeSummary() =>
         RepositoryChangeClassifier.Classify([
             "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.cs"
+        ]);
+
+    private static RepositoryChangeSummary BroadChangeSummary() =>
+        RepositoryChangeClassifier.Classify([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"
+        ]);
+
+    private static RepositoryChangeSummary SecurityChangeSummary() =>
+        RepositoryChangeClassifier.Classify([
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Api/AuthPolicy.cs"
         ]);
 
     private static RepositoryChangeSummary DocsOnlyChangeSummary() =>

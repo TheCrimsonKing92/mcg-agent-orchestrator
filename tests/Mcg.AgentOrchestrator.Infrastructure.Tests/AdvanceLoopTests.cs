@@ -553,6 +553,182 @@ public sealed class AdvanceLoopTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_dispatches_one_ready_sdlc_stage_at_a_time")]
+    public void StartSubscriptionReadyTasksDispatchesOneReadySdlcStageAtATime()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var planner = new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner);
+    var researcher = new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher);
+    var firstDeveloper = new TaskSpec(TaskId.New(), "Implement the first part", AgentRole.Developer);
+    var secondDeveloper = new TaskSpec(TaskId.New(), "Implement the second part", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Test the work", AgentRole.Tester);
+    var reviewer = new TaskSpec(TaskId.New(), "Review the work", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Dispatch in SDLC stage order", [planner, researcher, firstDeveloper, secondDeveloper, tester, reviewer]);
+    AgentDefinition[] agents =
+    [
+        CreateSubscriptionAgent(AgentRole.Planner),
+        CreateSubscriptionAgent(AgentRole.Researcher),
+        CreateSubscriptionAgent(AgentRole.Developer),
+        CreateSubscriptionAgent(AgentRole.Tester),
+        CreateSubscriptionAgent(AgentRole.Reviewer)
+    ];
+    kernel.ActivateGoal(goal.Id, agents);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}"),
+        new WorkerProfile("claude-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+    ]);
+
+    try
+    {
+        var first = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles);
+
+        Assert.Equal(1, first.Dispatches.Count);
+        Assert.Equal(planner.Id, first.Dispatches[0].Task.Id);
+        Assert.Equal(1, first.Processes.Tasks.Count);
+        Assert.Equal(planner.Id, first.Processes.Tasks[0].Id);
+        Assert.True(planner.LastProcess is { IsRunning: true });
+        Assert.True(researcher.LastDispatch is null);
+        Assert.True(firstDeveloper.LastDispatch is null);
+
+        new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, planner.Id);
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Planner complete.");
+
+        var second = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles);
+
+        Assert.Equal(1, second.Dispatches.Count);
+        Assert.Equal(researcher.Id, second.Dispatches[0].Task.Id);
+        Assert.Equal(1, second.Processes.Tasks.Count);
+        Assert.Equal(researcher.Id, second.Processes.Tasks[0].Id);
+        Assert.True(researcher.LastProcess is { IsRunning: true });
+        Assert.True(firstDeveloper.LastDispatch is null);
+
+        new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, researcher.Id);
+        kernel.ReportTaskProgress(goal.Id, researcher.Id, WorkTaskStatus.Completed, "Researcher complete.");
+
+        var third = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles);
+
+        Assert.True(third.Dispatches.Count > 0);
+        foreach (var dispatch in third.Dispatches)
+        {
+            Assert.Equal(AgentRole.Developer, dispatch.Task.RequiredRole);
+        }
+
+        Assert.True(tester.LastDispatch is null);
+        Assert.True(reviewer.LastDispatch is null);
+    }
+    finally
+    {
+        foreach (var task in goal.Tasks.Where(task => task.LastProcess is { IsRunning: true }))
+        {
+            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+        }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_does_not_prepare_already_running_tasks")]
+    public void StartSubscriptionReadyTasksDoesNotPrepareAlreadyRunningTasks()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Run once", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Do not double dispatch running task", [task]);
+    var agents = new[] { CreateSubscriptionAgent(AgentRole.Developer) };
+    kernel.ActivateGoal(goal.Id, agents);
+    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+    Directory.CreateDirectory(worktreePath);
+    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}"),
+        new WorkerProfile("claude-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+    ]);
+
+    try
+    {
+        var first = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles);
+
+        Assert.Equal(1, first.Dispatches.Count);
+        Assert.Equal(task.Id, first.Dispatches[0].Task.Id);
+        Assert.True(task.LastProcess is { IsRunning: true });
+
+        var second = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles);
+
+        Assert.Equal(0, second.Dispatches.Count);
+        Assert.Equal(0, second.Processes.Tasks.Count);
+        Assert.Equal(1, goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded && evt.TaskId == task.Id));
+        Assert.Equal(1, goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskProcessStarted && evt.TaskId == task.Id));
+    }
+    finally
+    {
+        if (task.LastProcess is { IsRunning: true })
+        {
+            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+        }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "BuildReadyTaskParallelPlan_preserves_same_stage_parallelism")]
+    public void BuildReadyTaskParallelPlanPreservesSameStageParallelism()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var firstDeveloper = new TaskSpec(TaskId.New(), "Implement the first part", AgentRole.Developer);
+    var secondDeveloper = new TaskSpec(TaskId.New(), "Implement the second part", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Plan same-stage parallelism", [firstDeveloper, secondDeveloper]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+
+    var plan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal);
+    Assert.Equal(1, plan.Batches.Count);
+    var firstBatch = plan.Batches[0];
+
+    Assert.Equal(2, firstBatch.IntentIds.Count);
+    Assert.True(firstBatch.IntentIds.Contains(firstDeveloper.Id.Value, StringComparer.OrdinalIgnoreCase));
+    Assert.True(firstBatch.IntentIds.Contains(secondDeveloper.Id.Value, StringComparer.OrdinalIgnoreCase));
+}
+
+private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
+{
+    return new AgentDefinition(
+        new AgentId("subscription-" + role.ToString().ToLowerInvariant()),
+        "Subscription " + role,
+        role,
+        new ModelProfile("OpenAI", "gpt-test", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+}
+
     [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_continues_after_subscription_retry_window")]
     public void AdvanceGoalWithSubscriptionsUntilBlockedContinuesAfterSubscriptionRetryWindow()
 {
