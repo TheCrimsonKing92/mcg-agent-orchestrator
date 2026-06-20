@@ -266,6 +266,29 @@ public sealed class DiscordGatewayTests
         Assert.True(api.SentMessages[0].Content.Contains("Second escalation"));
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_caps_oversized_goal_message_to_discord_limit")]
+    public async Task DiscordCollaborationViewCapsOversizedGoalMessageToDiscordLimit()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        // Eight long clarifications for one goal would otherwise blow past Discord's 2000-char limit (50035).
+        var longBody = new string('x', 600);
+        for (var i = 0; i < 8; i++)
+        {
+            await store.RaiseAsync(
+                CollaborationItemType.Clarification, "goal-abc123",
+                $"Spec clarification {i}: " + new string('q', 180), longBody, $"corr-{i}");
+        }
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        Assert.Equal(1, api.SentMessages.Count);
+        Assert.True(api.SentMessages[0].Content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+        Assert.True(api.SentMessages[0].Content.Contains("truncated to fit"));
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_resolving_last_item_clears_the_goal_message_no_spam")]
     public async Task DiscordCollaborationViewResolvingLastItemClearsTheGoalMessage()
     {
