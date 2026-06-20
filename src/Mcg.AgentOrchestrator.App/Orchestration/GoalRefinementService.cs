@@ -28,17 +28,23 @@ internal sealed class GoalRefinementService
     private readonly ModelFunctionCatalog _catalog;
     private readonly ICollaborationItemStore _collaboration;
     private readonly SpecRefinerPrecedentStore _precedents;
+    private readonly WorkerProfileCatalog? _workerProfiles;
+    private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
 
     public GoalRefinementService(
         IModelProviderRegistry providers,
         ModelFunctionCatalog catalog,
         ICollaborationItemStore collaboration,
-        SpecRefinerPrecedentStore precedents)
+        SpecRefinerPrecedentStore precedents,
+        WorkerProfileCatalog? workerProfiles = null,
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null)
     {
         _providers = providers;
         _catalog = catalog;
         _collaboration = collaboration;
         _precedents = precedents;
+        _workerProfiles = workerProfiles;
+        _subscriptionCompleterFactory = subscriptionCompleterFactory;
     }
 
     public async Task<RefinementResult> RefineAsync(
@@ -205,6 +211,12 @@ internal sealed class GoalRefinementService
             return SpecRefinementOutput.Invalid("No spec-refiner model function configured.");
 
         var binding = bindings[0];
+        var prompt = SpecRefinerPlanner.BuildPrompt(objective);
+        if (binding.Subscription is { } subscription && _workerProfiles is not null)
+        {
+            return await RunSubscriptionRefinerAsync(subscription, prompt, cancellationToken).ConfigureAwait(false);
+        }
+
         IModelProvider provider;
         try
         {
@@ -215,7 +227,6 @@ internal sealed class GoalRefinementService
             return SpecRefinementOutput.Invalid($"Spec-refiner provider '{binding.Model.ProviderName}' not found: {ex.Message}");
         }
 
-        var prompt = SpecRefinerPlanner.BuildPrompt(objective);
         var request = new ModelRequest(
             "You are a specification refiner. Output only a fenced JSON object.",
             [new ModelMessage("user", prompt)],
@@ -229,6 +240,34 @@ internal sealed class GoalRefinementService
         catch (Exception ex)
         {
             return SpecRefinementOutput.Invalid($"Spec refiner model call failed: {ex.Message}");
+        }
+    }
+
+    private async Task<SpecRefinementOutput> RunSubscriptionRefinerAsync(
+        SubscriptionLaunchProfile subscription,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var completer = _subscriptionCompleterFactory?.Invoke(subscription)
+                ?? new SubscriptionCliCompleter(
+                    _workerProfiles!,
+                    subscription.WorkerProfileName,
+                    subscription.ModelAlias ?? string.Empty,
+                    subscription.ReasoningEffort);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(SubscriptionCliCompleter.DefaultTimeout);
+            var stdout = await completer.CompleteAsync(prompt, "spec-refiner-prompt.md", cts.Token).ConfigureAwait(false);
+            return SpecRefinerPlanner.Parse(stdout);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return SpecRefinementOutput.Invalid($"Subscription spec refiner '{subscription.WorkerProfileName}' timed out.");
+        }
+        catch (Exception ex)
+        {
+            return SpecRefinementOutput.Invalid($"Subscription spec refiner '{subscription.WorkerProfileName}' failed: {ex.Message}");
         }
     }
 

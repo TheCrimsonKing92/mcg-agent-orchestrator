@@ -94,9 +94,7 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
 {
     private readonly string _profileName;
     private readonly string _modelAlias;
-    private readonly string? _reasoningEffort;
-    private readonly string _commandTemplate;
-    private readonly Func<string, string, CancellationToken, Task<string>> _runner;
+    private readonly SubscriptionCliCompleter _completer;
 
     public SubscriptionCliSemanticJudge(
         WorkerProfileCatalog profiles,
@@ -114,11 +112,9 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
         string? reasoningEffort,
         Func<string, string, CancellationToken, Task<string>> runner)
     {
-        _commandTemplate = commandTemplate;
         _profileName = profileName;
         _modelAlias = modelAlias;
-        _reasoningEffort = reasoningEffort;
-        _runner = runner;
+        _completer = new SubscriptionCliCompleter(commandTemplate, profileName, modelAlias, reasoningEffort, runner);
     }
 
     public string Name => $"sub:{_profileName}:{_modelAlias}";
@@ -134,14 +130,9 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
         CancellationToken cancellationToken)
     {
         var prompt = SemanticAcceptancePlanner.BuildPrompt(SemanticAcceptancePlanner.BuildEvidenceContext(inputs));
-        var tempDir = Path.Combine(Path.GetTempPath(), $"mcg-judge-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-        var promptPath = Path.Combine(tempDir, "judge-prompt.md");
         try
         {
-            await File.WriteAllTextAsync(promptPath, prompt, cancellationToken).ConfigureAwait(false);
-            var command = SubstitutePlaceholders(_commandTemplate, promptPath, _modelAlias, _reasoningEffort, tempDir);
-            var stdout = await _runner(command, tempDir, cancellationToken).ConfigureAwait(false);
+            var stdout = await _completer.CompleteAsync(prompt, "judge-prompt.md", cancellationToken).ConfigureAwait(false);
             return SemanticAcceptancePlanner.Parse(stdout);
         }
         catch (OperationCanceledException)
@@ -152,98 +143,16 @@ internal sealed class SubscriptionCliSemanticJudge : ISemanticJudge
         {
             return SemanticAcceptanceVerdict.Invalid($"SubscriptionCliSemanticJudge '{_profileName}': {ex.Message}");
         }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
     }
 
-    private static string SubstitutePlaceholders(
-        string template,
-        string promptPath,
-        string modelAlias,
-        string? reasoningEffort,
-        string workingDirectory)
-    {
-        return template
-            .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
-            .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
-            .Replace("{subscriptionReasoningEffort}", Quote(string.IsNullOrWhiteSpace(reasoningEffort) ? AgentCatalog.ComplexReasoningEffort : reasoningEffort), StringComparison.OrdinalIgnoreCase)
-            .Replace("{sandboxMode}", Quote("read-only"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{permissionMode}", Quote("plan"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
-
-    // Extracted so tests can assert ProcessStartInfo properties without launching a real process.
-    internal static ProcessStartInfo BuildStartInfo(string command, string workingDirectory)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = WorkerShell.Executable,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        foreach (var arg in WorkerShell.BaseArguments())
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
-        startInfo.ArgumentList.Add(command);
-        return startInfo;
-    }
+    internal static ProcessStartInfo BuildStartInfo(string command, string workingDirectory) =>
+        SubscriptionCliCompleter.BuildStartInfo(command, workingDirectory);
 
     internal static async Task<string> RunCommandAsync(
         string command,
         string workingDirectory,
-        CancellationToken cancellationToken)
-    {
-        var startInfo = BuildStartInfo(command, workingDirectory);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start subscription CLI for semantic acceptance.");
-
-        // Close stdin immediately so codex exec doesn't block on "Reading additional input from stdin...".
-        // claude-cli ignores stdin; codex hangs until EOF arrives.
-        process.StandardInput.Close();
-
-        // Link to the outer token so either cancellation path cancels the reads.
-        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(drainCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(drainCts.Token);
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-
-        // Cap the drain so a grandchild that inherits the stdout pipe handle (e.g. the node
-        // process spawned by claude-cli) cannot keep ReadToEndAsync alive indefinitely after
-        // the parent exits. On timeout, kill the tree; the verdict is recorded as invalid
-        // (advisory — the judge never blocks the deterministic merge gate).
-        const int DrainTimeoutMs = 12_000;
-        drainCts.CancelAfter(DrainTimeoutMs);
-        string stdout;
-        try
-        {
-            stdout = await stdoutTask.ConfigureAwait(false);
-            await stderrTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            stdout = string.Empty;
-        }
-        return stdout.Trim();
-    }
+        CancellationToken cancellationToken) =>
+        await SubscriptionCliCompleter.RunCommandAsync(command, workingDirectory, cancellationToken).ConfigureAwait(false);
 }
 
 // Decorator that runs a leaf judge once per changed file rather than once over the whole diff,

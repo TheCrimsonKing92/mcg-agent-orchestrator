@@ -19,7 +19,8 @@ internal static class GoalRefinementGate
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
         Goal goal,
-        ConductorAutonomyPolicy? policy = null)
+        ConductorAutonomyPolicy? policy = null,
+        WorkerProfileCatalog? workerProfiles = null)
     {
         if (goal.RefinedSpec is { } existing)
         {
@@ -29,7 +30,7 @@ internal static class GoalRefinementGate
                 existing);
         }
 
-        var service = CreateService(workspace, providers);
+        var service = CreateService(workspace, providers, workerProfiles);
         var result = service.RefineAsync(kernel, goal.Id, policy ?? ConductorAutonomyPolicy.Conservative).GetAwaiter().GetResult();
         kernel.RecordGoalPolicyDecision(
             goal.Id,
@@ -66,12 +67,14 @@ internal static class GoalRefinementGate
 
     private static GoalRefinementService CreateService(
         OrchestratorWorkspace workspace,
-        IModelProviderRegistry providers) =>
+        IModelProviderRegistry providers,
+        WorkerProfileCatalog? workerProfiles) =>
         new(
             providers,
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
+            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
+            workerProfiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath));
 
     private static IReadOnlyList<CollaborationItem> ListGoalCollaborationItems(
         OrchestratorWorkspace workspace,

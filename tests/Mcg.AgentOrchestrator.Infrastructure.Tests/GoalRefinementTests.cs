@@ -314,6 +314,89 @@ public sealed class GoalRefinementTests
         Xunit.Assert.False(SpecRefinerPlanner.Parse(string.Empty).IsValid);
     }
 
+    [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_writes_prompt_substitutes_plan_readonly_and_stdout_can_parse")]
+    public async Task SubscriptionCliCompleterWritesPromptSubstitutesPlanReadonlyAndStdoutCanParse()
+    {
+        string? capturedCommand = null;
+        string? capturedPrompt = null;
+        Task<string> FakeRunner(string command, string workingDirectory, CancellationToken cancellationToken)
+        {
+            capturedCommand = command;
+            capturedPrompt = File.ReadAllText(Path.Combine(workingDirectory, "spec-refiner-prompt.md"));
+            return Task.FromResult("""
+                ```json
+                {
+                  "behavioralContract": "Use subscription CLI for spec refinement.",
+                  "acceptanceCriteria": ["CLI stdout is parsed"],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": []
+                }
+                ```
+                """);
+        }
+
+        var completer = new SubscriptionCliCompleter(
+            "claude --model {subscriptionModelName} --permission-mode {permissionMode} --sandbox {sandboxMode} --cwd {workingDirectory} -p (Get-Content -Raw {promptPath}) -c reasoning={subscriptionReasoningEffort}",
+            "claude-cli",
+            "claude-sonnet-4-6",
+            null,
+            FakeRunner);
+
+        var stdout = await completer.CompleteAsync(
+            SpecRefinerPlanner.BuildPrompt("Refine this goal"),
+            "spec-refiner-prompt.md",
+            default);
+        var output = SpecRefinerPlanner.Parse(stdout);
+
+        Xunit.Assert.True(output.IsValid);
+        Xunit.Assert.Equal("Use subscription CLI for spec refinement.", output.BehavioralContract);
+        Xunit.Assert.Contains("Refine this goal", capturedPrompt!);
+        Xunit.Assert.Contains("--model 'claude-sonnet-4-6'", capturedCommand!);
+        Xunit.Assert.Contains("--permission-mode 'plan'", capturedCommand!);
+        Xunit.Assert.Contains("--sandbox 'read-only'", capturedCommand!);
+        Xunit.Assert.Contains("reasoning='high'", capturedCommand!);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_uses_subscription_cli_when_binding_has_subscription")]
+    public async Task GoalRefinementServiceUsesSubscriptionCliWhenBindingHasSubscription()
+    {
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.Capable,
+                new ModelProfile("missing-api-provider", "unused-api-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6"))
+        ]);
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})")
+        ]);
+        var (service, kernel, goalId, _) = BuildScenario(
+            catalog,
+            workerProfiles: profiles,
+            subscriptionCompleterFactory: sub => new SubscriptionCliCompleter(
+                profiles.GetRequired(sub.WorkerProfileName).CommandTemplate,
+                sub.WorkerProfileName,
+                sub.ModelAlias ?? string.Empty,
+                sub.ReasoningEffort,
+                (_, _, _) => Task.FromResult("""
+                    ```json
+                    {
+                      "behavioralContract": "Subscription CLI refined the goal.",
+                      "acceptanceCriteria": ["No API provider is required"],
+                      "verificationClass": "TestVerifiable",
+                      "decisions": [],
+                      "forks": []
+                    }
+                    ```
+                    """)));
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
+        Xunit.Assert.Equal("Subscription CLI refined the goal.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
+    }
+
     // --- SpecRefinerPlanner.ClassifyFork ---
 
     [Xunit.Fact(DisplayName = "ClassifyFork_low_confidence_high_blast_radius_returns_Ask")]
@@ -472,7 +555,9 @@ public sealed class GoalRefinementTests
     BuildScenario(
         ModelFunctionCatalog? catalog = null,
         string responseJson = "{}",
-        SpecRefinerPrecedentStore? precedentStore = null)
+        SpecRefinerPrecedentStore? precedentStore = null,
+        WorkerProfileCatalog? workerProfiles = null,
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null)
     {
         var provider = new FakeSmokeProvider(text: responseJson, providerName: "fake-refiner");
         var registry = new InMemoryModelProviderRegistry([provider]);
@@ -489,7 +574,13 @@ public sealed class GoalRefinementTests
         var prec = precedentStore ?? new SpecRefinerPrecedentStore(
             Path.Combine(tempDir, "precedents.json"));
 
-        var service = new GoalRefinementService(registry, effectiveCatalog, collab, prec);
+        var service = new GoalRefinementService(
+            registry,
+            effectiveCatalog,
+            collab,
+            prec,
+            workerProfiles,
+            subscriptionCompleterFactory);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Integrate the billing system");
 
