@@ -18,6 +18,15 @@ internal static partial class CliCommandHandlers
             .ToList();
     }
 
+    // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
+    // (spec-clarification:<goal>:<fork-kind>:<hash>). Intrinsic to the item, so answering one clarification
+    // never renumbers the others — unlike a positional index.
+    private static string ShortClarificationId(string correlationKey)
+    {
+        var lastSegment = correlationKey[(correlationKey.LastIndexOf(':') + 1)..];
+        return lastSegment.Length <= 8 ? lastSegment : lastSegment[..8];
+    }
+
     private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
         switch (command)
@@ -47,7 +56,7 @@ internal static partial class CliCommandHandlers
                     return false;
                 }
 
-                // `attention show <goal-id-prefix>`: list a goal's open spec clarifications with an index
+                // `attention show <goal-id-prefix>`: list a goal's open spec clarifications with a stable id
                 // and the question, so the operator can read them before deciding to answer or dismiss.
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
@@ -61,34 +70,41 @@ internal static partial class CliCommandHandlers
                         return false;
                     }
 
-                    for (var i = 0; i < clarifications.Count; i++)
+                    foreach (var clarification in clarifications)
                     {
-                        Console.WriteLine($"[{i}] {clarifications[i].Subject}");
-                        if (!string.IsNullOrWhiteSpace(clarifications[i].Body))
-                            Console.WriteLine($"    {clarifications[i].Body}");
+                        Console.WriteLine($"[{ShortClarificationId(clarification.CorrelationKey!)}] {clarification.Subject}");
+                        if (!string.IsNullOrWhiteSpace(clarification.Body))
+                            Console.WriteLine($"    {clarification.Body}");
                     }
 
-                    Console.WriteLine($"Answer with: attention answer {parts[2]} <index> <answer>");
+                    Console.WriteLine($"Answer with: attention answer {parts[2]} <id> <answer> (ids are stable; answering one does not renumber the rest)");
                     return false;
                 }
 
-                // `attention answer <goal-id-prefix> <index> <answer...>`: resolve one open clarification with
-                // a real answer (vs. `dismiss`). The answer is written into the RefinedSpec question and
-                // recorded as a precedent on the next refinement pass (SyncAnsweredClarifications).
+                // `attention answer <goal-id-prefix> <id> <answer...>`: resolve one open clarification with a
+                // real answer (vs. `dismiss`). The <id> is the stable short id from `attention show` (matched
+                // by prefix), so resolving one clarification never shifts the identity of the others. The
+                // answer is written into the RefinedSpec question and recorded as a precedent on the next
+                // refinement pass (SyncAnsweredClarifications).
                 if (parts.Count > 1 && parts[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (parts.Count < 5 || !int.TryParse(parts[3], out var index))
-                        throw new ArgumentException("Usage: attention answer <goal-id-prefix> <index> <answer> (run `attention show <goal>` first)");
+                    if (parts.Count < 5)
+                        throw new ArgumentException("Usage: attention answer <goal-id-prefix> <id> <answer> (run `attention show <goal>` first for ids)");
 
-                    var clarifications = OpenClarificationsForGoal(store, parts[2]);
-                    if (index < 0 || index >= clarifications.Count)
-                        throw new ArgumentException($"Index {index} is out of range; goal '{parts[2]}' has {clarifications.Count} open clarification(s).");
+                    var id = parts[3];
+                    var matches = OpenClarificationsForGoal(store, parts[2])
+                        .Where(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (matches.Count == 0)
+                        throw new ArgumentException($"No open clarification for goal '{parts[2]}' matches id '{id}'; run `attention show {parts[2]}`.");
+                    if (matches.Count > 1)
+                        throw new ArgumentException($"Id '{id}' is ambiguous ({matches.Count} matches); use more characters from `attention show {parts[2]}`.");
 
                     var answer = string.Join(' ', parts.Skip(4));
-                    var resolved = store.TryResolveAsync(clarifications[index].CorrelationKey!, answer).GetAwaiter().GetResult();
+                    var resolved = store.TryResolveAsync(matches[0].CorrelationKey!, answer).GetAwaiter().GetResult();
                     Console.WriteLine(resolved
-                        ? $"Answered clarification [{index}] for goal '{parts[2]}'."
-                        : $"Failed to resolve clarification [{index}] for goal '{parts[2]}'.");
+                        ? $"Answered clarification '{id}' for goal '{parts[2]}'."
+                        : $"Failed to resolve clarification '{id}' for goal '{parts[2]}'.");
                     return false;
                 }
 
