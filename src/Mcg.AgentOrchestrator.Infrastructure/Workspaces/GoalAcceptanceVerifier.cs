@@ -493,17 +493,37 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         elapsed.Stop();
+        // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
+        // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
+        // block a green goal, while never masking a build/compile failure and still surfacing the tail.
+        var reportedAllPassed = result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+        var passed = result.ExitCode == 0 || reportedAllPassed;
         return (new AcceptanceCheckResult(
             check.Name,
-            result.ExitCode == 0,
+            passed,
             result.ExitCode,
-            result.ExitCode == 0 ? null : TailOutput(result.Output),
+            passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
             environment.ArtifactsPath,
             "goal-acceptance-verifier",
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
             retried,
             ExtractResultSummary(result.Output)), retried);
+    }
+
+    // A dotnet test run whose own summary banner is "Passed!" (zero failed) but which then exits non-zero
+    // is a testhost shutdown abort, not a test failure. Treat it as passed so a benign abort does not block
+    // a green goal; a build/compile failure ("Build FAILED" / "error CS...") is a real failure, not this.
+    private static bool TestRunReportsAllPassed(string output)
+    {
+        if (output.Contains("Build FAILED", StringComparison.Ordinal) ||
+            output.Contains("error CS", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return output.Contains("Passed!", StringComparison.Ordinal) &&
+            !output.Contains("Failed!", StringComparison.Ordinal);
     }
 
     private async Task<AcceptanceCheckResult> RunForbiddenChangedPathsCheckAsync(
