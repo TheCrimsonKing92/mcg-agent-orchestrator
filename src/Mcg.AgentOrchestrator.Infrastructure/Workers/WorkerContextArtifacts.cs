@@ -267,9 +267,10 @@ public static class WorkerContextArtifacts
             lines.InsertRange(6,
             [
                 string.Empty,
-                "## DO NOT RUN",
-                "- Do not run `dotnet test` or `dotnet build` yourself.",
-                "- The orchestrator acceptance gate performs all build/test verification from stable build slots; report implementation evidence and rely on that gate."
+                "## Build/Test Verification",
+                "- Do not run raw `dotnet test` or `dotnet build` directly: raw testhost binds an unauthorized port and blocks on a Windows Firewall prompt during unattended runs.",
+                "- DO self-verify before reporting using the firewall-safe stable-slot wrapper `.\\scripts\\Invoke-IsolatedDotnet.ps1` (see the Isolated .NET Verification section for the exact `-GoalPrefix`/`-AttemptName` command). It routes through the firewall-authorized build slots, so it is safe to run.",
+                "- The orchestrator acceptance gate re-verifies from stable slots before merge; a compile/test failure you can catch with the wrapper is a failure you must fix, not defer."
             ]);
         }
 
