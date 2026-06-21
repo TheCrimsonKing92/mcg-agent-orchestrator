@@ -1,10 +1,44 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 public sealed class SqliteOrchestratorStateRepositoryTests
 {
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_existing_schema_startup_skips_DDL")]
+    public void ExistingSchemaStartupSkipsDdl()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        var statements = new List<string>();
+        _ = new SqliteOrchestratorStateRepository(db, statements.Add);
+
+        Assert.DoesNotContain(statements, IsWriteCategoryStartupStatement);
+        Assert.Contains(statements, s => s.StartsWith("PRAGMA busy_timeout", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_fresh_schema_creates_expected_catalog_objects")]
+    public void FreshSchemaCreatesExpectedCatalogObjects()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        conn.Open();
+
+        Xunit.Assert.Equal(
+            ["goals", "human_input_requests", "meta", "model_fit_history"],
+            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
+        Xunit.Assert.Equal(
+            ["ix_model_fit_history_model", "ix_model_fit_history_role"],
+            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix_model_fit_history_%' ORDER BY name"));
+        Xunit.Assert.Equal(
+            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "updated_at:TEXT:1", "snapshot_json:TEXT:1"],
+            QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_snapshot_through_SQLite")]
     public async Task SnapshotRoundtripThroughSqlite()
     {
@@ -355,6 +389,27 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     {
         var dir = CreateTempDirectory();
         return Path.Combine(dir, "state.db");
+    }
+
+    private static bool IsWriteCategoryStartupStatement(string sql)
+    {
+        var trimmed = sql.TrimStart();
+        return trimmed.StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("ALTER ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("DROP ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("PRAGMA journal_mode", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<string> QueryStrings(SqliteConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        using var reader = cmd.ExecuteReader();
+        var results = new List<string>();
+        while (reader.Read())
+            results.Add(reader.GetString(0));
+        return results;
     }
 
     private static Goal RecordDispatchOutcome(
