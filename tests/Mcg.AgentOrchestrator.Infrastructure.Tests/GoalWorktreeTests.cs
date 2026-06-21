@@ -213,11 +213,11 @@ public sealed class GoalWorktreeTests
 
             if (OperatingSystem.IsWindows())
             {
-                // Windows holds the file exclusively, so removal is partial until the lock releases.
-                Assert.False(partial.IsComplete);
-                Assert.Equal(path, partial.LeftoverPath);
-                Assert.Equal("workspace remove", partial.ResumeCommand);
-                Assert.True(partial.Message.Contains("could not be removed", StringComparison.OrdinalIgnoreCase));
+                // Windows holds the file exclusively, so the registered worktree and branch are
+                // cleaned up while the leftover directory is deferred to a later sweep.
+                Assert.True(partial.IsComplete);
+                Assert.Null(partial.LeftoverPath);
+                Assert.True(partial.Message.Contains("deferred to orphan sweep", StringComparison.OrdinalIgnoreCase));
                 Assert.True(Directory.Exists(path));
 
                 // Lock released; resume call deletes the directory and cleans up the branch.
@@ -331,10 +331,10 @@ public sealed class GoalWorktreeTests
 
             if (OperatingSystem.IsWindows())
             {
-                Assert.False(partial.IsComplete);
+                Assert.True(partial.IsComplete);
                 Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
-                Assert.Equal(path, partial.LeftoverPath);
-                Assert.True(partial.LockHolders.Count >= 0); // collection always initialized
+                Assert.True(partial.Message.Contains("deferred to orphan sweep", StringComparison.OrdinalIgnoreCase));
+                Assert.Null(partial.LeftoverPath);
             }
             else
             {
@@ -1970,6 +1970,189 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_resets_sandbox_acl_before_directory_delete")]
+    public void GoalWorktreesRemoveResetsSandboxAclBeforeDirectoryDelete()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.BuildServerShutdown = _ => { };
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(result.IsComplete);
+            Assert.True(acl.ResetPaths.SequenceEqual([path]));
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_deletes_orphaned_worktree_directory")]
+    public void GoalWorktreesSweepDeletesOrphanedWorktreeDirectory()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var registeredPath = GoalWorktrees.Ensure(repo, GoalId.New());
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned1");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.BuildServerShutdown = _ => { };
+
+            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal(1, result.RemovedCount);
+            Assert.Empty(result.LeftoverPaths);
+            Assert.False(Directory.Exists(orphanPath));
+            Assert.True(Directory.Exists(registeredPath));
+            Assert.Contains(acl.ResetPaths, resetPath => string.Equals(resetPath, orphanPath, StringComparison.Ordinal));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_ensure_clears_existing_orphan_and_retries_once")]
+    public void GoalWorktreesEnsureClearsExistingOrphanAndRetriesOnce()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.WorktreePath(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(path, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.BuildServerShutdown = _ => { };
+
+            var ensured = GoalWorktrees.Ensure(repo, goalId);
+
+            Assert.Equal(path, ensured);
+            Assert.True(File.Exists(Path.Combine(path, ".git")));
+            Assert.True(acl.ResetPaths.SequenceEqual([path]));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_failure_logs_warning_and_defers_leftover")]
+    public void GoalWorktreesCleanupFailureLogsWarningAndDefersLeftover()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectory = _ => false;
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(result.IsComplete);
+            Assert.Null(result.LeftoverPath);
+            Assert.True(result.Message.Contains("deferred to orphan sweep", StringComparison.OrdinalIgnoreCase));
+            Assert.True(Directory.Exists(path));
+            var warning = Assert.Single(warnings);
+            Assert.Equal(path, warning.Path);
+            Assert.Equal("remove", warning.Operation);
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reaps_recorded_worker_processes_before_delete")]
+    public void GoalWorktreesRemoveReapsRecordedWorkerProcessesBeforeDelete()
+    {
+        var repo = CreateSeededRepository();
+        var originalKill = GoalWorktrees.TryKillRecordedProcess;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Reap worker processes", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var startedAt = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", path, startedAt));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(111, "codex exec", path, "out.log", "err.log", "exit.txt", startedAt, null, null, OwnedProcessIds: [111, 222]));
+
+            var killed = new List<int>();
+            GoalWorktrees.TryKillRecordedProcess = pid =>
+            {
+                killed.Add(pid);
+                return true;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = _ => { };
+
+            var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
+
+            Assert.True(result.IsComplete);
+            Assert.True(killed.SequenceEqual([111, 222]));
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            GoalWorktrees.TryKillRecordedProcess = originalKill;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));
@@ -2158,6 +2341,16 @@ public sealed class GoalWorktreeTests
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    private sealed class RecordingSandboxAclHelper : ISandboxAclHelper
+    {
+        public List<string> ResetPaths { get; } = [];
+
+        public void ResetSandboxAcl(string worktreePath)
+        {
+            ResetPaths.Add(worktreePath);
         }
     }
 }

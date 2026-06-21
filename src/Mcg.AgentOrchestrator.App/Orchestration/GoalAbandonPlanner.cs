@@ -169,7 +169,7 @@ internal static class GoalAbandonPlanner
 
         if (GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) is not null)
         {
-            _ = GoalWorktrees.Remove(workspace.ExecutionDirectory, goal.Id);
+            _ = GoalWorktrees.Remove(workspace.ExecutionDirectory, goal.Id, kernel);
         }
 
         if (DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id).CanCleanup)

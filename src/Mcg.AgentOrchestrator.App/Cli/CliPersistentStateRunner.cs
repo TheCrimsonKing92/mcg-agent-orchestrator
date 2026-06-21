@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -58,6 +59,7 @@ internal static class CliPersistentStateRunner
                 (kernel, _) =>
                 {
                     var sweptCount = new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
+                    GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
 
                     var commandAgents = nextAgents;
                     var commandProfiles = nextWorkerProfiles;
@@ -171,6 +173,7 @@ internal static class CliPersistentStateRunner
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
+        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>

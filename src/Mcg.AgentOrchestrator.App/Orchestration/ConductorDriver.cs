@@ -207,7 +207,7 @@ internal sealed class ConductorDriver
         _cleanup = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Removing goal workspace.");
-            var result = GoalWorktrees.Remove(dir, goal.Id);
+            var result = GoalWorktrees.Remove(dir, goal.Id, kernel);
             if (result.IsComplete)
                 GoalOperationJournal.Completed(dir, goal, "conductor:cleanup", result.Message);
             else

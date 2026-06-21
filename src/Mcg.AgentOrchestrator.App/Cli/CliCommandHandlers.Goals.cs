@@ -953,7 +953,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     try
     {
         GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Removing goal workspace.");
-        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id);
+        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
     }
     catch (InvalidOperationException ex)
     {
@@ -1019,7 +1019,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         GoalWorktreeRemoveResult removeResult;
         try
         {
-            removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id);
+            removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
         }
         catch (InvalidOperationException ex)
         {
@@ -1869,7 +1869,7 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
         case "remove":
             var policy = ResolveCliAutonomyPolicy(parts);
             EnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "workspace remove");
-            PrintWorkspaceRemoveResult(GoalWorktrees.Remove(executionDirectory, goal.Id));
+            PrintWorkspaceRemoveResult(GoalWorktrees.Remove(executionDirectory, goal.Id, context.Kernel));
             return;
 
         default:
@@ -2325,7 +2325,7 @@ private static void CleanupGoalWorkspaceAfterMerge(
     GoalWorktreeRemoveResult removeResult;
     try
     {
-        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id);
+        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
     }
     catch (InvalidOperationException ex)
     {
