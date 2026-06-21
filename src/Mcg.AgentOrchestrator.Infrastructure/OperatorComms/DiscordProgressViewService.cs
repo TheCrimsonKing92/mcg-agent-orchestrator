@@ -33,6 +33,26 @@ public sealed class DiscordProgressViewService
         StatusProjection projection,
         CancellationToken cancellationToken = default)
     {
+        if (DiscordOperatorFaultClassifier.IsAuthDisabledForProcess)
+            return Skipped();
+
+        try
+        {
+            return await ReconcileCoreAsync(projection, cancellationToken);
+        }
+        catch (Exception ex) when (
+            !cancellationToken.IsCancellationRequested &&
+            DiscordOperatorFaultClassifier.IsAuthError(ex))
+        {
+            DiscordOperatorFaultClassifier.DisableForProcess("progress view", ex);
+            return Skipped();
+        }
+    }
+
+    private async Task<DiscordProgressUpdateResult> ReconcileCoreAsync(
+        StatusProjection projection,
+        CancellationToken cancellationToken)
+    {
         var catalog = OperatorChannelStore.Load(_catalogPath);
         var contentHash = Hash(projection.RenderedContent);
         if (string.Equals(catalog.ProgressStatusContentHash, contentHash, StringComparison.Ordinal) &&
@@ -101,6 +121,15 @@ public sealed class DiscordProgressViewService
             threadId,
             messageId);
     }
+
+    private static DiscordProgressUpdateResult Skipped() =>
+        new(
+            Unchanged: true,
+            CreatedThread: false,
+            SentMessage: false,
+            EditedMessage: false,
+            ThreadId: null,
+            MessageId: null);
 
     private static ulong? ParseNullableUInt64(string? value) =>
         ulong.TryParse(value, out var parsed) ? parsed : null;
