@@ -33,6 +33,42 @@ public static string CreateTempDirectory()
     return path;
 }
 
+public static string BacklogStorePathFor(string root) =>
+    Path.Combine(root, ".orchestrator", "backlog.db");
+
+// Seeds the SQLite backlog store under <root> from a "## Heading\nbody" markdown string, so tests can
+// keep their existing fixtures while the planners read from the store instead of a BACKLOG.md file.
+public static void SeedBacklog(string root, string markdown)
+{
+    var store = new BacklogStore(BacklogStorePathFor(root));
+    string? title = null;
+    var body = new System.Text.StringBuilder();
+    void Flush()
+    {
+        if (title is not null)
+        {
+            store.AddAsync(title, body.ToString().Trim()).GetAwaiter().GetResult();
+        }
+    }
+
+    foreach (var raw in markdown.Split('\n'))
+    {
+        var line = raw.TrimEnd('\r');
+        if (line.StartsWith("## ", StringComparison.Ordinal))
+        {
+            Flush();
+            title = line[3..].Trim();
+            body.Clear();
+        }
+        else if (title is not null && !line.StartsWith("# ", StringComparison.Ordinal))
+        {
+            body.AppendLine(line);
+        }
+    }
+
+    Flush();
+}
+
 public static Process StartPrototypeDashboardProcess(string appProject, string workingDirectory, string url) =>
     StartDashboardProcess(appProject, workingDirectory, "prototype-ui", url);
 

@@ -103,7 +103,7 @@ internal static partial class DashboardEndpoints
                 ? parsedMax
                 : throw new ArgumentException("Backlog goal-plan max must be a positive integer.");
         var intake = BacklogIntakePlanner.Build(
-            services.Workspace.ExecutionDirectory,
+            services.Workspace.BacklogStorePath,
             string.IsNullOrWhiteSpace(heading) ? null : heading,
             maxItems);
         if (intake.Items.Count == 0)

@@ -519,7 +519,7 @@ public static class WorkerContextArtifacts
             "  Use for: acceptance manifest status, verification history, model-fit evidence, and WORKER_RESULT completeness.",
             "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass.",
             "- backlog-log-evidence",
-            "  Artifact: BACKLOG.md and DOGFOOD_LOG.md when present in artifact-registry.json",
+            "  Artifact: DOGFOOD_LOG.md when present in artifact-registry.json",
             "  Use for: closing backlog items, filing follow-ups, and recording Model fit at goal boundaries.",
             "  Failure handling: missing backlog/log artifacts require a direct file read before editing those files.",
             string.Empty,
@@ -1503,7 +1503,6 @@ public static class WorkerContextArtifacts
             "context-package.json" => "Task-scoped context package metadata and missing-artifact fallback guidance.",
             "subscription-preflight.md" => "Subscription dispatch preflight findings.",
             "AGENTS.md" => "Repository-local agent instructions.",
-            "BACKLOG.md" => "Open orchestrator backlog context.",
             "DOGFOOD_LOG.md" => "Recent dogfood evidence and friction.",
             _ => "Copied repository guidance artifact."
         };
@@ -1522,7 +1521,7 @@ public static class WorkerContextArtifacts
             "diff-summary.md" => "generated from git status and diff commands in the working directory at dispatch preparation",
             "context-package.json" => "generated with the current task package at dispatch preparation",
             "subscription-preflight.md" => "generated from subscription preflight immediately before dispatch preparation",
-            "AGENTS.md" or "BACKLOG.md" or "DOGFOOD_LOG.md" => "copied from working directory at dispatch preparation",
+            "AGENTS.md" or "DOGFOOD_LOG.md" => "copied from working directory at dispatch preparation",
             _ => $"generated for {currentRole} at dispatch preparation"
         };
     }
@@ -1535,7 +1534,7 @@ public static class WorkerContextArtifacts
             "diff-summary.md" => ["Developer", "Tester", "Reviewer"],
             "subscription-preflight.md" => ["Developer", "Tester", "Reviewer"],
             "prior-task-evidence.md" => ["Developer", "Tester", "Reviewer"],
-            "AGENTS.md" or "BACKLOG.md" or "DOGFOOD_LOG.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
+            "AGENTS.md" or "DOGFOOD_LOG.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
             _ => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"]
         };
     }

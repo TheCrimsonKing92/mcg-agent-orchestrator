@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -20,64 +21,26 @@ internal sealed record BacklogIntakePlan(string BacklogPath, IReadOnlyList<Backl
 
 internal static class BacklogIntakePlanner
 {
-    private static readonly Regex HeadingRegex = new("^##\\s+(.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PathRegex = new(
         @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents|\.github)[\\/][A-Za-z0-9_.\\/\-]+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static BacklogIntakePlan Build(string repositoryRoot, string? headingFilter = null, int maxItems = 5)
+    public static BacklogIntakePlan Build(string backlogStorePath, string? headingFilter = null, int maxItems = 5)
     {
-        if (string.IsNullOrWhiteSpace(repositoryRoot))
+        if (string.IsNullOrWhiteSpace(backlogStorePath))
         {
-            throw new ArgumentException("Value cannot be empty.", nameof(repositoryRoot));
+            throw new ArgumentException("Value cannot be empty.", nameof(backlogStorePath));
         }
 
-        var backlogPath = Path.Combine(repositoryRoot, "BACKLOG.md");
-        if (!File.Exists(backlogPath))
-        {
-            throw new FileNotFoundException("BACKLOG.md was not found.", backlogPath);
-        }
-
-        var items = ParseItems(File.ReadAllText(backlogPath))
-            .Where(item => !item.Heading.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
+        var items = new BacklogStore(backlogStorePath).ListAsync().GetAwaiter().GetResult()
+            .Where(item => !item.Title.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
             .Where(item => string.IsNullOrWhiteSpace(headingFilter) ||
-                item.Heading.Contains(headingFilter, StringComparison.OrdinalIgnoreCase))
+                item.Title.Contains(headingFilter, StringComparison.OrdinalIgnoreCase))
             .Take(maxItems)
-            .Select(item => BuildItem(item.Heading, item.Body))
+            .Select(item => BuildItem(item.Title, item.Body))
             .ToList();
 
-        return new BacklogIntakePlan(backlogPath, items);
-    }
-
-    private static IEnumerable<(string Heading, string Body)> ParseItems(string backlog)
-    {
-        string? heading = null;
-        var body = new List<string>();
-        foreach (var line in backlog.Split(['\r', '\n'], StringSplitOptions.None))
-        {
-            var match = HeadingRegex.Match(line);
-            if (match.Success)
-            {
-                if (heading is not null)
-                {
-                    yield return (heading, string.Join(Environment.NewLine, body).Trim());
-                }
-
-                heading = match.Groups[1].Value.Trim();
-                body.Clear();
-                continue;
-            }
-
-            if (heading is not null)
-            {
-                body.Add(line);
-            }
-        }
-
-        if (heading is not null)
-        {
-            yield return (heading, string.Join(Environment.NewLine, body).Trim());
-        }
+        return new BacklogIntakePlan("backlog store", items);
     }
 
     private static BacklogIntakeItem BuildItem(string heading, string body)
@@ -100,7 +63,7 @@ internal static class BacklogIntakePlanner
             objective,
             "Run `workspace create <goal-prefix>` before file-touching work; use the goal worktree for dispatch, tests, acceptance, and cleanup.",
             "Inspect goal-branch diff, run focused tests named in the plan, verify worker result/evidence records, then run acceptance before merge.",
-            "Remove or update the BACKLOG item and add a DOGFOOD_LOG entry with commands, tests, blockers, and Model fit.");
+            "Close or update the backlog item (`backlog-close`) and add a DOGFOOD_LOG entry with commands, tests, blockers, and Model fit.");
     }
 
     private static List<string> InferTargetFiles(string text)
@@ -134,7 +97,7 @@ internal static class BacklogIntakePlanner
             Add(paths, "scripts/Invoke-IsolatedDotnet.ps1");
         }
 
-        return paths.Count == 0 ? ["BACKLOG.md"] : paths;
+        return paths;
     }
 
     private static List<AgentRole> InferRoles(string text)

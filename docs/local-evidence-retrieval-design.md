@@ -12,7 +12,7 @@ Give future file-access workers a way to find relevant local evidence without pu
 - `.orchestrator-context/<goal-id>/prior-task-summaries.md`: compact prior changed files, behavior, verification, risks, and model fit.
 - `.orchestrator-context/<goal-id>/prior-task-evidence.md`: full prior verification evidence, used only when summaries are insufficient.
 - `.orchestrator-handoff.md`: full handoff for file-access workers when present.
-- `BACKLOG.md`: open follow-ups and durable decision context.
+- the backlog store (`.orchestrator/backlog.db`, via `backlog-list`): open follow-ups and durable decision context.
 - `DOGFOOD_LOG.md` and rotated `docs/DOGFOOD_LOG-*.md`: product friction and validation history, but only when the current task explicitly asks for historical dogfood evidence.
 - Source/test files changed on the goal branch, discovered through `git diff --name-only main..HEAD` or the acceptance diff provider.
 

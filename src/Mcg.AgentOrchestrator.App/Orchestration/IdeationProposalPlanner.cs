@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -57,17 +58,9 @@ internal static class IdeationProposalPlanner
         }
 
         sb.AppendLine();
-        sb.AppendLine("## BACKLOG.md (top 4000 chars)");
-        var backlogPath = Path.Combine(workspace.ExecutionDirectory, "BACKLOG.md");
-        if (File.Exists(backlogPath))
-        {
-            var text = File.ReadAllText(backlogPath);
-            sb.AppendLine(text.Length > 4000 ? text[..4000] + "\n...(truncated)" : text);
-        }
-        else
-        {
-            sb.AppendLine("(not found)");
-        }
+        sb.AppendLine("## Backlog (open items, top 4000 chars)");
+        var backlogText = RenderOpenBacklog(workspace.BacklogStorePath);
+        sb.AppendLine(backlogText.Length > 4000 ? backlogText[..4000] + "\n...(truncated)" : backlogText);
 
         sb.AppendLine();
         sb.AppendLine("## DOGFOOD_LOG.md (recent 2000 chars)");
@@ -139,6 +132,25 @@ internal static class IdeationProposalPlanner
             }
         }
         return best ?? candidates[0];
+    }
+
+    private static string RenderOpenBacklog(string backlogStorePath)
+    {
+        var items = new BacklogStore(backlogStorePath).ListAsync().GetAwaiter().GetResult();
+        if (items.Count == 0)
+        {
+            return "(none)";
+        }
+
+        var sb = new StringBuilder();
+        foreach (var item in items)
+        {
+            sb.AppendLine($"## {item.Title}");
+            sb.AppendLine(item.Body);
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
     }
 
     public static string FormatBacklogEntry(IdeaProposal idea) =>

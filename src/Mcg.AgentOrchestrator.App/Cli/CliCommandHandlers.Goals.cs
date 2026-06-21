@@ -1293,11 +1293,22 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         .Skip(1)
         .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
     var plan = BacklogIntakePlanner.Build(
-        context.Workspace.ExecutionDirectory,
+        context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
         createGoal || createSimpleGoal ? 1 : 5);
     if (plan.Items.Count == 0)
     {
+        if (!string.IsNullOrWhiteSpace(headingFilter))
+        {
+            var doneItem = new BacklogStore(context.Workspace.BacklogStorePath)
+                .GetByExactIdAsync(BacklogStore.SlugId(headingFilter)).GetAwaiter().GetResult();
+            if (doneItem is { Status: BacklogItemStatus.Done })
+            {
+                Console.WriteLine($"Backlog item '{doneItem.Title}' is already Done; no goal created.");
+                return false;
+            }
+        }
+
         throw new InvalidOperationException("No backlog items matched the requested filter.");
     }
 
@@ -1309,18 +1320,6 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     var item = plan.Items.Single();
     var backlogItemId = BacklogStore.SlugId(item.Heading);
-
-    // Skip intake if the item is already Done in the backlog store.
-    if (!string.IsNullOrEmpty(backlogItemId))
-    {
-        var store = new BacklogStore(context.Workspace.BacklogStorePath);
-        var existing = store.GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult();
-        if (existing is { Status: BacklogItemStatus.Done })
-        {
-            Console.WriteLine($"Backlog item '{item.Heading}' is already Done; no goal created.");
-            return false;
-        }
-    }
 
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers)
@@ -1414,7 +1413,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         .Skip(1)
         .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
     var intake = BacklogIntakePlanner.Build(
-        context.Workspace.ExecutionDirectory,
+        context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
         maxItems: 10);
     if (intake.Items.Count == 0)
@@ -1486,12 +1485,13 @@ private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<stri
 
     if (appendBacklog && plan.IsValid && plan.Ideas.Count > 0)
     {
-        var backlogPath = Path.Combine(context.Workspace.ExecutionDirectory, "BACKLOG.md");
-        if (!File.Exists(backlogPath))
-            throw new InvalidOperationException($"BACKLOG.md not found at {backlogPath}; cannot append ideas.");
-        var entries = string.Concat(plan.Ideas.Select(IdeationProposalPlanner.FormatBacklogEntry));
-        File.AppendAllText(backlogPath, entries);
-        Console.WriteLine($"Appended {plan.Ideas.Count} idea(s) to BACKLOG.md.");
+        var store = new BacklogStore(context.Workspace.BacklogStorePath);
+        foreach (var idea in plan.Ideas)
+        {
+            var body = $"{idea.Rationale} Scope: {idea.Scope}. Value: {idea.Value}. Effort: {idea.Effort}. Risk: {idea.Risk}.";
+            store.AddAsync(idea.Title, body).GetAwaiter().GetResult();
+        }
+        Console.WriteLine($"Appended {plan.Ideas.Count} idea(s) to the backlog store.");
     }
     else if (appendBacklog && !plan.IsValid)
     {

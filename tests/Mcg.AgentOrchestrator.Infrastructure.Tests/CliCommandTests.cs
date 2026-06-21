@@ -363,7 +363,7 @@ public sealed class CliCommandTests
     public void CliBacklogIntakePrintsGoalSliceWithoutMutatingState()
     {
         var root = CreateTempDirectory();
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), """
+        SeedBacklog(root, """
         # Backlog
 
         ## Decision record (durable context, not work items)
@@ -409,7 +409,7 @@ public sealed class CliCommandTests
     public void CliBacklogIntakeCreateSimpleGoalRequiresExplicitFlag()
     {
         var root = CreateTempDirectory();
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), """
+        SeedBacklog(root, """
         # Backlog
 
         ## Add deterministic build/test broker
@@ -631,8 +631,8 @@ public sealed class CliCommandTests
         var root = CreateTempDirectory();
         WriteCompilationBacklog(root);
 
-        var first = GoalDependencyPlanner.Build(BacklogIntakePlanner.Build(root, maxItems: 2));
-        var second = GoalDependencyPlanner.Build(BacklogIntakePlanner.Build(root, maxItems: 2));
+        var first = GoalDependencyPlanner.Build(BacklogIntakePlanner.Build(BacklogStorePathFor(root), maxItems: 2));
+        var second = GoalDependencyPlanner.Build(BacklogIntakePlanner.Build(BacklogStorePathFor(root), maxItems: 2));
 
         Xunit.Assert.True(first.CompiledGraph.IsRunnable);
         Xunit.Assert.Equal(first.CompiledGraph.GraphId, second.CompiledGraph.GraphId);
@@ -651,7 +651,7 @@ public sealed class CliCommandTests
         var root = CreateTempDirectory();
         WriteConflictingCompilationBacklog(root);
 
-        var plan = GoalDependencyPlanner.Build(BacklogIntakePlanner.Build(root, maxItems: 2));
+        var plan = GoalDependencyPlanner.Build(BacklogIntakePlanner.Build(BacklogStorePathFor(root), maxItems: 2));
 
         Xunit.Assert.True(plan.CompiledGraph.IsRunnable);
         Xunit.Assert.Equal(2, plan.ParallelPlan.Batches.Count);
@@ -667,7 +667,7 @@ public sealed class CliCommandTests
     {
         var root = CreateTempDirectory();
         WriteCompilationBacklog(root);
-        var intake = BacklogIntakePlanner.Build(root, maxItems: 2);
+        var intake = BacklogIntakePlanner.Build(BacklogStorePathFor(root), maxItems: 2);
         var plan = GoalDependencyPlanner.Build(intake);
 
         var dto = DashboardResponseMapper.ToBacklogGoalPlanDto(intake, plan);
@@ -4107,7 +4107,7 @@ public sealed class CliCommandTests
 
     private static void WritePlanningBacklog(string root)
     {
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), """
+        SeedBacklog(root, """
         # Backlog
 
         ## Decision record (durable context, not work items)
@@ -4130,7 +4130,7 @@ public sealed class CliCommandTests
 
     private static void WriteCompilationBacklog(string root)
     {
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), """
+        SeedBacklog(root, """
         # Backlog
 
         ## Add feature A compiler support
@@ -4145,7 +4145,7 @@ public sealed class CliCommandTests
 
     private static void WriteConflictingCompilationBacklog(string root)
     {
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), """
+        SeedBacklog(root, """
         # Backlog
 
         ## Add feature A compiler support

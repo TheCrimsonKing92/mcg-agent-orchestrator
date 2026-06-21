@@ -126,7 +126,7 @@ Console.WriteLine("    --full: also surfaces status, monitor, readiness, evidenc
 Console.WriteLine("            input-needed, subscription-plan, model-outcomes, durations, loop-health, failure-triage,");
 Console.WriteLine("            goal-recovery, supervisor, and operator-inbox detail in one output.");
 Console.WriteLine("  goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start]");
-Console.WriteLine("    Create a goal. --simple: single Developer task. --from-backlog: read from BACKLOG.md. --run: create and start.");
+Console.WriteLine("    Create a goal. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
 Console.WriteLine("  accept [goal-id] [--skip-verify] [--autonomy <policy>]");
 Console.WriteLine("    Accept a completed goal: run acceptance checks, merge workspace, and clean up worktree.");
 Console.WriteLine("  stop <goal-id> <reason> --as cancel|park|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-abandon]");

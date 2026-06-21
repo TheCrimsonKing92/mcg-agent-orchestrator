@@ -31,8 +31,8 @@ internal static partial class ConsoleViews
 
         Console.WriteLine();
         if (plan.IsValid && plan.Ideas.Count > 0)
-            Console.WriteLine("Append to BACKLOG.md: ideate --append-backlog");
+            Console.WriteLine("Append to the backlog: ideate --append-backlog");
         else if (!plan.IsValid)
-            Console.WriteLine("Fix the validation errors before appending ideas to BACKLOG.md.");
+            Console.WriteLine("Fix the validation errors before appending ideas to the backlog.");
     }
 }
