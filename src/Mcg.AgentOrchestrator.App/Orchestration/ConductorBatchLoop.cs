@@ -37,6 +37,7 @@ internal sealed class ConductorBatchLoop
         TimeSpan? watchInterval = null,
         Action<BatchTickSummary>? onTick = null,
         Func<TimeSpan, bool>? sleepFunc = null,
+        IConductorWakeSignal? wakeSignal = null,
         TimeSpan? maxDuration = null,
         string? onlyGoalId = null,
         Action<AgentOrchestratorKernel>? persistTick = null,
@@ -105,10 +106,11 @@ internal sealed class ConductorBatchLoop
                 // driven. A one-shot `conduct --loop` (keepAliveWhenIdle=false) still completes here.
                 if (keepAliveWhenIdle && watchInterval is not null)
                 {
-                    EmitProgress($"IDLE_SLEEP seconds={(int)watchInterval.Value.TotalSeconds}");
+                    var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
+                    EmitProgress($"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleStop = sleepFunc is not null
-                        ? sleepFunc(watchInterval.Value)
-                        : SleepWithStopCheck(watchInterval.Value, stopFilePath);
+                        ? sleepFunc(idleInterval)
+                        : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal);
                     if (idleStop)
                     {
                         stopRequested = true;
@@ -238,14 +240,15 @@ internal sealed class ConductorBatchLoop
                     break;
                 }
 
-                var sleepSeconds = (int)watchInterval.Value.TotalSeconds;
+                var fallbackInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
+                var sleepSeconds = (int)fallbackInterval.TotalSeconds;
                 EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
                 Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
                 onTick?.Invoke(tickSummary with { WatchSleeping = true });
 
                 var stopDuringSleep = sleepFunc is not null
-                    ? sleepFunc(watchInterval.Value)
-                    : SleepWithStopCheck(watchInterval.Value, stopFilePath);
+                    ? sleepFunc(fallbackInterval)
+                    : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal);
 
                 if (stopDuringSleep)
                 {
@@ -432,8 +435,21 @@ internal sealed class ConductorBatchLoop
     private static bool IsStopRequested(string stopFilePath) =>
         !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);
 
-    // Returns true if the stop file appeared during sleep, false if sleep completed normally.
-    private static bool SleepWithStopCheck(TimeSpan interval, string stopFilePath)
+    private static TimeSpan GetWatchFallbackInterval(
+        AgentOrchestratorKernel kernel,
+        string? onlyGoalId,
+        TimeSpan idleInterval) =>
+        HasRunningDispatch(kernel, onlyGoalId)
+            ? TimeSpan.FromSeconds(WatchStopPollIntervalSeconds)
+            : idleInterval;
+
+    private static bool HasRunningDispatch(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
+        kernel.Goals.Any(goal =>
+            (onlyGoalId is null || goal.Id.Value == onlyGoalId)
+            && goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }));
+
+    // Returns true if the stop file appeared during sleep, false if the fallback timer or wake signal fired.
+    private static bool SleepUntilNextTick(TimeSpan interval, string stopFilePath, IConductorWakeSignal? wakeSignal)
     {
         var remaining = interval;
         var poll = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
@@ -442,7 +458,15 @@ internal sealed class ConductorBatchLoop
             if (IsStopRequested(stopFilePath))
                 return true;
             var slice = remaining < poll ? remaining : poll;
-            Thread.Sleep(slice);
+            if (wakeSignal is not null)
+            {
+                if (wakeSignal.Wait(slice))
+                    break;
+            }
+            else
+            {
+                Thread.Sleep(slice);
+            }
             remaining -= slice;
         }
 

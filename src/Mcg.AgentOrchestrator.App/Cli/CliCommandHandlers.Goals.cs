@@ -619,13 +619,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
                 };
                 var loopReaper = new BackgroundDispatchRunner();
+                using var loopWakeSignal = watchInterval is not null
+                    ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
+                    : null;
                 var loopSummary = new ConductorBatchLoop(
                     reconcileSweep,
                     (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
-                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
+                    watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
@@ -667,13 +670,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
                 var watchReaper = new BackgroundDispatchRunner();
+                using var watchWakeSignal = new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory);
                 var watchSummary = new ConductorBatchLoop(
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
                     wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
-                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
+                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), wakeSignal: watchWakeSignal, maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
