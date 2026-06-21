@@ -145,5 +145,4 @@ Durable state lives in stores, never in `.scratch`.
 
 - `AGENTS.md` — output/diagnosis/spec discipline and architecture invariants (read after this).
 - `.agents/skills/orchestrator-worker-verification/SKILL.md` — how to verify a worker result before trusting it.
-- `docs/conductor-loop.md`, `docs/acceptance-gate.md` — conceptual summaries of those subsystems.
 - `next <goal> --full` and `readiness <goal>` — the live, authoritative state of any goal.
