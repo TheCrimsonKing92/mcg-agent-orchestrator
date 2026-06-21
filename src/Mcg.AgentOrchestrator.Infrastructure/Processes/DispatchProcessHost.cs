@@ -286,7 +286,15 @@ public static void DropToLow() {
                 startInfo.ArgumentList.Add(argument);
             }
 
-            startInfo.ArgumentList.Add(parameters.Command);
+            // Pipe empty input into the worker command so the inner CLI (claude/codex) gets an
+            // immediately-closed (EOF) stdin instead of inheriting the wrapper's stdin handle. Closing the
+            // wrapper's stdin below is racy and does not reliably reach the grandchild CLI under the Low-IL
+            // sandbox launch: the CLI spawns (heartbeat childPid populates) but blocks on the inherited
+            // open pipe, emitting zero output until the watchdog reaps it (the "spawned-but-silent" hang,
+            // distinct from the wrapper startup hang fixed by WorkerShell's -InputFormat None). A fresh
+            // empty pipeline stdin overrides the inherited handle. Both worker kinds read their prompt from
+            // a file (Get-Content -Raw {promptPath}), never stdin, so empty stdin is safe.
+            startInfo.ArgumentList.Add("$null | " + parameters.Command);
 
             if (parameters.DisableSharedCompilation)
             {
