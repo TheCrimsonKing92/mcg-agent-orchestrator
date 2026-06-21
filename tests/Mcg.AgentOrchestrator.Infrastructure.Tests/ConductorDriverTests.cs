@@ -49,11 +49,13 @@ public sealed class ConductorDriverTests
         Action? buildServerShutdown = null,
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null,
+        Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<GoalId, TaskId>? clearCriterionRetryFeedback = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
+        Action<Goal, LandingResult>? afterSuccessfulLanding = null,
         Action<Goal>? record = null,
         Action<Goal>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
@@ -69,6 +71,7 @@ public sealed class ConductorDriverTests
             runAcceptanceSummary ?? (goal => (runAcceptance ?? (_ => true))(goal)
                 ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
                 : AcceptanceVerificationSummary.Failed),
+            runAdvisorySemanticAcceptance,
             retryTask,
             recordCriterionRetryFeedback,
             clearCriterionRetryFeedback,
@@ -76,6 +79,7 @@ public sealed class ConductorDriverTests
             land is null
                 ? ((g, _) => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"))
                 : ((g, _) => land(g)),
+            afterSuccessfulLanding,
             record ?? (_ => { }),
             cleanup ?? (_ => { }),
             writeEscalation ?? ((_, _, _) => { }),
@@ -418,6 +422,81 @@ public sealed class ConductorDriverTests
         Assert.True(landCalled);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(0, task.CriterionRetryFeedback.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_runs_semantic_acceptance_after_acceptance_before_landing")]
+    public void ConductorDriverVerifiedRunsSemanticAcceptanceAfterAcceptanceBeforeLanding()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var order = new List<string>();
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ =>
+            {
+                order.Add("acceptance");
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            runAdvisorySemanticAcceptance: (_, _) => order.Add("semantic"),
+            land: g =>
+            {
+                order.Add("land");
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Xunit.Assert.Equal(new[] { "acceptance", "semantic", "land" }, order);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_successful_landing_runs_post_landing_close_after_main_advances")]
+    public void ConductorDriverVerifiedSuccessfulLandingRunsPostLandingCloseAfterMainAdvances()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var order = new List<string>();
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAdvisorySemanticAcceptance: (_, _) => order.Add("semantic"),
+            land: g =>
+            {
+                order.Add("land");
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            afterSuccessfulLanding: (_, result) =>
+            {
+                Assert.True(result.MainAdvanced);
+                order.Add("close");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Xunit.Assert.Equal(new[] { "semantic", "land", "close" }, order);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_does_not_close_backlog_when_landing_does_not_advance_main")]
+    public void ConductorDriverVerifiedDoesNotCloseBacklogWhenLandingDoesNotAdvanceMain()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var closeCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            land: g => new LandingResult(g.Id.Value, g.Id.Value[..8],
+                new LandingDecision.Promote(), "integration", false, "No main advance"),
+            afterSuccessfulLanding: (_, _) => { closeCalled = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.False(closeCalled);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_zero_criterion_retry_budget_escalates_without_retry")]

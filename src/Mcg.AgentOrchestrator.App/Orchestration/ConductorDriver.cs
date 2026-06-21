@@ -15,11 +15,13 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Action _buildServerShutdown;
     private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
+    private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
     private readonly Action<Goal> _record;
     private readonly Action<Goal> _cleanup;
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
@@ -181,6 +183,26 @@ internal sealed class ConductorDriver
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
 
+        _runAdvisorySemanticAcceptance = (goal, _) =>
+        {
+            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
+            if (worktreePath is null)
+            {
+                return;
+            }
+
+            GoalOperationJournal.Begin(dir, goal, "conductor:semantic-acceptance", "Running advisory semantic acceptance.");
+            GoalLandingPostActions.RunAdvisorySemanticAcceptance(
+                goal,
+                workspace,
+                providers ?? new InMemoryModelProviderRegistry([]),
+                profiles,
+                worktreePath,
+                null,
+                Console.WriteLine);
+            GoalOperationJournal.Completed(dir, goal, "conductor:semantic-acceptance", "Advisory semantic acceptance invoked.");
+        };
+
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
 
         _land = (goal, policy) =>
@@ -192,6 +214,19 @@ internal sealed class ConductorDriver
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:land", result.Message);
             return result;
+        };
+
+        _afterSuccessfulLanding = (goal, result) =>
+        {
+            if (!result.MainAdvanced)
+            {
+                return;
+            }
+
+            GoalOperationJournal.Begin(dir, goal, "conductor:backlog-close", "Closing linked source backlog item.");
+            var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, workspace.BacklogStorePath, Console.WriteLine);
+            GoalOperationJournal.Completed(dir, goal, "conductor:backlog-close",
+                closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
         };
 
         _record = goal =>
@@ -245,11 +280,13 @@ internal sealed class ConductorDriver
         Func<Goal, DispatchStartOutcome>? startRecordedDispatches,
         Action? buildServerShutdown,
         Func<Goal, AcceptanceVerificationSummary> runAcceptanceVerification,
+        Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback,
         Action<GoalId, TaskId>? clearCriterionRetryFeedback,
         Func<Goal, GoalWorktreeRebaseResult> rebaseOntoMain,
         Func<Goal, ConductorAutonomyPolicy, LandingResult> land,
+        Action<Goal, LandingResult>? afterSuccessfulLanding,
         Action<Goal> record,
         Action<Goal> cleanup,
         Action<Goal, GoalLifecycleState, string> writeEscalation,
@@ -264,11 +301,13 @@ internal sealed class ConductorDriver
             : (goal, _) => startRecordedDispatches(goal);
         _buildServerShutdown = buildServerShutdown ?? (() => { });
         _runAcceptanceVerification = runAcceptanceVerification;
+        _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _rebaseOntoMain = rebaseOntoMain;
         _land = land;
+        _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
         _record = record;
         _cleanup = cleanup;
         _writeEscalation = writeEscalation;
@@ -502,7 +541,11 @@ internal sealed class ConductorDriver
             _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
-        // Gate 3: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
+        // Gate 3: advisory semantic acceptance runs only after deterministic acceptance passed. It
+        // records judge receipts for observability but never gates landing.
+        _runAdvisorySemanticAcceptance(goal, acceptance);
+
+        // Gate 4: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
         var changeRisk = _classifyChangeRisk(goal);
         if (changeRisk.HasValue)
         {
@@ -514,11 +557,16 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
+        // Gate 5: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, escalate.Reason);
+        }
+
+        if (landResult.MainAdvanced)
+        {
+            _afterSuccessfulLanding(goal, landResult);
         }
 
         return MakeResult(goal.Id.Value, goalPrefix, policy,

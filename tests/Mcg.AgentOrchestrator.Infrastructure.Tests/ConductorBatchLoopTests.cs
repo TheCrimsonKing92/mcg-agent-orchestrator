@@ -57,10 +57,12 @@ public sealed class ConductorBatchLoopTests
             null,
             null,
             null,
+            null,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
             land is null
                 ? ((g, _) => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"))
                 : ((g, _) => land(g)),
+            null,
             record ?? (_ => { }),
             cleanup ?? (_ => { }),
             writeEscalation ?? ((_, _, _) => { }),

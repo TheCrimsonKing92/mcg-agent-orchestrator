@@ -368,7 +368,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     AutoRecordDogfoodEntry(context);
                 }
 
-                AutoCloseSourceBacklogItem(context.CurrentGoal, context.Workspace.BacklogStorePath);
+                GoalLandingPostActions.AutoCloseSourceBacklogItem(context.CurrentGoal, context.Workspace.BacklogStorePath, Console.WriteLine);
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
@@ -765,19 +765,6 @@ private static void AutoRecordDogfoodEntry(CliExecutionContext context)
 
 // Closes the linked backlog item (if any) when a goal lands. Idempotent: already-closed or
 // absent items are a safe no-op. Swallows all store exceptions so acceptance never fails here.
-internal static bool AutoCloseSourceBacklogItem(Goal? goal, string backlogStorePath)
-{
-    if (goal?.SourceBacklogItemId is null)
-        return false;
-
-    var store = new BacklogStore(backlogStorePath);
-    var closed = store.TryCloseByIdAsync(goal.SourceBacklogItemId, $"Goal {goal.Id.Value[..8]} landed.").GetAwaiter().GetResult();
-    Console.WriteLine(closed
-        ? $"Closed backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]} landed)."
-        : $"Backlog item {goal.SourceBacklogItemId} already closed or not found (no-op).");
-    return closed;
-}
-
 private static void CommitDogfoodEntry(string executionDirectory, string goalPrefix)
 {
     var add = GitCli.Run(executionDirectory, "add", "DOGFOOD_LOG.md");
@@ -939,7 +926,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance passed and merge completed.");
-    AutoCloseSourceBacklogItem(goal, context.Workspace.BacklogStorePath);
+    GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, context.Workspace.BacklogStorePath, Console.WriteLine);
     if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, $"{commandName} workspace cleanup", out var cleanupPolicyError))
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", cleanupPolicyError);
@@ -1939,7 +1926,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     // Advisory only (does not gate the merge): ask a local judge whether the diff actually
     // accomplishes the objective, beyond passing tests. Records a receipt for the eventual
     // local-vs-subscription comparison and blocking flip. Any failure is swallowed.
-    RunAdvisorySemanticAcceptance(context, goal, worktreePath, verification);
+    GoalLandingPostActions.RunAdvisorySemanticAcceptance(
+        goal,
+        context.Workspace,
+        context.Providers,
+        context.WorkerProfiles,
+        worktreePath,
+        verification,
+        Console.WriteLine);
 
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
         goal.Id,
@@ -2000,131 +1994,6 @@ private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalI
     var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
         ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
     return JsonSerializer.Serialize(snapshot);
-}
-
-// Advisory semantic-acceptance pass: the configured judge lanes decide whether the diff actually
-// accomplishes the objective (not merely that tests pass), recorded as a receipt. ADVISORY — it
-// never changes the merge outcome and swallows every failure. Dormant unless one or more Judge-role
-// agents are configured (one per lane: free-local / cheap-API / capable), so acceptance is
-// unchanged on machines/tenants without any. Judges run in parallel; their agreement is the signal
-// for whether a cheaper lane suffices before the eventual blocking flip.
-private static void RunAdvisorySemanticAcceptance(
-    CliExecutionContext context,
-    Goal goal,
-    string? worktreePath,
-    AcceptanceVerificationResult? verification)
-{
-    if (worktreePath is null)
-    {
-        return;
-    }
-
-    var modelFunctions = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
-    var baseJudges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, context.Providers, context.WorkerProfiles);
-    if (baseJudges.Count == 0)
-    {
-        return;
-    }
-
-    try
-    {
-        var criteria = goal.Tasks
-            .Select(task => task.VerificationPlan)
-            .Where(plan => !string.IsNullOrWhiteSpace(plan))
-            .Select(plan => plan!)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        var testSummary = verification?.Checks is { Count: > 0 } checks
-            ? string.Join(Environment.NewLine, checks
-                .Where(check => !string.IsNullOrWhiteSpace(check.ResultSummary))
-                .Select(check => $"{check.Name}: {check.ResultSummary}"))
-            : null;
-
-        var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath);
-        var inputs = new SemanticAcceptanceInputs(
-            goal.Objective,
-            criteria,
-            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
-            GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
-            testSummary,
-            perFileDiffs);
-
-        var judges = baseJudges
-            .Select(j => (ISemanticJudge)new RecursivePerFileSemanticJudge(j))
-            .ToList();
-
-        var report = SemanticAcceptanceEvaluator
-            .EvaluateAsync(judges, inputs, TimeSpan.FromSeconds(90))
-            .GetAwaiter()
-            .GetResult();
-
-        PrintSemanticAcceptanceReport(report);
-        AppendSemanticAcceptanceReceipt(context, goal, report);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Semantic acceptance (advisory): skipped after error: {ex.Message}");
-    }
-}
-
-private static void PrintSemanticAcceptanceReport(SemanticAcceptanceReport report)
-{
-    Console.WriteLine("Semantic acceptance (advisory — does not gate the merge):");
-    foreach (var entry in report.Verdicts)
-    {
-        var verdict = entry.Verdict;
-        if (!verdict.IsValid)
-        {
-            Console.WriteLine($"  {entry.Judge}: no verdict ({string.Join("; ", verdict.ValidationErrors)})");
-            continue;
-        }
-
-        var summary = verdict.CriteriaMet ? "criteria MET" : "criteria NOT met";
-        Console.WriteLine($"  {entry.Judge}: {summary} (confidence {verdict.Confidence})");
-        foreach (var reason in verdict.Reasons.Take(3))
-        {
-            Console.WriteLine($"    - {reason}");
-        }
-
-        foreach (var unmet in verdict.UnmetCriteria)
-        {
-            Console.WriteLine($"    unmet: {unmet}");
-        }
-    }
-}
-
-private static void AppendSemanticAcceptanceReceipt(
-    CliExecutionContext context,
-    Goal goal,
-    SemanticAcceptanceReport report)
-{
-    var receipt = new
-    {
-        at = DateTimeOffset.UtcNow,
-        goalId = goal.Id.Value,
-        objective = goal.Objective,
-        consensus = report.Consensus,
-        judges = report.Verdicts.Select(entry => new
-        {
-            judge = entry.Judge,
-            valid = entry.Verdict.IsValid,
-            criteriaMet = entry.Verdict.CriteriaMet,
-            confidence = entry.Verdict.Confidence,
-            reasons = entry.Verdict.Reasons,
-            unmetCriteria = entry.Verdict.UnmetCriteria,
-            errors = entry.Verdict.ValidationErrors
-        })
-    };
-
-    var path = context.Workspace.SemanticAcceptanceLogPath;
-    var directory = Path.GetDirectoryName(path);
-    if (!string.IsNullOrEmpty(directory))
-    {
-        Directory.CreateDirectory(directory);
-    }
-
-    File.AppendAllText(path, JsonSerializer.Serialize(receipt) + Environment.NewLine);
 }
 
 // Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the

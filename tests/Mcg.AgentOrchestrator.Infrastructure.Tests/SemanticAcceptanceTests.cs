@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -234,6 +235,55 @@ public sealed class SemanticAcceptanceTests
         Assert.True(verdict.IsValid);
         Assert.True(verdict.CriteriaMet);
         Assert.Equal("ollama:qwen3:8b", judge.Name);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalLandingPostActions_writes_semantic_receipt_for_negative_verdict")]
+    public void GoalLandingPostActionsWritesSemanticReceiptForNegativeVerdict()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        File.WriteAllText(Path.Combine(root, "src", "A.cs"), "class A {}\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+        RunGit(root, "checkout", "-b", "goal/test");
+        File.WriteAllText(Path.Combine(root, "src", "A.cs"), "class A { string Missing() => \"not done\"; }\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "negative change");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog(
+        [
+            JudgeBinding(ModelLane.CheapApi, "Fake", "judge")
+        ]));
+        var response = """
+            ```json
+            {"criteria_met": false, "confidence": "medium", "reasons": ["missing requirement"], "unmet_criteria": ["required behavior absent"]}
+            ```
+            """;
+        var providers = new InMemoryModelProviderRegistry([new FakeJudgeProvider("Fake", response)]);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Implement required behavior", [
+            new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer, verificationPlan: "required behavior present")
+        ]);
+
+        GoalLandingPostActions.RunAdvisorySemanticAcceptance(
+            goal,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            root,
+            null);
+
+        var line = File.ReadLines(workspace.SemanticAcceptanceLogPath).Single();
+        using var document = JsonDocument.Parse(line);
+        var receipt = document.RootElement;
+        Assert.Equal(goal.Id.Value, receipt.GetProperty("goalId").GetString());
+        var judge = receipt.GetProperty("judges").EnumerateArray().Single();
+        Assert.True(judge.GetProperty("valid").GetBoolean());
+        Assert.False(judge.GetProperty("criteriaMet").GetBoolean());
+        Assert.Equal("required behavior absent", judge.GetProperty("unmetCriteria").EnumerateArray().Single().GetString());
     }
 
     [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_resolves_acceptance_judge_bindings_deduped")]
