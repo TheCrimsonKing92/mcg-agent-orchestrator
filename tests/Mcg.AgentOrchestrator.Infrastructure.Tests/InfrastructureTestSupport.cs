@@ -237,6 +237,43 @@ internal static class Assert
 
         throw new InvalidOperationException($"Expected exception {typeof(TException).Name} was not thrown.");
     }
+
+    // Delegating overloads so unqualified Assert.* in tests binds here instead of being shadowed away
+    // from Xunit.Assert. The bespoke Contains(string, predicate) helper above stays; standard
+    // collection/membership/type assertions forward to xUnit so they compile without Xunit.Assert prefixes.
+    public static void Contains<T>(IEnumerable<T> collection, Predicate<T> filter)
+        => Xunit.Assert.Contains(collection, filter);
+
+    public static void Contains(string expectedSubstring, string actualString)
+        => Xunit.Assert.Contains(expectedSubstring, actualString);
+
+    public static void DoesNotContain<T>(IEnumerable<T> collection, Predicate<T> filter)
+        => Xunit.Assert.DoesNotContain(collection, filter);
+
+    public static void DoesNotContain(string expectedSubstring, string actualString)
+        => Xunit.Assert.DoesNotContain(expectedSubstring, actualString);
+
+    public static void Empty(System.Collections.IEnumerable collection)
+        => Xunit.Assert.Empty(collection);
+
+    public static void NotEmpty(System.Collections.IEnumerable collection)
+        => Xunit.Assert.NotEmpty(collection);
+
+    public static T Single<T>(IEnumerable<T> collection)
+        => Xunit.Assert.Single(collection);
+
+    public static void NotNull(object? @object)
+        => Xunit.Assert.NotNull(@object);
+
+    public static void Null(object? @object)
+        => Xunit.Assert.Null(@object);
+
+    public static T IsType<T>(object @object)
+        => Xunit.Assert.IsType<T>(@object);
+
+    public static void InRange<T>(T actual, T low, T high)
+        where T : IComparable<T>
+        => Xunit.Assert.InRange(actual, low, high);
 }
 
 internal sealed class CapturingHandler : HttpMessageHandler
