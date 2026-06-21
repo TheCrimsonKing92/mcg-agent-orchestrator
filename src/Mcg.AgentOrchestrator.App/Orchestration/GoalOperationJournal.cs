@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Security.Cryptography;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -163,6 +164,34 @@ internal static class GoalOperationJournal
             DateTimeOffset.UtcNow,
             detail);
         File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
+        TryAppendRunEvent(executionDirectory, entry);
+    }
+
+    private static void TryAppendRunEvent(string executionDirectory, GoalOperationJournalEntry entry)
+    {
+        try
+        {
+            var storePath = System.IO.Path.Combine(
+                System.IO.Path.GetFullPath(executionDirectory),
+                ".orchestrator",
+                "run-events.db");
+            var store = new SqliteRunEventStore(storePath);
+            store.AppendAsync(new RunEventAppend(
+                RunEventTypes.GoalOperation,
+                entry.GoalId.Value,
+                entry.Operation,
+                entry.Status.ToString(),
+                entry.Detail,
+                JsonSerializer.Serialize(entry, JsonOptions),
+                entry.At))
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch
+        {
+            // The journal is still the command's primary lifecycle side effect; observability must not
+            // make dispatch or acceptance fail.
+        }
     }
 
     private static GoalOperationJournalEntry? TryDeserialize(string line)

@@ -579,14 +579,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {ConductorBatchLoop.DefaultWatchIntervalSeconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
                 }
 
-                // SSE push: discover dashboard URL and build onTick callback.
-                Action<BatchTickSummary>? onTick = null;
+                Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
                 var dashboardUrl = GetFlagValue(parts, "--dashboard-url")
                     ?? ConductorTickPusher.TryReadDashboardUrl(context.Workspace.DashboardUrlFilePath);
                 if (dashboardUrl is not null)
                 {
-                    Console.WriteLine($"[conduct --loop] Dashboard SSE push enabled: {dashboardUrl}");
-                    onTick = ConductorTickPusher.CreateCallback(dashboardUrl);
+                    Console.WriteLine($"[conduct --loop] Dashboard compatibility push enabled: {dashboardUrl}");
+                    var storeTick = onTick;
+                    var httpTick = ConductorTickPusher.CreateCallback(dashboardUrl);
+                    onTick = tick =>
+                    {
+                        storeTick(tick);
+                        httpTick(tick);
+                    };
                 }
 
                 var loopDriver = new ConductorDriver(
@@ -677,7 +682,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
                     wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
-                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), wakeSignal: watchWakeSignal, maxDuration: watchMax,
+                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
+                    onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
+                    wakeSignal: watchWakeSignal,
+                    maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -12,6 +13,7 @@ internal static class DashboardMonitoringEvents
     public const string KeepAliveEventName = "monitor.keepalive";
     public const string ConductorTickEventName = "conductor.tick";
     public const string ConductorProgressEventName = "conductor.progress";
+    private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 
     public static string StreamPath(string goalId) => $"/api/goals/{goalId}/events/stream";
 
@@ -74,6 +76,16 @@ internal static class DashboardMonitoringEvents
     public static async Task WriteKeepAliveAsync(Stream stream, CancellationToken cancellationToken)
     {
         await stream.WriteAsync(Encoding.UTF8.GetBytes($": {KeepAliveEventName} {DateTimeOffset.UtcNow:O}\n\n"), cancellationToken);
+    }
+
+    public static IReadOnlyList<ConductorTickEvent> BuildConductorTickEvents(IEnumerable<RunEventRecord> records)
+    {
+        return records
+            .Where(record => record.EventType == RunEventTypes.ConductorTick)
+            .Select(ToConductorTickEvent)
+            .Where(evt => evt is not null)
+            .Select(evt => evt!)
+            .ToList();
     }
 
     private static GoalMonitoringSnapshotDto BuildSnapshot(
@@ -139,4 +151,44 @@ internal static class DashboardMonitoringEvents
     }
 
     public static string FormatEventId(long id) => id.ToString(CultureInfo.InvariantCulture);
+
+    private static ConductorTickEvent? ToConductorTickEvent(RunEventRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.PayloadJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<ConductorTickPayload>(record.PayloadJson, CaseInsensitiveJson);
+            return payload is null
+                ? null
+                : new ConductorTickEvent(
+                    record.Sequence,
+                    record.OccurredAt,
+                    payload.Tick,
+                    payload.Advanced,
+                    payload.Held,
+                    payload.Escalated,
+                    payload.Retried,
+                    payload.Done,
+                    payload.WatchSleeping,
+                    payload.ProgressLines);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private sealed record ConductorTickPayload(
+        int Tick,
+        int Advanced,
+        int Held,
+        int Escalated,
+        int Retried,
+        int Done,
+        bool WatchSleeping,
+        IReadOnlyList<string>? ProgressLines);
 }

@@ -25,6 +25,36 @@ public sealed class DashboardRenderingTests
         Assert.True(html.Contains("<nav class=\"dashboard-nav\">", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "DashboardMonitoringEvents_renders_SSE_tick_payload_from_run_event_store")]
+    public async Task DashboardMonitoringEventsRendersSseTickPayloadFromRunEventStore()
+{
+    var root = CreateTempDirectory();
+    var db = Path.Combine(root, "run-events.db");
+    ConductorTickPusher.TryRecord(
+        db,
+        new BatchTickSummary(4, Advanced: 1, Held: 0, Escalated: 0, Retried: 0, Done: 1, WatchSleeping: false)
+        {
+            ProgressLines = ["GOAL goal=abc12345 result=done state=Complete"]
+        });
+
+    var records = await new SqliteRunEventStore(db).ReadSinceAsync();
+    var tick = Assert.Single(DashboardMonitoringEvents.BuildConductorTickEvents(records));
+
+    using var stream = new MemoryStream();
+    await DashboardMonitoringEvents.WriteServerSentEventAsync(
+        stream,
+        DashboardMonitoringEvents.ConductorTickEventName,
+        tick,
+        $"run-{tick.Seq}",
+        CancellationToken.None);
+    var sse = Encoding.UTF8.GetString(stream.ToArray());
+
+    Assert.True(sse.Contains("id: run-", StringComparison.Ordinal));
+    Assert.True(sse.Contains("event: conductor.tick", StringComparison.Ordinal));
+    Assert.True(sse.Contains("\"Tick\": 4", StringComparison.Ordinal));
+    Assert.True(sse.Contains("GOAL goal=abc12345 result=done state=Complete", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_renders_goal_tasks_and_attention")]
     public void DashboardRendererRendersGoalTasksAndAttention()
 {
