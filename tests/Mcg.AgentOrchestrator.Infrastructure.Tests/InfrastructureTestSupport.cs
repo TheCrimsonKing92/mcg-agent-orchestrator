@@ -272,7 +272,7 @@ internal static class Assert
         => Xunit.Assert.IsType<T>(@object);
 
     public static void InRange<T>(T actual, T low, T high)
-        where T : IComparable<T>
+        where T : IComparable
         => Xunit.Assert.InRange(actual, low, high);
 }
 
