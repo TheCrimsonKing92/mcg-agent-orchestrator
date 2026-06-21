@@ -8,11 +8,25 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestratorStateRepository
 {
     private readonly string _dbPath;
+    private readonly Action<string>? _statementObserver;
+    private static readonly string[] SchemaTableNames =
+    [
+        "meta",
+        "goals",
+        "human_input_requests",
+        "model_fit_history"
+    ];
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
 
     public SqliteOrchestratorStateRepository(string dbPath)
+        : this(dbPath, statementObserver: null)
+    {
+    }
+
+    internal SqliteOrchestratorStateRepository(string dbPath, Action<string>? statementObserver)
     {
         _dbPath = dbPath;
+        _statementObserver = statementObserver;
         EnsureSchema();
     }
 
@@ -91,8 +105,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         using var conn = new SqliteConnection(ConnectionString);
         conn.Open();
-        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        if (SchemaTablesAlreadyExist(conn))
+            return;
+
+        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
@@ -133,6 +150,22 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_role ON model_fit_history(role)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_model ON model_fit_history(provider_name, model_name)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
+    }
+
+    private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ($meta, $goals, $human_input_requests, $model_fit_history)
+            """;
+        cmd.Parameters.AddWithValue("$meta", "meta");
+        cmd.Parameters.AddWithValue("$goals", "goals");
+        cmd.Parameters.AddWithValue("$human_input_requests", "human_input_requests");
+        cmd.Parameters.AddWithValue("$model_fit_history", "model_fit_history");
+        return Convert.ToInt32(cmd.ExecuteScalar()) == SchemaTableNames.Length;
     }
 
     public async Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
@@ -406,8 +439,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private static async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)
         => await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
 
-    private static void RunNonQuery(SqliteConnection conn, string sql)
+    private void RunNonQuery(SqliteConnection conn, string sql)
     {
+        _statementObserver?.Invoke(sql);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();

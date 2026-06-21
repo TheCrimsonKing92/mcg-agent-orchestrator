@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 public sealed class GoalWorktreeTests
 {
@@ -1587,6 +1588,36 @@ public sealed class GoalWorktreeTests
             releaseVerifier.Set();
             Assert.True(acceptanceTask.Wait(TimeSpan.FromSeconds(10)));
             Assert.True(File.Exists(Path.Combine(repo, "concurrency.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktree_state_reads_construct_repository_while_write_lock_is_held")]
+    public void GoalWorktreeStateReadsConstructRepositoryWhileWriteLockIsHeld()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            kernel.CreateGoal("Readable while acceptance holds writer");
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
+            lockConnection.Open();
+            using var lockCommand = lockConnection.CreateCommand();
+            lockCommand.CommandText = "BEGIN IMMEDIATE";
+            lockCommand.ExecuteNonQuery();
+
+            var concurrentRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var goals = concurrentRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+
+            Assert.Single(goals);
+            Assert.Equal("Readable while acceptance holds writer", goals.Single().Objective);
         }
         finally
         {
