@@ -1318,7 +1318,7 @@ public static class WorkerContextArtifacts
     private static List<string> CopyGuidanceFiles(string workingDirectory, string contextDirectory)
     {
         var copied = new List<string>();
-        foreach (var fileName in new[] { "AGENTS.md", "BACKLOG.md", "DOGFOOD_LOG.md" })
+        foreach (var fileName in new[] { "AGENTS.md", "DOGFOOD_LOG.md" })
         {
             var sourcePath = Path.Combine(workingDirectory, fileName);
             if (!File.Exists(sourcePath))
