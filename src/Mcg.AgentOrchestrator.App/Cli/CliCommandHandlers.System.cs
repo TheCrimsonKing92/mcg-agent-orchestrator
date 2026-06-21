@@ -8,6 +8,16 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
+    private static List<CollaborationItem> OpenClarificationsForGoal(CollaborationItemStore store, string goalPrefix)
+    {
+        return store.GetAttentionQueueAsync().GetAwaiter().GetResult()
+            .Where(item =>
+                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal) &&
+                (item.GoalId?.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToList();
+    }
+
     private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
         switch (command)
@@ -34,6 +44,51 @@ internal static partial class CliCommandHandlers
                     var dismissed = open.Count(item =>
                         store.TryResolveAsync(item.CorrelationKey!, "dismissed by operator").GetAwaiter().GetResult());
                     Console.WriteLine($"Dismissed {dismissed} open attention item(s) for goal '{goalPrefix}'.");
+                    return false;
+                }
+
+                // `attention show <goal-id-prefix>`: list a goal's open spec clarifications with an index
+                // and the question, so the operator can read them before deciding to answer or dismiss.
+                if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts.Count < 3)
+                        throw new ArgumentException("Usage: attention show <goal-id-prefix>");
+
+                    var clarifications = OpenClarificationsForGoal(store, parts[2]);
+                    if (clarifications.Count == 0)
+                    {
+                        Console.WriteLine($"No open clarifications for goal '{parts[2]}'.");
+                        return false;
+                    }
+
+                    for (var i = 0; i < clarifications.Count; i++)
+                    {
+                        Console.WriteLine($"[{i}] {clarifications[i].Subject}");
+                        if (!string.IsNullOrWhiteSpace(clarifications[i].Body))
+                            Console.WriteLine($"    {clarifications[i].Body}");
+                    }
+
+                    Console.WriteLine($"Answer with: attention answer {parts[2]} <index> <answer>");
+                    return false;
+                }
+
+                // `attention answer <goal-id-prefix> <index> <answer...>`: resolve one open clarification with
+                // a real answer (vs. `dismiss`). The answer is written into the RefinedSpec question and
+                // recorded as a precedent on the next refinement pass (SyncAnsweredClarifications).
+                if (parts.Count > 1 && parts[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts.Count < 5 || !int.TryParse(parts[3], out var index))
+                        throw new ArgumentException("Usage: attention answer <goal-id-prefix> <index> <answer> (run `attention show <goal>` first)");
+
+                    var clarifications = OpenClarificationsForGoal(store, parts[2]);
+                    if (index < 0 || index >= clarifications.Count)
+                        throw new ArgumentException($"Index {index} is out of range; goal '{parts[2]}' has {clarifications.Count} open clarification(s).");
+
+                    var answer = string.Join(' ', parts.Skip(4));
+                    var resolved = store.TryResolveAsync(clarifications[index].CorrelationKey!, answer).GetAwaiter().GetResult();
+                    Console.WriteLine(resolved
+                        ? $"Answered clarification [{index}] for goal '{parts[2]}'."
+                        : $"Failed to resolve clarification [{index}] for goal '{parts[2]}'.");
                     return false;
                 }
 
