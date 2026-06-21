@@ -52,7 +52,9 @@ Orchestrator-managed `dotnet test` runs write build/test artifacts under a bound
 
 The CLI centers on six alias verbs. All other verbs are covered in [ADVANCED](#advanced).
 
-## Core Loop
+> **Operating the orchestrator? See [`docs/operator-runbook.md`](docs/operator-runbook.md).** The default path is the autonomous conductor (`conduct --loop`), which owns workspace creation, dispatch, acceptance, and landing. The "Core Loop" immediately below is the lower-level **manual** verb sequence — keep it for granular or fallback control, not as the primary workflow.
+
+## Core Loop (manual verbs — fallback; prefer `conduct --loop`)
 
 ```text
 simple-goal "Build feature X"          # create a single-Developer goal

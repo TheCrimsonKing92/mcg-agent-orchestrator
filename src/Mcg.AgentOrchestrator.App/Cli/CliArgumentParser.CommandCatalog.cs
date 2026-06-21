@@ -104,7 +104,6 @@ private static bool IsSimpleCommand(string command)
         command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-show", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-import", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("goals-prune", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-channel", StringComparison.OrdinalIgnoreCase);

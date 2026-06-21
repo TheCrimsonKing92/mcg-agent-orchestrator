@@ -452,7 +452,7 @@ public sealed class FundamentalAliasTests
     public void CliGoalFromBacklogFlagDelegatesToBacklogIntake()
     {
         var root = CreateTempDirectory();
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), """
+        SeedBacklog(root, """
         # Backlog
 
         ## Add smoke test coverage

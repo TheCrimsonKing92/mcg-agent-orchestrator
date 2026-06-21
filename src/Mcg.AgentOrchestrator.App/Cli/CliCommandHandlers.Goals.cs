@@ -619,13 +619,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
                 };
                 var loopReaper = new BackgroundDispatchRunner();
+                using var loopWakeSignal = watchInterval is not null
+                    ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
+                    : null;
                 var loopSummary = new ConductorBatchLoop(
                     reconcileSweep,
                     (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
-                    watchInterval: watchInterval, onTick: onTick, maxDuration: maxDuration,
+                    watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
@@ -667,13 +670,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
                 var watchReaper = new BackgroundDispatchRunner();
+                using var watchWakeSignal = new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory);
                 var watchSummary = new ConductorBatchLoop(
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
                     wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
-                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), maxDuration: watchMax,
+                    watchInterval: TimeSpan.FromSeconds(watchPollSeconds), wakeSignal: watchWakeSignal, maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
@@ -1293,11 +1297,22 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         .Skip(1)
         .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
     var plan = BacklogIntakePlanner.Build(
-        context.Workspace.ExecutionDirectory,
+        context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
         createGoal || createSimpleGoal ? 1 : 5);
     if (plan.Items.Count == 0)
     {
+        if (!string.IsNullOrWhiteSpace(headingFilter))
+        {
+            var doneItem = new BacklogStore(context.Workspace.BacklogStorePath)
+                .GetByExactIdAsync(BacklogStore.SlugId(headingFilter)).GetAwaiter().GetResult();
+            if (doneItem is { Status: BacklogItemStatus.Done })
+            {
+                Console.WriteLine($"Backlog item '{doneItem.Title}' is already Done; no goal created.");
+                return false;
+            }
+        }
+
         throw new InvalidOperationException("No backlog items matched the requested filter.");
     }
 
@@ -1309,18 +1324,6 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     var item = plan.Items.Single();
     var backlogItemId = BacklogStore.SlugId(item.Heading);
-
-    // Skip intake if the item is already Done in the backlog store.
-    if (!string.IsNullOrEmpty(backlogItemId))
-    {
-        var store = new BacklogStore(context.Workspace.BacklogStorePath);
-        var existing = store.GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult();
-        if (existing is { Status: BacklogItemStatus.Done })
-        {
-            Console.WriteLine($"Backlog item '{item.Heading}' is already Done; no goal created.");
-            return false;
-        }
-    }
 
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers)
@@ -1414,7 +1417,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         .Skip(1)
         .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
     var intake = BacklogIntakePlanner.Build(
-        context.Workspace.ExecutionDirectory,
+        context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
         maxItems: 10);
     if (intake.Items.Count == 0)
@@ -1486,12 +1489,13 @@ private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<stri
 
     if (appendBacklog && plan.IsValid && plan.Ideas.Count > 0)
     {
-        var backlogPath = Path.Combine(context.Workspace.ExecutionDirectory, "BACKLOG.md");
-        if (!File.Exists(backlogPath))
-            throw new InvalidOperationException($"BACKLOG.md not found at {backlogPath}; cannot append ideas.");
-        var entries = string.Concat(plan.Ideas.Select(IdeationProposalPlanner.FormatBacklogEntry));
-        File.AppendAllText(backlogPath, entries);
-        Console.WriteLine($"Appended {plan.Ideas.Count} idea(s) to BACKLOG.md.");
+        var store = new BacklogStore(context.Workspace.BacklogStorePath);
+        foreach (var idea in plan.Ideas)
+        {
+            var body = $"{idea.Rationale} Scope: {idea.Scope}. Value: {idea.Value}. Effort: {idea.Effort}. Risk: {idea.Risk}.";
+            store.AddAsync(idea.Title, body).GetAwaiter().GetResult();
+        }
+        Console.WriteLine($"Appended {plan.Ideas.Count} idea(s) to the backlog store.");
     }
     else if (appendBacklog && !plan.IsValid)
     {

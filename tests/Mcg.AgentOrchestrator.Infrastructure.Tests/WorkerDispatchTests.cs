@@ -3549,7 +3549,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(Path.Combine(contextDirectory, "prior-task-evidence.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "context-package.json")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "AGENTS.md")));
-    Assert.True(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
+    Assert.False(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
     var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));

@@ -11,8 +11,7 @@ public sealed class GoalBacklogLinkTests
     public void CreateWithLinkCarriesSourceBacklogItemId()
     {
         var root = CreateTempDirectory();
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"),
-            "# Backlog\n\n## My Feature\n\nFeature body.\n");
+        SeedBacklog(root, "# Backlog\n\n## My Feature\n\nFeature body.\n");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = [];
@@ -35,11 +34,9 @@ public sealed class GoalBacklogLinkTests
     public async Task NoGoalForAlreadyDoneItemAtIntake()
     {
         var root = CreateTempDirectory();
-        File.WriteAllText(Path.Combine(root, "BACKLOG.md"),
-            "# Backlog\n\n## Done Feature\n\nFeature body.\n");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
 
-        // Import the item into the BacklogStore and mark it Done.
+        // Seed the item into the BacklogStore and mark it Done.
         var store = new BacklogStore(workspace.BacklogStorePath);
         var itemId = BacklogStore.SlugId("Done Feature");
         var now = DateTimeOffset.UtcNow;

@@ -4,6 +4,8 @@ Attention is scarce. Preserve it.
 
 Prefer short, decision-changing output over comprehensive dumps. Show what changed, what is blocked, what was verified, and what needs a decision. Suppress everything else.
 
+> **Operating the orchestrator — driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the canonical conductor-first guide, including the stuck-goal playbook (symptom → command) and the state/store map. This file covers output/diagnosis/spec discipline and architecture invariants — read it alongside the runbook, not instead of it.
+
 ## Output Discipline
 
 All commands must minimize output by default.
@@ -101,18 +103,10 @@ Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the
 
 ## Operating the goal loop
 
-**Default (expedient): drive goals with the autonomous conductor, not the manual verbs.**
-After creating a goal (`simple-goal "<payload>"` for a single Developer task, or `goal "<payload>"` for the five-role pipeline), hand the whole lifecycle to the conductor:
+**Default: drive goals with the autonomous conductor (`conduct --loop`), not the manual verbs.** The full operate / observe / recover guide — golden path, the `conduct` flag matrix, the three policies, the state model, and the **stuck-goal playbook** (symptom → first command) — lives in [`docs/operator-runbook.md`](docs/operator-runbook.md); read it first. A few notes that complement it:
 
-```
-conduct <goal-id> --loop --watch --poll-seconds 30 --max-duration 1800 [--policy Conservative|Permissive|Manual]
-```
-
-`conduct --loop` runs `ConductorBatchLoop`, which advances the goal (and every other active goal) through its full state machine — `Created → WorkspaceReady → Dispatched → Running → AwaitingVerification → Verified → Merged → Recorded → CleanedUp` — one policy-gated step per tick. It creates the worktree, prepares/starts the subscription dispatch, waits on the worker, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forwards into `main`, appends the `DOGFOOD_LOG` entry, and removes the worktree. `--watch` sleeps between ticks while goals are held (running workers); `--max-iterations`/`--max-duration` bound the run; a `STOP` file or Ctrl-C ends it. There is no need to call `workspace create`, `subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, or `accept` by hand. A single non-loop `conduct <goal-id>` advances exactly one step (useful for inspection).
-
-- **Policy = your gate.** `Conservative` (default) auto-promotes DocsOnly changes only and **escalates at the promote gate for any code/build change** — the loop pauses there and writes the goal to the operator inbox. That escalation is your operator gate: review the goal-branch diff yourself, then promote. `Permissive` auto-promotes all passing changes (acceptance suite still runs); use it only when you accept the conductor's automated acceptance verification as sufficient. `Manual` escalates at every step. Note the conductor's acceptance gate runs the real test/build suite against the worktree, so promotion is never on worker-reported results alone — but still eyeball the diff for behavior/security changes.
 - **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so a raw `dotnet test` in a worktree no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
-- At a landing, the conductor records the `DOGFOOD_LOG` entry itself; you still prune the finished `BACKLOG` item and add newly discovered ones.
+- At a landing, the conductor records the `DOGFOOD_LOG` entry itself; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
 
 **Manual lower-level verbs (fallback / granular control only — prefer `conduct --loop`):** `subscription-dispatch <n>` → `start-dispatch <n> --confirm-dispatch-start` (the cost guard blocks ONLY on an *anomalous* prompt — disproportionate to task complexity, ≥2× the per-complexity ceiling, or batch total ≥2× the batch ceiling; routine/legitimately-large Complex briefs proceed silently, so `--confirm-large-paid-subscription-start` is needed only when a genuinely bloated prompt trips it) → wait on the printed pid → `refresh-dispatch <n>` → operator gate → `accept`. `acceptance`/`accept` fast-forwards only when main has not advanced mid-goal; otherwise run the printed `git merge goal/<prefix>`. ApiOnly tasks (e.g. the local Reviewer) run via `run <n>` with no file access — output reflects prompt text, not branch state; close HUMAN_INPUT with `answer <request-id>`, then `verify-manual <n> passed "<evidence incl. Model fit: line>"`. To put an operator note into an undispatched task's brief: `progress <n> running "<note>"` → `progress <n> failed "<reset>"` → `retry <n> "<msg>"`.
 
@@ -149,4 +143,4 @@ Do not paste full dashboard responses, full prompts, full logs, or long API payl
 
 Rotate `DOGFOOD_LOG.md` when it grows past roughly 500 lines: move all but the most recent entries to a dated archive under `docs/` (for example `docs/DOGFOOD_LOG-2026-06.md`) and keep the pointer line at the top of the log current. Do not load archives into context for routine work.
 
-Check `BACKLOG.md` before proposing follow-up work; it holds open items with context, file pointers, and done-conditions. Update it at goal boundaries: remove finished entries, add newly discovered follow-ups as self-contained entries that need no conversation history.
+Check the backlog before proposing follow-up work: `backlog-list` reads the canonical store (`.orchestrator/backlog.db`; the `BACKLOG.md` file is legacy and being retired). Update it at goal boundaries — `backlog-close` finished items and `backlog-add` newly discovered follow-ups as self-contained entries that need no conversation history.

@@ -129,23 +129,19 @@ public sealed class IdeationPlanTests
         Assert.True(kernel.Goals.Count == 0);
         Assert.True(output.Contains("Reduce rework", StringComparison.Ordinal));
 
-        // BACKLOG.md should not have been created
-        var backlogPath = Path.Combine(workspace.ExecutionDirectory, "BACKLOG.md");
-        Assert.False(File.Exists(backlogPath));
+        // The backlog store should not have been written to during preview.
+        var stored = new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult();
+        Assert.True(stored.Count == 0);
     }
 
     // ── CLI: ideate --append-backlog appends valid ideas ────────────────────
 
-    [Xunit.Fact(DisplayName = "Cli_Ideate_AppendBacklog_AppendsIdeasToFile")]
-    public void Cli_Ideate_AppendBacklog_AppendsIdeasToFile()
+    [Xunit.Fact(DisplayName = "Cli_Ideate_AppendBacklog_AppendsIdeasToStore")]
+    public void Cli_Ideate_AppendBacklog_AppendsIdeasToStore()
     {
         var (kernel, workspace, agents, providers) = BuildTestContext(SingleIdeaJson);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-
-        // Create the BACKLOG.md file first
-        var backlogPath = Path.Combine(workspace.ExecutionDirectory, "BACKLOG.md");
-        File.WriteAllText(backlogPath, "# Backlog\n\n");
 
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["ideate", "--append-backlog"],
@@ -156,8 +152,10 @@ public sealed class IdeationPlanTests
             ref profiles,
             ref currentGoal));
 
-        var content = File.ReadAllText(backlogPath);
-        Assert.True(content.Contains("Reduce rework", StringComparison.Ordinal));
+        var stored = new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult();
+        Assert.True(stored.Any(item =>
+            item.Title.Contains("Reduce rework", StringComparison.Ordinal) ||
+            item.Body.Contains("Reduce rework", StringComparison.Ordinal)));
     }
 
     // ── CLI: ideate --append-backlog throws on invalid plan ──────────────────
@@ -174,10 +172,6 @@ public sealed class IdeationPlanTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var backlogPath = Path.Combine(workspace.ExecutionDirectory, "BACKLOG.md");
-        File.WriteAllText(backlogPath, "# Backlog\n\n");
-        var originalContent = File.ReadAllText(backlogPath);
-
         var ex = Assert.Throws<InvalidOperationException>(() =>
             CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["ideate", "--append-backlog"],
@@ -189,8 +183,9 @@ public sealed class IdeationPlanTests
                 ref currentGoal)));
 
         Assert.True(ex.Message.Contains("validation error", StringComparison.OrdinalIgnoreCase));
-        // BACKLOG.md should not have been modified
-        Assert.True(File.ReadAllText(backlogPath) == originalContent);
+        // The backlog store should not have been written to on an invalid plan.
+        var stored = new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult();
+        Assert.True(stored.Count == 0);
     }
 
     // ── SelectBestOfN: all-valid picks the most-ideas plan ──────────────────

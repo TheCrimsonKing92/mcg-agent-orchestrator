@@ -81,20 +81,6 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             return false;
         }
 
-        case "backlog-import":
-        {
-            var backlogMdPath = Path.Combine(context.Workspace.RootDirectory, "BACKLOG.md");
-            if (!File.Exists(backlogMdPath))
-            {
-                Console.WriteLine($"No BACKLOG.md found at {backlogMdPath}");
-                return false;
-            }
-            var store = new BacklogStore(context.Workspace.BacklogStorePath);
-            var (added, skipped) = ImportBacklogMd(backlogMdPath, store);
-            Console.WriteLine($"Imported: {added} added, {skipped} already existed.");
-            return false;
-        }
-
         case "backlog-view":
         {
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
@@ -123,61 +109,6 @@ private static string? ResolveBacklogTextFile(IReadOnlyList<string> parts, strin
     }
 
     return parts.Count > inlineIndex ? parts[inlineIndex] : defaultValue;
-}
-
-private static (int added, int skipped) ImportBacklogMd(string path, BacklogStore store)
-{
-    var lines = File.ReadAllLines(path);
-    var sections = ParseBacklogMdSections(lines);
-    var added = 0;
-    var skipped = 0;
-    var now = DateTimeOffset.UtcNow;
-    foreach (var (title, body, isDone) in sections)
-    {
-        var id = BacklogStore.SlugId(title);
-        if (string.IsNullOrEmpty(id))
-            continue;
-        var status = isDone ? BacklogItemStatus.Done : BacklogItemStatus.Open;
-        var item = new BacklogItem(id, title, body, status, now, now, null);
-        var wasAdded = store.UpsertAsync(item).GetAwaiter().GetResult();
-        if (wasAdded) added++;
-        else skipped++;
-    }
-    return (added, skipped);
-}
-
-internal static IReadOnlyList<(string Title, string Body, bool IsDone)> ParseBacklogMdSections(string[] lines)
-{
-    var results = new List<(string, string, bool)>();
-    string? currentTitle = null;
-    var currentBody = new System.Text.StringBuilder();
-    var currentIsDone = false;
-
-    foreach (var line in lines)
-    {
-        if (line.StartsWith("## ", StringComparison.Ordinal))
-        {
-            if (currentTitle is not null)
-                results.Add((currentTitle, currentBody.ToString().Trim(), currentIsDone));
-
-            currentTitle = line[3..].Trim();
-            currentBody.Clear();
-            var titleUpper = currentTitle.ToUpperInvariant();
-            currentIsDone = titleUpper.Contains("DONE", StringComparison.Ordinal)
-                || titleUpper.Contains("CLOSED", StringComparison.Ordinal)
-                || titleUpper.Contains("SHIPPED", StringComparison.Ordinal);
-        }
-        else if (currentTitle is not null && !line.StartsWith("# ", StringComparison.Ordinal))
-        {
-            if (currentBody.Length > 0 || !string.IsNullOrWhiteSpace(line))
-                currentBody.AppendLine(line);
-        }
-    }
-
-    if (currentTitle is not null)
-        results.Add((currentTitle, currentBody.ToString().Trim(), currentIsDone));
-
-    return results;
 }
 
 internal static string RenderBacklogMarkdown(IReadOnlyList<BacklogItem> items)

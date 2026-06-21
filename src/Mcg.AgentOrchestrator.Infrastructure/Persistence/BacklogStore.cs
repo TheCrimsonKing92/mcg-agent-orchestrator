@@ -280,7 +280,7 @@ public sealed class BacklogStore
         }
     }
 
-    // Derives a deterministic slug-style id from a title (used by backlog-import for idempotency).
+    // Derives a deterministic slug-style id from a title (used for idempotent upserts).
     public static string SlugId(string title)
     {
         var sb = new System.Text.StringBuilder();

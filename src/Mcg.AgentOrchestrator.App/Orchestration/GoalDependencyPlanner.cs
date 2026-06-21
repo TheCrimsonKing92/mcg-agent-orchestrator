@@ -287,11 +287,6 @@ internal static class GoalDependencyPlanner
                 yield return new CompiledGoalValidationFinding("error", node.Id, "node has no declared file scope");
             }
 
-            if (node.FileScopes.SequenceEqual(["BACKLOG.md"], StringComparer.OrdinalIgnoreCase))
-            {
-                yield return new CompiledGoalValidationFinding("warning", node.Id, "file scope is low confidence; inspect before dispatch");
-            }
-
             if (node.VerificationContracts.Count == 0)
             {
                 yield return new CompiledGoalValidationFinding("error", node.Id, "node has no verification contract");
