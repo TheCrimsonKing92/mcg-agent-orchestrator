@@ -7,7 +7,9 @@ description: Operate mcg-agent-orchestrator self-improvement and dogfood goals. 
 
 Use this skill when the task changes or validates the orchestrator by running work through the orchestrator itself.
 
-## Operating Loop
+> **Canonical operating guide: [`docs/operator-runbook.md`](../../../docs/operator-runbook.md).** The default path is the autonomous conductor (`conduct --loop --policy <...>`), which owns workspace creation, dispatch, acceptance, and cleanup — you do not call `workspace create` / `acceptance` / `workspace remove` by hand under it. The manual sequence below is a granular fallback. For stuck goals, use the runbook's stuck-goal playbook (`readiness`, `recover`, `attention dismiss`).
+
+## Operating Loop (manual fallback — prefer `conduct --loop`)
 
 1. Check `BACKLOG.md` before choosing or proposing work.
 2. Prefer `simple-goal "<objective>"` for one Developer task; use `goal "<objective>"` only when the five-role pipeline is the point of the validation.

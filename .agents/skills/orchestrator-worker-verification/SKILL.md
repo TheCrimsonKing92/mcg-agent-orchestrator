@@ -7,6 +7,8 @@ description: Verify subscription or API worker output in mcg-agent-orchestrator.
 
 Use this skill before trusting a worker result or accepting a goal.
 
+> Operating context: [`docs/operator-runbook.md`](../../../docs/operator-runbook.md) — see its "Trust order" and stuck-goal playbook. This skill is the deep-dive on verifying a single worker result.
+
 ## Verification Flow
 
 1. Treat `Completed` status and final prose as claims, not proof.
