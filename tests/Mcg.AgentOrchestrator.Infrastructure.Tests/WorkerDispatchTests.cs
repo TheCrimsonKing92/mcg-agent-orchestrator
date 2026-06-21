@@ -862,6 +862,49 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex-spark'", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_sets_dispatch_provider_label")]
+    public void SubscriptionDispatchOverrideProfileSetsDispatchProviderLabel()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a worker dispatch label",
+        [new TaskSpec(TaskId.New(), "Implement the focused dispatch label change.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-haiku-4-5"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})")
+    ]);
+    var modelOverride = new DispatchModelOverride("codex-cli", "gpt-5.3-codex-spark", null);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal, task, [agent], profiles, workingDirectory, dispatchedAt, modelOverride);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
+
+    Assert.True(preflight.Allowed);
+    Assert.Contains(preflight.Findings, text => text.Equals("profile: codex-cli", StringComparison.Ordinal));
+    Assert.Contains(preflight.Findings, text => text.Equals("model: OpenAI/gpt-5.3-codex-spark", StringComparison.Ordinal));
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex-spark'", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_replaces_agent_default")]
     public void SubscriptionDispatchOverrideProfileReplacesAgentDefault()
 {

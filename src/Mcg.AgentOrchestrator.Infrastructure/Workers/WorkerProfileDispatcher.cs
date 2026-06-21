@@ -106,6 +106,7 @@ public static class WorkerProfileDispatcher
         var resolvedReasoning = modelOverride?.ReasoningEffort is not null
             ? modelOverride.ReasoningEffort
             : ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
+        var dispatchProviderName = ResolveDispatchProviderName(selection.Model.ProviderName, profile.Name, modelOverride);
         var variables = BuildSubscriptionTemplateVariables(agent, selection);
         if (modelOverride?.ModelName is { Length: > 0 })
             variables["subscriptionModelName"] = resolvedModelName;
@@ -122,7 +123,7 @@ public static class WorkerProfileDispatcher
             workingDirectory,
             dispatchedAt,
             variables,
-            selection.Model.ProviderName,
+            dispatchProviderName,
             resolvedModelName,
             resolvedReasoning,
             selection.Complexity,
@@ -155,7 +156,8 @@ public static class WorkerProfileDispatcher
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
                 : ResolveEffectiveSubscriptionModelName(agent, selection);
-            findings.Add($"model: {selection.Model.ProviderName}/{effectiveModelName}");
+            var dispatchProviderName = ResolveDispatchProviderName(selection.Model.ProviderName, profile.Name, modelOverride);
+            findings.Add($"model: {dispatchProviderName}/{effectiveModelName}");
             findings.Add($"complexity: {selection.Complexity}");
 
             AddProfileFinding(
@@ -438,6 +440,31 @@ public static class WorkerProfileDispatcher
         }
 
         return profiles.GetRequired(ResolveSubscriptionProfileName(agent, model));
+    }
+
+    private static string ResolveDispatchProviderName(string selectedProviderName, string profileName, DispatchModelOverride? modelOverride)
+    {
+        if (modelOverride is null)
+        {
+            return selectedProviderName;
+        }
+
+        if (profileName.Equals(OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return "OpenAI";
+        }
+
+        if (profileName.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return "Anthropic";
+        }
+
+        if (profileName.Equals(OllamaSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return "Ollama";
+        }
+
+        return selectedProviderName;
     }
 
     public static string ResolveSubscriptionProfileName(AgentDefinition agent)
