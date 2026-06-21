@@ -70,6 +70,23 @@ public sealed class DiscordCollaborationViewService
 
     public async Task ReconcileAsync(CancellationToken cancellationToken = default)
     {
+        if (DiscordOperatorFaultClassifier.IsAuthDisabledForProcess)
+            return;
+
+        try
+        {
+            await ReconcileCoreAsync(cancellationToken);
+        }
+        catch (Exception ex) when (
+            !cancellationToken.IsCancellationRequested &&
+            DiscordOperatorFaultClassifier.IsAuthError(ex))
+        {
+            DiscordOperatorFaultClassifier.DisableForProcess("collaboration view", ex);
+        }
+    }
+
+    private async Task ReconcileCoreAsync(CancellationToken cancellationToken)
+    {
         var queue = await _store.GetAttentionQueueAsync(cancellationToken);
         var refs = LoadRefs();
 
@@ -90,6 +107,7 @@ public sealed class DiscordCollaborationViewService
             }
             catch (Exception ex) when (
                 !cancellationToken.IsCancellationRequested &&
+                !DiscordOperatorFaultClassifier.IsAuthError(ex) &&
                 !DiscordOperatorFaultClassifier.IsFatal(ex) &&
                 !DiscordOperatorFaultClassifier.IsTransient(ex))
             {

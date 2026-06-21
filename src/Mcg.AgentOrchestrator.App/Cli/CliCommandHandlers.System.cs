@@ -239,30 +239,39 @@ internal static partial class CliCommandHandlers
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
                 var botToken = OperatorChannelFactory.ResolveBotToken();
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
-                var runtime = OperatorChannelFactory.CreateDiscordRuntime(
-                    catalog,
-                    context.Workspace.OperatorChannelPath,
-                    botToken,
-                    store,
-                    context.Workspace.OrchestratorDirectory,
-                    (correlationKey, answer, cancellationToken) =>
-                    {
-                        // operator-listen runs with an EMPTY kernel and no write lock (SkipsKernelState)
-                        // so it stays concurrent with a running conductor. Resolve purely against the
-                        // collaboration store (no kernel needed): this clears the clarification in Discord
-                        // and records the precedent. The conductor's AwaitingClarification gate reads the
-                        // store, so the goal resumes on its next tick, and EnsureRefined then writes the
-                        // answer into the goal's RefinedSpec.
-                        var service = new GoalRefinementService(
-                            context.Providers,
-                            ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
-                            store,
-                            new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
-                        return service.TryResolveOpenClarificationAsync(
-                            correlationKey,
-                            answer,
-                            cancellationToken);
-                    });
+                OperatorChannelFactory.DiscordOperatorRuntime? runtime;
+                try
+                {
+                    runtime = OperatorChannelFactory.CreateDiscordRuntime(
+                        catalog,
+                        context.Workspace.OperatorChannelPath,
+                        botToken,
+                        store,
+                        context.Workspace.OrchestratorDirectory,
+                        (correlationKey, answer, cancellationToken) =>
+                        {
+                            // operator-listen runs with an EMPTY kernel and no write lock (SkipsKernelState)
+                            // so it stays concurrent with a running conductor. Resolve purely against the
+                            // collaboration store (no kernel needed): this clears the clarification in Discord
+                            // and records the precedent. The conductor's AwaitingClarification gate reads the
+                            // store, so the goal resumes on its next tick, and EnsureRefined then writes the
+                            // answer into the goal's RefinedSpec.
+                            var service = new GoalRefinementService(
+                                context.Providers,
+                                ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
+                                store,
+                                new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
+                            return service.TryResolveOpenClarificationAsync(
+                                correlationKey,
+                                answer,
+                                cancellationToken);
+                        });
+                }
+                catch (Exception ex) when (DiscordOperatorFaultClassifier.IsAuthError(ex))
+                {
+                    DiscordOperatorFaultClassifier.DisableForProcess("operator-listen startup", ex);
+                    return false;
+                }
                 if (runtime is null)
                 {
                     Console.WriteLine("operator-listen: Discord not configured or MCGO_DISCORD_BOT_TOKEN missing.");
@@ -445,6 +454,11 @@ internal static partial class CliCommandHandlers
             {
                 return;
             }
+            catch (Exception ex) when (DiscordOperatorFaultClassifier.IsAuthError(ex))
+            {
+                DiscordOperatorFaultClassifier.DisableForProcess(operationName, ex);
+                return;
+            }
             catch (Exception ex) when (DiscordOperatorFaultClassifier.IsTransient(ex))
             {
                 attempt++;
@@ -459,12 +473,6 @@ internal static partial class CliCommandHandlers
                 {
                     return;
                 }
-            }
-            catch (Exception ex) when (DiscordOperatorFaultClassifier.IsFatal(ex))
-            {
-                Console.Error.WriteLine(
-                    $"operator-listen: fatal Discord authorization error while refreshing {operationName}: {ex.Message}");
-                throw;
             }
         }
     }

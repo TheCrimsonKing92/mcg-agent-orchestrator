@@ -6,6 +6,32 @@ using System.Net;
 
 public sealed class DiscordGatewayTests
 {
+    [Xunit.Fact(DisplayName = "DiscordOperatorFaultClassifier_auth_401_and_403_are_non_fatal")]
+    public void DiscordOperatorFaultClassifierAuth401And403AreNonFatal()
+    {
+        DiscordOperatorFaultClassifier.ResetForTests();
+        try
+        {
+            var unauthorized = new HttpRequestException(
+                "The server responded with error 401: Unauthorized",
+                null,
+                HttpStatusCode.Unauthorized);
+            var forbidden = new HttpRequestException(
+                "The server responded with error 403: Forbidden",
+                null,
+                HttpStatusCode.Forbidden);
+
+            Assert.True(DiscordOperatorFaultClassifier.IsAuthError(unauthorized));
+            Assert.True(DiscordOperatorFaultClassifier.IsAuthError(forbidden));
+            Assert.False(DiscordOperatorFaultClassifier.IsFatal(unauthorized));
+            Assert.False(DiscordOperatorFaultClassifier.IsFatal(forbidden));
+        }
+        finally
+        {
+            DiscordOperatorFaultClassifier.ResetForTests();
+        }
+    }
+
     // ---- DiscordInteractionHandler param overload (parity with JSON Process tests) ----
 
     [Xunit.Fact(DisplayName = "DiscordInteractionHandler_overload_direct_action_maps_to_decision")]
@@ -535,26 +561,51 @@ public sealed class DiscordGatewayTests
     [Xunit.Fact(DisplayName = "OperatorListen_collaboration_reconcile_loop_exits_on_unauthorized_discord_refresh_error")]
     public async Task OperatorListenCollaborationReconcileLoopExitsOnUnauthorizedDiscordRefreshError()
     {
+        DiscordOperatorFaultClassifier.ResetForTests();
         var root = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(root);
-        var api = new FakeDiscordForumApi();
-        api.CreateThreadFailures.Enqueue(new HttpRequestException(
-            "The server responded with error 401: Unauthorized",
-            null,
-            HttpStatusCode.Unauthorized));
-        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
-        await store.RaiseAsync(
-            CollaborationItemType.Decision,
-            "goal-auth-123",
-            "Unauthorized decision",
-            "Body",
-            "corr-auth-1");
+        try
+        {
+            var warnings = new List<DiscordOperatorAuthWarning>();
+            DiscordOperatorFaultClassifier.AuthWarningSink = warnings.Add;
+            var store = CollaborationItemStore.ForDirectory(root);
+            var api = new FakeDiscordForumApi();
+            api.CreateThreadFailures.Enqueue(new HttpRequestException(
+                "The server responded with error 401: Unauthorized",
+                null,
+                HttpStatusCode.Unauthorized));
+            var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+            await store.RaiseAsync(
+                CollaborationItemType.Decision,
+                "goal-auth-123",
+                "Unauthorized decision",
+                "Body",
+                "corr-auth-1");
+            using var cts = new CancellationTokenSource();
 
-        await Xunit.Assert.ThrowsAsync<HttpRequestException>(() =>
-            CliCommandHandlers.RunCollaborationReconcileLoopAsync(view, TimeSpan.FromSeconds(15), CancellationToken.None));
+            Task Delay(TimeSpan _, CancellationToken cancellationToken)
+            {
+                cts.Cancel();
+                return Task.FromCanceled(cts.Token);
+            }
 
-        Assert.Equal(1, api.CreateThreadAttempts);
-        Xunit.Assert.Empty(api.SentMessages);
+            await CliCommandHandlers.RunCollaborationReconcileLoopAsync(
+                view,
+                TimeSpan.FromSeconds(15),
+                cts.Token,
+                Delay);
+            await view.ReconcileAsync();
+
+            Assert.True(DiscordOperatorFaultClassifier.IsAuthDisabledForProcess);
+            Assert.Equal(1, warnings.Count);
+            Assert.Equal(HttpStatusCode.Unauthorized, warnings[0].StatusCode);
+            Assert.Equal(1, api.CreateThreadAttempts);
+            Xunit.Assert.Empty(api.SentMessages);
+        }
+        finally
+        {
+            DiscordOperatorFaultClassifier.ResetForTests();
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact(DisplayName = "DiscordProgressView_reconcile_skips_identical_status_content")]
