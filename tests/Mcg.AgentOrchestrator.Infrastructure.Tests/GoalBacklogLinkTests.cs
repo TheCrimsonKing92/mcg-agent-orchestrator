@@ -74,7 +74,7 @@ public sealed class GoalBacklogLinkTests
         var goal = kernel.CreateGoal("Land this", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
         kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
 
-        CliCommandHandlers.AutoCloseSourceBacklogItem(goal, dbPath);
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath);
 
         var fetched = await store.GetByExactIdAsync(item.Id);
         Assert.True(fetched is not null);
@@ -96,10 +96,24 @@ public sealed class GoalBacklogLinkTests
         kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
 
         // Must not throw; must leave item as Done.
-        CliCommandHandlers.AutoCloseSourceBacklogItem(goal, dbPath);
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath);
 
         var fetched = await store.GetByExactIdAsync(item.Id);
         Assert.True(fetched is not null);
         Assert.True(fetched!.Status == BacklogItemStatus.Done);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_land_without_source_backlog_item_warns_and_continues")]
+    public void LandWithoutSourceBacklogItemWarnsAndContinues()
+    {
+        var dbPath = Path.Combine(CreateTempDirectory(), "backlog.db");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Land this", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
+        var messages = new List<string>();
+
+        var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath, messages.Add);
+
+        Assert.False(closed);
+        Assert.Contains(messages, message => message.Contains("without a linked source backlog item", StringComparison.OrdinalIgnoreCase));
     }
 }
