@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Hidden detached dispatch-host entrypoint (see DispatchProcessHost). Must run before any tenant,
@@ -35,6 +36,7 @@ var workspace = OrchestratorWorkspace.ForDirectory(
     repoRoot,
     string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
     tenantSelection.TenantName);
+GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;

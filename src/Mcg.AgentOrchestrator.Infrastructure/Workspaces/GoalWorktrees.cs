@@ -42,6 +42,67 @@ public sealed record GoalWorktreeRemoveResult(
     public bool IsComplete => LeftoverPath is null;
 }
 
+public sealed record GoalWorktreeCleanupWarning(string Path, string Operation, Exception Exception);
+
+public sealed record GoalWorktreeSweepResult(int RemovedCount, IReadOnlyList<string> LeftoverPaths);
+
+public sealed record GoalWorktreeCleanupOptions(TimeSpan SweepInterval)
+{
+    public static GoalWorktreeCleanupOptions Default { get; } = new(TimeSpan.FromMinutes(5));
+}
+
+public interface ISandboxAclHelper
+{
+    void ResetSandboxAcl(string worktreePath);
+}
+
+public sealed class WindowsSandboxAclHelper : ISandboxAclHelper
+{
+    public void ResetSandboxAcl(string worktreePath)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sandboxPath = Path.Combine(worktreePath, ".mcg-sandbox");
+        if (!Directory.Exists(sandboxPath))
+        {
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "icacls",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add(sandboxPath);
+        startInfo.ArgumentList.Add("/reset");
+        startInfo.ArgumentList.Add("/T");
+        startInfo.ArgumentList.Add("/C");
+        startInfo.ArgumentList.Add("/Q");
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return;
+        }
+
+        if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+        }
+    }
+}
+
+public sealed class NoOpSandboxAclHelper : ISandboxAclHelper
+{
+    public void ResetSandboxAcl(string worktreePath) { }
+}
+
 public static class GoalWorktrees
 {
     public const string DirectoryName = ".orchestrator-worktrees";
@@ -54,6 +115,11 @@ public static class GoalWorktrees
     // Injectable for testing: called best-effort before directory deletion to release any
     // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
     internal static Action<string> BuildServerShutdown = DefaultBuildServerShutdown;
+    internal static ISandboxAclHelper SandboxAclHelper { get; set; } =
+        OperatingSystem.IsWindows() ? new WindowsSandboxAclHelper() : new NoOpSandboxAclHelper();
+    internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
+    internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
+    internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
 
     public static string BranchName(GoalId goalId) => $"goal/{Prefix(goalId)}";
 
@@ -79,12 +145,18 @@ public static class GoalWorktrees
         }
 
         RequireGitWorkTree(executionDirectory);
+        EnsureWorktreeRootIgnored(executionDirectory);
 
         var path = WorktreePath(executionDirectory, goalId);
         var branch = BranchName(goalId);
-        var result = BranchExists(executionDirectory, branch)
-            ? GitCli.Run(executionDirectory, "worktree", "add", path, branch)
-            : GitCli.Run(executionDirectory, "worktree", "add", path, "-b", branch);
+        var branchExists = BranchExists(executionDirectory, branch);
+        var result = AddWorktree(executionDirectory, path, branch, branchExists);
+        if (result.ExitCode != 0 && WorktreeAddFailedBecausePathExists(result, path))
+        {
+            ClearOrphanDirectory(path, kernel: null, operation: "worktree-add-retry");
+            result = AddWorktree(executionDirectory, path, branch, BranchExists(executionDirectory, branch));
+        }
+
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException($"Failed to create goal workspace at '{path}': {result.Error}");
@@ -122,7 +194,7 @@ public static class GoalWorktrees
         }
     }
 
-    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId)
+    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null)
     {
         RequireGitWorkTree(executionDirectory);
 
@@ -157,34 +229,71 @@ public static class GoalWorktrees
 
         if (Directory.Exists(path))
         {
+            ReapRecordedWorkerProcesses(kernel, path);
             BuildServerShutdown(path);
+            ResetSandboxAcl(path, "remove");
         }
 
-        if (Directory.Exists(path) && !DeleteDirectoryWithRetry(path))
+        if (Directory.Exists(path) && !DeleteDirectory(path))
         {
-            var lockHolders = FindLockHolders(path);
-            var prefix = wasAlreadyUnregistered
-                ? "Workspace already unregistered; directory could not be removed."
-                : "Workspace unregistered; directory could not be removed.";
-            var branchNote = BranchExists(executionDirectory, branch) ? $" Branch {branch} remains." : "";
-            return new GoalWorktreeRemoveResult(
-                prefix + branchNote,
-                path,
-                lockHolders,
-                "workspace remove");
+            WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."));
         }
 
         if (!BranchExists(executionDirectory, branch))
         {
             _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
-            return new GoalWorktreeRemoveResult("Removed workspace.", null, [], null);
+            return new GoalWorktreeRemoveResult(Directory.Exists(path)
+                ? "Removed workspace; leftover directory deferred to orphan sweep."
+                : "Removed workspace.", null, [], null);
         }
 
         var branchRemoval = GitCli.Run(executionDirectory, "branch", "-d", branch);
         _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         return branchRemoval.ExitCode == 0
-            ? new GoalWorktreeRemoveResult($"Removed workspace and merged branch {branch}.", null, [], null)
-            : new GoalWorktreeRemoveResult($"Removed workspace; branch {branch} kept because it has unmerged commits.", null, [], null);
+            ? new GoalWorktreeRemoveResult(Directory.Exists(path)
+                ? $"Removed workspace and merged branch {branch}; leftover directory deferred to orphan sweep."
+                : $"Removed workspace and merged branch {branch}.", null, [], null)
+            : new GoalWorktreeRemoveResult(Directory.Exists(path)
+                ? $"Removed workspace; branch {branch} kept because it has unmerged commits; leftover directory deferred to orphan sweep."
+                : $"Removed workspace; branch {branch} kept because it has unmerged commits.", null, [], null);
+    }
+
+    public static GoalWorktreeSweepResult SweepOrphanedWorktrees(string executionDirectory, AgentOrchestratorKernel? kernel = null)
+    {
+        if (!IsGitWorkTree(executionDirectory))
+        {
+            return new GoalWorktreeSweepResult(0, []);
+        }
+
+        var worktreesRoot = Path.Combine(Path.GetFullPath(executionDirectory), DirectoryName);
+        if (!Directory.Exists(worktreesRoot))
+        {
+            return new GoalWorktreeSweepResult(0, []);
+        }
+
+        var registered = RegisteredWorktreePaths(executionDirectory);
+        var removed = 0;
+        var leftovers = new List<string>();
+
+        foreach (var directory in Directory.EnumerateDirectories(worktreesRoot))
+        {
+            var normalized = NormalizePath(directory);
+            if (registered.Contains(normalized))
+            {
+                continue;
+            }
+
+            if (ClearOrphanDirectory(directory, kernel, "orphan-sweep"))
+            {
+                removed++;
+            }
+            else if (Directory.Exists(directory))
+            {
+                leftovers.Add(directory);
+            }
+        }
+
+        return new GoalWorktreeSweepResult(removed, leftovers);
     }
 
     /// <summary>
@@ -317,7 +426,11 @@ public static class GoalWorktrees
                 $"acceptance {Prefix(goalId)}");
         }
 
-        var rebase = GitCli.Run(worktreePath, "rebase", baseBranch);
+        var rebase = GitCli.Run(worktreePath, "rebase", "--apply", "--no-stat", baseBranch);
+        if (IsRebaseStatPathFailure(rebase))
+        {
+            rebase = RunGitDirect(worktreePath, "rebase", "--apply", "--no-stat", baseBranch);
+        }
         if (rebase.ExitCode == 0)
         {
             return new GoalWorktreeRebaseResult(
@@ -362,6 +475,24 @@ public static class GoalWorktrees
         return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
     }
 
+    private static GitCli.GitResult AddWorktree(string executionDirectory, string path, string branch, bool branchExists)
+    {
+        return branchExists
+            ? GitCli.Run(executionDirectory, "worktree", "add", path, branch)
+            : GitCli.Run(executionDirectory, "worktree", "add", path, "-b", branch);
+    }
+
+    private static bool WorktreeAddFailedBecausePathExists(GitCli.GitResult result, string path)
+    {
+        if (result.ExitCode == 0 || !Directory.Exists(path))
+        {
+            return false;
+        }
+
+        var message = $"{result.Output}{Environment.NewLine}{result.Error}";
+        return message.Contains("already exists", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? GetCurrentBranchName(string executionDirectory)
     {
         var result = GitCli.Run(executionDirectory, "branch", "--show-current");
@@ -386,23 +517,122 @@ public static class GoalWorktrees
 
     private static bool IsRegisteredWorktree(string executionDirectory, string path)
     {
-        var result = GitCli.Run(executionDirectory, "worktree", "list", "--porcelain");
-        if (result.ExitCode != 0)
+        return RegisteredWorktreePaths(executionDirectory).Contains(NormalizePath(path));
+    }
+
+    private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
+    {
+        if (result.ExitCode == 0)
         {
             return false;
         }
 
-        var target = NormalizePath(path);
+        var message = $"{result.Output}{Environment.NewLine}{result.Error}";
+        return message.Contains("failed to stat", StringComparison.OrdinalIgnoreCase) &&
+            message.Contains("...", StringComparison.Ordinal);
+    }
+
+    private static GitCli.GitResult RunGitDirect(string workingDirectory, params string[] args)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workingDirectory
+            };
+
+            foreach (var arg in args)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return new GitCli.GitResult(1, string.Empty, "failed to start git process");
+            }
+
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return new GitCli.GitResult(-1, string.Empty, $"git {string.Join(' ', args)} timed out after {GitCli.DefaultTimeoutMilliseconds}ms");
+            }
+
+            Task.WaitAll([outputTask, errorTask], 5_000);
+            var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
+            var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
+            return new GitCli.GitResult(process.ExitCode, output, error);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return new GitCli.GitResult(1, string.Empty, ex.Message);
+        }
+    }
+
+    private static HashSet<string> RegisteredWorktreePaths(string executionDirectory)
+    {
+        var result = GitCli.Run(executionDirectory, "worktree", "list", "--porcelain");
+        if (result.ExitCode != 0)
+        {
+            return [];
+        }
+
         return result.Output
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Where(line => line.StartsWith("worktree ", StringComparison.Ordinal))
             .Select(line => NormalizePath(line["worktree ".Length..]))
-            .Any(worktree => string.Equals(worktree, target, StringComparison.OrdinalIgnoreCase));
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string NormalizePath(string path)
     {
         return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static void EnsureWorktreeRootIgnored(string executionDirectory)
+    {
+        try
+        {
+            var gitDirResult = GitCli.Run(executionDirectory, "rev-parse", "--git-dir");
+            if (gitDirResult.ExitCode != 0 || string.IsNullOrWhiteSpace(gitDirResult.Output))
+            {
+                return;
+            }
+
+            var gitDir = gitDirResult.Output.Trim();
+            if (!Path.IsPathRooted(gitDir))
+            {
+                gitDir = Path.GetFullPath(Path.Combine(executionDirectory, gitDir));
+            }
+
+            var infoDirectory = Path.Combine(gitDir, "info");
+            Directory.CreateDirectory(infoDirectory);
+            var excludePath = Path.Combine(infoDirectory, "exclude");
+            const string ignoreEntry = ".orchestrator-worktrees/";
+            var existing = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
+            if (existing
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(line => string.Equals(line, ignoreEntry, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            File.AppendAllText(excludePath,
+                (existing.Length > 0 && !existing.EndsWith('\n') ? Environment.NewLine : string.Empty) +
+                ignoreEntry +
+                Environment.NewLine);
+        }
+        catch
+        {
+            // Ignore hygiene failures; git worktree creation remains the authoritative operation.
+        }
     }
 
     /// <summary>
@@ -453,6 +683,98 @@ public static class GoalWorktrees
         }
 
         return false;
+    }
+
+    private static bool ClearOrphanDirectory(string path, AgentOrchestratorKernel? kernel, string operation)
+    {
+        if (!Directory.Exists(path))
+        {
+            return true;
+        }
+
+        ReapRecordedWorkerProcesses(kernel, path);
+        BuildServerShutdown(path);
+        ResetSandboxAcl(path, operation);
+        if (DeleteDirectory(path))
+        {
+            return true;
+        }
+
+        WarnCleanupFailure(path, operation, new IOException("Directory deletion failed after ACL reset."));
+        return !Directory.Exists(path);
+    }
+
+    private static void ResetSandboxAcl(string worktreePath, string operation)
+    {
+        try
+        {
+            SandboxAclHelper.ResetSandboxAcl(worktreePath);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+        {
+            WarnCleanupFailure(worktreePath, operation + ":acl-reset", ex);
+        }
+    }
+
+    private static void ReapRecordedWorkerProcesses(AgentOrchestratorKernel? kernel, string worktreePath)
+    {
+        if (kernel is null)
+        {
+            return;
+        }
+
+        var normalized = NormalizePath(worktreePath);
+        foreach (var process in kernel.Goals
+                     .SelectMany(goal => goal.Tasks)
+                     .Select(task => task.LastProcess)
+                     .OfType<TaskProcessRecord>()
+                     .Where(process =>
+                         process.IsRunning &&
+                         string.Equals(NormalizePath(process.WorkingDirectory), normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var processId in process.TrackedProcessIds.Distinct())
+            {
+                _ = TryKillRecordedProcess(processId);
+            }
+        }
+    }
+
+    private static bool DefaultTryKillRecordedProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void WarnCleanupFailure(string path, string operation, Exception exception)
+    {
+        try
+        {
+            CleanupWarningSink(new GoalWorktreeCleanupWarning(path, operation, exception));
+        }
+        catch
+        {
+            // Warning sinks are observational only.
+        }
+    }
+
+    private static void DefaultCleanupWarningSink(GoalWorktreeCleanupWarning warning)
+    {
+        Console.Error.WriteLine(
+            $"warning: worktree-cleanup path=\"{warning.Path}\" operation=\"{warning.Operation}\" exception=\"{warning.Exception.GetType().Name}\" message=\"{warning.Exception.Message}\"");
     }
 
     private static bool IsTransientDeleteFailure(Exception ex)
