@@ -1,11 +1,13 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardEndpoints
 {
-    private static async Task<IResult> HandleConductorTickAsync(HttpContext context)
+    private static async Task<IResult> HandleConductorTickAsync(HttpContext context, DashboardEndpointServices services)
     {
         try
         {
@@ -27,7 +29,12 @@ internal static partial class DashboardEndpoints
             var progressLines = root.TryGetProperty("progressLines", out var pl)
                 ? pl.EnumerateArray().Select(e => e.GetString() ?? string.Empty).Where(s => s.Length > 0).ToList()
                 : null;
-            ConductorEventBus.RecordTick(tick, advanced, held, escalated, retried, done, watchSleeping, progressLines);
+            ConductorTickPusher.TryRecord(
+                services.Workspace.RunEventStorePath,
+                new BatchTickSummary(tick, advanced, held, escalated, retried, done, watchSleeping)
+                {
+                    ProgressLines = progressLines
+                });
             return Results.Ok(new { recorded = true, tick });
         }
         catch (JsonException ex)

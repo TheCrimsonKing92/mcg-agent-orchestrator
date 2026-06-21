@@ -43,8 +43,9 @@ internal static partial class DashboardEndpoints
         context.Response.ContentType = "text/event-stream; charset=utf-8";
 
         var sinceEventId = ParseMonitoringSinceEventId(context.Request);
-        var sinceTickSeq = 0L;
+        var sinceRunEventSeq = 0L;
         var nextSnapshotAt = DateTimeOffset.MinValue;
+        var runEvents = new SqliteRunEventStore(services.Workspace.RunEventStorePath);
         while (!context.RequestAborted.IsCancellationRequested)
         {
             var batch = BuildMonitoringBatch(services, current, goal, sinceEventId);
@@ -71,15 +72,15 @@ internal static partial class DashboardEndpoints
                 sinceEventId = evt.Id;
             }
 
-            foreach (var tick in ConductorEventBus.GetSince(sinceTickSeq))
+            foreach (var tick in await ReadConductorTicksAsync(runEvents, sinceRunEventSeq, context.RequestAborted))
             {
                 await DashboardMonitoringEvents.WriteServerSentEventAsync(
                     context.Response.Body,
                     DashboardMonitoringEvents.ConductorTickEventName,
                     tick,
-                    id: null,
+                    id: $"run-{tick.Seq}",
                     context.RequestAborted);
-                sinceTickSeq = tick.Seq;
+                sinceRunEventSeq = tick.Seq;
                 if (tick.ProgressLines is { Count: > 0 })
                 {
                     foreach (var line in tick.ProgressLines)
@@ -127,5 +128,14 @@ internal static partial class DashboardEndpoints
         return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
             ? parsed
             : 0;
+    }
+
+    private static async Task<IReadOnlyList<ConductorTickEvent>> ReadConductorTicksAsync(
+        IRunEventStore runEvents,
+        long sinceRunEventSeq,
+        CancellationToken cancellationToken)
+    {
+        var records = await runEvents.ReadSinceAsync(sinceRunEventSeq, maxCount: 200, cancellationToken: cancellationToken);
+        return DashboardMonitoringEvents.BuildConductorTickEvents(records);
     }
 }
