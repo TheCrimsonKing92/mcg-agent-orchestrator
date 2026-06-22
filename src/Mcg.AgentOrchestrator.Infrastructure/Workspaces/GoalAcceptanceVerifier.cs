@@ -480,10 +480,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(WithBuildEnvironmentArguments(arguments, environment), worktreePath, cancellationToken).ConfigureAwait(false);
 
         var retried = false;
-        if (result.ExitCode != 0 && result.Output.Contains("CS2012", StringComparison.Ordinal))
+        if (result.ExitCode != 0 && (result.Output.Contains("CS2012", StringComparison.Ordinal) || IsTransientTesthostAbort(result.Output)))
         {
-            // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
-            // clears residual compiler processes before the single allowed retry.
+            // CS2012 is a transient obj-dll file lock; a mid-run testhost abort ("host process exited
+            // unexpectedly" / "Test Run Aborted" with no completed verdict) is an environmental crash
+            // (resource pressure, concurrent slot use). Both are transient: a second build-server shutdown
+            // + fresh attempt clears them before the single allowed retry, so a one-off crash stops
+            // spuriously escalating an otherwise-green goal.
             await _runner(["dotnet", "build-server", "shutdown"], worktreePath, cancellationToken).ConfigureAwait(false);
             environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
             leaseLock.Dispose();
@@ -525,6 +528,29 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return output.Contains("Passed!", StringComparison.Ordinal) &&
             !output.Contains("Failed!", StringComparison.Ordinal);
     }
+
+    // A testhost that crashes MID-run ("host process exited unexpectedly" / "Test Run Aborted") with no
+    // completed all-passed banner and no real test failure is an environmental abort, not a verdict — it
+    // should be retried once like CS2012. A build/compile failure, or a completed run WITH real test
+    // failures, is NOT this and must not be retried (it is a genuine red).
+    internal static bool IsTransientTesthostAbort(string output)
+    {
+        if (output.Contains("Build FAILED", StringComparison.Ordinal) ||
+            output.Contains("error CS", StringComparison.Ordinal) ||
+            TestRunReportsRealFailure(output))
+        {
+            return false;
+        }
+
+        return output.Contains("Test Run Aborted", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("host process exited unexpectedly", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("active Test Run was aborted", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // True when the run's own summary banner reports >=1 actual test failure (a completed run with real
+    // failures), e.g. "Failed:     1, Passed:  1012". Distinguishes a genuine red from a transient abort.
+    private static bool TestRunReportsRealFailure(string output) =>
+        System.Text.RegularExpressions.Regex.IsMatch(output, @"Failed:\s*[1-9]\d*");
 
     private async Task<AcceptanceCheckResult> RunForbiddenChangedPathsCheckAsync(
         IReadOnlyList<string> globs,

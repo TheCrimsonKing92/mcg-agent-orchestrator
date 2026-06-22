@@ -23,7 +23,35 @@ public sealed class BacklogStore
         EnsureSchema();
     }
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;";
+    // Pooling=False matches the loop critical-path stores: a POOLED connection can be returned to the
+    // pool still holding a WAL read/lock slot, so a later writer meets "database is locked" that
+    // busy_timeout cannot wait out. Without it a backlog write concurrent with a reader could fail.
+    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+
+    // Bounded retry on a transient SQLITE_BUSY/LOCKED: busy_timeout (30s) handles the simple lock-wait,
+    // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
+    // wait instead of a fatal throw. Mirrors SqliteOrchestratorStateRepository.
+    private const int MaxBusyRetries = 6;
+
+    private static bool IsTransientLock(SqliteException ex) =>
+        ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
+
+    private static async Task<T> WithBusyRetryAsync<T>(Func<Task<T>> operation, CancellationToken ct)
+    {
+        var delayMs = 50;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (SqliteException ex) when (attempt < MaxBusyRetries && IsTransientLock(ex))
+            {
+                await Task.Delay(delayMs, ct);
+                delayMs = Math.Min(delayMs * 2, 1000);
+            }
+        }
+    }
 
     private SqliteConnection OpenConnection()
     {
@@ -64,20 +92,23 @@ public sealed class BacklogStore
         var id = Guid.NewGuid().ToString("n");
         var now = DateTimeOffset.UtcNow;
         var item = new BacklogItem(id, title, body, BacklogItemStatus.Open, now, now, sourceGoalId);
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            await InsertItemAsync(conn, item, cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
-        return item;
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                await InsertItemAsync(conn, item, cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+            return item;
+        }, cancellationToken);
     }
 
     public async Task<IReadOnlyList<BacklogItem>> ListAsync(
@@ -120,46 +151,49 @@ public sealed class BacklogStore
         string? reason = null,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
-            await using (var cmd = conn.CreateCommand())
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
             {
-                if (reason is null)
+                var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+                await using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id";
+                    if (reason is null)
+                    {
+                        cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id";
+                    }
+                    else
+                    {
+                        cmd.CommandText = """
+                            UPDATE backlog
+                            SET status = 'Done',
+                                updated_at = $updated_at,
+                                body = CASE WHEN body = '' THEN $reason
+                                            ELSE body || char(10) || char(10) || 'Closed: ' || $reason
+                                       END
+                            WHERE id = $id
+                            """;
+                        cmd.Parameters.AddWithValue("$reason", reason);
+                    }
+                    cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+                    cmd.Parameters.AddWithValue("$id", id);
+                    var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                    if (rows == 0)
+                        throw new InvalidOperationException($"No backlog item found with id '{id}'.");
                 }
-                else
-                {
-                    cmd.CommandText = """
-                        UPDATE backlog
-                        SET status = 'Done',
-                            updated_at = $updated_at,
-                            body = CASE WHEN body = '' THEN $reason
-                                        ELSE body || char(10) || char(10) || 'Closed: ' || $reason
-                                   END
-                        WHERE id = $id
-                        """;
-                    cmd.Parameters.AddWithValue("$reason", reason);
-                }
-                cmd.Parameters.AddWithValue("$updated_at", updatedAt);
-                cmd.Parameters.AddWithValue("$id", id);
-                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-                if (rows == 0)
-                    throw new InvalidOperationException($"No backlog item found with id '{id}'.");
+                var result = await LoadItemByIdAsync(conn, id, cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return result!;
             }
-            var result = await LoadItemByIdAsync(conn, id, cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-            return result!;
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     public async Task<BacklogItem> ReopenAsync(
@@ -167,46 +201,49 @@ public sealed class BacklogStore
         string? reason = null,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
-            await using (var cmd = conn.CreateCommand())
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
             {
-                if (reason is null)
+                var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+                await using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE backlog SET status = 'Open', updated_at = $updated_at WHERE id = $id";
+                    if (reason is null)
+                    {
+                        cmd.CommandText = "UPDATE backlog SET status = 'Open', updated_at = $updated_at WHERE id = $id";
+                    }
+                    else
+                    {
+                        cmd.CommandText = """
+                            UPDATE backlog
+                            SET status = 'Open',
+                                updated_at = $updated_at,
+                                body = CASE WHEN body = '' THEN $reason
+                                            ELSE body || char(10) || char(10) || 'Reopened: ' || $reason
+                                       END
+                            WHERE id = $id
+                            """;
+                        cmd.Parameters.AddWithValue("$reason", reason);
+                    }
+                    cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+                    cmd.Parameters.AddWithValue("$id", id);
+                    var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                    if (rows == 0)
+                        throw new InvalidOperationException($"No backlog item found with id '{id}'.");
                 }
-                else
-                {
-                    cmd.CommandText = """
-                        UPDATE backlog
-                        SET status = 'Open',
-                            updated_at = $updated_at,
-                            body = CASE WHEN body = '' THEN $reason
-                                        ELSE body || char(10) || char(10) || 'Reopened: ' || $reason
-                                   END
-                        WHERE id = $id
-                        """;
-                    cmd.Parameters.AddWithValue("$reason", reason);
-                }
-                cmd.Parameters.AddWithValue("$updated_at", updatedAt);
-                cmd.Parameters.AddWithValue("$id", id);
-                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-                if (rows == 0)
-                    throw new InvalidOperationException($"No backlog item found with id '{id}'.");
+                var result = await LoadItemByIdAsync(conn, id, cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return result!;
             }
-            var result = await LoadItemByIdAsync(conn, id, cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-            return result!;
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     public async Task<BacklogItem?> GetByExactIdAsync(string id, CancellationToken cancellationToken = default)
@@ -223,31 +260,34 @@ public sealed class BacklogStore
     {
         try
         {
-            await using var conn = OpenConnection();
-            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
-            await using var cmd = conn.CreateCommand();
-            if (reason is null)
+            return await WithBusyRetryAsync(async () =>
             {
-                cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id AND status = 'Open'";
-            }
-            else
-            {
-                cmd.CommandText = """
-                    UPDATE backlog
-                    SET status = 'Done',
-                        updated_at = $updated_at,
-                        body = CASE WHEN body = '' THEN $reason
-                                    ELSE body || char(10) || char(10) || 'Closed: ' || $reason
-                               END
-                    WHERE id = $id AND status = 'Open'
-                    """;
-                cmd.Parameters.AddWithValue("$reason", reason);
-            }
-            cmd.Parameters.AddWithValue("$updated_at", updatedAt);
-            cmd.Parameters.AddWithValue("$id", id);
-            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-            return rows > 0;
+                await using var conn = OpenConnection();
+                await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+                var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+                await using var cmd = conn.CreateCommand();
+                if (reason is null)
+                {
+                    cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id AND status = 'Open'";
+                }
+                else
+                {
+                    cmd.CommandText = """
+                        UPDATE backlog
+                        SET status = 'Done',
+                            updated_at = $updated_at,
+                            body = CASE WHEN body = '' THEN $reason
+                                        ELSE body || char(10) || char(10) || 'Closed: ' || $reason
+                                   END
+                        WHERE id = $id AND status = 'Open'
+                        """;
+                    cmd.Parameters.AddWithValue("$reason", reason);
+                }
+                cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+                cmd.Parameters.AddWithValue("$id", id);
+                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                return rows > 0;
+            }, cancellationToken);
         }
         catch
         {
@@ -258,26 +298,29 @@ public sealed class BacklogStore
     // Returns true if inserted, false if the item already existed (idempotent for import).
     public async Task<bool> UpsertAsync(BacklogItem item, CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                INSERT OR IGNORE INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id)
-                VALUES ($id, $title, $body, $status, $created_at, $updated_at, $source_goal_id)
-                """;
-            SetItemParameters(cmd, item);
-            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-            return rows > 0;
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    INSERT OR IGNORE INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id)
+                    VALUES ($id, $title, $body, $status, $created_at, $updated_at, $source_goal_id)
+                    """;
+                SetItemParameters(cmd, item);
+                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return rows > 0;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     // Derives a deterministic slug-style id from a title (used for idempotent upserts).

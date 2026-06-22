@@ -6,6 +6,7 @@ public static class OllamaDefaults
     // IPv6 attempt first, and the fallback to IPv4 can exceed reachability
     // probe timeouts while Ollama listens on IPv4 only.
     public const string BaseUrl = "http://127.0.0.1:11434";
+    public const string OpenAiModelsPath = "/v1/models";
 
     public static string ResolveBaseUrl()
     {
@@ -16,4 +17,7 @@ public static class OllamaDefaults
     {
         return string.IsNullOrWhiteSpace(configured) ? BaseUrl : configured.Trim();
     }
+
+    public static string BuildOpenAiModelsUrl(string baseUrl) =>
+        $"{baseUrl.TrimEnd('/')}{OpenAiModelsPath}";
 }

@@ -113,19 +113,19 @@ public static class OrchestratorHealthInspector
         try
         {
             using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = probe.GetAsync($"{baseUrl.TrimEnd('/')}/api/version").GetAwaiter().GetResult();
+            var response = probe.GetAsync(OllamaDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
             if (response.IsSuccessStatusCode)
             {
                 var model = environment.TryGetValue("OLLAMA_MODEL", out var m) && !string.IsNullOrWhiteSpace(m) ? m : "qwen3:8b";
-                return new ProviderConfigurationStatus("Ollama", true, "LocalBridge", $"Ollama is running at {baseUrl}; default model is '{model}'.");
+                return new ProviderConfigurationStatus("Ollama", true, "LocalBridge", $"OpenAI-compatible local inference server is running at {baseUrl}; default model is '{model}'.");
             }
         }
         catch
         {
-            // Ollama is not reachable
+            // Local inference server is not reachable.
         }
 
-        return new ProviderConfigurationStatus("Ollama", false, "Offline", $"Ollama is not reachable at {baseUrl}.");
+        return new ProviderConfigurationStatus("Ollama", false, "Offline", $"OpenAI-compatible local inference server is not reachable at {baseUrl}.");
     }
 
     private static IEnumerable<AgentConfigurationValidation> InspectAgents(

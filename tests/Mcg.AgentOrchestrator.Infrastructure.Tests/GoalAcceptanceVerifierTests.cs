@@ -4,6 +4,18 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("IsolatedDotnetRoot")]
 public sealed class GoalAcceptanceVerifierTests
 {
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_classifies_transient_testhost_abort_vs_real_failure")]
+    [Xunit.InlineData("The active Test Run was aborted because the host process exited unexpectedly.", true)]
+    [Xunit.InlineData("Test Run Aborted.\r\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs", true)]
+    [Xunit.InlineData("Failed!  - Failed:     1, Passed:  1012, Skipped:     0, Total:  1013", false)]
+    [Xunit.InlineData("Failed:     1, Passed:  1012. The active Test Run was aborted because the host process exited unexpectedly.", false)]
+    [Xunit.InlineData("Build FAILED.\r\nerror CS1002: ; expected", false)]
+    [Xunit.InlineData("Passed!  - Failed:     0, Passed:  1013, Skipped:     0, Total:  1013", false)]
+    public void ClassifiesTransientTesthostAbortVsRealFailure(string output, bool expected)
+    {
+        Assert.Equal(expected, GoalAcceptanceVerifier.IsTransientTesthostAbort(output));
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_once_on_CS2012_and_returns_passed")]
     public async Task GoalAcceptanceVerifierRetriesOnceOnCs2012AndReturnsPassed()
     {

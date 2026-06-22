@@ -52,6 +52,32 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         return conn;
     }
 
+    // Bounded retry on a transient SQLITE_BUSY/LOCKED: busy_timeout (30s) handles the simple lock-wait,
+    // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
+    // wait instead of a fatal throw. Mirrors SqliteOrchestratorStateRepository (matching the loop
+    // critical-path stores so a write concurrent with operator-listen never hard-fails).
+    private const int MaxBusyRetries = 6;
+
+    private static bool IsTransientLock(SqliteException ex) =>
+        ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
+
+    private static async Task<T> WithBusyRetryAsync<T>(Func<Task<T>> operation, CancellationToken ct)
+    {
+        var delayMs = 50;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (SqliteException ex) when (attempt < MaxBusyRetries && IsTransientLock(ex))
+            {
+                await Task.Delay(delayMs, ct);
+                delayMs = Math.Min(delayMs * 2, 1000);
+            }
+        }
+    }
+
     private void EnsureSchema()
     {
         var directory = Path.GetDirectoryName(_dbPath);
@@ -90,44 +116,47 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         string? correlationKey = null,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            // Idempotent on correlation key: if an OPEN (non-terminal) item already exists for this key,
-            // refresh its subject/body and return it rather than inserting a duplicate. Without this, a
-            // conductor that re-escalates the same goal+reason each tick piles up identical items
-            // (observed: 12 copies of one landing escalation), which also collide as duplicate Discord
-            // button customIds. Raising "another one" while one is pending is the bug — not the rendering.
-            if (!string.IsNullOrWhiteSpace(correlationKey))
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
             {
-                var existing = await TryReadOpenItemByCorrelationKeyAsync(conn, correlationKey!, cancellationToken);
-                if (existing is not null)
+                // Idempotent on correlation key: if an OPEN (non-terminal) item already exists for this key,
+                // refresh its subject/body and return it rather than inserting a duplicate. Without this, a
+                // conductor that re-escalates the same goal+reason each tick piles up identical items
+                // (observed: 12 copies of one landing escalation), which also collide as duplicate Discord
+                // button customIds. Raising "another one" while one is pending is the bug — not the rendering.
+                if (!string.IsNullOrWhiteSpace(correlationKey))
                 {
-                    await using var refresh = conn.CreateCommand();
-                    refresh.CommandText = "UPDATE collaboration_items SET subject = $subject, body = $body WHERE id = $id";
-                    refresh.Parameters.AddWithValue("$subject", subject);
-                    refresh.Parameters.AddWithValue("$body", body);
-                    refresh.Parameters.AddWithValue("$id", existing.Id);
-                    await refresh.ExecuteNonQueryAsync(cancellationToken);
-                    await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-                    return existing with { Subject = subject, Body = body };
+                    var existing = await TryReadOpenItemByCorrelationKeyAsync(conn, correlationKey!, cancellationToken);
+                    if (existing is not null)
+                    {
+                        await using var refresh = conn.CreateCommand();
+                        refresh.CommandText = "UPDATE collaboration_items SET subject = $subject, body = $body WHERE id = $id";
+                        refresh.Parameters.AddWithValue("$subject", subject);
+                        refresh.Parameters.AddWithValue("$body", body);
+                        refresh.Parameters.AddWithValue("$id", existing.Id);
+                        await refresh.ExecuteNonQueryAsync(cancellationToken);
+                        await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                        return existing with { Subject = subject, Body = body };
+                    }
                 }
-            }
 
-            var item = new CollaborationItem(
-                Guid.NewGuid().ToString("n"), type, goalId, CollaborationItemStatus.Raised,
-                subject, body, correlationKey, DateTimeOffset.UtcNow, null, null);
-            await InsertItemAsync(conn, item, cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-            return item;
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
+                var item = new CollaborationItem(
+                    Guid.NewGuid().ToString("n"), type, goalId, CollaborationItemStatus.Raised,
+                    subject, body, correlationKey, DateTimeOffset.UtcNow, null, null);
+                await InsertItemAsync(conn, item, cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return item;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     private async Task<CollaborationItem?> TryReadOpenItemByCorrelationKeyAsync(
@@ -151,60 +180,66 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         string resolution,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            var resolvedAt = DateTimeOffset.UtcNow.ToString("O");
-            await using var cmd = conn.CreateCommand();
-            // Idempotent: only update if currently in a non-terminal state.
-            cmd.CommandText = """
-                UPDATE collaboration_items
-                SET status = 'Resolved', resolved_at = $resolved_at, resolution = $resolution
-                WHERE correlation_key = $key
-                  AND status NOT IN ('Resolved', 'Closed')
-                """;
-            cmd.Parameters.AddWithValue("$resolved_at", resolvedAt);
-            cmd.Parameters.AddWithValue("$resolution", resolution);
-            cmd.Parameters.AddWithValue("$key", correlationKey);
-            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-            return rows > 0;
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                var resolvedAt = DateTimeOffset.UtcNow.ToString("O");
+                await using var cmd = conn.CreateCommand();
+                // Idempotent: only update if currently in a non-terminal state.
+                cmd.CommandText = """
+                    UPDATE collaboration_items
+                    SET status = 'Resolved', resolved_at = $resolved_at, resolution = $resolution
+                    WHERE correlation_key = $key
+                      AND status NOT IN ('Resolved', 'Closed')
+                    """;
+                cmd.Parameters.AddWithValue("$resolved_at", resolvedAt);
+                cmd.Parameters.AddWithValue("$resolution", resolution);
+                cmd.Parameters.AddWithValue("$key", correlationKey);
+                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return rows > 0;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     public async Task<bool> TryMarkDeliveredAsync(
         string correlationKey,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = OpenConnection();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-        try
+        return await WithBusyRetryAsync(async () =>
         {
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                UPDATE collaboration_items
-                SET status = 'Delivered'
-                WHERE correlation_key = $key
-                  AND status = 'Raised'
-                """;
-            cmd.Parameters.AddWithValue("$key", correlationKey);
-            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
-            return rows > 0;
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
-            throw;
-        }
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE collaboration_items
+                    SET status = 'Delivered'
+                    WHERE correlation_key = $key
+                      AND status = 'Raised'
+                    """;
+                cmd.Parameters.AddWithValue("$key", correlationKey);
+                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return rows > 0;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     public async Task<IReadOnlyList<CollaborationItem>> GetAttentionQueueAsync(
