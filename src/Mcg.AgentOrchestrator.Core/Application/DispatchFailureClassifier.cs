@@ -41,9 +41,24 @@ public static class DispatchFailureClassifier
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
-        return verification.ExitCode == 0 &&
-            string.IsNullOrWhiteSpace(verification.StandardOutput) &&
-            string.IsNullOrWhiteSpace(verification.StandardError);
+        if (!HasZeroByteStandardOutput(verification))
+        {
+            return false;
+        }
+
+        return verification.ExitCode != 0 ||
+            (verification.ExitCode == 0 && string.IsNullOrWhiteSpace(verification.StandardError));
+    }
+
+    private static bool HasZeroByteStandardOutput(TaskVerificationRecord verification)
+    {
+        if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
+            File.Exists(verification.StandardOutputPath))
+        {
+            return new FileInfo(verification.StandardOutputPath).Length == 0;
+        }
+
+        return verification.StandardOutput.Length == 0;
     }
 
     public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)

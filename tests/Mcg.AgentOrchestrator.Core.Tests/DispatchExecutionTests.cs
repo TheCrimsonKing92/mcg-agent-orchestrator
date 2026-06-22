@@ -459,6 +459,61 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_counts_nonzero_empty_stdout_as_empty_output_retry")]
+    public void RecordDispatchExecutionResultCountsNonzeroEmptyStdoutAsEmptyOutputRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry empty stdout dispatch");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "silent-agent run", "C:\\repo", clock.UtcNow));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "silent-agent run",
+        "C:\\repo",
+        1,
+        string.Empty,
+        string.Empty,
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.EmptyOutputRetryCount);
+    Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_resets_empty_output_retry_on_nonempty_stdout")]
+    public void RecordDispatchExecutionResultResetsEmptyOutputRetryOnNonemptyStdout()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reset empty stdout dispatch retry");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "silent-agent run", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "silent-agent run",
+        "C:\\repo",
+        1,
+        string.Empty,
+        string.Empty,
+        clock.UtcNow));
+    kernel.RetryTask(goal.Id, task.Id, "retry empty stdout");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "agent run",
+        "C:\\repo",
+        1,
+        "x",
+        string.Empty,
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(0, task.EmptyOutputRetryCount);
+    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_when_exit_code_0_but_whitespace_only_output")]
     public void RecordDispatchExecutionResultFailsTaskWhenExitCode0ButWhitespaceOnlyOutput()
 {

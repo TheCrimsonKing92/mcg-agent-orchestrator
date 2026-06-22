@@ -32,6 +32,8 @@ public sealed class TaskSpec
 
     public IReadOnlyList<string> CriterionRetryFeedback { get; private set; } = [];
 
+    public int EmptyOutputRetryCount { get; private set; }
+
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
 
     public AgentId? AssignedAgentId { get; private set; }
@@ -134,7 +136,8 @@ public sealed class TaskSpec
             SubscriptionLimitReviewedAt,
             SubscriptionLimitReviewedFailureCount,
             CriterionRetryCount,
-            CriterionRetryFeedback);
+            CriterionRetryFeedback,
+            EmptyOutputRetryCount);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -238,6 +241,7 @@ public sealed class TaskSpec
             snapshot.SubscriptionLimitReviewedAt,
             snapshot.SubscriptionLimitReviewedFailureCount);
         task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
+        task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         return task;
     }
 
@@ -254,6 +258,9 @@ public sealed class TaskSpec
     internal void RecordVerification(TaskVerificationRecord verification)
     {
         SubscriptionRetryAfter = null;
+        EmptyOutputRetryCount = DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification)
+            ? EmptyOutputRetryCount + 1
+            : 0;
         if (verification.ModelFitNote is null)
         {
             var note = ModelFitEvidence.TryExtractNote(verification.StandardOutput, verification.StandardError);
