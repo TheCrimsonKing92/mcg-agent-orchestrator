@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -44,6 +45,46 @@ internal static partial class DashboardEndpoints
             agents,
             workerProfiles,
             services.HostArgs.EnableOperatorControls);
+    }
+
+    internal static IReadOnlyList<TaskDurationStatsDto> BuildTaskDurationStatsReport(AgentOrchestratorKernel kernel, bool includeModel = false)
+    {
+        return kernel.BuildTaskDurationStats(includeModel)
+            .Select(ToTaskDurationStatsDto)
+            .ToList();
+    }
+
+    private static TaskDurationStatsDto ToTaskDurationStatsDto(TaskDurationStatsRecord record)
+    {
+        var insufficient = $"n/a (n={record.TaskCount})";
+        return new TaskDurationStatsDto(
+            record.Scope,
+            record.Role,
+            record.Complexity,
+            record.ProviderName,
+            record.ModelName,
+            record.TaskCount,
+            record.AttemptCount,
+            record.FailedAttemptCount,
+            TaskDurationReport.MinSamplesForPublishedStats,
+            record.HasPublishedStats,
+            record.HasPublishedStats ? FormatDuration(record.MedianLegitimateRuntime) : insufficient,
+            record.HasPublishedStats ? FormatDuration(record.P90LegitimateRuntime) : insufficient,
+            record.HasPublishedStats ? FormatDuration(record.MedianFailureInterventionOverhead) : insufficient,
+            record.FailureRate);
+    }
+
+    private static string FormatDuration(TimeSpan? duration)
+    {
+        if (duration is null)
+        {
+            return "n/a";
+        }
+
+        var value = duration.Value;
+        return value.TotalMinutes >= 1
+            ? $"{value.TotalMinutes:0.#}m"
+            : $"{value.TotalSeconds:0.#}s";
     }
 
     private static DashboardBuildTestCleanupDto BuildTestCleanup(DashboardEndpointServices services)

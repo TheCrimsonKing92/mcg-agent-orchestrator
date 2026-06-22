@@ -25,6 +25,9 @@ public sealed record TaskDurationStatsRecord(
     TimeSpan? MedianFailureInterventionOverhead,
     double FailureRate)
 {
+    public bool HasPublishedStats => TaskCount >= TaskDurationReport.MinSamplesForPublishedStats &&
+        MedianLegitimateRuntime is not null;
+
     public string Scope => string.IsNullOrWhiteSpace(ProviderName) || string.IsNullOrWhiteSpace(ModelName)
         ? $"{Role}/{Complexity}"
         : $"{Role}/{Complexity} {ProviderName}/{ModelName}";
@@ -32,6 +35,8 @@ public sealed record TaskDurationStatsRecord(
 
 public static class TaskDurationReport
 {
+    public const int MinSamplesForPublishedStats = 3;
+
     public static IReadOnlyList<TaskDurationStatsRecord> BuildByRoleAndComplexity(IEnumerable<Goal> goals) =>
         Build(CollectObservations(goals), includeModel: false);
 
@@ -64,6 +69,7 @@ public static class TaskDurationReport
         return stats
             .Where(record => record.Role == role && record.Complexity == complexity)
             .Where(record => record.MedianLegitimateRuntime is not null)
+            .Where(record => record.HasPublishedStats)
             .OrderByDescending(record => record.TaskCount)
             .ThenBy(record => record.Scope, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
@@ -94,7 +100,6 @@ public static class TaskDurationReport
                     .ToList();
                 var overhead = items
                     .Select(item => item.FailureInterventionOverhead)
-                    .Where(duration => duration > TimeSpan.Zero)
                     .OrderBy(duration => duration)
                     .ToList();
                 var attempts = items.Sum(item => item.AttemptCount);
@@ -136,10 +141,15 @@ public static class TaskDurationReport
             return null;
         }
 
+        var cancellationTimes = goal.Timeline
+            .Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCancelled)
+            .Select(evt => evt.OccurredAt)
+            .OrderBy(timestamp => timestamp)
+            .ToList();
         var verifications = task.VerificationHistory
             .OrderBy(verification => verification.CompletedAt)
             .ToList();
-        var attempts = PairAttempts(dispatchTimes, verifications);
+        var attempts = PairAttempts(dispatchTimes, verifications, cancellationTimes);
         if (attempts.Count == 0)
         {
             return null;
@@ -148,9 +158,10 @@ public static class TaskDurationReport
         var successfulAttempts = attempts
             .Where(attempt => attempt.Verification?.Succeeded is true)
             .ToList();
-        var legitimateRuntime = successfulAttempts.Count == 0
+        var finalSuccessfulAttempt = successfulAttempts.LastOrDefault();
+        var legitimateRuntime = finalSuccessfulAttempt is null
             ? (TimeSpan?)null
-            : Sum(successfulAttempts.Select(attempt => PositiveDuration(attempt.End, ResolveAttemptStart(task, attempt, dispatchTimes))));
+            : PositiveDuration(finalSuccessfulAttempt.End, ResolveAttemptStart(task, finalSuccessfulAttempt, dispatchTimes));
 
         var overhead = TimeSpan.Zero;
         var failedAttemptCount = 0;
@@ -163,9 +174,9 @@ public static class TaskDurationReport
 
             failedAttemptCount++;
             overhead += PositiveDuration(attempt.End, ResolveAttemptStart(task, attempt, dispatchTimes));
-            if (attempt.Verification is not null && attempt.NextDispatchAt is not null)
+            if (attempt.NextDispatchAt is not null)
             {
-                overhead += PositiveDuration(attempt.NextDispatchAt.Value, attempt.Verification.CompletedAt);
+                overhead += PositiveDuration(attempt.NextDispatchAt.Value, attempt.End);
             }
         }
 
@@ -195,7 +206,8 @@ public static class TaskDurationReport
 
     private static List<AttemptTiming> PairAttempts(
         IReadOnlyList<DateTimeOffset> dispatchTimes,
-        IReadOnlyList<TaskVerificationRecord> verifications)
+        IReadOnlyList<TaskVerificationRecord> verifications,
+        IReadOnlyList<DateTimeOffset> cancellationTimes)
     {
         var attempts = new List<AttemptTiming>();
         for (var index = 0; index < dispatchTimes.Count; index++)
@@ -205,7 +217,10 @@ public static class TaskDurationReport
             var verification = verifications
                 .FirstOrDefault(item => item.CompletedAt >= start &&
                     (nextDispatch is null || item.CompletedAt <= nextDispatch.Value));
-            var end = verification?.CompletedAt ?? nextDispatch;
+            var cancellation = cancellationTimes
+                .FirstOrDefault(item => item >= start &&
+                    (nextDispatch is null || item <= nextDispatch.Value));
+            var end = Earliest(verification?.CompletedAt, cancellation == default ? null : cancellation, nextDispatch);
             if (end is null)
             {
                 continue;
@@ -215,6 +230,25 @@ public static class TaskDurationReport
         }
 
         return attempts;
+    }
+
+    private static DateTimeOffset? Earliest(params DateTimeOffset?[] timestamps)
+    {
+        DateTimeOffset? earliest = null;
+        foreach (var timestamp in timestamps)
+        {
+            if (timestamp is null)
+            {
+                continue;
+            }
+
+            if (earliest is null || timestamp.Value < earliest.Value)
+            {
+                earliest = timestamp.Value;
+            }
+        }
+
+        return earliest;
     }
 
     private static DateTimeOffset ResolveAttemptStart(
@@ -231,17 +265,6 @@ public static class TaskDurationReport
         }
 
         return attempt.DispatchAt;
-    }
-
-    private static TimeSpan Sum(IEnumerable<TimeSpan> durations)
-    {
-        var total = TimeSpan.Zero;
-        foreach (var duration in durations)
-        {
-            total += duration;
-        }
-
-        return total;
     }
 
     private static TimeSpan PositiveDuration(DateTimeOffset end, DateTimeOffset start)

@@ -64,7 +64,8 @@ internal static partial class DashboardEndpoints
                 view,
                 agentCatalog.Agents,
                 workerProfiles,
-                DashboardResponseMapper.ToOperatorInboxReportDto(operatorInbox)));
+                DashboardResponseMapper.ToOperatorInboxReportDto(operatorInbox),
+                BuildTaskDurationStatsReport(current)));
         return Text(html, "text/html; charset=utf-8");
     }
 }

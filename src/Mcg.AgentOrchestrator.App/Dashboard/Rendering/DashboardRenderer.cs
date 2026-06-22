@@ -20,7 +20,8 @@ public sealed record DashboardRenderOptions(
     DashboardView View = DashboardView.Ops,
     IReadOnlyList<AgentDefinition>? AgentDefinitions = null,
     WorkerProfileCatalog? WorkerProfiles = null,
-    OperatorInboxReportDto? OperatorInbox = null);
+    OperatorInboxReportDto? OperatorInbox = null,
+    IReadOnlyList<TaskDurationStatsDto>? TaskDurationStats = null);
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,
@@ -218,15 +219,48 @@ public static partial class DashboardRenderer
         if (options.EnableOperatorControls)
         {
             RenderSystemDiagnostics(html, options.Workspace, options.ContinuationWatches ?? []);
+            RenderTaskDurationStats(html, options.TaskDurationStats ?? []);
         }
         else if (options.Workspace is not null)
         {
             RenderReadOnlyHostedContext(html, options.Workspace);
+            RenderTaskDurationStats(html, options.TaskDurationStats ?? []);
         }
         else
         {
             html.AppendLine("<section><h2>System</h2><p class=\"meta\">No workspace context available.</p></section>");
         }
+    }
+
+    private static void RenderTaskDurationStats(StringBuilder html, IReadOnlyList<TaskDurationStatsDto> records)
+    {
+        html.AppendLine("<section>");
+        html.AppendLine("<h2>Task Duration Estimates</h2>");
+        html.AppendLine("<div class=\"linkbar\"><a href=\"/api/system/task-durations\" target=\"_blank\" rel=\"noreferrer\">Open duration stats JSON</a> <a href=\"/api/system/task-durations?byModel=true\" target=\"_blank\" rel=\"noreferrer\">Slice by model</a></div>");
+        if (records.Count == 0)
+        {
+            html.AppendLine("<p class=\"meta\">No dispatch timing history found.</p>");
+            html.AppendLine("</section>");
+            return;
+        }
+
+        html.AppendLine("<table><thead><tr><th>Scope</th><th>Tasks</th><th>Attempts</th><th>Legit median</th><th>P90</th><th>Overhead median</th><th>Failure rate</th></tr></thead><tbody>");
+        foreach (var record in records)
+        {
+            html.AppendLine("<tr>");
+            html.AppendLine($"<td>{Encode(record.Scope)}</td>");
+            html.AppendLine($"<td>{record.TaskCount}</td>");
+            html.AppendLine($"<td>{record.AttemptCount}</td>");
+            html.AppendLine($"<td>{Encode(record.MedianLegitimateRuntime)}</td>");
+            html.AppendLine($"<td>{Encode(record.P90LegitimateRuntime)}</td>");
+            html.AppendLine($"<td>{Encode(record.MedianFailureInterventionOverhead)}</td>");
+            html.AppendLine($"<td>{record.FailureRate:P0}</td>");
+            html.AppendLine("</tr>");
+        }
+
+        html.AppendLine("</tbody></table>");
+        html.AppendLine($"<p class=\"meta\">Buckets need at least {TaskDurationReport.MinSamplesForPublishedStats} samples before runtime estimates are published.</p>");
+        html.AppendLine("</section>");
     }
 
     private static void RenderOpsView(

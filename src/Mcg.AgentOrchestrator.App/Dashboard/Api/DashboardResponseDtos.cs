@@ -182,6 +182,22 @@ internal sealed record DashboardBuildTestRunDto(
     string ErrorLogPath,
     string Message);
 
+public sealed record TaskDurationStatsDto(
+    string Scope,
+    AgentRole Role,
+    TaskComplexity Complexity,
+    string? ProviderName,
+    string? ModelName,
+    int TaskCount,
+    int AttemptCount,
+    int FailedAttemptCount,
+    int MinimumSampleCount,
+    bool HasPublishedStats,
+    string MedianLegitimateRuntime,
+    string P90LegitimateRuntime,
+    string MedianFailureInterventionOverhead,
+    double FailureRate);
+
 public sealed record DashboardBuildTestRunSummaryDto(
     string Stamp,
     DateTimeOffset? StartedAt,
