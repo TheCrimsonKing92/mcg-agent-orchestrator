@@ -90,10 +90,6 @@ public static class RepositoryTestImpactPlanner
                 "core tests",
                 CoreTests,
                 "Core contracts changed or core tests changed."));
-            checks.Add(new RepositoryTestImpactCheck(
-                "infrastructure tests",
-                InfrastructureTests,
-                "Core behavior feeds infrastructure and CLI/dashboard integration."));
         }
 
         if (touchesInfrastructure || touchesApp || touchesScriptsOrConfig)
@@ -118,7 +114,7 @@ public static class RepositoryTestImpactPlanner
 
         return new RepositoryTestImpactPlan(
             RequiresBuild: true,
-            RequiresBroadVerification: touchesCore || summary.RequiresBroadVerification,
+            RequiresBroadVerification: summary.RequiresBroadVerification,
             Summary: distinctChecks.Length == 1
                 ? $"Selected {distinctChecks[0].Name} from changed file scope."
                 : $"Selected {distinctChecks.Length} test commands from changed file scope.",

@@ -94,19 +94,18 @@ function Wait-DashboardHealth {
 function New-IsolatedDotnetArguments {
     $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
     $artifactsPath = Join-Path $runRoot "artifacts"
-    if (Test-Path -LiteralPath $artifactsPath) {
-        Remove-Item -LiteralPath $artifactsPath -Recurse -Force
-    }
-
     New-Item -ItemType Directory -Force -Path $artifactsPath | Out-Null
+    $maxCpuCount = 0
+    if (-not ([int]::TryParse($env:MCG_BUILD_MAXCPUCOUNT, [ref]$maxCpuCount)) -or $maxCpuCount -le 1) {
+        $maxCpuCount = [Math]::Max(2, [int]([Environment]::ProcessorCount / 4))
+    }
 
     [pscustomobject]@{
         RunRoot = $runRoot
         Arguments = @(
             "--artifacts-path",
             $artifactsPath,
-            "-maxcpucount:1",
-            "-p:UseSharedCompilation=false"
+            "-maxcpucount:$maxCpuCount"
         )
     }
 }
@@ -131,9 +130,6 @@ if ($remaining) {
     throw "Dashboard app processes are still running after exact cleanup: $remainingIds"
 }
 
-$env:DOTNET_CLI_USE_MSBUILD_SERVER = "0"
-$env:MSBUILDDISABLENODEREUSE = "1"
-$env:UseSharedCompilation = "false"
 $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
 
 $buildIsolation = New-IsolatedDotnetArguments

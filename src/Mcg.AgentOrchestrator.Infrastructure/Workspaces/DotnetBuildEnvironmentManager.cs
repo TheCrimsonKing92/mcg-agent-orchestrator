@@ -10,6 +10,7 @@ public sealed record DotnetBuildEnvironment(
     string ArtifactsPath,
     string ExecutionLockPath,
     IReadOnlyList<string> Arguments,
+    string SlotOwnerToken,
     string? LeaseMetadataPath = null,
     bool ReusedGoalLease = false,
     bool StaleLockCleared = false);
@@ -44,6 +45,8 @@ public static class DotnetBuildEnvironmentManager
     private const string LeaseDirectoryName = "lease";
     private const string LeaseMetadataFileName = "lease.json";
     private const string LeaseLockFileName = "lease.lock";
+    private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
+    public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -68,7 +71,8 @@ public static class DotnetBuildEnvironmentManager
             root,
             artifactsPath,
             executionLockPath,
-            BuildArguments(artifactsPath));
+            BuildArguments(artifactsPath),
+            "manual");
     }
 
     public static string GoalRoot(GoalId goalId)
@@ -246,6 +250,28 @@ public static class DotnetBuildEnvironmentManager
         return deleted;
     }
 
+    public static void ShutdownBuildServersBestEffort()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList = { "build-server", "shutdown" }
+            });
+
+            process?.WaitForExit(10_000);
+        }
+        catch
+        {
+            // Best effort cleanup only; build/test result handling owns the real verdict.
+        }
+    }
+
     public static FileStream AcquireLeaseExecutionLock(
         DotnetBuildEnvironment environment,
         CancellationToken cancellationToken = default)
@@ -267,7 +293,7 @@ public static class DotnetBuildEnvironmentManager
                     FileShare.None);
                 try
                 {
-                    CleanArtifactsDirectory(environment.ArtifactsPath);
+                    PrepareArtifactsDirectory(environment);
                 }
                 catch
                 {
@@ -326,6 +352,7 @@ public static class DotnetBuildEnvironmentManager
             artifactsPath,
             executionLockPath,
             BuildArguments(artifactsPath),
+            leaseId,
             metadataPath,
             ReusedGoalLease: reused,
             StaleLockCleared: staleLockCleared);
@@ -335,10 +362,19 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
-        "--disable-build-servers",
-        "-maxcpucount:1",
-        "-p:UseSharedCompilation=false"
+        $"-maxcpucount:{ResolveMaxCpuCount()}"
     ];
+
+    private static int ResolveMaxCpuCount()
+    {
+        var configured = Environment.GetEnvironmentVariable(BuildMaxCpuCountVariable);
+        if (int.TryParse(configured, out var value) && value > 1)
+        {
+            return value;
+        }
+
+        return Math.Max(2, Environment.ProcessorCount / StableSlotCount);
+    }
 
     private static string LeaseDirectory(GoalId goalId)
     {
@@ -371,7 +407,8 @@ public static class DotnetBuildEnvironmentManager
             root,
             artifactsPath,
             executionLockPath,
-            BuildArguments(artifactsPath));
+            BuildArguments(artifactsPath),
+            slotName);
     }
 
     private static void ValidateStableSlotIndex(int slotIndex)
@@ -417,7 +454,7 @@ public static class DotnetBuildEnvironmentManager
                 FileShare.None);
             try
             {
-                CleanArtifactsDirectory(environment.ArtifactsPath);
+                PrepareArtifactsDirectory(environment);
             }
             catch
             {
@@ -442,14 +479,48 @@ public static class DotnetBuildEnvironmentManager
 
     private static readonly string[] TesthostFirewallConfigurations = ["Debug", "Release"];
 
-    private static void CleanArtifactsDirectory(string artifactsPath)
+    private static void PrepareArtifactsDirectory(DotnetBuildEnvironment environment)
     {
-        if (Directory.Exists(artifactsPath))
+        var clean = environment.StaleLockCleared;
+        var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
+        if (Directory.Exists(environment.ArtifactsPath) && Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())
         {
-            Directory.Delete(artifactsPath, recursive: true);
+            clean |= !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
         }
 
-        Directory.CreateDirectory(artifactsPath);
+        if (clean && Directory.Exists(environment.ArtifactsPath))
+        {
+            Directory.Delete(environment.ArtifactsPath, recursive: true);
+        }
+
+        Directory.CreateDirectory(environment.ArtifactsPath);
+        WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
+    }
+
+    private static bool OwnerMarkerMatches(string ownerPath, string expectedToken)
+    {
+        if (!File.Exists(ownerPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(ownerPath));
+            return document.RootElement.TryGetProperty("ownerToken", out var ownerToken) &&
+                ownerToken.ValueKind == JsonValueKind.String &&
+                string.Equals(ownerToken.GetString(), expectedToken, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void WriteOwnerMarker(string ownerPath, string ownerToken)
+    {
+        var marker = new ArtifactsOwnerMarker(1, ownerToken, Environment.ProcessId, Environment.MachineName, DateTimeOffset.UtcNow);
+        File.WriteAllText(ownerPath, JsonSerializer.Serialize(marker, JsonOptions));
     }
 
     private static bool TryClearStaleLock(string lockPath)
@@ -566,6 +637,13 @@ public static class DotnetBuildEnvironmentManager
         DateTimeOffset LastUsedAt,
         string LastAttemptName,
         bool StaleLockCleared);
+
+    private sealed record ArtifactsOwnerMarker(
+        int Version,
+        string OwnerToken,
+        int OwnerProcessId,
+        string MachineName,
+        DateTimeOffset LastAcquiredAt);
 }
 
 public sealed class DotnetBuildEnvironmentLease : IDisposable
@@ -582,6 +660,13 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
     public void Dispose()
     {
-        _stream.Dispose();
+        try
+        {
+            _stream.Dispose();
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersBestEffort();
+        }
     }
 }

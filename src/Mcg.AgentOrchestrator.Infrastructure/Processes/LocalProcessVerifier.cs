@@ -226,9 +226,6 @@ public sealed class LocalProcessVerifier
             startInfo.ArgumentList.Add(args[i]);
         }
 
-        startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
-        startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
         using var process = Process.Start(startInfo)

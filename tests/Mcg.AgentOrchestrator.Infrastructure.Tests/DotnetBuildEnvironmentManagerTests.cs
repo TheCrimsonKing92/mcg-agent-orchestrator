@@ -69,7 +69,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.False(string.IsNullOrWhiteSpace(second.LeaseMetadataPath));
             Assert.True(File.Exists(second.LeaseMetadataPath));
             Assert.True(first.Arguments.Contains("--artifacts-path"));
-            Assert.True(first.Arguments.Contains("--disable-build-servers"));
+            Assert.False(first.Arguments.Contains("--disable-build-servers"));
+            Assert.DoesNotContain(first.Arguments, argument => argument.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal));
+            Assert.Contains(first.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !argument.Equals("-maxcpucount:1", StringComparison.Ordinal));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
@@ -191,6 +193,38 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_artifacts_for_same_goal_slot")]
+    public void DotnetBuildEnvironmentManagerReusesArtifactsForSameGoalSlot()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var goalId = new GoalId("10293847102938471029384710293847");
+        try
+        {
+            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "first");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
+            {
+                File.WriteAllText(Path.Combine(first.ArtifactsPath, "warm-cache.txt"), "keep");
+            }
+
+            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "second");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(second))
+            {
+                Assert.True(File.Exists(Path.Combine(second.ArtifactsPath, "warm-cache.txt")));
+            }
+
+            File.WriteAllText(Path.Combine(second.RootPath, "lease", "lease.lock"), "999999");
+            var stale = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "stale-owner");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(stale))
+            {
+                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
+            }
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stable_slot_build_arguments_are_firewall_covered")]
     public void DotnetBuildEnvironmentManagerStableSlotBuildArgumentsAreFirewallCovered()
     {
@@ -219,16 +253,18 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_passes_disable_build_servers_and_node_reuse_env")]
-    public void InvokeIsolatedDotnetPassesDisableBuildServersAndNodeReuseEnv()
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_uses_warm_multicore_build_defaults")]
+    public void InvokeIsolatedDotnetUsesWarmMulticoreBuildDefaults()
     {
         var repoRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory();
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var script = File.ReadAllText(scriptPath);
 
-        Assert.True(script.Contains("\"--disable-build-servers\"", StringComparison.Ordinal));
-        Assert.True(script.Contains("$env:MSBUILDDISABLENODEREUSE = \"1\"", StringComparison.Ordinal));
-        Assert.True(script.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", StringComparison.Ordinal));
+        Assert.DoesNotContain("\"--disable-build-servers\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("$env:MSBUILDDISABLENODEREUSE = \"1\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:UseSharedCompilation=false", script, StringComparison.Ordinal);
+        Assert.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", script, StringComparison.Ordinal);
     }
 
     private static string ArgumentValue(IReadOnlyList<string> arguments, string name)

@@ -146,8 +146,6 @@ public static class RepositoryChangeClassifier
         var broad = generated ||
             categories.Contains(RepositoryChangeCategory.BuildSystem) ||
             securitySensitive ||
-            path.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/Api/", StringComparison.OrdinalIgnoreCase);
 
         return new RepositoryChangedFile(

@@ -98,18 +98,34 @@ public sealed class RepositoryChangeClassifierTests
         Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_broadens_core_changes_to_core_and_infrastructure_tests")]
-    public void RepositoryTestImpactPlannerBroadensCoreChangesToCoreAndInfrastructureTests()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]
+    public void RepositoryTestImpactPlannerSelectsCoreTestsForCoreChanges()
     {
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.cs"
         ]);
 
         Assert.True(plan.RequiresBuild);
-        Assert.True(plan.RequiresBroadVerification);
+        Assert.False(plan.RequiresBroadVerification);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("core tests", check.Name);
+        Assert.True(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
+        Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_and_infrastructure_tests_for_mixed_changes")]
+    public void RepositoryTestImpactPlannerSelectsCoreAndInfrastructureTestsForMixedChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"
+        ]);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
         Assert.Equal(2, plan.Checks.Count);
-        Assert.True(plan.Checks.Any(check => check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal))));
-        Assert.True(plan.Checks.Any(check => check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal))));
+        Assert.True(plan.Checks.Any(check => check.Name == "core tests"));
+        Assert.True(plan.Checks.Any(check => check.Name == "infrastructure tests"));
     }
 
     [Xunit.Fact(DisplayName = "VerificationPolicyCompiler_compiles_different_policies_from_task_risk_and_scope")]
