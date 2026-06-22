@@ -6,8 +6,41 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // runs distinct test classes in parallel, so without a shared collection they clobber each other's
 // root and flake. Pinning every env-var-mutating class to one non-parallel collection serializes them.
 [Xunit.CollectionDefinition("IsolatedDotnetRoot", DisableParallelization = true)]
-public sealed class IsolatedDotnetRootCollection
+public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>
 {
+}
+
+// Pins MCG_DOTNET_ISOLATED_ROOT to an ephemeral per-run temp root for the ENTIRE IsolatedDotnetRoot
+// collection, so lease-acquiring tests (GoalAcceptanceVerifier/LocalProcessVerifier, which do NOT set
+// their own per-test scope) never touch the shared firewall slots (e.g. slot-0). Without this, when the
+// suite itself runs inside a slot-routed harness holding slot-0, those tests deadlock waiting for the
+// lease execution lock their own host process already holds. Per-test EnvVarScope overrides nest cleanly
+// on top of this baseline (they save/restore whatever value is current).
+public sealed class IsolatedDotnetRootFixture : IDisposable
+{
+    private readonly string? _originalValue;
+    private readonly string _root;
+
+    public IsolatedDotnetRootFixture()
+    {
+        _originalValue = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        _root = Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-collection-{Guid.NewGuid():N}");
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _originalValue);
+        try
+        {
+            if (Directory.Exists(_root))
+                Directory.Delete(_root, recursive: true);
+        }
+        catch
+        {
+            // Best effort.
+        }
+    }
 }
 
 [Xunit.Collection("IsolatedDotnetRoot")]
