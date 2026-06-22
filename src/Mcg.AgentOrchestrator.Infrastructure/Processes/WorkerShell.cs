@@ -26,13 +26,19 @@ public static class WorkerShell
     }
 
     /// <summary>
-    /// Base arguments preceding the wrapper/command. <c>-ExecutionPolicy Bypass</c> only applies on
-    /// Windows; pwsh on Linux/macOS has no execution policy, so it is omitted there.
+    /// Base arguments preceding the wrapper/command. <c>-NonInteractive -InputFormat None</c> make the
+    /// host ignore stdin entirely: under a background/detached launch the worker's stdin is an inherited
+    /// pipe that never reaches EOF, and a PowerShell host that reads stdin (the default) blocks at startup
+    /// before ever running the command — the CLI-worker "startup hang" where the heartbeat shows childPid
+    /// null and zero output until the watchdog reaps it. Ignoring stdin closes that race at the source
+    /// (the post-Start StandardInput.Close in DispatchProcessHost is a racy band-aid by comparison).
+    /// <c>-ExecutionPolicy Bypass</c> only applies on Windows; pwsh on Linux/macOS has no execution
+    /// policy, so it is omitted there.
     /// </summary>
     public static IReadOnlyList<string> BaseArguments() =>
         OperatingSystem.IsWindows()
-            ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
-            : ["-NoProfile", "-Command"];
+            ? ["-NoProfile", "-NonInteractive", "-InputFormat", "None", "-ExecutionPolicy", "Bypass", "-Command"]
+            : ["-NoProfile", "-NonInteractive", "-InputFormat", "None", "-Command"];
 
     private static bool IsOnPath(string executable)
     {
