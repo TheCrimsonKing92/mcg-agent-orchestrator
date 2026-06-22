@@ -80,6 +80,7 @@ public sealed class BackgroundDispatchRunner
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
         var heartbeatPath = Path.Combine(logRoot, $"{prefix}.heartbeat.json");
+        var startGatePath = Path.Combine(logRoot, $"{prefix}.start-gate");
 
         var isLocalDispatch = IsLocalDispatch(dispatch);
         var parametersPath = Path.Combine(logRoot, $"{prefix}.dispatch.json");
@@ -114,6 +115,7 @@ public sealed class BackgroundDispatchRunner
         if (OperatingSystem.IsWindows())
         {
             startInfo.CreateNewProcessGroup = true;
+            startInfo.Environment[DispatchProcessHost.StartGatePathVariable] = startGatePath;
         }
 
         startInfo.ArgumentList.Add("exec");
@@ -123,6 +125,8 @@ public sealed class BackgroundDispatchRunner
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
+        WorkerProcessJobs.TryRegister(process);
+        ReleaseDispatchHostStartGate(startGatePath);
 
         var record = new TaskProcessRecord(
             process.Id,
@@ -138,6 +142,20 @@ public sealed class BackgroundDispatchRunner
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
         return record;
+    }
+
+    private static void ReleaseDispatchHostStartGate(string startGatePath)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(startGatePath)!);
+            File.WriteAllText(startGatePath, "go");
+        }
+        catch
+        {
+            // Best-effort: if the gate cannot be written, the dispatch host fails closed rather than
+            // launching a worker outside the supervisor job.
+        }
     }
 
     /// <summary>
@@ -256,6 +274,7 @@ public sealed class BackgroundDispatchRunner
     {
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
+        ReleaseTrackedProcessJobs(processRecord);
         var task = kernel.GetTask(goalId, taskId);
         if (RequiresFileChangeEvidence(task) &&
             TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
@@ -619,6 +638,7 @@ public sealed class BackgroundDispatchRunner
             CompletedAt = _clock.UtcNow,
             WasCancelled = true
         };
+        ReleaseTrackedProcessJobs(processRecord);
 
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
         return cancelled;
@@ -1174,27 +1194,17 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
+    private static void ReleaseTrackedProcessJobs(TaskProcessRecord processRecord)
+    {
+        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
+        {
+            WorkerProcessJobs.Release(processId);
+        }
+    }
+
     private static bool TryKillProcess(int processId)
     {
-        try
-        {
-            var process = Process.GetProcessById(processId);
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(5000);
-            }
-        }
-        catch (ArgumentException)
-        {
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            return true;
-        }
-
-        return true;
+        return WorkerProcessJobs.TryKillOrFallback(processId);
     }
 
     // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
