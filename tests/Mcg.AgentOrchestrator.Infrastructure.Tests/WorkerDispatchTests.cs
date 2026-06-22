@@ -32,6 +32,122 @@ public sealed class WorkerDispatchTests
     Assert.Contains(preparation.Command, text => text.Contains("--role Developer", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_within_budget_prompt_unchanged")]
+    public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
+{
+    var brief = CreateBudgetBrief("brief instructions only");
+
+    var result = WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6");
+
+    Assert.False(result.Trimmed);
+    Assert.Equal(brief.Content, result.Brief.Content);
+    Assert.Empty(result.DroppedSections);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_drops_evidence_before_other_context")]
+    public void WorkerPromptInputBudgetDropsEvidenceBeforeOtherContext()
+{
+    var brief = CreateBudgetBrief(
+        "brief instructions",
+        "## Prior Task Evidence",
+        new string('e', 240),
+        "## Source Survey",
+        "source-survey-kept",
+        "## Worker Context Digest",
+        "digest-kept");
+    var budget = WorkerPromptInputBudget.CountTokens(brief.Content.Replace(new string('e', 240), string.Empty, StringComparison.Ordinal));
+
+    var result = WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6", budget);
+
+    Assert.True(result.DroppedSections.SequenceEqual(["evidence"]));
+    Assert.False(result.Brief.Content.Contains("Prior Task Evidence", StringComparison.Ordinal));
+    Assert.True(result.Brief.Content.Contains("source-survey-kept", StringComparison.Ordinal));
+    Assert.True(result.Brief.Content.Contains("digest-kept", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_drops_context_sections_in_fixed_priority_order_until_fit")]
+    public void WorkerPromptInputBudgetDropsContextSectionsInFixedPriorityOrderUntilFit()
+{
+    var brief = CreateBudgetBrief(
+        "brief instructions",
+        "## Prior Task Evidence",
+        new string('e', 240),
+        "## Source Survey",
+        new string('s', 240),
+        "## Worker Context Digest",
+        new string('d', 240));
+    var budget = WorkerPromptInputBudget.CountTokens("brief instructions") + 2;
+
+    var result = WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6", budget);
+
+    Assert.True(result.DroppedSections.SequenceEqual(["evidence", "source survey", "digest"]));
+    Assert.False(result.Brief.Content.Contains("Prior Task Evidence", StringComparison.Ordinal));
+    Assert.False(result.Brief.Content.Contains("Source Survey", StringComparison.Ordinal));
+    Assert.False(result.Brief.Content.Contains("Worker Context Digest", StringComparison.Ordinal));
+    Assert.True(result.Brief.Content.Contains("brief instructions", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_rejects_irreducible_over_budget_prompt")]
+    public void WorkerPromptInputBudgetRejectsIrreducibleOverBudgetPrompt()
+{
+    var brief = CreateBudgetBrief(
+        "brief instructions must remain intact " + new string('b', 120),
+        "## Prior Task Evidence",
+        new string('e', 240));
+
+    var ex = Assert.Throws<WorkerPromptInputBudgetExceededException>(
+        () => WorkerPromptInputBudget.Apply(brief, "Ollama", "qwen3:8b", inputTokenBudgetOverride: 5));
+
+    Assert.Equal(brief.GoalId, ex.GoalId);
+    Assert.Equal(brief.TaskId, ex.TaskId);
+    Assert.Equal("Ollama", ex.ProviderName);
+    Assert.Equal("qwen3:8b", ex.ModelName);
+    Assert.True(ex.TokenCount > ex.TokenBudget);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_over_limit_subscription_prompt_before_dispatch_mutation")]
+    public void WorkerProfileDispatcherRejectsOverLimitSubscriptionPromptBeforeDispatchMutation()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Reject irreducible over-budget subscription prompt",
+        [new TaskSpec(TaskId.New(), "Research prompt budget behavior", AgentRole.Researcher)]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Fixed refined spec content " + new string('x', 20000),
+        ["Prompt budget failure is reported before dispatch."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = new AgentDefinition(
+        new AgentId("ollama-researcher"),
+        "Ollama Researcher",
+        AgentRole.Researcher,
+        new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    var ex = Assert.Throws<WorkerPromptInputBudgetExceededException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt));
+
+    Assert.Equal(task.Id, ex.TaskId);
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Null(task.LastDispatch);
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "WorkerCommandTemplate_rejects_unresolved_variables_before_worker_dispatch_mutation")]
     public void WorkerCommandTemplateRejectsUnresolvedVariablesBeforeWorkerDispatchMutation()
 {
@@ -4048,6 +4164,16 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.False(File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")));
     Assert.True(File.Exists(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "manifest.md")));
+}
+
+    private static TaskBrief CreateBudgetBrief(params string[] lines)
+{
+    return new TaskBrief(
+        new GoalId("goal123456789"),
+        new TaskId("task123456789"),
+        AgentRole.Developer,
+        "Developer: budget",
+        string.Join(Environment.NewLine, lines));
 }
 
     private static TaskDispatchRecord ReopenTaskWithRecoverableDispatchLimit(

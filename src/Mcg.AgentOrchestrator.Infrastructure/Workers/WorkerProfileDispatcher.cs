@@ -44,8 +44,9 @@ public static class WorkerProfileDispatcher
             BuildModelFitTarget(providerName, modelName),
             workingDirectory,
             contextDirectory);
+        var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
         var preparation = WorkerCommandTemplate.Prepare(
-            brief,
+            budgetedBrief,
             profile.Name,
             profile.CommandTemplate,
             promptRoot,
@@ -321,13 +322,12 @@ public static class WorkerProfileDispatcher
     {
         var agent = ResolveAssignedAgent(task, agents);
         var selection = ResolveSubscriptionModel(agent, goal, task);
-        return kernel
-            .BuildTaskBrief(
-                goal.Id,
-                task.Id,
-                BuildModelFitTarget(selection.Model.ProviderName, ResolveEffectiveSubscriptionModelName(agent, selection)))
-            .Content
-            .Length;
+        var modelName = ResolveEffectiveSubscriptionModelName(agent, selection);
+        var brief = kernel.BuildTaskBrief(
+            goal.Id,
+            task.Id,
+            BuildModelFitTarget(selection.Model.ProviderName, modelName));
+        return WorkerPromptInputBudget.Apply(brief, selection.Model.ProviderName, modelName).Brief.Content.Length;
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareSubscriptionReadyTasks(
