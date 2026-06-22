@@ -2460,6 +2460,53 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Xunit.Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_cancel_kills_tracked_tree_and_allows_redispatch_without_paid_start")]
+    public void BackgroundDispatchRunnerCancelKillsTrackedTreeAndAllowsRedispatchWithoutPaidStart()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-06-21T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Stop worker tree and redispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var dispatch = new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(
+            111,
+            dispatch.Command,
+            dispatch.WorkingDirectory,
+            "out.log",
+            "err.log",
+            "exit.txt",
+            now,
+            null,
+            null,
+            OwnedProcessIds: [111, 222]));
+    var running = new HashSet<int> { 111, 222 };
+    var killed = new List<int>();
+    var runner = new BackgroundDispatchRunner(
+        new TestClock(now.AddMinutes(1)),
+        isStillRunning: pid => running.Contains(pid),
+        tryKillOwnedProcess: pid =>
+        {
+            killed.Add(pid);
+            running.Remove(pid);
+            return true;
+        });
+
+    runner.CancelLatestProcess(kernel, goal.Id, task.Id);
+    kernel.RequeueInterruptedDispatch(goal.Id, task.Id, "Redispatch after stopped worker tree.");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt 2", root, now.AddMinutes(2)));
+
+    Assert.True(killed.SequenceEqual([111, 222]));
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.Equal("codex exec prompt 2", task.LastDispatch!.Command);
+    Xunit.Assert.Null(task.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_defers_future_subscription_retry_after_before_start")]
     public void BackgroundDispatchRunnerDefersFutureSubscriptionRetryAfterBeforeStart()
 {

@@ -14,6 +14,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class DispatchProcessHost
 {
     public const string SubcommandName = "__dispatch-run";
+    public const string StartGatePathVariable = "MCG_DISPATCH_HOST_START_GATE";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
 
     // Dispatch supervision: an unbounded wait lets a hung worker — or a stuck grandchild such as a
@@ -298,6 +299,7 @@ public static void DropToLow() {
             ApplyWorkerSandbox(startInfo, parameters);
 
             WriteHeartbeat("starting");
+            RequireStartGate();
             worker = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start worker process.");
             workerGroup = OwnedProcessGroup.Attach(worker);
@@ -426,6 +428,26 @@ public static void DropToLow() {
         }
 
         return fallback;
+    }
+
+    private static void RequireStartGate()
+    {
+        var gatePath = Environment.GetEnvironmentVariable(StartGatePathVariable);
+        if (string.IsNullOrWhiteSpace(gatePath))
+        {
+            return;
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (!File.Exists(gatePath) && DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(25);
+        }
+
+        if (!File.Exists(gatePath))
+        {
+            throw new InvalidOperationException("Dispatch host start gate was not released; refusing to launch worker outside the supervisor job.");
+        }
     }
 
     private static void TryWriteExitCode(string path, int exitCode)

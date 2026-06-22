@@ -741,22 +741,7 @@ public static class GoalWorktrees
 
     private static bool DefaultTryKillRecordedProcess(int processId)
     {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            if (process.HasExited)
-            {
-                return false;
-            }
-
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit(5000);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
+        return WorkerProcessJobs.TryKillOrFallback(processId);
     }
 
     private static void WarnCleanupFailure(string path, string operation, Exception exception)
