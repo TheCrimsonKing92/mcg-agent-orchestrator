@@ -10,6 +10,8 @@ internal static class WorkerProcessJobs
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
     private static readonly ConcurrentDictionary<int, OwnedProcessGroup> Jobs = new();
 
+    internal static Func<int, bool> TryKillPidTree { get; set; } = DefaultTryKillPidTree;
+
     public static bool TryRegister(Process process)
     {
         if (IsProtectedProcessOrAncestor(process.Id))
@@ -74,7 +76,7 @@ internal static class WorkerProcessJobs
 
     internal static bool HasRegisteredJob(int processId) => Jobs.ContainsKey(processId);
 
-    private static bool TryKillPidTree(int processId)
+    private static bool DefaultTryKillPidTree(int processId)
     {
         try
         {
