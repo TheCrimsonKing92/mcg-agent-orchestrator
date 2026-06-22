@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -8,17 +9,19 @@ public sealed class LocalProcessVerifier
     internal sealed record PreparedCommand(
         string Command,
         string ArtifactPathEvidence,
+        string FileName,
+        IReadOnlyList<string> Arguments,
         DotnetBuildEnvironment? BuildEnvironment = null);
 
     internal sealed record CommandResult(int ExitCode, string Stdout, string Stderr = "");
 
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
 
-    private readonly Func<string[], string, CancellationToken, Task<CommandResult>> _runner;
+    private readonly Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> _runner;
 
     public LocalProcessVerifier() : this(RunCommandAsync) { }
 
-    internal LocalProcessVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
+    internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> runner)
     {
         _runner = runner;
     }
@@ -41,26 +44,24 @@ public sealed class LocalProcessVerifier
         }
 
         // Shut down build servers to release file locks before running verification.
-        await _runner(["dotnet", "build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
+        await _runner("dotnet", ["build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
 
         var completedAt = DateTimeOffset.UtcNow;
         var preparedCommand = PrepareCommand(command, goalId, taskId);
         var elapsed = Stopwatch.StartNew();
 
-        string[] psArgs = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", preparedCommand.Command];
-
         using var leaseLock = preparedCommand.BuildEnvironment is null
             ? null
             : DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(preparedCommand.BuildEnvironment, cancellationToken);
 
-        var result = await _runner(psArgs, workingDirectory, cancellationToken).ConfigureAwait(false);
+        var result = await _runner(preparedCommand.FileName, preparedCommand.Arguments, workingDirectory, cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != 0 && (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
         {
             // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
             // clears residual compiler processes before the single allowed retry.
-            await _runner(["dotnet", "build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
-            result = await _runner(psArgs, workingDirectory, cancellationToken).ConfigureAwait(false);
+            await _runner("dotnet", ["build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
+            result = await _runner(preparedCommand.FileName, preparedCommand.Arguments, workingDirectory, cancellationToken).ConfigureAwait(false);
         }
 
         elapsed.Stop();
@@ -78,18 +79,23 @@ public sealed class LocalProcessVerifier
     internal static PreparedCommand PrepareCommand(string command, GoalId? goalId = null, TaskId? taskId = null)
     {
         var commandToRun = command.Trim();
+        var executionArguments = TokenizeSimpleCommand(commandToRun);
+        var fileName = executionArguments.FirstOrDefault() ?? string.Empty;
+        var arguments = executionArguments.Skip(1).ToArray();
         if (goalId is null || !IsSimpleDotnetCommand(commandToRun))
         {
-            return new PreparedCommand(commandToRun, string.Empty);
+            return new PreparedCommand(commandToRun, string.Empty, fileName, arguments);
         }
 
         var attemptName = taskId is null ? "verify" : $"verify-{Prefix(taskId.Value)}";
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
-        commandToRun = $"{commandToRun} {string.Join(' ', environment.Arguments.Select(QuotePowerShellArgument))}";
+        arguments = [.. arguments, .. environment.Arguments];
         return new PreparedCommand(
-            commandToRun,
+            JoinDisplayCommand([fileName, .. arguments]),
             $"Build environment lease: {environment.LeaseId}{Environment.NewLine}" +
             $"Verification artifacts: {environment.ArtifactsPath}{Environment.NewLine}",
+            fileName,
+            arguments,
             environment);
     }
 
@@ -108,9 +114,57 @@ public sealed class LocalProcessVerifier
             !command.Contains('\r');
     }
 
-    private static string QuotePowerShellArgument(string argument)
+    private static string[] TokenizeSimpleCommand(string command)
     {
-        return $"'{argument.Replace("'", "''", StringComparison.Ordinal)}'";
+        var tokens = new List<string>();
+        var token = new StringBuilder();
+        char? quote = null;
+
+        foreach (var ch in command)
+        {
+            if (quote is { } quoteChar)
+            {
+                if (ch == quoteChar)
+                {
+                    quote = null;
+                    continue;
+                }
+
+                token.Append(ch);
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                if (token.Length > 0)
+                {
+                    tokens.Add(token.ToString());
+                    token.Clear();
+                }
+
+                continue;
+            }
+
+            token.Append(ch);
+        }
+
+        if (token.Length > 0)
+        {
+            tokens.Add(token.ToString());
+        }
+
+        return tokens.ToArray();
+    }
+
+    private static string JoinDisplayCommand(IReadOnlyList<string> arguments)
+    {
+        return string.Join(' ', arguments);
     }
 
     private static string Prefix(string value)
@@ -152,13 +206,14 @@ public sealed class LocalProcessVerifier
     }
 
     private static async Task<CommandResult> RunCommandAsync(
-        string[] args,
+        string fileName,
+        IReadOnlyList<string> args,
         string workingDirectory,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = args[0],
+            FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -166,7 +221,7 @@ public sealed class LocalProcessVerifier
             WorkingDirectory = workingDirectory
         };
 
-        for (var i = 1; i < args.Length; i++)
+        for (var i = 0; i < args.Count; i++)
         {
             startInfo.ArgumentList.Add(args[i]);
         }
@@ -177,7 +232,7 @@ public sealed class LocalProcessVerifier
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
         using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start process: {args[0]}");
+            ?? throw new InvalidOperationException($"Failed to start process: {fileName}");
         using var processGroup = OwnedProcessGroup.Attach(process);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
