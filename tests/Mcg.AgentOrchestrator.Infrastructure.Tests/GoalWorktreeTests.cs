@@ -2384,6 +2384,34 @@ public sealed class GoalWorktreeTests
         return process.ExitCode;
     }
 
+    [Xunit.Fact(DisplayName = "DeleteDirectory_removes_tree_containing_read_only_files")]
+    public void DeleteDirectoryRemovesTreeContainingReadOnlyFiles()
+    {
+        // Sandbox workers leave their worktree checkout read-only; the orphan sweep must still be
+        // able to delete it. On Windows a naive Directory.Delete throws UnauthorizedAccessException
+        // on a read-only file, so this exercises the attribute-clearing retry path.
+        var root = Path.Combine(Path.GetTempPath(), "mcg-del-ro-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "nested"));
+        var file = Path.Combine(root, "nested", "locked.txt");
+        File.WriteAllText(file, "sandbox output");
+        File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.ReadOnly);
+
+        try
+        {
+            Assert.True(GoalWorktrees.DeleteDirectory(root));
+            Assert.False(Directory.Exists(root));
+        }
+        finally
+        {
+            if (File.Exists(file))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
+            DeleteDirectory(root);
+        }
+    }
+
     private static void DeleteDirectory(string path)
     {
         try

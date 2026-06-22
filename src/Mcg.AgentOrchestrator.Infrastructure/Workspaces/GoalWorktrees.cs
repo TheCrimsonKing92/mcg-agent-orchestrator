@@ -668,6 +668,7 @@ public static class GoalWorktrees
         }
 
         var delay = InitialDeleteRetryDelay;
+        var attemptedReadOnlyClear = false;
         for (var attempt = 1; attempt <= DeleteRetryAttempts; attempt++)
         {
             try
@@ -682,12 +683,47 @@ public static class GoalWorktrees
                     return false;
                 }
 
+                // Sandbox workers leave their checkout read-only; Directory.Delete cannot remove a
+                // read-only file (it throws UnauthorizedAccessException), and icacls /reset does not
+                // clear the read-only *attribute*. This is the dominant orphan-sweep failure cause, so
+                // strip the attribute tree-wide once before retrying. In-use handles (not read-only)
+                // fall through to the retry/defer path unchanged.
+                if (!attemptedReadOnlyClear && ex is UnauthorizedAccessException)
+                {
+                    ClearReadOnlyAttributes(path);
+                    attemptedReadOnlyClear = true;
+                }
+
                 Thread.Sleep(delay);
                 delay += delay;
             }
         }
 
         return false;
+    }
+
+    private static void ClearReadOnlyAttributes(string path)
+    {
+        try
+        {
+            var root = new DirectoryInfo(path);
+            if ((root.Attributes & FileAttributes.ReadOnly) != 0)
+            {
+                root.Attributes &= ~FileAttributes.ReadOnly;
+            }
+
+            foreach (var entry in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                if ((entry.Attributes & FileAttributes.ReadOnly) != 0)
+                {
+                    entry.Attributes &= ~FileAttributes.ReadOnly;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort; the next delete attempt surfaces any remaining failure.
+        }
     }
 
     private static bool ClearOrphanDirectory(string path, AgentOrchestratorKernel? kernel, string operation)
