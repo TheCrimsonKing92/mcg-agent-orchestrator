@@ -426,10 +426,15 @@ public static class GoalWorktrees
                 $"acceptance {Prefix(goalId)}");
         }
 
-        var rebase = GitCli.Run(worktreePath, "rebase", "--apply", "--no-stat", baseBranch);
+        // Use the "merge" backend (a real per-commit 3-way merge), NOT "--apply" (the legacy am/patch
+        // backend). --apply matches on patch CONTEXT, so it spuriously conflicts when main changed lines
+        // NEAR the goal's changes in the same file — even non-overlapping — a base-skew false-conflict
+        // that forces an escalation + manual re-dispatch. --merge only conflicts on actually-overlapping
+        // hunks. (--no-stat + the RunGitDirect fallback keep the Windows stat-path workaround intact.)
+        var rebase = GitCli.Run(worktreePath, "rebase", "--merge", "--no-stat", baseBranch);
         if (IsRebaseStatPathFailure(rebase))
         {
-            rebase = RunGitDirect(worktreePath, "rebase", "--apply", "--no-stat", baseBranch);
+            rebase = RunGitDirect(worktreePath, "rebase", "--merge", "--no-stat", baseBranch);
         }
         if (rebase.ExitCode == 0)
         {
