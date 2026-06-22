@@ -2208,6 +2208,111 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_skips_protected_recorded_worker_process")]
+    public void GoalWorktreesRemoveSkipsProtectedRecordedWorkerProcess()
+    {
+        var repo = CreateSeededRepository();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalProtectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+        try
+        {
+            var protectedPid = 111;
+            Environment.SetEnvironmentVariable(
+                CliProtectedProcessEnvironment.ProtectedPidVariable,
+                protectedPid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Remove protected worker process", [
+                new TaskSpec(TaskId.New(), "Developer task", AgentRole.Developer)
+            ]);
+            kernel.ActivateGoal(goal.Id, EchoAgents());
+            var task = goal.Tasks[0];
+            var path = GoalWorktrees.WorktreePath(repo, goal.Id);
+            Directory.CreateDirectory(path);
+            var startedAt = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", path, startedAt));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(protectedPid, "codex exec", path, "out.log", "err.log", "exit.txt", startedAt, null, null, OwnedProcessIds: [protectedPid]));
+
+            var killed = new List<int>();
+            WorkerProcessJobs.TryKillPidTree = pid =>
+            {
+                killed.Add(pid);
+                return true;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = _ => { };
+
+            var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
+
+            Assert.True(result.IsComplete);
+            Assert.Empty(killed);
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, originalProtectedPid);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_kills_unprotected_recorded_worker_process")]
+    public void GoalWorktreesRemoveKillsUnprotectedRecordedWorkerProcess()
+    {
+        var repo = CreateSeededRepository();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalProtectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "111");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Remove unprotected worker process", [
+                new TaskSpec(TaskId.New(), "Developer task", AgentRole.Developer)
+            ]);
+            kernel.ActivateGoal(goal.Id, EchoAgents());
+            var task = goal.Tasks[0];
+            var path = GoalWorktrees.WorktreePath(repo, goal.Id);
+            Directory.CreateDirectory(path);
+            var startedAt = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", path, startedAt));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(222, "codex exec", path, "out.log", "err.log", "exit.txt", startedAt, null, null, OwnedProcessIds: [222]));
+
+            var killed = new List<int>();
+            WorkerProcessJobs.TryKillPidTree = pid =>
+            {
+                killed.Add(pid);
+                return true;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = _ => { };
+
+            var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
+
+            Assert.True(result.IsComplete);
+            Assert.True(killed.SequenceEqual([222]));
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, originalProtectedPid);
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));

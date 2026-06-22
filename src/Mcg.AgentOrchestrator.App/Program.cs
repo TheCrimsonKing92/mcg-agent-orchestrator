@@ -2,6 +2,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+CliProtectedProcessEnvironment.EnsureProtectedPid();
+
 // Hidden detached dispatch-host entrypoint (see DispatchProcessHost). Must run before any tenant,
 // workspace, or state setup so the detached worker process stays minimal and self-contained.
 if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)

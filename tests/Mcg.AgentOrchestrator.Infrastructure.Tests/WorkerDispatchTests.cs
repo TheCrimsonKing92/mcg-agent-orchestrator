@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -11,6 +12,30 @@ using System.Text.Json;
 
 public sealed class WorkerDispatchTests
 {
+    [Xunit.Fact(DisplayName = "CliStartup_sets_protected_pid_before_worker_dispatch")]
+    public void CliStartupSetsProtectedPidBeforeWorkerDispatch()
+    {
+        var original = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, null);
+
+            CliProtectedProcessEnvironment.EnsureProtectedPid();
+
+            var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+            Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
+
+            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
+            CliProtectedProcessEnvironment.EnsureProtectedPid();
+
+            Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, original);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerCommandTemplate_expands_profile_template_and_writes_prompt")]
     public void WorkerCommandTemplateExpandsProfileTemplateAndWritesPrompt()
 {
