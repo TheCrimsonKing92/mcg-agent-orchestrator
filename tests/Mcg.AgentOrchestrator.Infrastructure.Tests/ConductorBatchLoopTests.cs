@@ -1074,6 +1074,37 @@ public sealed class ConductorBatchLoopTests
         Assert.True(lines.Any(l => l.StartsWith("GOAL ", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact(DisplayName = "ProgressEmission_WatchHeldRunningEmitsOnlyChangedDisposition")]
+    public void ProgressEmission_WatchHeldRunningEmitsOnlyChangedDisposition()
+    {
+        var (kernel, _) = SimpleGoal();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        var ticks = new List<BatchTickSummary>();
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 4,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ => false,
+                onTick: ticks.Add);
+        });
+
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Equal(4, ticks.Count);
+        Assert.Single(lines.Where(l => l.StartsWith("GOAL goal=", StringComparison.Ordinal)));
+        Assert.Single(lines.Where(l => l.StartsWith("TICK_END tick=", StringComparison.Ordinal)));
+        Assert.DoesNotContain(lines, l => l.StartsWith("TICK_END tick=2 ", StringComparison.Ordinal));
+        Assert.True(ticks.Skip(1).All(t => t.ProgressLines is not null && t.ProgressLines.Count == 0));
+    }
+
     // ── Fault isolation: a throwing goal is escalated, others still advance ─
 
     [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_ThrowingGoalEscalated_HealthyGoalStillAdvanced")]

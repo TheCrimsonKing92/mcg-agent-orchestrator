@@ -9,6 +9,7 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxVerifyRetries = 2;
     internal const int DefaultWatchIntervalSeconds = 15;
     internal const int WatchStopPollIntervalSeconds = 5;
+    internal const int QuietSummaryEveryTicks = 20;
 
     private readonly Action<AgentOrchestratorKernel> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -49,6 +50,7 @@ internal sealed class ConductorBatchLoop
         var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
         var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
         var retryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var lastGoalDisposition = new Dictionary<string, string>(StringComparer.Ordinal);
         var totalTicks = 0;
         var totalAdvanced = 0;
         var totalHeld = 0;
@@ -129,8 +131,7 @@ internal sealed class ConductorBatchLoop
             }
 
             totalTicks++;
-            var tickLines = new List<string>();
-            EmitProgress($"TICK tick={totalTicks} eligible={eligible.Length}", tickLines);
+            var changedGoalLines = new List<string>();
 
             var tickAdvanced = 0;
             var tickHeld = 0;
@@ -146,9 +147,12 @@ internal sealed class ConductorBatchLoop
                 var depHoldReason = GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
                 if (depHoldReason is not null)
                 {
-                    EmitProgress($"GOAL goal={label} result=held reason={Sanitize(depHoldReason)}", tickLines);
-                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {depHoldReason}");
-                    kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}");
+                    var progressLine = $"GOAL goal={label} result=held reason={Sanitize(depHoldReason)}";
+                    if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
+                    {
+                        Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {depHoldReason}");
+                        kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}");
+                    }
                     // A goal held due to a failed/escalated dependency will never unblock unless
                     // future condition-specific re-entry logic says otherwise.
                     if (depHoldReason.StartsWith("dependency escalated", StringComparison.Ordinal))
@@ -174,7 +178,8 @@ internal sealed class ConductorBatchLoop
                 catch (Exception ex)
                 {
                     var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
-                    EmitProgress($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}", tickLines);
+                    changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
+                    lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                     kernel.RecordGoalPolicyDecision(goal.Id, msg);
                     escalatedGoals.Add(goal.Id.Value);
@@ -193,16 +198,20 @@ internal sealed class ConductorBatchLoop
                         retries++;
                         retryCounts[goal.Id.Value] = retries;
                         tickRetried++;
-                        EmitProgress($"GOAL goal={label} result=retry attempt={retries}/{maxVerifyRetries}", tickLines);
+                        changedGoalLines.Add($"GOAL goal={label} result=retry attempt={retries}/{maxVerifyRetries}");
+                        lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {goal.Id.Value[..8]} acceptance flake (retry {retries}/{maxVerifyRetries})");
                         kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})");
                         result = driver.AdvanceOnce(goal, policy);
                     }
                 }
 
-                EmitProgress(FormatGoalProgressLine(label, result.Outcome), tickLines);
-                Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
-                kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
+                var goalProgressLine = FormatGoalProgressLine(label, result.Outcome);
+                if (RecordChangedDisposition(goal.Id.Value, goalProgressLine, lastGoalDisposition, changedGoalLines))
+                {
+                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
+                    kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
+                }
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
@@ -215,8 +224,20 @@ internal sealed class ConductorBatchLoop
             totalEscalated += tickEscalated;
             totalRetried   += tickRetried;
 
-            EmitProgress($"TICK_END tick={totalTicks} advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} done={tickDone}", tickLines);
-            Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
+            var emitTickSummary = changedGoalLines.Count > 0 || totalTicks % QuietSummaryEveryTicks == 0;
+            var tickLines = new List<string>();
+            if (emitTickSummary)
+            {
+                EmitProgress($"TICK tick={totalTicks} eligible={eligible.Length}", tickLines);
+                foreach (var line in changedGoalLines)
+                {
+                    EmitProgress(line, tickLines);
+                }
+
+                var summaryPrefix = changedGoalLines.Count > 0 ? "TICK_END" : "TICK_SUMMARY";
+                EmitProgress($"{summaryPrefix} tick={totalTicks} advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} done={tickDone}", tickLines);
+                Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
+            }
 
             // Durably checkpoint this tick's progress (dispatches started, reconcile results, escalations).
             // Without this the loop's mutations live only in memory until the whole command returns, so a
@@ -242,8 +263,11 @@ internal sealed class ConductorBatchLoop
 
                 var fallbackInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
-                EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
-                Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
+                if (emitTickSummary)
+                {
+                    EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
+                    Console.WriteLine($"[conduct --loop --watch] No progress in tick {totalTicks}; sleeping {sleepSeconds}s for workers to complete.");
+                }
                 onTick?.Invoke(tickSummary with { WatchSleeping = true });
 
                 var stopDuringSleep = sleepFunc is not null
@@ -275,6 +299,23 @@ internal sealed class ConductorBatchLoop
         Console.WriteLine(line);
         Console.Out.Flush();
         accumulator?.Add(line);
+    }
+
+    private static bool RecordChangedDisposition(
+        string goalId,
+        string progressLine,
+        Dictionary<string, string> lastGoalDisposition,
+        List<string> changedGoalLines)
+    {
+        if (lastGoalDisposition.TryGetValue(goalId, out var previous)
+            && string.Equals(previous, progressLine, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        lastGoalDisposition[goalId] = progressLine;
+        changedGoalLines.Add(progressLine);
+        return true;
     }
 
     // Sanitize a detail string for compact line format (no spaces, max 40 chars).
