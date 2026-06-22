@@ -24,8 +24,13 @@ public sealed class GoalBacklogLinkTests
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.True(currentGoal is not null);
-        var expectedId = BacklogStore.SlugId("My Feature");
-        Assert.Equal(expectedId, currentGoal!.SourceBacklogItemId);
+        // Intake links the goal to the REAL backlog item id (a GUID from AddAsync), not a title slug,
+        // so auto-close fires for GUID-keyed items. Assert against the actually-seeded item's id.
+        var seededId = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "My Feature", StringComparison.Ordinal))
+            .Id;
+        Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
     }
 
     // ── Intake: skip already-done item ───────────────────────────────────────
