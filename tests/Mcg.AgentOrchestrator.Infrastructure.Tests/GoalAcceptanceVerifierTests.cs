@@ -504,7 +504,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(result.Passed);
         Assert.Equal(3, calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
-        Assert.DoesNotContain("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(calls[2], arg => arg.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(["git diff whitespace", "core tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
 
@@ -530,7 +530,7 @@ public sealed class GoalAcceptanceVerifierTests
 
         Assert.True(result.Passed);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
-        Assert.DoesNotContain("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(calls[2], arg => arg.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(["git diff whitespace", "infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
 

@@ -260,11 +260,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var script = File.ReadAllText(scriptPath);
 
-        Assert.DoesNotContain("\"--disable-build-servers\"", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("$env:MSBUILDDISABLENODEREUSE = \"1\"", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("-p:UseSharedCompilation=false", script, StringComparison.Ordinal);
-        Assert.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"--disable-build-servers\"", script);
+        Assert.DoesNotContain("$env:MSBUILDDISABLENODEREUSE = \"1\"", script);
+        Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script);
+        Assert.DoesNotContain("-p:UseSharedCompilation=false", script);
+        Assert.True(script.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", StringComparison.Ordinal));
     }
 
     private static string ArgumentValue(IReadOnlyList<string> arguments, string name)
