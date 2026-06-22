@@ -591,6 +591,41 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(result.Checks.Any(check => check.ResultSummary == "covered by: full dotnet tests"));
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_change_scoped_kill_switch_keeps_solution_check")]
+    public async Task GoalAcceptanceVerifierChangeScopedKillSwitchKeepsSolutionCheck()
+    {
+        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+        try
+        {
+            var root = CreateStandardManifestWorkspace();
+            var calls = new List<string[]>();
+            var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+                new(0, ""),
+                new(0, ""),
+                new(0, "Full tests passed.")
+            ]);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
+
+            Assert.True(result.Passed);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+            Assert.True(result.Checks!.Any(check => check.Name == "full dotnet tests"));
+            Assert.True(result.Checks.Any(check => check.ResultSummary == "covered by: full dotnet tests"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dedupes_policy_injection_against_equivalent_manifest_check")]
     public async Task GoalAcceptanceVerifierDedupesPolicyInjectionAgainstEquivalentManifestCheck()
     {
