@@ -1318,7 +1318,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     var item = plan.Items.Single();
-    var backlogItemId = BacklogStore.SlugId(item.Heading);
+    var backlogItemId = item.Id;
 
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers)
