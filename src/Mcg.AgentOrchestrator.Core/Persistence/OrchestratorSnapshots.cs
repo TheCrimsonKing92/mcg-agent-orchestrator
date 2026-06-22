@@ -47,7 +47,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? SubscriptionLimitReviewedAt = null,
     int SubscriptionLimitReviewedFailureCount = 0,
     int CriterionRetryCount = 0,
-    IReadOnlyList<string>? CriterionRetryFeedback = null);
+    IReadOnlyList<string>? CriterionRetryFeedback = null,
+    int EmptyOutputRetryCount = 0);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

@@ -33,7 +33,12 @@ public sealed record ConductorAutonomyPolicy(
     int MaxCriterionRetries,
     IReadOnlyDictionary<string, decimal>? PerProviderBudgetCaps,
     ChangeRiskTier? AutoPromoteRiskThreshold,
-    IReadOnlyDictionary<GoalLifecycleState, ConductorTransitionDecision> TransitionMap)
+    IReadOnlyDictionary<GoalLifecycleState, ConductorTransitionDecision> TransitionMap,
+    int MaxEmptyOutputDispatchRetries = 8,
+    int MaxEmptyOutputAutoRecoverCycles = 3,
+    double EmptyOutputRetryInitialDelaySeconds = 0,
+    double EmptyOutputRetryBackoffMultiplier = 2,
+    double EmptyOutputRetryMaxDelaySeconds = 30)
 {
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
@@ -135,6 +140,21 @@ public sealed record ConductorAutonomyPolicy(
         if (MaxCriterionRetries < 0)
             errors.Add($"maxCriterionRetries must be zero or greater (got {MaxCriterionRetries}).");
 
+        if (MaxEmptyOutputDispatchRetries <= 0)
+            errors.Add($"maxEmptyOutputDispatchRetries must be greater than zero (got {MaxEmptyOutputDispatchRetries}).");
+
+        if (MaxEmptyOutputAutoRecoverCycles <= 0)
+            errors.Add($"maxEmptyOutputAutoRecoverCycles must be greater than zero (got {MaxEmptyOutputAutoRecoverCycles}).");
+
+        if (EmptyOutputRetryInitialDelaySeconds < 0)
+            errors.Add($"emptyOutputRetryInitialDelaySeconds must be zero or greater (got {EmptyOutputRetryInitialDelaySeconds}).");
+
+        if (EmptyOutputRetryBackoffMultiplier < 1)
+            errors.Add($"emptyOutputRetryBackoffMultiplier must be at least 1 (got {EmptyOutputRetryBackoffMultiplier}).");
+
+        if (EmptyOutputRetryMaxDelaySeconds < 0)
+            errors.Add($"emptyOutputRetryMaxDelaySeconds must be zero or greater (got {EmptyOutputRetryMaxDelaySeconds}).");
+
         if (PerProviderBudgetCaps is not null)
         {
             foreach (var (provider, cap) in PerProviderBudgetCaps)
@@ -164,6 +184,11 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"maxConcurrentPaidWorkers\": {MaxConcurrentPaidWorkers},");
         sb.AppendLine($"  \"maxTotalBudget\": {MaxTotalBudget},");
         sb.AppendLine($"  \"maxCriterionRetries\": {MaxCriterionRetries},");
+        sb.AppendLine($"  \"maxEmptyOutputDispatchRetries\": {MaxEmptyOutputDispatchRetries},");
+        sb.AppendLine($"  \"maxEmptyOutputAutoRecoverCycles\": {MaxEmptyOutputAutoRecoverCycles},");
+        sb.AppendLine($"  \"emptyOutputRetryInitialDelaySeconds\": {EmptyOutputRetryInitialDelaySeconds},");
+        sb.AppendLine($"  \"emptyOutputRetryBackoffMultiplier\": {EmptyOutputRetryBackoffMultiplier},");
+        sb.AppendLine($"  \"emptyOutputRetryMaxDelaySeconds\": {EmptyOutputRetryMaxDelaySeconds},");
 
         if (PerProviderBudgetCaps is { Count: > 0 })
         {
@@ -224,6 +249,21 @@ public sealed record ConductorAutonomyPolicy(
             var maxCriterionRetries = root.TryGetProperty("maxCriterionRetries", out _)
                 ? RequireInt(root, "maxCriterionRetries", src)
                 : 1;
+            var maxEmptyOutputDispatchRetries = root.TryGetProperty("maxEmptyOutputDispatchRetries", out _)
+                ? RequireInt(root, "maxEmptyOutputDispatchRetries", src)
+                : 8;
+            var maxEmptyOutputAutoRecoverCycles = root.TryGetProperty("maxEmptyOutputAutoRecoverCycles", out _)
+                ? RequireInt(root, "maxEmptyOutputAutoRecoverCycles", src)
+                : 3;
+            var emptyOutputRetryInitialDelaySeconds = root.TryGetProperty("emptyOutputRetryInitialDelaySeconds", out _)
+                ? RequireDouble(root, "emptyOutputRetryInitialDelaySeconds", src)
+                : 0;
+            var emptyOutputRetryBackoffMultiplier = root.TryGetProperty("emptyOutputRetryBackoffMultiplier", out _)
+                ? RequireDouble(root, "emptyOutputRetryBackoffMultiplier", src)
+                : 2;
+            var emptyOutputRetryMaxDelaySeconds = root.TryGetProperty("emptyOutputRetryMaxDelaySeconds", out _)
+                ? RequireDouble(root, "emptyOutputRetryMaxDelaySeconds", src)
+                : 30;
 
             IReadOnlyDictionary<string, decimal>? providerCaps = null;
             if (root.TryGetProperty("perProviderBudgetCaps", out var capsEl)
@@ -275,7 +315,18 @@ public sealed record ConductorAutonomyPolicy(
             }
 
             var policy = new ConductorAutonomyPolicy(
-                name, maxWorkers, maxBudget, maxCriterionRetries, providerCaps, riskThreshold, transitionMap);
+                name,
+                maxWorkers,
+                maxBudget,
+                maxCriterionRetries,
+                providerCaps,
+                riskThreshold,
+                transitionMap,
+                maxEmptyOutputDispatchRetries,
+                maxEmptyOutputAutoRecoverCycles,
+                emptyOutputRetryInitialDelaySeconds,
+                emptyOutputRetryBackoffMultiplier,
+                emptyOutputRetryMaxDelaySeconds);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
@@ -325,6 +376,14 @@ public sealed record ConductorAutonomyPolicy(
     private static decimal RequireDecimal(JsonElement root, string property, string src)
     {
         if (!root.TryGetProperty(property, out var el) || !el.TryGetDecimal(out var value))
+            throw new FormatException(
+                $"conductor-policy.json{src}: {property} is required and must be a number.");
+        return value;
+    }
+
+    private static double RequireDouble(JsonElement root, string property, string src)
+    {
+        if (!root.TryGetProperty(property, out var el) || !el.TryGetDouble(out var value))
             throw new FormatException(
                 $"conductor-policy.json{src}: {property} is required and must be a number.");
         return value;

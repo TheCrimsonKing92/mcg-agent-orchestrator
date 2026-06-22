@@ -59,7 +59,8 @@ public sealed class ConductorDriverTests
         Action<Goal>? record = null,
         Action<Goal>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
-        Func<Goal, ChangeRiskTier?>? classifyRisk = null)
+        Func<Goal, ChangeRiskTier?>? classifyRisk = null,
+        Action<TimeSpan>? emptyOutputBackoffDelay = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -83,7 +84,8 @@ public sealed class ConductorDriverTests
             record ?? (_ => { }),
             cleanup ?? (_ => { }),
             writeEscalation ?? ((_, _, _) => { }),
-            classifyRisk ?? (_ => null));
+            classifyRisk ?? (_ => null),
+            emptyOutputBackoffDelay);
     }
 
     // ── Empty-batch escalation diagnostics ───────────────────────────────
@@ -667,19 +669,50 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Failed_empty_output_flake_auto_retries_instead_of_escalating")]
-    public void ConductorDriverFailedEmptyOutputFlakeAutoRetriesInsteadOfEscalating()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Failed_nonzero_empty_output_flake_auto_recovers_instead_of_escalating")]
+    public void ConductorDriverFailedNonzeroEmptyOutputFlakeAutoRecoversInsteadOfEscalating()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         DispatchTask(kernel, goal, task);
-        // Worker exited 0 but produced no output: the kernel marks the task Failed ("verification
-        // cannot be confirmed"), putting the goal in the Failed lifecycle state. This is a transient
-        // headless-CLI flake, so the conductor should re-dispatch the task rather than escalate.
+        // Worker exited non-zero but produced zero bytes of stdout: this is a CLI startup/API flake,
+        // not a worker verdict, so the conductor should re-admit it instead of escalating.
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "", "", DateTimeOffset.UtcNow));
+            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.EmptyOutputRetryCount);
 
+        var retried = false;
+        var escalated = false;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => { retried = true; retryMessage = msg; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(retried);
+        Assert.False(escalated);
+        Assert.Contains("zero-byte stdout with exit 1", retryMessage!);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_nonempty_stdout_failure_resets_empty_output_count_and_escalates")]
+    public void ConductorDriverNonemptyStdoutFailureResetsEmptyOutputCountAndEscalates()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+        kernel.RetryTask(goal.Id, task.Id, "retry transient empty output");
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "x", "", DateTimeOffset.UtcNow));
+
+        Assert.Equal(0, task.EmptyOutputRetryCount);
         var retried = false;
         var escalated = false;
         var driver = MakeDriver(
@@ -689,10 +722,87 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.True(retried);
+        Assert.False(retried);
+        Assert.True(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_empty_output_budget_exhaustion_auto_recovers_before_operator_escalation")]
+    public void ConductorDriverEmptyOutputBudgetExhaustionAutoRecoversBeforeOperatorEscalation()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        for (var i = 0; i < 2; i++)
+        {
+            DispatchTask(kernel, goal, task);
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+                new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+            if (i == 0)
+            {
+                kernel.RetryTask(goal.Id, task.Id, "previous empty output retry");
+            }
+        }
+
+        var policy = ConductorAutonomyPolicy.Permissive with
+        {
+            MaxEmptyOutputDispatchRetries = 2,
+            MaxEmptyOutputAutoRecoverCycles = 1
+        };
+        var retryMessage = string.Empty;
+        var escalated = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => { retryMessage = msg; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, policy);
+
         Assert.False(escalated);
+        Assert.Contains("Auto-recover+re-admit", retryMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
-        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+
+        result = driver.AdvanceOnce(goal, policy);
+
+        Assert.True(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_empty_output_backoff_uses_configured_delay")]
+    public void ConductorDriverEmptyOutputBackoffUsesConfiguredDelay()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        for (var i = 0; i < 2; i++)
+        {
+            DispatchTask(kernel, goal, task);
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+                new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+            if (i == 0)
+            {
+                kernel.RetryTask(goal.Id, task.Id, "previous empty output retry");
+            }
+        }
+
+        var delays = new List<TimeSpan>();
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => kernel.RetryTask(gid, tid, msg),
+            emptyOutputBackoffDelay: delays.Add);
+        var policy = ConductorAutonomyPolicy.Permissive with
+        {
+            EmptyOutputRetryInitialDelaySeconds = 1,
+            EmptyOutputRetryBackoffMultiplier = 2,
+            EmptyOutputRetryMaxDelaySeconds = 3
+        };
+
+        driver.AdvanceOnce(goal, policy);
+
+        Assert.Single(delays);
+        Assert.Equal(TimeSpan.FromSeconds(2), delays[0]);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Blocked_facts_escalates")]

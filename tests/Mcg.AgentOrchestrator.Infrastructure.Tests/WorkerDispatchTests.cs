@@ -3200,6 +3200,29 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(1, task.LastVerification!.ExitCode);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_empty_stdout_nonzero_exit_records_empty_output_retry")]
+    public void BackgroundDispatchRunnerEmptyStdoutNonzeroExitRecordsEmptyOutputRetry()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        string.Empty,
+        string.Empty,
+        clock,
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Equal(1, task.EmptyOutputRetryCount);
+    Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
     public void BackgroundDispatchRunnerFileRoleWithCommittedChangePasses()
 {

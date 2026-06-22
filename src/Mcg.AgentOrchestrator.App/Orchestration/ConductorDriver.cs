@@ -26,6 +26,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal> _cleanup;
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
+    private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -270,6 +271,7 @@ internal sealed class ConductorDriver
                 return null;
             }
         };
+        _emptyOutputBackoffDelay = Thread.Sleep;
     }
 
     internal ConductorDriver(
@@ -290,7 +292,8 @@ internal sealed class ConductorDriver
         Action<Goal> record,
         Action<Goal> cleanup,
         Action<Goal, GoalLifecycleState, string> writeEscalation,
-        Func<Goal, ChangeRiskTier?> classifyChangeRisk)
+        Func<Goal, ChangeRiskTier?> classifyChangeRisk,
+        Action<TimeSpan>? emptyOutputBackoffDelay = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -312,6 +315,7 @@ internal sealed class ConductorDriver
         _cleanup = cleanup;
         _writeEscalation = writeEscalation;
         _classifyChangeRisk = classifyChangeRisk;
+        _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
     }
 
     public ConductorAdvanceResult AdvanceOnce(Goal goal, ConductorAutonomyPolicy policy)
@@ -325,26 +329,46 @@ internal sealed class ConductorDriver
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
 
-        // A goal failed ONLY because a task hit a transient empty-output dispatch flake (the worker
-        // exited 0 but produced nothing — a known intermittent claude/codex headless behaviour) is
-        // self-healed by re-dispatching that task, bounded by MaxTransientDispatchRetries, instead of
-        // escalating to a human. Without this, a single flaky empty response kills an otherwise-healthy
-        // goal — exactly what blocked an end-to-end autonomous run. A genuine failure (non-zero exit or
-        // any output) is NOT matched here and still escalates.
+        // Empty stdout from a subscription worker means the CLI never produced a worker verdict. Treat
+        // it as provider/startup flake, retry on a dedicated budget, and only escalate after all bounded
+        // auto-recover cycles are spent. Any non-empty stdout resets the task counter in TaskSpec and is
+        // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 t.LastVerification is { } latest && DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(latest) &&
-                t.VerificationHistory.Count(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake) <= MaxTransientDispatchRetries);
+                t.EmptyOutputRetryCount > 0);
             if (flakedTask is not null)
             {
+                var maxAttempts = policy.MaxEmptyOutputDispatchRetries * policy.MaxEmptyOutputAutoRecoverCycles;
+                if (flakedTask.EmptyOutputRetryCount > maxAttempts)
+                {
+                    return Escalate(goal, goalPrefix, policy, state,
+                        $"Task {flakedTask.Id.Value[..8]} exhausted empty-output dispatch recovery " +
+                        $"({flakedTask.EmptyOutputRetryCount}/{maxAttempts}); operator action required");
+                }
+
+                var delay = ComputeEmptyOutputBackoff(policy, flakedTask.EmptyOutputRetryCount);
+                if (delay > TimeSpan.Zero)
+                {
+                    _emptyOutputBackoffDelay(delay);
+                }
+
+                var attemptInCycle = ((flakedTask.EmptyOutputRetryCount - 1) % policy.MaxEmptyOutputDispatchRetries) + 1;
+                var cycle = ((flakedTask.EmptyOutputRetryCount - 1) / policy.MaxEmptyOutputDispatchRetries) + 1;
+                var note = attemptInCycle == policy.MaxEmptyOutputDispatchRetries
+                    ? $"Auto-recover+re-admit empty-output dispatch flake cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; " +
+                        $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}"
+                    : $"Auto-retry empty-output dispatch flake {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
+                        $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; " +
+                        $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
                 _retryTask(goal.Id, flakedTask.Id,
-                    "Auto-retry transient dispatch flake: worker exited 0 with no output (verification could not be confirmed)");
+                    note);
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(
                         GoalLifecycleState.Failed,
-                        $"Auto-retried transient empty-output dispatch flake on task {flakedTask.Id.Value[..8]}"));
+                        $"Auto-recovered empty-output dispatch flake on task {flakedTask.Id.Value[..8]}"));
             }
         }
 
@@ -464,9 +488,19 @@ internal sealed class ConductorDriver
             : "No tasks in ready batch; goal may have no assigned or ready tasks";
     }
 
-    // Cap on auto-retrying a transient empty-output dispatch flake before escalating to a human; a
-    // worker that keeps exiting 0 with no output is a genuine problem, not a flake.
-    private const int MaxTransientDispatchRetries = 2;
+    private static TimeSpan ComputeEmptyOutputBackoff(ConductorAutonomyPolicy policy, int retryCount)
+    {
+        if (policy.EmptyOutputRetryInitialDelaySeconds <= 0 ||
+            policy.EmptyOutputRetryMaxDelaySeconds <= 0)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var exponent = Math.Max(0, retryCount - 1);
+        var seconds = policy.EmptyOutputRetryInitialDelaySeconds *
+            Math.Pow(policy.EmptyOutputRetryBackoffMultiplier, exponent);
+        return TimeSpan.FromSeconds(Math.Min(seconds, policy.EmptyOutputRetryMaxDelaySeconds));
+    }
 
     // Appends a bounded tail of the acceptance build/test output to an escalation/journal line so an
     // operator (or the conductor's own retry diagnostics) can see WHY acceptance failed — the detail
