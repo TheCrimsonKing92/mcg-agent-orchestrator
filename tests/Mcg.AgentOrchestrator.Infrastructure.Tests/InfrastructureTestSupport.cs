@@ -274,6 +274,34 @@ internal static class Assert
     public static void InRange<T>(T actual, T low, T high)
         where T : IComparable
         => Xunit.Assert.InRange(actual, low, high);
+
+    // Faithful delegates to Xunit.Assert for standard overloads this shadow previously lacked (af94964c):
+    // value-in-collection membership, collection equality, per-element inspection, and string prefix/
+    // suffix. These forward to xUnit so workers' standard assertions compile and behave identically,
+    // removing the overload-resolution friction without rewriting ~80 existing bespoke call sites.
+    public static void Contains<T>(T expected, IEnumerable<T> collection)
+        => Xunit.Assert.Contains(expected, collection);
+
+    public static void Contains<T>(T expected, IEnumerable<T> collection, IEqualityComparer<T> comparer)
+        => Xunit.Assert.Contains(expected, collection, comparer);
+
+    public static void DoesNotContain<T>(T expected, IEnumerable<T> collection)
+        => Xunit.Assert.DoesNotContain(expected, collection);
+
+    public static void Equal<T>(IEnumerable<T> expected, IEnumerable<T> actual)
+        => Xunit.Assert.Equal(expected, actual);
+
+    public static void Collection<T>(IEnumerable<T> collection, params Action<T>[] elementInspectors)
+        => Xunit.Assert.Collection(collection, elementInspectors);
+
+    public static void StartsWith(string expectedStartString, string? actualString)
+        => Xunit.Assert.StartsWith(expectedStartString, actualString);
+
+    public static void EndsWith(string expectedEndString, string? actualString)
+        => Xunit.Assert.EndsWith(expectedEndString, actualString);
+
+    public static void True(bool condition, string userMessage)
+        => Xunit.Assert.True(condition, userMessage);
 }
 
 internal sealed class CapturingHandler : HttpMessageHandler
