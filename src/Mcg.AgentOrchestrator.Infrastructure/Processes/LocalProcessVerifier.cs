@@ -233,7 +233,7 @@ public sealed class LocalProcessVerifier
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start process: {fileName}");
-        using var processGroup = OwnedProcessGroup.Attach(process);
+        WorkerProcessJobs.TryRegister(process, $"local-verification:{workingDirectory}");
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(CommandTimeout);
@@ -251,9 +251,13 @@ public sealed class LocalProcessVerifier
         }
         catch (OperationCanceledException)
         {
-            try { processGroup.Kill(); } catch { /* best effort */ }
+            try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
             throw;
+        }
+        finally
+        {
+            WorkerProcessJobs.Release(process.Id);
         }
     }
 }

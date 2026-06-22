@@ -5,14 +5,60 @@ using System.Collections.Concurrent;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class WorkerProcessJobs
+public static class WorkerProcessJobs
 {
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
     private static readonly ConcurrentDictionary<int, OwnedProcessGroup> Jobs = new();
+    private static SpawnRegistry? Registry;
 
     internal static Func<int, bool> TryKillPidTree { get; set; } = DefaultTryKillPidTree;
 
-    public static bool TryRegister(Process process)
+    public static void ConfigureRegistry(string dbPath)
+    {
+        Registry = new SpawnRegistry(dbPath);
+    }
+
+    public static int SweepStartupOrphans()
+    {
+        var registry = Registry;
+        if (registry is null)
+        {
+            return 0;
+        }
+
+        var reaped = 0;
+        foreach (var entry in registry.ListActive())
+        {
+            if (!SpawnProcessIdentityReader.MatchesLiveProcess(entry, out var process))
+            {
+                registry.MarkReleased(entry.ProcessId, $"spawn_registry: already-dead-or-recycled pid={entry.ProcessId} owner={entry.OwnerId}");
+                continue;
+            }
+
+            using (process)
+            {
+                if (IsProtectedProcessOrAncestor(entry.ProcessId) || ProtectedPidIsDescendantOf(entry.ProcessId))
+                {
+                    registry.RecordDiagnostic(entry.Id, $"spawn_registry: refused-protected pid={entry.ProcessId} owner={entry.OwnerId}");
+                    continue;
+                }
+
+                if (TryKillOrFallback(entry.ProcessId))
+                {
+                    registry.MarkReleased(entry.ProcessId, $"spawn_registry: startup-reaped pid={entry.ProcessId} owner={entry.OwnerId}");
+                    reaped++;
+                }
+                else
+                {
+                    registry.RecordDiagnostic(entry.Id, $"spawn_registry: startup-reap-failed pid={entry.ProcessId} owner={entry.OwnerId}");
+                }
+            }
+        }
+
+        return reaped;
+    }
+
+    public static bool TryRegister(Process process, string? ownerId = null)
     {
         if (IsProtectedProcessOrAncestor(process.Id))
         {
@@ -24,6 +70,7 @@ internal static class WorkerProcessJobs
             var group = OwnedProcessGroup.Attach(process);
             if (Jobs.TryAdd(process.Id, group))
             {
+                RegisterDurable(process, ownerId);
                 return true;
             }
 
@@ -51,6 +98,7 @@ internal static class WorkerProcessJobs
             try
             {
                 group.Kill();
+                Registry?.MarkReleased(processId, $"spawn_registry: killed pid={processId}");
                 return true;
             }
             catch
@@ -63,18 +111,62 @@ internal static class WorkerProcessJobs
             }
         }
 
-        return TryKillPidTree(processId);
+        var fallbackKilled = TryKillPidTree(processId);
+        if (fallbackKilled)
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: fallback-killed pid={processId}");
+        }
+
+        return fallbackKilled;
     }
 
     public static void Release(int processId)
     {
         if (Jobs.TryRemove(processId, out var group))
         {
-            group.Dispose();
+            try
+            {
+                group.Kill();
+            }
+            catch
+            {
+                // Already-dead or access-denied races are diagnostics, not state-machine failures.
+            }
+            finally
+            {
+                group.Dispose();
+            }
         }
+
+        Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
     }
 
     internal static bool HasRegisteredJob(int processId) => Jobs.ContainsKey(processId);
+
+    internal static IReadOnlyList<SpawnRegistryEntry> ListActiveRegistryEntriesForTests() =>
+        Registry?.ListActive() ?? [];
+
+    internal static void ClearRegistryForTests() => Registry = null;
+
+    private static void RegisterDurable(Process process, string? ownerId)
+    {
+        var registry = Registry;
+        if (registry is null || !SpawnProcessIdentityReader.TryRead(process, out var identity))
+        {
+            return;
+        }
+
+        try
+        {
+            registry.Register(
+                string.IsNullOrWhiteSpace(ownerId) ? $"pid:{process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : ownerId,
+                identity);
+        }
+        catch
+        {
+            // Registry durability is a lifecycle backstop; failed diagnostics must not prevent spawn.
+        }
+    }
 
     private static bool DefaultTryKillPidTree(int processId)
     {

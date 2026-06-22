@@ -125,7 +125,7 @@ public sealed class BackgroundDispatchRunner
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
-        WorkerProcessJobs.TryRegister(process);
+        WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}");
         ReleaseDispatchHostStartGate(startGatePath);
 
         var record = new TaskProcessRecord(

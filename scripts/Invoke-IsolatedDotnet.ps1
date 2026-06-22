@@ -123,6 +123,7 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
+    "--disable-build-servers",
     "-maxcpucount:1",
     "-p:UseSharedCompilation=false"
 )

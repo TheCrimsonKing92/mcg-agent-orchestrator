@@ -38,6 +38,8 @@ var workspace = OrchestratorWorkspace.ForDirectory(
     repoRoot,
     string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
     tenantSelection.TenantName);
+WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
+WorkerProcessJobs.SweepStartupOrphans();
 GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
