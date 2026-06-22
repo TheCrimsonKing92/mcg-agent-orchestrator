@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record BacklogIntakeItem(
+    string Id,
     string Heading,
     string Body,
     IReadOnlyList<string> TargetFiles,
@@ -37,13 +38,13 @@ internal static class BacklogIntakePlanner
             .Where(item => string.IsNullOrWhiteSpace(headingFilter) ||
                 item.Title.Contains(headingFilter, StringComparison.OrdinalIgnoreCase))
             .Take(maxItems)
-            .Select(item => BuildItem(item.Title, item.Body))
+            .Select(item => BuildItem(item.Id, item.Title, item.Body))
             .ToList();
 
         return new BacklogIntakePlan("backlog store", items);
     }
 
-    private static BacklogIntakeItem BuildItem(string heading, string body)
+    private static BacklogIntakeItem BuildItem(string id, string heading, string body)
     {
         var text = $"{heading}\n{body}";
         var targetFiles = InferTargetFiles(text);
@@ -53,6 +54,7 @@ internal static class BacklogIntakePlanner
         var dependencies = InferDependencies(text);
         var objective = BuildObjective(heading, body, targetFiles, verification);
         return new BacklogIntakeItem(
+            id,
             heading,
             body,
             targetFiles,
