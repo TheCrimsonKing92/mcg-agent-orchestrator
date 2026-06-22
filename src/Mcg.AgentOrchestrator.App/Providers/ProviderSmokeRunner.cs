@@ -182,16 +182,16 @@ public static bool TryCreateLiveProvider(string providerName, out IModelProvider
         try
         {
             using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            var check = probe.GetAsync($"{baseUrl.TrimEnd('/')}/api/version").GetAwaiter().GetResult();
+            var check = probe.GetAsync(OllamaDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
             if (!check.IsSuccessStatusCode)
             {
-                detail = $"Ollama not reachable at {baseUrl}";
+                detail = $"OpenAI-compatible local inference server not reachable at {baseUrl}";
                 return false;
             }
         }
         catch
         {
-            detail = $"Ollama not reachable at {baseUrl}";
+            detail = $"OpenAI-compatible local inference server not reachable at {baseUrl}";
             return false;
         }
 

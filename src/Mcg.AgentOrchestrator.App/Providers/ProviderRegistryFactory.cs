@@ -32,12 +32,12 @@ internal static class ProviderRegistryFactory
     public static bool IsOllamaReachable() =>
         IsOllamaReachable(OllamaDefaults.ResolveBaseUrl());
 
-    private static bool IsOllamaReachable(string baseUrl)
+    public static bool IsOllamaReachable(string baseUrl)
     {
         try
         {
             using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = probe.GetAsync($"{baseUrl.TrimEnd('/')}/api/version").GetAwaiter().GetResult();
+            var response = probe.GetAsync(OllamaDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
             return response.IsSuccessStatusCode;
         }
         catch
