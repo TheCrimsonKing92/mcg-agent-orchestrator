@@ -224,9 +224,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
     {
         var script = File.ReadAllText(Path.Combine("scripts", "Invoke-IsolatedDotnet.ps1"));
 
-        Assert.Contains("\"--disable-build-servers\"", script, StringComparison.Ordinal);
-        Assert.Contains("$env:MSBUILDDISABLENODEREUSE = \"1\"", script, StringComparison.Ordinal);
-        Assert.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script, StringComparison.Ordinal);
+        Assert.True(script.Contains("\"--disable-build-servers\"", StringComparison.Ordinal));
+        Assert.True(script.Contains("$env:MSBUILDDISABLENODEREUSE = \"1\"", StringComparison.Ordinal));
+        Assert.True(script.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", StringComparison.Ordinal));
     }
 
     private static string ArgumentValue(IReadOnlyList<string> arguments, string name)
