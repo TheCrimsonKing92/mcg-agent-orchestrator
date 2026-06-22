@@ -289,6 +289,27 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
 }
 
+    [Xunit.Fact(DisplayName = "RetryTask_on_a_Verified_goal_downgrades_to_Active_so_the_conductor_redispatches")]
+    public void RetryTaskOnVerifiedGoalDowngradesToActiveForRedispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry redispatch", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    // Goal is Completed -> Verified: a conduct tick here would re-run ACCEPTANCE, not re-dispatch.
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+
+    kernel.RetryTask(goal.Id, task.Id, "acceptance failed; fix the test compile errors");
+
+    // The retried task is no longer complete: the goal drops back to Active and resolves to a
+    // dispatch state (WorkspaceReady), so the conductor RE-DISPATCHES the worker with the feedback.
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+    Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+}
+
     [Xunit.Fact(DisplayName = "ResolveState_returns_Merged_when_goal_completed_and_merged")]
     public void ResolveStateReturnsMergedWhenGoalCompletedAndMerged()
 {
