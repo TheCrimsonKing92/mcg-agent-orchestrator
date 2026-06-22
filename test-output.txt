@@ -1,0 +1,60 @@
+
+  Determining projects to restore...
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q [C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj]
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q [C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj]
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+  All projects are up-to-date for restore.
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+  Mcg.AgentOrchestrator.Core -> C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.Core\debug\Mcg.AgentOrchestrator.Core.dll
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+  Mcg.AgentOrchestrator.Core -> C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.Core\debug\Mcg.AgentOrchestrator.Core.dll
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+  Mcg.AgentOrchestrator.Infrastructure -> C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure\debug\Mcg.AgentOrchestrator.Infrastructure.dll
+  Mcg.AgentOrchestrator.App -> C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.App\debug\Mcg.AgentOrchestrator.App.dll
+C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj : warning NU1903: Package 'SQLitePCLRaw.lib.e_sqlite3' 2.1.10 has a known high severity vulnerability, https://github.com/advisories/GHSA-2m69-gcr7-jv3q
+  Mcg.AgentOrchestrator.Infrastructure -> C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure\debug\Mcg.AgentOrchestrator.Infrastructure.dll
+  Mcg.AgentOrchestrator.Infrastructure.Tests -> C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure.Tests\debug\Mcg.AgentOrchestrator.Infrastructure.Tests.dll
+Test run for C:\Users\miles\AppData\Local\Temp\mcg-dotnet-isolated\slots\slot-1\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure.Tests\debug\Mcg.AgentOrchestrator.Infrastructure.Tests.dll (.NETCoreApp,Version=v10.0)
+VSTest version 18.0.1 (x64)
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:02.29]     WorkerProcessJobs_startup_sweep_reaps_only_registry_owned_pid [FAIL]
+[xUnit.net 00:00:02.46]     WorkerProcessJobs_register_writes_durable_pid_identity [FAIL]
+  Failed WorkerProcessJobs_startup_sweep_reaps_only_registry_owned_pid [493 ms]
+  Error Message:
+   System.InvalidOperationException : Expected '1', got '0'.
+  Stack Trace:
+     at Assert.Equal[T](T expected, T actual) in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\InfrastructureTestSupport.cs:line 198
+   at WorkerProcessJobsTests.WorkerProcessJobsStartupSweepReapsOnlyRegistryOwnedPid() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\WorkerProcessJobsTests.cs:line 28
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.RuntimeMethodInfo.Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+  Failed WorkerProcessJobs_register_writes_durable_pid_identity [171 ms]
+  Error Message:
+   System.InvalidOperationException : Expected condition to be true.
+  Stack Trace:
+     at Assert.True(Boolean condition) in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\InfrastructureTestSupport.cs:line 206
+   at WorkerProcessJobsTests.WorkerProcessJobsRegisterWritesDurablePidIdentity() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\WorkerProcessJobsTests.cs:line 63
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.RuntimeMethodInfo.Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+[xUnit.net 00:00:03.01]     WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild [FAIL]
+[xUnit.net 00:00:03.24]     WorkerProcessJobs_registers_and_releases_wrapper_job [FAIL]
+  Failed WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild [547 ms]
+  Error Message:
+   System.InvalidOperationException : Expected condition to be true.
+  Stack Trace:
+     at Assert.True(Boolean condition) in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\InfrastructureTestSupport.cs:line 206
+   at WorkerProcessJobsTests.WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\WorkerProcessJobsTests.cs:line 155
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.RuntimeMethodInfo.Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+  Failed WorkerProcessJobs_registers_and_releases_wrapper_job [234 ms]
+  Error Message:
+   System.InvalidOperationException : Expected condition to be true.
+  Stack Trace:
+     at Assert.True(Boolean condition) in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\InfrastructureTestSupport.cs:line 206
+   at WorkerProcessJobsTests.WorkerProcessJobsRegistersAndReleasesWrapperJob() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\97916e4c\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\WorkerProcessJobsTests.cs:line 110
+   at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.RuntimeMethodInfo.Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+
+Failed!  - Failed:     4, Passed:     7, Skipped:     0, Total:    11, Duration: 1 s - Mcg.AgentOrchestrator.Infrastructure.Tests.dll (net10.0)

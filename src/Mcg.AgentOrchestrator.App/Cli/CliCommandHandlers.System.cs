@@ -602,6 +602,10 @@ internal static partial class CliCommandHandlers
             CreateNoWindow = true,
             WorkingDirectory = context.Workspace.RootDirectory
         };
+        startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        startInfo.Environment["UseSharedCompilation"] = "false";
+        startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = context.Workspace.RootDirectory;
 
         foreach (var part in parts.Skip(1))
         {

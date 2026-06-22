@@ -834,11 +834,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.AccountVariable);
         startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.CredentialTargetVariable);
 
+        int? startedProcessId = null;
         try
         {
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
-            using var processGroup = OwnedProcessGroup.Attach(process);
+            startedProcessId = process.Id;
+            WorkerProcessJobs.TryRegister(process, $"acceptance:{workingDirectory}");
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(CommandTimeout);
@@ -849,7 +851,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (OperationCanceledException)
             {
-                try { processGroup.Kill(); } catch { /* best effort */ }
+                try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 throw;
             }
@@ -860,6 +862,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         finally
         {
+            if (startedProcessId is { } processId)
+            {
+                WorkerProcessJobs.Release(processId);
+            }
+
             TryDeleteFile(stdoutPath);
             TryDeleteFile(stderrPath);
         }

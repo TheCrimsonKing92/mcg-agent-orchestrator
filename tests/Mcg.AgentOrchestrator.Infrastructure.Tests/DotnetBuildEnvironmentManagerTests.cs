@@ -219,6 +219,18 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_passes_disable_build_servers_and_node_reuse_env")]
+    public void InvokeIsolatedDotnetPassesDisableBuildServersAndNodeReuseEnv()
+    {
+        var repoRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.True(script.Contains("\"--disable-build-servers\"", StringComparison.Ordinal));
+        Assert.True(script.Contains("$env:MSBUILDDISABLENODEREUSE = \"1\"", StringComparison.Ordinal));
+        Assert.True(script.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", StringComparison.Ordinal));
+    }
+
     private static string ArgumentValue(IReadOnlyList<string> arguments, string name)
     {
         var index = -1;

@@ -158,6 +158,15 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearSubscriptionRetryAfter();
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        // A retried task is no longer complete, so a Completed goal must drop back to Active for the
+        // conductor to RE-DISPATCH it. RefreshGoalStatus treats Completed as terminal and won't
+        // downgrade on its own, and GoalLifecycle.ResolveState maps a Completed goal to Verified
+        // regardless of task state — so without this the conductor re-runs ACCEPTANCE on the unchanged
+        // worktree and re-escalates instead of re-running the worker with the retry feedback.
+        if (goal.Status == GoalStatus.Completed)
+        {
+            goal.SetStatus(GoalStatus.Active);
+        }
         RefreshGoalStatus(goal);
         return task;
     }

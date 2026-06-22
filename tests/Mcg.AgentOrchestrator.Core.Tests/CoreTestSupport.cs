@@ -154,4 +154,41 @@ internal static partial class Assert
 
         return values[0];
     }
+
+    // Faithful delegates to Xunit.Assert for standard overloads this shadow previously lacked (af94964c):
+    // value-in-collection membership, substring/collection equality, per-element inspection, prefix/suffix,
+    // and null checks. These forward to xUnit so standard assertions compile and behave identically,
+    // removing the overload-resolution friction without rewriting the existing bespoke call sites.
+    public static void Contains<T>(T expected, IEnumerable<T> collection)
+        => Xunit.Assert.Contains(expected, collection);
+
+    public static void Contains<T>(T expected, IEnumerable<T> collection, IEqualityComparer<T> comparer)
+        => Xunit.Assert.Contains(expected, collection, comparer);
+
+    public static void Contains(string expectedSubstring, string actualString)
+        => Xunit.Assert.Contains(expectedSubstring, actualString);
+
+    public static void DoesNotContain<T>(T expected, IEnumerable<T> collection)
+        => Xunit.Assert.DoesNotContain(expected, collection);
+
+    public static void DoesNotContain(string expectedSubstring, string actualString)
+        => Xunit.Assert.DoesNotContain(expectedSubstring, actualString);
+
+    public static void Equal<T>(IEnumerable<T> expected, IEnumerable<T> actual)
+        => Xunit.Assert.Equal(expected, actual);
+
+    public static void Collection<T>(IEnumerable<T> collection, params Action<T>[] elementInspectors)
+        => Xunit.Assert.Collection(collection, elementInspectors);
+
+    public static void StartsWith(string expectedStartString, string? actualString)
+        => Xunit.Assert.StartsWith(expectedStartString, actualString);
+
+    public static void EndsWith(string expectedEndString, string? actualString)
+        => Xunit.Assert.EndsWith(expectedEndString, actualString);
+
+    public static void NotNull(object? @object)
+        => Xunit.Assert.NotNull(@object);
+
+    public static void Null(object? @object)
+        => Xunit.Assert.Null(@object);
 }

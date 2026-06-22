@@ -14,11 +14,18 @@ public sealed class LocalProcessVerifierTests
             var prepared = LocalProcessVerifier.PrepareCommand(" dotnet test Example.sln --verbosity minimal ", goalId, taskId);
 
             Assert.True(prepared.Command.StartsWith("dotnet test Example.sln --verbosity minimal", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains("'--artifacts-path'", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains("'--disable-build-servers'", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains("'-maxcpucount:1'", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains("'-p:UseSharedCompilation=false'", StringComparison.Ordinal));
+            Assert.False(prepared.Command.Contains('\'', StringComparison.Ordinal));
+            Assert.True(prepared.Command.Contains("--artifacts-path", StringComparison.Ordinal));
+            Assert.True(prepared.Command.Contains("--disable-build-servers", StringComparison.Ordinal));
+            Assert.True(prepared.Command.Contains("-maxcpucount:1", StringComparison.Ordinal));
+            Assert.True(prepared.Command.Contains("-p:UseSharedCompilation=false", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+            Assert.Equal("dotnet", prepared.FileName);
+            Assert.Equal("test", prepared.Arguments[0]);
+            Assert.Contains("--artifacts-path", prepared.Arguments);
+            Assert.Contains("--disable-build-servers", prepared.Arguments);
+            Assert.Contains("-maxcpucount:1", prepared.Arguments);
+            Assert.Contains("-p:UseSharedCompilation=false", prepared.Arguments);
             Assert.True(prepared.ArtifactPathEvidence.Contains("Build environment lease: goal-12345678", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Verification artifacts:", StringComparison.Ordinal));
             Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase) == true);
@@ -97,24 +104,69 @@ public sealed class LocalProcessVerifierTests
         var prepared = LocalProcessVerifier.PrepareCommand("Write-Output ok", new GoalId("12345678123456781234567812345678"), TaskId.New());
 
         Assert.Equal("Write-Output ok", prepared.Command);
+        Assert.Equal("Write-Output", prepared.FileName);
+        Assert.True(prepared.Arguments.SequenceEqual(["ok"]));
         Assert.Equal(string.Empty, prepared.ArtifactPathEvidence);
     }
 
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_leaves_dotnet_commands_without_goal_context_unchanged")]
     public void LocalProcessVerifierLeavesDotnetCommandsWithoutGoalContextUnchanged()
     {
-        var prepared = LocalProcessVerifier.PrepareCommand("dotnet build Mcg.AgentOrchestrator.sln -c Release");
+        var prepared = LocalProcessVerifier.PrepareCommand("dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'");
 
-        Assert.Equal("dotnet build Mcg.AgentOrchestrator.sln -c Release", prepared.Command);
+        Assert.Equal("dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'", prepared.Command);
+        Assert.Equal("dotnet", prepared.FileName);
+        Assert.True(prepared.Arguments.SequenceEqual(["test", "Mcg.AgentOrchestrator.sln", "--filter", "AgentCatalog|WorkerProfile"]));
         Assert.False(prepared.Command.Contains("--disable-build-servers", StringComparison.Ordinal));
         Assert.Equal(string.Empty, prepared.ArtifactPathEvidence);
+    }
+
+    [Xunit.Fact(DisplayName = "LocalProcessVerifier_launches_dotnet_directly_without_a_shell_host")]
+    public async Task LocalProcessVerifierLaunchesDotnetDirectlyWithoutAShellHost()
+    {
+        var goalId = new GoalId("10203040102030401020304010203040");
+        var calls = new List<(string FileName, IReadOnlyList<string> Arguments)>();
+        var verifier = new LocalProcessVerifier((fileName, args, _, _) =>
+        {
+            calls.Add((fileName, args));
+            if (fileName.Equals("powershell.exe", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Equals("pwsh", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new LocalProcessVerifier.CommandResult(127, "", "shell host is unavailable"));
+            }
+
+            return Task.FromResult(new LocalProcessVerifier.CommandResult(0, "dotnet direct launch", ""));
+        });
+
+        try
+        {
+            var record = await verifier.RunAsync(
+                "dotnet --info",
+                "C:\\fake\\dir",
+                goalId,
+                TaskId.New());
+
+            Assert.Equal(0, record.ExitCode);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal("dotnet", calls[0].FileName);
+            Assert.True(calls[0].Arguments.SequenceEqual(["build-server", "shutdown"]));
+            Assert.Equal("dotnet", calls[1].FileName);
+            Assert.DoesNotContain("powershell.exe", calls[1].Arguments);
+            Assert.DoesNotContain("pwsh", calls[1].Arguments);
+            Assert.Contains("--artifacts-path", calls[1].Arguments);
+            Assert.Contains("dotnet direct launch", record.StandardOutput);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
     }
 
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_retries_once_on_CS2012_and_returns_passed")]
     public async Task LocalProcessVerifierRetriesOnceOnCs2012AndReturnsPassed()
     {
         var goalId = new GoalId("fedcba98fedcba98fedcba98fedcba98");
-        var calls = new List<string[]>();
+        var calls = new List<(string FileName, IReadOnlyList<string> Arguments)>();
         var responses = new Queue<LocalProcessVerifier.CommandResult>([
             new(0, "", ""),
             new(1, "error CS2012: Cannot open 'Core.dll' for writing", ""),
@@ -122,9 +174,9 @@ public sealed class LocalProcessVerifierTests
             new(0, "Test run succeeded.", "")
         ]);
 
-        var verifier = new LocalProcessVerifier((args, _, _) =>
+        var verifier = new LocalProcessVerifier((fileName, args, _, _) =>
         {
-            calls.Add(args);
+            calls.Add((fileName, args));
             return Task.FromResult(responses.Dequeue());
         });
 
@@ -138,11 +190,17 @@ public sealed class LocalProcessVerifierTests
 
             Assert.Equal(0, record.ExitCode);
             Assert.Equal(4, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.Equal("powershell.exe", calls[1][0]);
-            Assert.Equal("powershell.exe", calls[3][0]);
-            Assert.True(calls[1].SequenceEqual(calls[3]));
+            Assert.Equal("dotnet", calls[0].FileName);
+            Assert.True(calls[0].Arguments.SequenceEqual(["build-server", "shutdown"]));
+            Assert.Equal("dotnet", calls[2].FileName);
+            Assert.True(calls[2].Arguments.SequenceEqual(["build-server", "shutdown"]));
+            Assert.Equal("dotnet", calls[1].FileName);
+            Assert.Equal("dotnet", calls[3].FileName);
+            Assert.DoesNotContain("powershell.exe", calls[1].Arguments);
+            Assert.DoesNotContain("pwsh", calls[1].Arguments);
+            Assert.Contains("--artifacts-path", calls[1].Arguments);
+            Assert.Equal(calls[1].FileName, calls[3].FileName);
+            Assert.True(calls[1].Arguments.SequenceEqual(calls[3].Arguments));
         }
         finally
         {
