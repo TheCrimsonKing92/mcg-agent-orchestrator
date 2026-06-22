@@ -48,6 +48,7 @@ internal static partial class DashboardEndpoints
         api.MapGet("/goals/cross-start-plan", async Task<IResult> (HttpContext context) => await Safe(() => GetCrossGoalStartPlanAsync(context, services)));
         api.MapGet("/system/dashboard-host", () => Json(BuildHostInfo(services)));
         api.MapGet("/system/architecture", () => Json(BuildArchitectureReport(services)));
+        api.MapGet("/system/task-durations", async Task<IResult> (HttpContext context) => await Safe(() => GetTaskDurationsAsync(context, services)));
         if (args.EnableOperatorControls)
         {
             api.MapGet("/system/processes", () => Json(DashboardProcessInspector.InspectCurrent()));
@@ -150,6 +151,14 @@ internal static partial class DashboardEndpoints
         return OrchestratorHealthInspector.InspectCurrentEnvironment(
             services.LoadAgentCatalog(),
             WorkerProfileStore.Load(services.WorkerProfilePath));
+    }
+
+    private static async Task<IResult> GetTaskDurationsAsync(HttpContext context, DashboardEndpointServices services)
+    {
+        var includeModel = context.Request.Query.ContainsKey("byModel") ||
+            context.Request.Query.ContainsKey("by-model");
+        var current = await LoadAsync(services, context.RequestAborted);
+        return Json(BuildTaskDurationStatsReport(current, includeModel));
     }
 
     private static Task<AgentOrchestratorKernel> LoadAsync(DashboardEndpointServices services, CancellationToken cancellationToken = default) =>

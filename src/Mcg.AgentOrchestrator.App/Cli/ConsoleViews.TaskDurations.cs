@@ -17,10 +17,19 @@ internal static partial class ConsoleViews
 
         foreach (var record in records)
         {
+            var medianRuntime = record.HasPublishedStats
+                ? FormatDuration(record.MedianLegitimateRuntime)
+                : FormatInsufficient(record.TaskCount);
+            var p90Runtime = record.HasPublishedStats
+                ? FormatDuration(record.P90LegitimateRuntime)
+                : FormatInsufficient(record.TaskCount);
+            var medianOverhead = record.HasPublishedStats
+                ? FormatDuration(record.MedianFailureInterventionOverhead)
+                : FormatInsufficient(record.TaskCount);
             Console.WriteLine(
                 $"  {record.Scope}: tasks={record.TaskCount} attempts={record.AttemptCount} " +
-                $"legit median={FormatDuration(record.MedianLegitimateRuntime)} p90={FormatDuration(record.P90LegitimateRuntime)} " +
-                $"overhead median={FormatDuration(record.MedianFailureInterventionOverhead)} " +
+                $"legit median={medianRuntime} p90={p90Runtime} " +
+                $"overhead median={medianOverhead} " +
                 $"failureRate={record.FailureRate:P0}");
         }
 
@@ -39,4 +48,6 @@ internal static partial class ConsoleViews
             ? $"{value.TotalMinutes:0.#}m"
             : $"{value.TotalSeconds:0.#}s";
     }
+
+    private static string FormatInsufficient(int sampleCount) => $"n/a (n={sampleCount})";
 }

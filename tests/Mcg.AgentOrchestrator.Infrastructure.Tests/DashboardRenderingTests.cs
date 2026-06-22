@@ -1256,6 +1256,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(systemHtml, text => text.Contains("href=\"/api/system/build-test-cleanup\"", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("data-action-button=\"/api/system/run-build-test-cycle\"", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("Run dashboard build/test cycle", StringComparison.Ordinal));
+    Assert.Contains(systemHtml, text => text.Contains("Task Duration Estimates", StringComparison.Ordinal));
+    Assert.Contains(systemHtml, text => text.Contains("href=\"/api/system/task-durations\"", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("POST /api/system/run-build-test-cycle", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("Build/test run history", StringComparison.Ordinal));
     Assert.Contains(systemHtml, text => text.Contains("href=\"/api/system/build-test-runs\"", StringComparison.Ordinal));
@@ -1435,6 +1437,67 @@ public sealed class DashboardRenderingTests
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("startMonitorStaleTimer", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("Live monitor stale; timed refresh remains active.", StringComparison.Ordinal));
     Assert.Contains(DashboardAssets.OperatorControlsScript, text => text.Contains("window.__dashboardReady = true", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_system_view_presents_task_duration_stats")]
+    public void DashboardRendererSystemViewPresentsTaskDurationStats()
+{
+    var html = DashboardRenderer.Render(
+        new AgentOrchestratorKernel(),
+        new DashboardRenderOptions(
+            EnableOperatorControls: true,
+            View: DashboardView.System,
+            Workspace: new DashboardWorkspaceContext(
+                @"C:\repo\.orchestrator",
+                @"C:\repo\.orchestrator\state.db",
+                @"C:\repo",
+                @"C:\repo\.orchestrator\prompts",
+                @"C:\repo\.orchestrator\logs",
+                @"C:\repo\.orchestrator\workers.json",
+                @"C:\repo\.orchestrator\agents.json",
+                12345),
+            TaskDurationStats:
+            [
+                new TaskDurationStatsDto(
+                    "Developer/Complex",
+                    AgentRole.Developer,
+                    TaskComplexity.Complex,
+                    null,
+                    null,
+                    TaskCount: 3,
+                    AttemptCount: 4,
+                    FailedAttemptCount: 1,
+                    MinimumSampleCount: TaskDurationReport.MinSamplesForPublishedStats,
+                    HasPublishedStats: true,
+                    MedianLegitimateRuntime: "10m",
+                    P90LegitimateRuntime: "12m",
+                    MedianFailureInterventionOverhead: "20m",
+                    FailureRate: 0.25),
+                new TaskDurationStatsDto(
+                    "Tester/Simple",
+                    AgentRole.Tester,
+                    TaskComplexity.Simple,
+                    null,
+                    null,
+                    TaskCount: 1,
+                    AttemptCount: 1,
+                    FailedAttemptCount: 0,
+                    MinimumSampleCount: TaskDurationReport.MinSamplesForPublishedStats,
+                    HasPublishedStats: false,
+                    MedianLegitimateRuntime: "n/a (n=1)",
+                    P90LegitimateRuntime: "n/a (n=1)",
+                    MedianFailureInterventionOverhead: "n/a (n=1)",
+                    FailureRate: 0)
+            ]));
+
+    Assert.Contains(html, text => text.Contains("Task Duration Estimates", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Developer/Complex", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<td>10m</td>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<td>20m</td>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("<td>25%</td>", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Tester/Simple", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("n/a (n=1)", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("Buckets need at least 3 samples", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardProcessInspector_filters_current_process_and_executable_siblings")]
