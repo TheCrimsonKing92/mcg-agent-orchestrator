@@ -5,8 +5,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ProcessSpawningCollection;
 
 [Xunit.Collection("ProcessSpawning")]
-public sealed class WorkerProcessJobsTests
+public sealed class WorkerProcessJobsTests : IDisposable
 {
+    private readonly string? _originalProtectedPid = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID");
+
+    public WorkerProcessJobsTests()
+    {
+        Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID", null);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID", _originalProtectedPid);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_reaps_only_registry_owned_pid")]
     public void WorkerProcessJobsStartupSweepReapsOnlyRegistryOwnedPid()
     {
