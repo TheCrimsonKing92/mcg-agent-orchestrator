@@ -115,7 +115,9 @@ public sealed class TaskSpec
                     LastDispatch.ReasoningEffort,
                     LastDispatch.TaskComplexity,
                     LastDispatch.PromptCharacterCount,
-                    LastDispatch.UsesComplexModel),
+                    LastDispatch.UsesComplexModel,
+                    LastDispatch.BaseCommit,
+                    LastDispatch.ResultCommit),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -216,7 +218,9 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.ReasoningEffort,
                 snapshot.LastDispatch.TaskComplexity,
                 snapshot.LastDispatch.PromptCharacterCount,
-                snapshot.LastDispatch.UsesComplexModel));
+                snapshot.LastDispatch.UsesComplexModel,
+                snapshot.LastDispatch.BaseCommit,
+                snapshot.LastDispatch.ResultCommit));
         }
 
         if (snapshot.LastProcess is not null)
@@ -316,6 +320,18 @@ public sealed class TaskSpec
         SubscriptionRetryAfter = null;
         LastDispatch = dispatch;
         LastProcess = null;
+    }
+
+    internal void SetDispatchBaseCommit(string baseCommit)
+    {
+        if (LastDispatch is not null)
+            LastDispatch = LastDispatch with { BaseCommit = baseCommit };
+    }
+
+    internal void SetDispatchResultCommit(string resultCommit)
+    {
+        if (LastDispatch is not null)
+            LastDispatch = LastDispatch with { ResultCommit = resultCommit };
     }
 
     internal void RecordProcess(TaskProcessRecord process) => LastProcess = process;

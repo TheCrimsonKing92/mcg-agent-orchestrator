@@ -383,6 +383,28 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintEvidenceSummary(context.CurrentGoal, context.Kernel.BuildGoalEvidenceSummary(context.CurrentGoal.Id));
             return false;
 
+        case "goal-changes":
+        {
+            var changesGoalPrefix = GetOptionalArgument(parts, "--role", "--task", "--committed", "--working", "--all", "--flat", "--json");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, changesGoalPrefix);
+            var changesRoleFilter = GetFlagValue(parts, "--role");
+            var changesTaskFilter = GetFlagValue(parts, "--task");
+            var changesCommitted = HasCliConfirmation(parts, "--committed");
+            var changesWorking = HasCliConfirmation(parts, "--working");
+            var changesFlat = HasCliConfirmation(parts, "--flat");
+            var changesJson = HasCliConfirmation(parts, "--json");
+            if (!changesCommitted && !changesWorking) { changesCommitted = true; changesWorking = true; }
+            var changesWorktree = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            var changesReport = GoalChangesReader.Build(context.CurrentGoal, changesWorktree, changesCommitted, changesWorking, changesRoleFilter, changesTaskFilter);
+            if (changesJson)
+                ConsoleViews.PrintGoalChangesJson(changesReport);
+            else if (changesFlat)
+                ConsoleViews.PrintGoalChangesFlat(changesReport);
+            else
+                ConsoleViews.PrintGoalChanges(changesReport);
+            return false;
+        }
+
         case "stages":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             ConsoleViews.PrintStageReadinessReport(context.CurrentGoal, context.Kernel.BuildStageReadinessReport(context.CurrentGoal.Id), context.Agents);

@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record DispatchRefreshOutcome(TaskProcessRecord ProcessRecord, TaskVerificationRecord? Verification);
+public sealed record DispatchRefreshOutcome(TaskProcessRecord ProcessRecord, TaskVerificationRecord? Verification, string? ResultCommit = null);
 
 public sealed class BackgroundDispatchRunner
 {
@@ -124,6 +124,11 @@ public sealed class BackgroundDispatchRunner
         startInfo.ArgumentList.Add(ResolveDispatchHostAssembly());
         startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
         startInfo.ArgumentList.Add(parametersPath);
+
+        // Capture baseCommit immediately before spawning — the left boundary for file attribution.
+        var baseCommit = TryGetWorktreeHead(dispatch.WorkingDirectory);
+        if (baseCommit is not null)
+            kernel.RecordDispatchBaseCommit(goalId, taskId, baseCommit);
 
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = Process.Start(startInfo)
@@ -279,6 +284,8 @@ public sealed class BackgroundDispatchRunner
         DispatchRefreshOutcome outcome)
     {
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification);
+        if (outcome.ResultCommit is not null)
+            kernel.RecordDispatchResultCommit(goalId, taskId, outcome.ResultCommit);
     }
 
     private DispatchRefreshOutcome BuildCompletedProcessOutcome(
@@ -391,6 +398,9 @@ public sealed class BackgroundDispatchRunner
             ExitCode = exitCode
         };
 
+        // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
+        var resultCommit = TryGetWorktreeHead(processRecord.WorkingDirectory);
+
         var verification = new TaskVerificationRecord(
             processRecord.Command,
             processRecord.WorkingDirectory,
@@ -401,7 +411,22 @@ public sealed class BackgroundDispatchRunner
             StandardOutputPath: processRecord.StandardOutputPath,
             StandardErrorPath: processRecord.StandardErrorPath);
 
-        return new DispatchRefreshOutcome(completed, verification);
+        return new DispatchRefreshOutcome(completed, verification, resultCommit);
+    }
+
+    private static string? TryGetWorktreeHead(string workingDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(workingDirectory))
+                return null;
+            var result = GitCli.Run(workingDirectory, "rev-parse", "HEAD");
+            return result.Succeeded ? result.Output.Trim() : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool RequiresFileChangeEvidence(TaskSpec task)
