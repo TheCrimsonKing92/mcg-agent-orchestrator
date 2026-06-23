@@ -253,6 +253,22 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]
+    public void DotnetBuildEnvironmentManagerCapsMsbuildParallelismPerSlot()
+    {
+        using var defaultScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, null);
+        var defaultArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
+        var expectedDefault = Math.Max(2, Environment.ProcessorCount / DotnetBuildEnvironmentManager.StableSlotCount);
+
+        Assert.Equal($"-maxcpucount:{expectedDefault}", MaxCpuCountArgument(defaultArguments));
+        Assert.NotEqual("-maxcpucount:1", MaxCpuCountArgument(defaultArguments));
+
+        using var configuredScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, "7");
+        var configuredArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
+
+        Assert.Equal("-maxcpucount:7", MaxCpuCountArgument(configuredArguments));
+    }
+
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_uses_warm_multicore_build_defaults")]
     public void InvokeIsolatedDotnetUsesWarmMulticoreBuildDefaults()
     {
@@ -283,13 +299,20 @@ public sealed class DotnetBuildEnvironmentManagerTests
         return arguments[index + 1];
     }
 
+    private static string MaxCpuCountArgument(IReadOnlyList<string> arguments)
+    {
+        var argument = arguments.SingleOrDefault(argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
+        Assert.False(string.IsNullOrWhiteSpace(argument));
+        return argument!;
+    }
+
     private sealed class EnvVarScope : IDisposable
     {
         private readonly string _name;
         private readonly string? _originalValue;
-        private readonly string _root;
+        private readonly string? _root;
 
-        private EnvVarScope(string name, string value)
+        private EnvVarScope(string name, string? value)
         {
             _name = name;
             _originalValue = Environment.GetEnvironmentVariable(name);
@@ -304,9 +327,19 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-test-{Guid.NewGuid():N}"));
         }
 
+        public static EnvVarScope ForVariable(string name, string? value)
+        {
+            return new EnvVarScope(name, value);
+        }
+
         public void Dispose()
         {
             Environment.SetEnvironmentVariable(_name, _originalValue);
+            if (string.IsNullOrWhiteSpace(_root))
+            {
+                return;
+            }
+
             try
             {
                 if (Directory.Exists(_root))
