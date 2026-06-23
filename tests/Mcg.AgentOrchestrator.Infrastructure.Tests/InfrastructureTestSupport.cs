@@ -199,6 +199,14 @@ internal static class Assert
         }
     }
 
+    public static void NotEqual<T>(T expected, T actual)
+    {
+        if (EqualityComparer<T>.Default.Equals(expected, actual))
+        {
+            throw new InvalidOperationException($"Expected '{actual}' to not equal '{expected}'.");
+        }
+    }
+
     public static void True(bool condition)
     {
         if (!condition)
