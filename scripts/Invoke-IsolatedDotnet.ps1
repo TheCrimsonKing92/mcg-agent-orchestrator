@@ -140,12 +140,14 @@ if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
 }
 else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
+    $slotName = Get-StableSlotName -Value $safeGoalPrefix
     $leaseId = "goal-$safeGoalPrefix"
     $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\goals\$safeGoalPrefix"
+    $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\$slotName"
     $leaseRoot = Join-Path $runRoot "lease"
-    $artifactsPath = Join-Path $runRoot "artifacts"
+    $artifactsPath = Join-Path $slotRoot "artifacts"
     $ownerToken = $leaseId
-    $executionLockPath = Join-Path $runRoot "lease.execution.lock"
+    $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
     New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
     $lockPath = Join-Path $leaseRoot "lease.lock"
     $staleLockCleared = $false

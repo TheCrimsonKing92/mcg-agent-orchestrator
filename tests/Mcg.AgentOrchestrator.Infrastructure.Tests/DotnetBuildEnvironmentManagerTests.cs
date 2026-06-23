@@ -65,8 +65,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
             Assert.True(second.ReusedGoalLease);
             Assert.Equal(DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId), first.ArtifactsPath);
-            Assert.StartsWith(first.RootPath, first.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(Path.Combine("slots", "slot-"), first.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            Assert.True(first.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(first.ArtifactsPath));
             Assert.True(Directory.Exists(second.ArtifactsPath));
             Assert.False(string.IsNullOrWhiteSpace(second.LeaseMetadataPath));
@@ -81,8 +80,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Contains(first.Arguments, argument => argument.Equals($"-p:BaseOutputPath={EnsureTrailingSeparator(Path.Combine(first.ArtifactsPath, "bin"))}", StringComparison.Ordinal));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
-            Assert.StartsWith(other.RootPath, other.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
-            Assert.NotEqual(first.ArtifactsPath, other.ArtifactsPath);
+            Assert.True(other.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
             Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(otherGoalId));
             using var metadata = JsonDocument.Parse(File.ReadAllText(second.LeaseMetadataPath!));
             Assert.Equal(goalId.Value, metadata.RootElement.GetProperty("goalId").GetString());
@@ -297,7 +295,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.True(script.Contains("-p:ArtifactsPath=$artifactsPath\\", StringComparison.Ordinal));
         Assert.True(script.Contains("-p:BaseIntermediateOutputPath=$(Join-Path $artifactsPath 'obj')\\", StringComparison.Ordinal));
         Assert.True(script.Contains("-p:BaseOutputPath=$(Join-Path $artifactsPath 'bin')\\", StringComparison.Ordinal));
-        Assert.True(script.Contains("$artifactsPath = Join-Path $runRoot \"artifacts\"", StringComparison.Ordinal));
+        Assert.True(script.Contains("$artifactsPath = Join-Path $slotRoot \"artifacts\"", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]

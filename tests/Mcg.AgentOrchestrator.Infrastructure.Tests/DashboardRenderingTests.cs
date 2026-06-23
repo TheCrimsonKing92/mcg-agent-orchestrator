@@ -1778,7 +1778,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal("large paid subscription start", workSummary.NextAction.Control!.CostRisk);
     Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
     Assert.Equal($"goal-{goalPrefix}", workSummary.BuildEnvironment.LeaseId);
-    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("goals", goal.Id.Value[..8], "artifacts"), StringComparison.OrdinalIgnoreCase));
+    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
     Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
     Assert.False(workSummary.BuildEnvironment.LeaseExists);
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));

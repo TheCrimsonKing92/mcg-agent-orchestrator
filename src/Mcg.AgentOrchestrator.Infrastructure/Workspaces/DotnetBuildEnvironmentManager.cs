@@ -39,7 +39,7 @@ public static class DotnetBuildEnvironmentManager
     public const string RootDirectoryName = "mcg-dotnet-isolated";
 
     // Supported escape hatch for tests that need lease-root isolation. Production and acceptance
-    // goal runs use per-goal roots; stable slots remain for manual/firewall setup commands.
+    // runs use the default stable slots so their testhost.exe paths stay firewall-covered.
     public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
     public const int StableSlotCount = 4;
     private const string LeaseDirectoryName = "lease";
@@ -82,7 +82,7 @@ public static class DotnetBuildEnvironmentManager
 
     public static string GoalArtifactsPath(GoalId goalId)
     {
-        return Path.Combine(GoalRoot(goalId), "artifacts");
+        return StableSlotArtifactsPath(StableSlotName(goalId));
     }
 
     public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTesthostFirewallPaths()
@@ -321,7 +321,7 @@ public static class DotnetBuildEnvironmentManager
         var leaseId = $"goal-{Prefix(goalId)}";
         var leaseDirectory = LeaseDirectory(goalId);
         var artifactsPath = GoalArtifactsPath(goalId);
-        var executionLockPath = Path.Combine(root, "lease.execution.lock");
+        var executionLockPath = StableSlotExecutionLockPath(StableSlotName(goalId));
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
