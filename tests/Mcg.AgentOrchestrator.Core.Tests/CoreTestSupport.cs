@@ -75,12 +75,7 @@ internal sealed class FakeModelProvider : IModelProvider
 internal static partial class Assert
 {
     public static void Equal<T>(T expected, T actual)
-    {
-        if (!EqualityComparer<T>.Default.Equals(expected, actual))
-        {
-            throw new InvalidOperationException($"Expected '{expected}', got '{actual}'.");
-        }
-    }
+        => Xunit.Assert.Equal(expected, actual);
 
     public static void True(bool condition, string? message = null)
     {
