@@ -279,9 +279,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var summary = RepositoryChangeClassifier.Classify(changedFiles);
+        // Do NOT gate on summary.RequiresBroadVerification: core/infra changes are escalation-broad
+        // (LandingDecision still escalates them) but are test-narrow-able. Genuine full-suite cases
+        // are caught by the build/security guards here and by plan.RequiresBroadVerification below.
         if (summary.HasBuildSystemChanges ||
-            summary.HasSecuritySensitiveChanges ||
-            summary.RequiresBroadVerification)
+            summary.HasSecuritySensitiveChanges)
         {
             return null;
         }
