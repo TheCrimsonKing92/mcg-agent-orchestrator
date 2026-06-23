@@ -83,6 +83,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("execute-dispatch", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("start-dispatch", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("start-dispatches", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("reconcile", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("logs", StringComparison.OrdinalIgnoreCase) ||

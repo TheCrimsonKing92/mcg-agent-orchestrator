@@ -4800,6 +4800,124 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_recover_does_not_implicitly_reconcile_exit_file")]
+    public void PersistentRunnerRecoverDoesNotImplicitlyReconcileExitFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("No implicit reconcile", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["recover", goal.Id.Value[..8], "operator note"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restoredTask = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, task.Id);
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
+        Xunit.Assert.Null(restoredTask.LastProcess!.ExitCode);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_applies_exit_file_outside_command_transaction")]
+    public void PersistentRunnerReconcileAppliesExitFileOutsideCommandTransaction()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Explicit reconcile", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["reconcile"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restoredTask = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, task.Id);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
+        Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
+        Xunit.Assert.NotNull(restoredTask.LastVerification);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_discards_stale_process_identity")]
+    public void PersistentRunnerReconcileDiscardsStaleProcessIdentity()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Stale reconcile", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        repository.BeforeNextTransaction = stored =>
+        {
+            var current = stored.GetTask(goal.Id, task.Id);
+            var replacement = current.LastProcess! with
+            {
+                ProcessId = 424242,
+                StartedAt = current.LastProcess.StartedAt.AddSeconds(1),
+                ExitCodePath = current.LastProcess.ExitCodePath + ".next"
+            };
+            stored.RecordTaskProcessRefreshed(goal.Id, task.Id, replacement, null);
+        };
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["reconcile"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restoredTask = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, task.Id);
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
+        Xunit.Assert.Equal(424242, restoredTask.LastProcess!.ProcessId);
+        Xunit.Assert.Null(restoredTask.LastProcess.ExitCode);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+    }
+
     private static AgentDefinition SubscriptionPlanner(string id, string name) => new(
         new AgentId(id),
         name,
@@ -4871,5 +4989,77 @@ public sealed class CliCommandTests
         }
 
         return output;
+    }
+
+    private sealed class InMemoryTransactionalStateRepository : ITransactionalOrchestratorStateRepository
+    {
+        private AgentOrchestratorKernel _kernel;
+
+        public InMemoryTransactionalStateRepository(AgentOrchestratorKernel kernel)
+        {
+            _kernel = Clone(kernel);
+        }
+
+        public int TransactionCount { get; private set; }
+
+        public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
+
+        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(Clone(_kernel));
+
+        public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
+        {
+            _kernel = Clone(kernel);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<GoalSummary>>([]);
+
+        public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
+
+        public Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+            int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ModelOutcomeRecord>>([]);
+
+        public Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ModelFitBestFit?>(null);
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default) =>
+            TransactAsync(async (kernel, _, token) => await transaction(kernel, token), cancellationToken);
+
+        public async Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            if (BeforeNextTransaction is { } before)
+            {
+                BeforeNextTransaction = null;
+                before(_kernel);
+            }
+
+            var transactionKernel = Clone(_kernel);
+            Task CheckpointAsync()
+            {
+                _kernel = Clone(transactionKernel);
+                return Task.CompletedTask;
+            }
+
+            var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
+            if (shouldSave)
+            {
+                _kernel = Clone(transactionKernel);
+            }
+
+            return result;
+        }
+
+        private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
+            AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
     }
 }

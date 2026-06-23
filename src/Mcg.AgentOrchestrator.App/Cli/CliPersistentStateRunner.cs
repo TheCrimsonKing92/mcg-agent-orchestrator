@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -45,6 +46,11 @@ internal static class CliPersistentStateRunner
             return ExecuteAcceptanceOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsProcessRefreshCommand(args))
+        {
+            return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        }
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -54,19 +60,6 @@ internal static class CliPersistentStateRunner
         var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
-
-        // Reconcile finished/orphaned dispatches OUTSIDE the command's write transaction.
-        // SweepExitedProcesses runs process kills, WaitForExit, git inspection/commit, and build-daemon
-        // reaping; running that while holding BEGIN IMMEDIATE on state.db lets a SINGLE stuck dispatch
-        // (exit file present but unreconciled, e.g. after a crashed loop) wedge EVERY state-mutating
-        // command with "database is locked" while reads keep working. Sweep a separately-loaded kernel
-        // with no write lock held, persist any reconciliation with a brief write, then run the command
-        // in its own transaction against the reconciled state. Mirrors the conduct-loop path above.
-        var sweepKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        var sweptCount = new BackgroundDispatchRunner().SweepExitedProcesses(sweepKernel);
-        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
-        if (sweptCount > 0)
-            stateRepository.SaveAsync(sweepKernel).GetAwaiter().GetResult();
 
         var changed = stateRepository.TransactAsync(
                 (kernel, _) =>
@@ -165,11 +158,24 @@ internal static class CliPersistentStateRunner
              args[0].Equals("accept", StringComparison.OrdinalIgnoreCase));
     }
 
+    internal static bool IsProcessRefreshCommand(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+        {
+            return false;
+        }
+
+        return args[0].Equals("reconcile", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase);
+    }
+
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
     // progress via an independent SaveAsync (passed to the loop as PersistCheckpoint). This makes a
     // started dispatch durable the moment its tick completes — so a stopped/killed/long-running loop
     // never loses dispatch records, and reconcile can recognize a finished worker instead of
-    // re-dispatching it. A pre-loop sweep and a final save mirror the transactional path's bookkeeping.
+    // re-dispatching it. Reconcile stays owned by the loop/explicit refresh commands instead of being
+    // an implicit side effect of every state-mutating command.
     private static bool ExecuteConductLoopOutsideTransaction(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -234,6 +240,67 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool ExecuteProcessRefreshOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+
+        var candidates = CaptureRunningProcessIdentities(kernel);
+        var command = args[0].ToLowerInvariant();
+        var runner = new BackgroundDispatchRunner();
+
+        switch (command)
+        {
+            case "reconcile":
+                var reconciled = runner.SweepExitedProcesses(kernel);
+                GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+                Console.WriteLine($"Reconciled dispatches: {reconciled}");
+                break;
+
+            case "refresh-dispatch":
+                var refreshTarget = ResolveDispatchCommandTask(args, kernel, currentGoal, "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+                currentGoal = refreshTarget.Goal;
+                runner.RefreshLatestProcess(kernel, refreshTarget.Goal.Id, refreshTarget.Task.Id);
+                ConsoleViews.PrintTask(refreshTarget.Goal, refreshTarget.Task);
+                break;
+
+            case "refresh-dispatches":
+                var refreshGoal = ResolveDispatchCommandGoal(args, kernel, currentGoal, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
+                currentGoal = refreshGoal;
+                var refreshed = GoalManagementCommandService.RefreshDispatches(kernel, refreshGoal);
+                ConsoleViews.PrintProcessBatchResult(refreshGoal, refreshed);
+                break;
+
+            default:
+                throw new ArgumentException($"Unsupported process refresh command: {args[0]}");
+        }
+
+        var results = CaptureRefreshResults(kernel, candidates);
+        if (results.Count == 0)
+        {
+            return false;
+        }
+
+        var applied = stateRepository.TransactAsync(
+                (transactionKernel, _) =>
+                {
+                    var appliedCount = ApplyRefreshResults(transactionKernel, results);
+                    return Task.FromResult((appliedCount > 0, appliedCount));
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        currentGoal = ResolveCurrentGoal(stateRepository.LoadAsync().GetAwaiter().GetResult(), currentGoal?.Id.Value);
+        return applied > 0;
     }
 
     private static bool ExecuteAcceptanceOutsideTransaction(
@@ -314,6 +381,165 @@ internal static class CliPersistentStateRunner
 
         return head.Output.Trim();
     }
+
+    private static IReadOnlyDictionary<(GoalId GoalId, TaskId TaskId), ProcessRefreshIdentity> CaptureRunningProcessIdentities(
+        AgentOrchestratorKernel kernel)
+    {
+        return kernel.Goals
+            .SelectMany(goal => goal.Tasks
+                .Where(task => task.LastProcess is { IsRunning: true })
+                .Select(task => new
+                {
+                    GoalId = goal.Id,
+                    TaskId = task.Id,
+                    Identity = ProcessRefreshIdentity.From(task.LastProcess!)
+                }))
+            .ToDictionary(item => (item.GoalId, item.TaskId), item => item.Identity);
+    }
+
+    private static IReadOnlyList<ProcessRefreshResult> CaptureRefreshResults(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyDictionary<(GoalId GoalId, TaskId TaskId), ProcessRefreshIdentity> candidates)
+    {
+        var results = new List<ProcessRefreshResult>();
+        foreach (var goal in kernel.Goals)
+        {
+            foreach (var task in goal.Tasks)
+            {
+                if (!candidates.TryGetValue((goal.Id, task.Id), out var identity) ||
+                    task.LastProcess is null ||
+                    ProcessRefreshIdentity.From(task.LastProcess) == identity)
+                {
+                    continue;
+                }
+
+                results.Add(new ProcessRefreshResult(
+                    goal.Id,
+                    task.Id,
+                    identity,
+                    task.LastProcess,
+                    task.LastVerification));
+            }
+        }
+
+        return results;
+    }
+
+    private static int ApplyRefreshResults(
+        AgentOrchestratorKernel transactionKernel,
+        IReadOnlyList<ProcessRefreshResult> results)
+    {
+        var applied = 0;
+        foreach (var result in results)
+        {
+            var currentTask = transactionKernel.GetTask(result.GoalId, result.TaskId);
+            if (currentTask.Status != WorkTaskStatus.Running ||
+                currentTask.LastProcess is not { IsRunning: true } currentProcess ||
+                ProcessRefreshIdentity.From(currentProcess) != result.ExpectedIdentity)
+            {
+                continue;
+            }
+
+            transactionKernel.RecordTaskProcessRefreshed(
+                result.GoalId,
+                result.TaskId,
+                result.Process,
+                result.Verification);
+            applied++;
+        }
+
+        return applied;
+    }
+
+    private static (Goal Goal, TaskSpec Task) ResolveDispatchCommandTask(
+        IReadOnlyList<string> parts,
+        AgentOrchestratorKernel kernel,
+        Goal? currentGoal,
+        string usage)
+    {
+        if (parts.Count < 2)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        string? goalPrefix = null;
+        string taskNumber;
+        if (parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            if (parts.Count < 4)
+            {
+                throw new ArgumentException($"Usage: {usage}");
+            }
+
+            goalPrefix = parts[2];
+            taskNumber = parts[3];
+        }
+        else if (parts.Count > 2 && parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            if (parts.Count < 4)
+            {
+                throw new ArgumentException($"Usage: {usage}");
+            }
+
+            goalPrefix = parts[3];
+            taskNumber = parts[1];
+        }
+        else if (parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal))
+        {
+            goalPrefix = parts[1];
+            taskNumber = parts[2];
+        }
+        else
+        {
+            taskNumber = parts[1];
+        }
+
+        var goal = OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, goalPrefix);
+        return (goal, OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskNumber));
+    }
+
+    private static Goal ResolveDispatchCommandGoal(
+        IReadOnlyList<string> parts,
+        AgentOrchestratorKernel kernel,
+        Goal? currentGoal,
+        string usage)
+    {
+        string? goalPrefix = null;
+        if (parts.Count > 1)
+        {
+            if (parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parts.Count < 3)
+                {
+                    throw new ArgumentException($"Usage: {usage}");
+                }
+
+                goalPrefix = parts[2];
+            }
+            else if (!parts[1].StartsWith("--", StringComparison.Ordinal))
+            {
+                goalPrefix = parts[1];
+            }
+        }
+
+        return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, goalPrefix);
+    }
+
+    private sealed record ProcessRefreshIdentity(
+        int ProcessId,
+        string ExitCodePath,
+        DateTimeOffset StartedAt)
+    {
+        public static ProcessRefreshIdentity From(TaskProcessRecord process) =>
+            new(process.ProcessId, process.ExitCodePath, process.StartedAt);
+    }
+
+    private sealed record ProcessRefreshResult(
+        GoalId GoalId,
+        TaskId TaskId,
+        ProcessRefreshIdentity ExpectedIdentity,
+        TaskProcessRecord Process,
+        TaskVerificationRecord? Verification);
 
     private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalId goalId)
     {
