@@ -1,0 +1,23 @@
+namespace Mcg.AgentOrchestrator.Core;
+
+public interface IGoalLifecycleEventWriter
+{
+    void AppendGoalCreated(GoalId goalId, string objective);
+    void AppendClarificationNeeded(GoalId goalId, string clarificationId);
+    void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName);
+    void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt);
+    void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures);
+    void AppendCleanedUp(GoalId goalId);
+}
+
+public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
+{
+    public static NullGoalLifecycleEventWriter Instance { get; } = new();
+
+    public void AppendGoalCreated(GoalId goalId, string objective) { }
+    public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
+    public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
+    public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
+    public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
+    public void AppendCleanedUp(GoalId goalId) { }
+}

@@ -18,10 +18,11 @@ internal static class GoalLifecycleCommands
         IReadOnlyList<AgentDefinition> agents,
         string objective,
         OrchestratorWorkspace workspace,
-        IModelProviderRegistry providers)
+        IModelProviderRegistry providers,
+        IGoalLifecycleEventWriter? eventWriter = null)
     {
         var goal = kernel.CreateGoal(objective);
-        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -46,7 +47,8 @@ internal static class GoalLifecycleCommands
         IReadOnlyList<AgentDefinition> agents,
         string objective,
         OrchestratorWorkspace workspace,
-        IModelProviderRegistry providers)
+        IModelProviderRegistry providers,
+        IGoalLifecycleEventWriter? eventWriter = null)
     {
         var goal = kernel.CreateGoal(
             objective,
@@ -57,7 +59,7 @@ internal static class GoalLifecycleCommands
                     AgentRole.Developer,
                     "Record concrete evidence that the objective is complete. Use an automated command when practical, or record manual verification evidence.")
             ]);
-        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }

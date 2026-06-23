@@ -119,6 +119,7 @@ public sealed partial class AgentOrchestratorKernel
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}: {dispatch.Command}");
+        _eventWriter.AppendTaskDispatched(goalId, taskId, task.RequiredRole, dispatch.WorkerName);
     }
 
     public void RecordTaskProcessStarted(GoalId goalId, TaskId taskId, TaskProcessRecord process)
