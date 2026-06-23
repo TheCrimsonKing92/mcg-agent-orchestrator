@@ -75,10 +75,13 @@ internal sealed class ModelRegistrySemanticJudge : ISemanticJudge
     {
         var prompt = SemanticAcceptancePlanner.BuildPrompt(SemanticAcceptancePlanner.BuildEvidenceContext(inputs));
         var provider = _providers.GetRequired(_providerName);
+        var systemPrompt = _modelName.Contains("qwen3", StringComparison.OrdinalIgnoreCase)
+            ? "/no_think\nYou are a strict, evidence-grounded software acceptance reviewer."
+            : "You are a strict, evidence-grounded software acceptance reviewer.";
         var request = new ModelRequest(
-            "You are a strict, evidence-grounded software acceptance reviewer.",
+            systemPrompt,
             [new ModelMessage("user", prompt)],
-            new ModelOptions(Temperature: 0.0, MaxOutputTokens: 800, ModelName: _modelName));
+            new ModelOptions(Temperature: 0.0, MaxOutputTokens: 256, ModelName: _modelName));
 
         var response = await provider.CompleteAsync(request, cancellationToken).ConfigureAwait(false);
         return SemanticAcceptancePlanner.Parse(response.Text);
@@ -190,11 +193,43 @@ internal sealed class RecursivePerFileSemanticJudge : ISemanticJudge
             return await _leaf.JudgeAsync(inputs, cancellationToken).ConfigureAwait(false);
         }
 
+        var perFileCandidates = substantive.Take(MaxPerFileJudgeCalls).ToList();
+        var overflow = substantive.Skip(MaxPerFileJudgeCalls).ToList();
+
         var perFileVerdicts = await Task.WhenAll(
-            substantive.Select(file => JudgeFileAsync(file, inputs, cancellationToken)))
+            perFileCandidates.Select(file => JudgeFileAsync(file, inputs, cancellationToken)))
             .ConfigureAwait(false);
 
-        return Aggregate(perFileVerdicts);
+        if (overflow.Count == 0)
+        {
+            return Aggregate(perFileVerdicts);
+        }
+
+        var overflowVerdict = await JudgeOverflowAsync(overflow, inputs, cancellationToken).ConfigureAwait(false);
+        return Aggregate([.. perFileVerdicts, overflowVerdict]);
+    }
+
+    private async Task<PerFileJudgeVerdict> JudgeOverflowAsync(
+        IReadOnlyList<(string File, string Diff)> overflow,
+        SemanticAcceptanceInputs inputs,
+        CancellationToken cancellationToken)
+    {
+        var label = $"(overflow: {overflow.Count} files)";
+        try
+        {
+            var overflowInputs = inputs with
+            {
+                ChangedFiles = overflow.Select(f => f.File).ToList(),
+                PerFileDiffs = null
+            };
+            var verdict = await _leaf.JudgeAsync(overflowInputs, cancellationToken).ConfigureAwait(false);
+            return new PerFileJudgeVerdict(label, verdict);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new PerFileJudgeVerdict(label, SemanticAcceptanceVerdict.Invalid(
+                $"Overflow whole-diff judge failed for {overflow.Count} files: {ex.Message}"));
+        }
     }
 
     private async Task<PerFileJudgeVerdict> JudgeFileAsync(
