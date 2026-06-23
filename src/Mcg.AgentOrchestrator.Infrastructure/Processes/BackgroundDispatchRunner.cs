@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public sealed record DispatchRefreshOutcome(TaskProcessRecord ProcessRecord, TaskVerificationRecord? Verification);
+
 public sealed class BackgroundDispatchRunner
 {
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
@@ -123,6 +125,7 @@ public sealed class BackgroundDispatchRunner
         startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
         startInfo.ArgumentList.Add(parametersPath);
 
+        ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
         WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}");
@@ -188,6 +191,13 @@ public sealed class BackgroundDispatchRunner
 
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
+        var outcome = ReconcileLatestProcess(kernel, goalId, taskId);
+        ApplyRefreshOutcome(kernel, goalId, taskId, outcome);
+        return outcome.ProcessRecord;
+    }
+
+    public DispatchRefreshOutcome ReconcileLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
+    {
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
@@ -200,7 +210,7 @@ public sealed class BackgroundDispatchRunner
                 TryKillTrackedProcesses(processRecord, waitForExit: true);
             }
 
-            return RecordCompletedProcess(kernel, goalId, taskId, processRecord, exitCode);
+            return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, exitCode);
         }
 
         if (_isStillRunning(processRecord.ProcessId))
@@ -217,11 +227,11 @@ public sealed class BackgroundDispatchRunner
                         $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 0, reapNote);
+                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote);
                 }
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, diagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic);
             }
 
             if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
@@ -236,35 +246,42 @@ public sealed class BackgroundDispatchRunner
                         $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 0, reapNote);
+                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote);
                 }
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic);
             }
 
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
             {
                 TryKillTrackedProcesses(processRecord, waitForExit: true);
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1, stallDiagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, stallDiagnostic);
             }
 
-            kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
-            return processRecord;
+            return new DispatchRefreshOutcome(processRecord, null);
         }
 
         if (exitFileExists)
         {
-            kernel.RecordTaskProcessRefreshed(goalId, taskId, processRecord, null);
-            return processRecord;
+            return new DispatchRefreshOutcome(processRecord, null);
         }
 
         TryKillTrackedProcesses(processRecord, waitForExit: false);
-        return RecordCompletedProcess(kernel, goalId, taskId, processRecord, 1);
+        return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1);
     }
 
-    private TaskProcessRecord RecordCompletedProcess(
+    public static void ApplyRefreshOutcome(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        DispatchRefreshOutcome outcome)
+    {
+        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification);
+    }
+
+    private DispatchRefreshOutcome BuildCompletedProcessOutcome(
         AgentOrchestratorKernel kernel,
         GoalId goalId,
         TaskId taskId,
@@ -384,8 +401,7 @@ public sealed class BackgroundDispatchRunner
             StandardOutputPath: processRecord.StandardOutputPath,
             StandardErrorPath: processRecord.StandardErrorPath);
 
-        kernel.RecordTaskProcessRefreshed(goalId, taskId, completed, verification);
-        return completed;
+        return new DispatchRefreshOutcome(completed, verification);
     }
 
     private static bool RequiresFileChangeEvidence(TaskSpec task)

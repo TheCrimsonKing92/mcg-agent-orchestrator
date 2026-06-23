@@ -20,7 +20,7 @@ public sealed class LocalProcessVerifierTests
             Assert.False(prepared.Command.Contains("-maxcpucount:1", StringComparison.Ordinal));
             Assert.False(prepared.Command.Contains("-p:UseSharedCompilation=false", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("-maxcpucount:", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+            Assert.True(prepared.Command.Contains(DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId), StringComparison.OrdinalIgnoreCase));
             Assert.Equal("dotnet", prepared.FileName);
             Assert.Equal("test", prepared.Arguments[0]);
             Assert.Contains("--artifacts-path", prepared.Arguments);
@@ -30,7 +30,7 @@ public sealed class LocalProcessVerifierTests
             Assert.Contains(prepared.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Build environment lease: goal-12345678", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Verification artifacts:", StringComparison.Ordinal));
-            Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase) == true);
+            Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.StartsWith(DotnetBuildEnvironmentManager.GoalRoot(goalId), StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {

@@ -263,6 +263,11 @@ internal static partial class DashboardEndpoints
             return confirmation;
         }
 
+        if (operation.Equals("refresh", StringComparison.OrdinalIgnoreCase))
+        {
+            return await RefreshTaskOutsideTransactionAsync(context, goalId, taskId, services, agents, policy);
+        }
+
         return await MutateAsync(
             services,
             async current =>
@@ -451,6 +456,11 @@ internal static partial class DashboardEndpoints
         var body = await ReadRequestBodyAsync(context.Request);
         var agents = services.LoadAgentCatalog().Agents;
         var policy = ResolveDashboardAutonomyPolicy(context);
+        if (operation.Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase))
+        {
+            return await RefreshDispatchesOutsideTransactionAsync(context, goalId, services, agents, policy);
+        }
+
         return await MutateAsync(
             services,
             current =>
@@ -488,6 +498,86 @@ internal static partial class DashboardEndpoints
                     body,
                     services.Workspace,
                     services.Providers);
+                return Task.FromResult(Json(result));
+            },
+            context.RequestAborted);
+    }
+
+    private static async Task<IResult> RefreshTaskOutsideTransactionAsync(
+        HttpContext context,
+        string goalId,
+        string taskId,
+        DashboardEndpointServices services,
+        IReadOnlyList<AgentDefinition> agents,
+        AutonomyPolicy policy)
+    {
+        var snapshot = await LoadAsync(services, context.RequestAborted);
+        var snapshotGoal = ResolveGoal(snapshot, goalId);
+        var snapshotTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(snapshotGoal, taskId);
+        var policyConfirmation = RequirePolicyForTaskOperation(snapshot, snapshotGoal, "refresh", policy);
+        if (policyConfirmation is not null)
+        {
+            return policyConfirmation;
+        }
+
+        var runner = new BackgroundDispatchRunner();
+        var outcome = runner.ReconcileLatestProcess(snapshot, snapshotGoal.Id, snapshotTask.Id);
+        return await MutateAsync(
+            services,
+            current =>
+            {
+                var goal = ResolveGoal(current, goalId);
+                var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
+                BackgroundDispatchRunner.ApplyRefreshOutcome(current, goal.Id, task.Id, outcome);
+                AutonomyPolicyEvidence.Record(current, goal, policy, AutonomyAction.Refresh, "refresh", allowed: true);
+                var updatedGoal = ResolveGoal(current, goalId);
+                var updatedTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(updatedGoal, taskId);
+                return Task.FromResult(Json(DashboardResponseMapper.ToTaskDetailDto(updatedGoal, updatedTask)));
+            },
+            context.RequestAborted);
+    }
+
+    private static async Task<IResult> RefreshDispatchesOutsideTransactionAsync(
+        HttpContext context,
+        string goalId,
+        DashboardEndpointServices services,
+        IReadOnlyList<AgentDefinition> agents,
+        AutonomyPolicy policy)
+    {
+        var snapshot = await LoadAsync(services, context.RequestAborted);
+        var snapshotGoal = ResolveGoal(snapshot, goalId);
+        var policyConfirmation = RequirePolicyForGoalBatchOperation(snapshot, snapshotGoal, "refresh-dispatches", policy);
+        if (policyConfirmation is not null)
+        {
+            return policyConfirmation;
+        }
+
+        var plan = snapshot.BuildProcessBatchPlan(snapshotGoal.Id, ProcessBatchActionKind.RefreshDispatches);
+        var runner = new BackgroundDispatchRunner();
+        var outcomes = new List<(TaskId TaskId, DispatchRefreshOutcome Outcome)>();
+        foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
+        {
+            outcomes.Add((item.TaskId, runner.ReconcileLatestProcess(snapshot, snapshotGoal.Id, item.TaskId)));
+        }
+
+        return await MutateAsync(
+            services,
+            current =>
+            {
+                var goal = ResolveGoal(current, goalId);
+                var refreshed = new List<TaskSpec>();
+                foreach (var (refreshTaskId, outcome) in outcomes)
+                {
+                    BackgroundDispatchRunner.ApplyRefreshOutcome(current, goal.Id, refreshTaskId, outcome);
+                    refreshed.Add(current.GetTask(goal.Id, refreshTaskId));
+                }
+
+                AutonomyPolicyEvidence.Record(current, goal, policy, AutonomyAction.Refresh, "refresh-dispatches", allowed: true);
+                var updatedGoal = ResolveGoal(current, goalId);
+                var result = DashboardResponseMapper.ToProcessBatchActionResultDto(
+                    updatedGoal,
+                    "refresh-dispatches",
+                    new ProcessBatchExecutionResult(plan, refreshed));
                 return Task.FromResult(Json(result));
             },
             context.RequestAborted);
@@ -655,6 +745,7 @@ internal static partial class DashboardEndpoints
         {
             "run" or "api-run" => AutonomyAction.ModelRun,
             "start" => AutonomyAction.DispatchStart,
+            "refresh" => AutonomyAction.Refresh,
             "verify" => AutonomyAction.BuildTest,
             _ => (AutonomyAction?)null
         };

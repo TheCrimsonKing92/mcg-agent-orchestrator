@@ -140,14 +140,12 @@ if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
 }
 else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
-    $slotName = Get-StableSlotName -Value $safeGoalPrefix
     $leaseId = "goal-$safeGoalPrefix"
     $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\goals\$safeGoalPrefix"
-    $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\$slotName"
     $leaseRoot = Join-Path $runRoot "lease"
-    $artifactsPath = Join-Path $slotRoot "artifacts"
+    $artifactsPath = Join-Path $runRoot "artifacts"
     $ownerToken = $leaseId
-    $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
+    $executionLockPath = Join-Path $runRoot "lease.execution.lock"
     New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
     $lockPath = Join-Path $leaseRoot "lease.lock"
     $staleLockCleared = $false
@@ -181,6 +179,9 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
+    "-p:ArtifactsPath=$artifactsPath\",
+    "-p:BaseIntermediateOutputPath=$(Join-Path $artifactsPath 'obj')\",
+    "-p:BaseOutputPath=$(Join-Path $artifactsPath 'bin')\",
     "-maxcpucount:$(Get-BuildMaxCpuCount)"
 )
 

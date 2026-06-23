@@ -46,7 +46,7 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[3]);
         Assert.Equal(GetArtifactsPath(calls[1]), GetArtifactsPath(calls[3]));
         Assert.True(result.ArtifactsPath is not null);
-        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("goals", "abcd1234", "artifacts"), StringComparison.OrdinalIgnoreCase));
         var check = result.Checks!.Single(item => item.Name == "dotnet test");
         Assert.Equal("goal-acceptance-verifier", check.BrokerName);
         Assert.Equal("goal-abcd1234", check.LeaseId);

@@ -39,7 +39,7 @@ public static class DotnetBuildEnvironmentManager
     public const string RootDirectoryName = "mcg-dotnet-isolated";
 
     // Supported escape hatch for tests that need lease-root isolation. Production and acceptance
-    // runs normally use the default stable slots so their testhost.exe paths stay firewall-covered.
+    // goal runs use per-goal roots; stable slots remain for manual/firewall setup commands.
     public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
     public const int StableSlotCount = 4;
     private const string LeaseDirectoryName = "lease";
@@ -82,7 +82,7 @@ public static class DotnetBuildEnvironmentManager
 
     public static string GoalArtifactsPath(GoalId goalId)
     {
-        return StableSlotArtifactsPath(StableSlotName(goalId));
+        return Path.Combine(GoalRoot(goalId), "artifacts");
     }
 
     public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTesthostFirewallPaths()
@@ -320,9 +320,8 @@ public static class DotnetBuildEnvironmentManager
         var root = GoalRoot(goalId);
         var leaseId = $"goal-{Prefix(goalId)}";
         var leaseDirectory = LeaseDirectory(goalId);
-        var slotName = StableSlotName(goalId);
-        var artifactsPath = StableSlotArtifactsPath(slotName);
-        var executionLockPath = StableSlotExecutionLockPath(slotName);
+        var artifactsPath = GoalArtifactsPath(goalId);
+        var executionLockPath = Path.Combine(root, "lease.execution.lock");
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
@@ -362,8 +361,14 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
+        $"-p:ArtifactsPath={EnsureTrailingDirectorySeparator(artifactsPath)}",
+        $"-p:BaseIntermediateOutputPath={EnsureTrailingDirectorySeparator(Path.Combine(artifactsPath, "obj"))}",
+        $"-p:BaseOutputPath={EnsureTrailingDirectorySeparator(Path.Combine(artifactsPath, "bin"))}",
         $"-maxcpucount:{ResolveMaxCpuCount()}"
     ];
+
+    private static string EnsureTrailingDirectorySeparator(string path) =>
+        Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
 
     private static int ResolveMaxCpuCount()
     {
@@ -490,11 +495,7 @@ public static class DotnetBuildEnvironmentManager
 
         if (clean && Directory.Exists(environment.ArtifactsPath))
         {
-            var objPath = Path.Combine(environment.ArtifactsPath, "obj");
-            if (Directory.Exists(objPath))
-            {
-                Directory.Delete(objPath, recursive: true);
-            }
+            Directory.Delete(environment.ArtifactsPath, recursive: true);
         }
 
         Directory.CreateDirectory(environment.ArtifactsPath);
