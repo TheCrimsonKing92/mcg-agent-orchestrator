@@ -192,20 +192,10 @@ public static string FindRepositoryRoot()
 internal static class Assert
 {
     public static void Equal<T>(T expected, T actual)
-    {
-        if (!EqualityComparer<T>.Default.Equals(expected, actual))
-        {
-            throw new InvalidOperationException($"Expected '{expected}', got '{actual}'.");
-        }
-    }
+        => Xunit.Assert.Equal(expected, actual);
 
     public static void NotEqual<T>(T expected, T actual)
-    {
-        if (EqualityComparer<T>.Default.Equals(expected, actual))
-        {
-            throw new InvalidOperationException($"Expected '{actual}' to not equal '{expected}'.");
-        }
-    }
+        => Xunit.Assert.NotEqual(expected, actual);
 
     public static void True(bool condition)
     {
