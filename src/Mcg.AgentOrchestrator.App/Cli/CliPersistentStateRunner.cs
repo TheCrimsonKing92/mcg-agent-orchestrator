@@ -406,9 +406,13 @@ internal static class CliPersistentStateRunner
         {
             foreach (var task in goal.Tasks)
             {
+                // Capture a candidate the sweep RECONCILED in place: the exited process keeps its
+                // identity (pid/startedAt/exitCodePath) but is no longer running. Skip ones still
+                // running (sweep changed nothing) or whose identity differs (a different process).
                 if (!candidates.TryGetValue((goal.Id, task.Id), out var identity) ||
                     task.LastProcess is null ||
-                    ProcessRefreshIdentity.From(task.LastProcess) == identity)
+                    task.LastProcess.IsRunning ||
+                    ProcessRefreshIdentity.From(task.LastProcess) != identity)
                 {
                     continue;
                 }
