@@ -390,11 +390,8 @@ public sealed class GoalChangesReaderTests
 
 file static class Assert
 {
-    public static void Equal<T>(T expected, T actual)
-    {
-        if (!EqualityComparer<T>.Default.Equals(expected, actual))
-            throw new Xunit.Sdk.EqualException(expected, actual);
-    }
+    public static void Equal<T>(T expected, T actual) =>
+        Xunit.Assert.Equal(expected, actual);
 
     public static void Single<T>(IReadOnlyList<T> collection) =>
         Xunit.Assert.Single(collection);
