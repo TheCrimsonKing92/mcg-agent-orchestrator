@@ -636,12 +636,14 @@ public sealed class SemanticAcceptanceTests
         Assert.True(verdict.CriteriaMet);
     }
 
-    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_judges_each_substantive_file_when_file_count_exceeds_cap")]
-    public async Task RecursiveJudgeJudgesEachSubstantiveFileWhenFileCountExceedsCap()
+    [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_enforces_cap_and_collapses_overflow_into_single_whole_diff_call")]
+    public async Task RecursiveJudgeEnforcesCapAndCollapsesOverflowIntoSingleWholeDiffCall()
     {
+        var callCount = 0;
         var capturedFiles = new List<string>();
         var leaf = new FakeJudge("leaf", inputs =>
         {
+            callCount++;
             capturedFiles.Add(inputs.ChangedFiles[0]);
             return new SemanticAcceptanceVerdict(true, "high", [$"{inputs.ChangedFiles[0]} ok"], [], []);
         });
@@ -662,11 +664,13 @@ public sealed class SemanticAcceptanceTests
 
         var verdict = await judge.JudgeAsync(inputs, default);
 
+        // Cap enforcement: exactly MaxPerFileJudgeCalls per-file calls + 1 overflow whole-diff call.
+        Assert.Equal(RecursivePerFileSemanticJudge.MaxPerFileJudgeCalls + 1, callCount);
+        // All files still covered: per-file for first cap files, overflow for the remainder.
         Assert.Equal(fileCount, capturedFiles.Count);
         Assert.True(perFileDiffs.All(file => capturedFiles.Contains(file.Item1)));
         Assert.True(verdict.IsValid);
         Assert.True(verdict.CriteriaMet);
-        Assert.True(verdict.Reasons.Any(reason => reason.Contains($"{fileCount} of {fileCount} files judged", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RecursivePerFileSemanticJudge_budgets_oversized_single_file_diff")]
@@ -876,6 +880,104 @@ public sealed class SemanticAcceptanceTests
         Assert.True(sw.ElapsedMilliseconds < 18_000);
     }
 
+    [Xunit.Fact(DisplayName = "ModelRegistrySemanticJudge_uses_256_max_output_tokens")]
+    public async Task ModelRegistryJudgeUses256MaxOutputTokens()
+    {
+        var response = """{"criteria_met":true,"confidence":"high","reasons":["ok"],"unmet_criteria":[]}""";
+        var provider = new CapturingFakeProvider("Ollama", response);
+        var registry = new InMemoryModelProviderRegistry([provider]);
+        var judge = new ModelRegistrySemanticJudge(registry, "Ollama", "qwen2.5:7b");
+
+        await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.Equal(256, provider.LastRequest!.Options.MaxOutputTokens);
+    }
+
+    [Xunit.Fact(DisplayName = "ModelRegistrySemanticJudge_prepends_no_think_for_qwen3_model")]
+    public async Task ModelRegistryJudgePrependsNoThinkForQwen3Model()
+    {
+        var response = """{"criteria_met":true,"confidence":"high","reasons":["ok"],"unmet_criteria":[]}""";
+        var provider = new CapturingFakeProvider("Ollama", response);
+        var registry = new InMemoryModelProviderRegistry([provider]);
+        var judge = new ModelRegistrySemanticJudge(registry, "Ollama", "qwen3:8b");
+
+        await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.True(provider.LastRequest!.SystemPrompt.StartsWith("/no_think", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ModelRegistrySemanticJudge_does_not_prepend_no_think_for_non_qwen3_model")]
+    public async Task ModelRegistryJudgeDoesNotPrependNoThinkForNonQwen3Model()
+    {
+        var response = """{"criteria_met":true,"confidence":"high","reasons":["ok"],"unmet_criteria":[]}""";
+        var provider = new CapturingFakeProvider("Ollama", response);
+        var registry = new InMemoryModelProviderRegistry([provider]);
+        var judge = new ModelRegistrySemanticJudge(registry, "Ollama", "llama3:8b");
+
+        await judge.JudgeAsync(SampleInputs(), default);
+
+        Assert.False(provider.LastRequest!.SystemPrompt.Contains("/no_think", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ChatCompletionsModelProvider_maps_non_null_reasoning_effort_to_request_field")]
+    public async Task ChatCompletionsProviderMapsReasoningEffortToRequestField()
+    {
+        string? capturedBody = null;
+        var handler = new FakeHttpHandler(req =>
+        {
+            capturedBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}""",
+                    System.Text.Encoding.UTF8,
+                    "application/json")
+            };
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
+        var provider = new ChatCompletionsModelProvider(http, "test-model", "TestProvider");
+        var request = new ModelRequest(
+            "system prompt",
+            [new ModelMessage("user", "hello")],
+            new ModelOptions(ReasoningEffort: "medium"));
+
+        await provider.CompleteAsync(request, default);
+
+        Assert.NotNull(capturedBody);
+        var doc = System.Text.Json.JsonDocument.Parse(capturedBody!);
+        Assert.True(doc.RootElement.TryGetProperty("reasoning_effort", out var prop));
+        Assert.Equal("medium", prop.GetString());
+    }
+
+    [Xunit.Fact(DisplayName = "ChatCompletionsModelProvider_omits_reasoning_effort_when_null")]
+    public async Task ChatCompletionsProviderOmitsReasoningEffortWhenNull()
+    {
+        string? capturedBody = null;
+        var handler = new FakeHttpHandler(req =>
+        {
+            capturedBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}""",
+                    System.Text.Encoding.UTF8,
+                    "application/json")
+            };
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
+        var provider = new ChatCompletionsModelProvider(http, "test-model", "TestProvider");
+        var request = new ModelRequest(
+            "system prompt",
+            [new ModelMessage("user", "hello")],
+            new ModelOptions(ReasoningEffort: null));
+
+        await provider.CompleteAsync(request, default);
+
+        Assert.NotNull(capturedBody);
+        var doc = System.Text.Json.JsonDocument.Parse(capturedBody!);
+        Assert.False(doc.RootElement.TryGetProperty("reasoning_effort", out _));
+    }
+
     private static ModelFunctionBinding JudgeBinding(ModelLane lane, string provider, string model) =>
         new(ModelFunctionPurposes.AcceptanceJudge, lane,
             new ModelProfile(provider, model, ModelCapability.Text,
@@ -914,5 +1016,23 @@ public sealed class SemanticAcceptanceTests
 
         public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
             => Task.FromResult(new ModelResponse(text, null, "stop"));
+    }
+
+    private sealed class CapturingFakeProvider(string providerName, string text) : IModelProvider
+    {
+        public string ProviderName { get; } = providerName;
+        public ModelRequest? LastRequest { get; private set; }
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            LastRequest = request;
+            return Task.FromResult(new ModelResponse(text, null, "stop"));
+        }
+    }
+
+    private sealed class FakeHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(handler(request));
     }
 }

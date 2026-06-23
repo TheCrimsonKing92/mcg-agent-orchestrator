@@ -219,7 +219,8 @@ public sealed class ChatCompletionsModelProvider : IModelProvider
             messages,
             stream = false,
             temperature = request.Options.Temperature,
-            max_tokens = request.Options.MaxOutputTokens
+            max_tokens = request.Options.MaxOutputTokens,
+            reasoning_effort = request.Options.ReasoningEffort
         };
 
         using var response = await _httpClient.PostAsJsonAsync("v1/chat/completions", body, JsonOptions(), cancellationToken).ConfigureAwait(false);
