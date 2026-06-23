@@ -204,6 +204,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
             {
                 File.WriteAllText(Path.Combine(first.ArtifactsPath, "warm-cache.txt"), "keep");
+                Directory.CreateDirectory(Path.Combine(first.ArtifactsPath, "obj"));
+                File.WriteAllText(Path.Combine(first.ArtifactsPath, "obj", "stale-cache.txt"), "delete");
             }
 
             var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "second");
@@ -216,7 +218,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var stale = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "stale-owner");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(stale))
             {
-                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
+                Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
+                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "obj", "stale-cache.txt")));
             }
         }
         finally

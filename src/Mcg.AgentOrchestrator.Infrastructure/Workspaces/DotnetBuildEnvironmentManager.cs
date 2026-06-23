@@ -490,7 +490,11 @@ public static class DotnetBuildEnvironmentManager
 
         if (clean && Directory.Exists(environment.ArtifactsPath))
         {
-            Directory.Delete(environment.ArtifactsPath, recursive: true);
+            var objPath = Path.Combine(environment.ArtifactsPath, "obj");
+            if (Directory.Exists(objPath))
+            {
+                Directory.Delete(objPath, recursive: true);
+            }
         }
 
         Directory.CreateDirectory(environment.ArtifactsPath);
