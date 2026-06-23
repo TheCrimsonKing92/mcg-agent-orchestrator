@@ -75,9 +75,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.DoesNotContain(first.Arguments, argument => argument.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal));
             Assert.Contains(first.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !argument.Equals("-maxcpucount:1", StringComparison.Ordinal));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
-            Assert.Contains(first.Arguments, argument => argument.Equals($"-p:ArtifactsPath={EnsureTrailingSeparator(first.ArtifactsPath)}", StringComparison.Ordinal));
-            Assert.Contains(first.Arguments, argument => argument.Equals($"-p:BaseIntermediateOutputPath={EnsureTrailingSeparator(Path.Combine(first.ArtifactsPath, "obj"))}", StringComparison.Ordinal));
-            Assert.Contains(first.Arguments, argument => argument.Equals($"-p:BaseOutputPath={EnsureTrailingSeparator(Path.Combine(first.ArtifactsPath, "bin"))}", StringComparison.Ordinal));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
             Assert.True(other.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
@@ -292,9 +289,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script);
         Assert.DoesNotContain("-p:UseSharedCompilation=false", script);
         Assert.True(script.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", StringComparison.Ordinal));
-        Assert.True(script.Contains("-p:ArtifactsPath=$artifactsPath\\", StringComparison.Ordinal));
-        Assert.True(script.Contains("-p:BaseIntermediateOutputPath=$(Join-Path $artifactsPath 'obj')\\", StringComparison.Ordinal));
-        Assert.True(script.Contains("-p:BaseOutputPath=$(Join-Path $artifactsPath 'bin')\\", StringComparison.Ordinal));
         Assert.True(script.Contains("$artifactsPath = Join-Path $slotRoot \"artifacts\"", StringComparison.Ordinal));
     }
 
@@ -354,9 +348,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(string.IsNullOrWhiteSpace(argument));
         return argument!;
     }
-
-    private static string EnsureTrailingSeparator(string path) =>
-        Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
 
     private static SafeFileHandle CreateInheritableFileHandle(string path)
     {

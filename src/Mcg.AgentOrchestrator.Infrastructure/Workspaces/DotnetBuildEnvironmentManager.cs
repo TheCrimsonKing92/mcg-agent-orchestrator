@@ -361,14 +361,8 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
-        $"-p:ArtifactsPath={EnsureTrailingDirectorySeparator(artifactsPath)}",
-        $"-p:BaseIntermediateOutputPath={EnsureTrailingDirectorySeparator(Path.Combine(artifactsPath, "obj"))}",
-        $"-p:BaseOutputPath={EnsureTrailingDirectorySeparator(Path.Combine(artifactsPath, "bin"))}",
         $"-maxcpucount:{ResolveMaxCpuCount()}"
     ];
-
-    private static string EnsureTrailingDirectorySeparator(string path) =>
-        Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
 
     private static int ResolveMaxCpuCount()
     {

@@ -181,9 +181,6 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
-    "-p:ArtifactsPath=$artifactsPath\",
-    "-p:BaseIntermediateOutputPath=$(Join-Path $artifactsPath 'obj')\",
-    "-p:BaseOutputPath=$(Join-Path $artifactsPath 'bin')\",
     "-maxcpucount:$(Get-BuildMaxCpuCount)"
 )
 
