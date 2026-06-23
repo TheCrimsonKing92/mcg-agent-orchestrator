@@ -60,7 +60,9 @@ public sealed record TaskDispatchRecord(
     string? ReasoningEffort = null,
     TaskComplexity? TaskComplexity = null,
     int? PromptCharacterCount = null,
-    bool UsesComplexModel = false);
+    bool UsesComplexModel = false,
+    string? BaseCommit = null,
+    string? ResultCommit = null);
 
 public sealed record TaskProcessRecord(
     int ProcessId,
