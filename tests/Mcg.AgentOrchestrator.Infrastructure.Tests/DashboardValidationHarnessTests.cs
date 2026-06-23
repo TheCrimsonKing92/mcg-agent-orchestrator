@@ -46,7 +46,7 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains(buildTestCycle, text => text.Contains("dotnet build $Solution --no-restore --verbosity minimal @isolatedArguments", StringComparison.Ordinal));
     Assert.Contains(buildTestCycle, text => text.Contains("dotnet test $Solution --no-build --verbosity minimal @isolatedArguments", StringComparison.Ordinal));
     Assert.Contains(buildTestCycle, text => text.Contains("--artifacts-path", StringComparison.Ordinal));
-    Assert.Contains(buildTestCycle, text => text.Contains("-maxcpucount:1", StringComparison.Ordinal));
+    Assert.Contains(buildTestCycle, text => text.Contains("-maxcpucount:$maxCpuCount", StringComparison.Ordinal));
     Assert.Contains(buildTestCycle, text => text.Contains("Wait-DashboardHealth", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("ValidateSet(\"create-goal\", \"complete-task\", \"smoke\")", StringComparison.Ordinal));
     Assert.Contains(dogfoodAction, text => text.Contains("form[data-action=\"/api/goals\"]", StringComparison.Ordinal));

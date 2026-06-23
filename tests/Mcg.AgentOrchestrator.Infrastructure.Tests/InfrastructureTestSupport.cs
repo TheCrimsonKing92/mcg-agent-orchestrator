@@ -199,6 +199,14 @@ internal static class Assert
         }
     }
 
+    public static void NotEqual<T>(T expected, T actual)
+    {
+        if (EqualityComparer<T>.Default.Equals(expected, actual))
+        {
+            throw new InvalidOperationException($"Expected '{actual}' to not equal '{expected}'.");
+        }
+    }
+
     public static void True(bool condition)
     {
         if (!condition)
@@ -289,6 +297,11 @@ internal static class Assert
         => Xunit.Assert.DoesNotContain(expected, collection);
 
     public static void Equal<T>(IEnumerable<T> expected, IEnumerable<T> actual)
+        => Xunit.Assert.Equal(expected, actual);
+
+    // Array args otherwise bind to the reference-equality Equal<T>(T,T) overload (T=T[]); this more-specific
+    // array overload routes them to Xunit's element-wise comparison.
+    public static void Equal<T>(T[] expected, T[] actual)
         => Xunit.Assert.Equal(expected, actual);
 
     public static void Collection<T>(IEnumerable<T> collection, params Action<T>[] elementInspectors)

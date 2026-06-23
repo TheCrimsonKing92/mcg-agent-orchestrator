@@ -98,9 +98,45 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var deferredChecks = BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath);
+        var scopedChecks = BuildChangeScopedChecks(solutionCheck, effectiveChecks, changedFiles);
+        var runSolutionCheck = solutionCheck is not null && scopedChecks is null;
+        var deferredChecks = runSolutionCheck
+            ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
+            : [];
 
-        if (deferredChecks.Count > 0)
+        if (scopedChecks is not null)
+        {
+            var scopedNames = scopedChecks.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+
+            foreach (var check in effectiveChecks.Where(c =>
+                !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
+            {
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                retried |= checkResult.Retried;
+                checks.Add(checkResult.Result);
+                if (!checkResult.Result.Passed)
+                {
+                    break;
+                }
+            }
+
+            if (checks.All(check => check.Passed))
+            {
+                foreach (var check in effectiveChecks.Where(c =>
+                    c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                    scopedNames.Contains(c.Name)))
+                {
+                    var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                    retried |= checkResult.Retried;
+                    checks.Add(checkResult.Result);
+                    if (!checkResult.Result.Passed)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        else if (deferredChecks.Count > 0)
         {
             var deferredNames = deferredChecks.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -227,6 +263,68 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 c.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
                 IsProjectInSolution(c.Project, solutionCheck.Project, slnContent))
             .ToList();
+    }
+
+    private static List<AcceptanceManifestCheck>? BuildChangeScopedChecks(
+        AcceptanceManifestCheck? solutionCheck,
+        IReadOnlyList<AcceptanceManifestCheck> allChecks,
+        IReadOnlyList<string>? changedFiles)
+    {
+        if (solutionCheck is null ||
+            changedFiles is null ||
+            changedFiles.Count == 0 ||
+            !ChangeScopedAcceptanceEnabled())
+        {
+            return null;
+        }
+
+        var summary = RepositoryChangeClassifier.Classify(changedFiles);
+        // Do NOT gate on summary.RequiresBroadVerification: core/infra changes are escalation-broad
+        // (LandingDecision still escalates them) but are test-narrow-able. Genuine full-suite cases
+        // are caught by the build/security guards here and by plan.RequiresBroadVerification below.
+        if (summary.HasBuildSystemChanges ||
+            summary.HasSecuritySensitiveChanges)
+        {
+            return null;
+        }
+
+        var plan = RepositoryTestImpactPlanner.Plan(summary);
+        if (!plan.RequiresBuild ||
+            plan.RequiresBroadVerification ||
+            plan.Checks.Any(check => check.Command.Count == 0))
+        {
+            return null;
+        }
+
+        var scoped = new List<AcceptanceManifestCheck>();
+        foreach (var plannedCheck in plan.Checks)
+        {
+            var plannedManifestCheck = PolicyCheckToManifestCheck(plannedCheck);
+            var existing = allChecks.FirstOrDefault(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                !check.Name.Equals(solutionCheck.Name, StringComparison.Ordinal) &&
+                DotnetCheckMatches(check, plannedManifestCheck));
+            scoped.Add(existing ?? plannedManifestCheck);
+        }
+
+        return scoped.Count == 0 ? null : scoped;
+    }
+
+    private static bool DotnetCheckMatches(AcceptanceManifestCheck left, AcceptanceManifestCheck right) =>
+        string.Equals(NormalizePath(left.Project), NormalizePath(right.Project), StringComparison.OrdinalIgnoreCase) &&
+        left.Arguments.SequenceEqual(right.Arguments, StringComparer.OrdinalIgnoreCase);
+
+    private static string? NormalizePath(string? path) =>
+        string.IsNullOrWhiteSpace(path) ? path : path.Replace('\\', '/').Trim();
+
+    private static bool ChangeScopedAcceptanceEnabled()
+    {
+        var value = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        return string.IsNullOrWhiteSpace(value) ||
+            value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<AcceptanceManifestCheck> BuildPolicyInjectedChecks(
@@ -816,11 +914,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             startInfo.ArgumentList.Add(BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForPosix));
         }
 
-        // Match the dispatch wrapper: keep MSBuild worker nodes and VBCSCompiler from outliving the
-        // root process and pinning worktree obj files.
-        startInfo.EnvironmentVariables["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
-        startInfo.EnvironmentVariables["UseSharedCompilation"] = "false";
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
 
         // The acceptance suite verifies the CODE and must run hermetically — NOT under the operator's
