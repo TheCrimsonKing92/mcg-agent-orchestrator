@@ -20,7 +20,8 @@ internal static class GoalRefinementGate
         IModelProviderRegistry providers,
         Goal goal,
         ConductorAutonomyPolicy? policy = null,
-        WorkerProfileCatalog? workerProfiles = null)
+        WorkerProfileCatalog? workerProfiles = null,
+        IGoalLifecycleEventWriter? eventWriter = null)
     {
         if (goal.RefinedSpec is { } existing)
         {
@@ -34,10 +35,10 @@ internal static class GoalRefinementGate
                     .SyncAnsweredClarifications(kernel, goal.Id) ?? existing;
             }
 
-            return new GoalRefinementGateResult(
-                existing.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined,
-                RanRefinement: false,
-                existing);
+            var outcome = existing.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined;
+            if (outcome == RefinementOutcome.AwaitingClarification)
+                eventWriter?.AppendClarificationNeeded(goal.Id, "spec");
+            return new GoalRefinementGateResult(outcome, RanRefinement: false, existing);
         }
 
         var service = CreateService(workspace, providers, workerProfiles);
@@ -47,6 +48,8 @@ internal static class GoalRefinementGate
             result.Outcome == RefinementOutcome.AwaitingClarification
                 ? "Goal refinement attached a RefinedSpec and raised clarification item(s); planning is held until they are resolved."
                 : "Goal refinement attached a RefinedSpec before planning.");
+        if (result.Outcome == RefinementOutcome.AwaitingClarification)
+            eventWriter?.AppendClarificationNeeded(goal.Id, "spec");
         return new GoalRefinementGateResult(result.Outcome, RanRefinement: true, result.Spec);
     }
 

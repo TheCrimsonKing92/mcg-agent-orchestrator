@@ -5,10 +5,16 @@ public sealed partial class AgentOrchestratorKernel
     private readonly Dictionary<GoalId, Goal> _goals = [];
     private readonly Dictionary<HumanInputRequestId, HumanInputRequest> _humanInputRequests = [];
     private readonly IClock _clock;
+    private IGoalLifecycleEventWriter _eventWriter = NullGoalLifecycleEventWriter.Instance;
 
     public AgentOrchestratorKernel(IClock? clock = null)
     {
         _clock = clock ?? new SystemClock();
+    }
+
+    public void SetEventWriter(IGoalLifecycleEventWriter writer)
+    {
+        _eventWriter = writer ?? NullGoalLifecycleEventWriter.Instance;
     }
 
     public IReadOnlyCollection<Goal> Goals => _goals.Values;
