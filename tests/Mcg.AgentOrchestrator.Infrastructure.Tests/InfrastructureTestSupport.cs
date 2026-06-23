@@ -299,6 +299,11 @@ internal static class Assert
     public static void Equal<T>(IEnumerable<T> expected, IEnumerable<T> actual)
         => Xunit.Assert.Equal(expected, actual);
 
+    // Array args otherwise bind to the reference-equality Equal<T>(T,T) overload (T=T[]); this more-specific
+    // array overload routes them to Xunit's element-wise comparison.
+    public static void Equal<T>(T[] expected, T[] actual)
+        => Xunit.Assert.Equal(expected, actual);
+
     public static void Collection<T>(IEnumerable<T> collection, params Action<T>[] elementInspectors)
         => Xunit.Assert.Collection(collection, elementInspectors);
 
