@@ -69,7 +69,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.False(string.IsNullOrWhiteSpace(second.LeaseMetadataPath));
             Assert.True(File.Exists(second.LeaseMetadataPath));
             Assert.True(first.Arguments.Contains("--artifacts-path"));
-            Assert.True(first.Arguments.Contains("--disable-build-servers"));
+            Assert.False(first.Arguments.Contains("--disable-build-servers"));
+            Assert.DoesNotContain(first.Arguments, argument => argument.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal));
+            Assert.Contains(first.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !argument.Equals("-maxcpucount:1", StringComparison.Ordinal));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
@@ -191,6 +193,41 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_artifacts_for_same_goal_slot")]
+    public void DotnetBuildEnvironmentManagerReusesArtifactsForSameGoalSlot()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var goalId = new GoalId("10293847102938471029384710293847");
+        try
+        {
+            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "first");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
+            {
+                File.WriteAllText(Path.Combine(first.ArtifactsPath, "warm-cache.txt"), "keep");
+                Directory.CreateDirectory(Path.Combine(first.ArtifactsPath, "obj"));
+                File.WriteAllText(Path.Combine(first.ArtifactsPath, "obj", "stale-cache.txt"), "delete");
+            }
+
+            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "second");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(second))
+            {
+                Assert.True(File.Exists(Path.Combine(second.ArtifactsPath, "warm-cache.txt")));
+            }
+
+            File.WriteAllText(Path.Combine(second.RootPath, "lease", "lease.lock"), "999999");
+            var stale = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "stale-owner");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(stale))
+            {
+                Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
+                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "obj", "stale-cache.txt")));
+            }
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stable_slot_build_arguments_are_firewall_covered")]
     public void DotnetBuildEnvironmentManagerStableSlotBuildArgumentsAreFirewallCovered()
     {
@@ -219,16 +256,34 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_passes_disable_build_servers_and_node_reuse_env")]
-    public void InvokeIsolatedDotnetPassesDisableBuildServersAndNodeReuseEnv()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]
+    public void DotnetBuildEnvironmentManagerCapsMsbuildParallelismPerSlot()
+    {
+        using var defaultScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, null);
+        var defaultArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
+        var expectedDefault = Math.Max(2, Environment.ProcessorCount / DotnetBuildEnvironmentManager.StableSlotCount);
+
+        Assert.Equal($"-maxcpucount:{expectedDefault}", MaxCpuCountArgument(defaultArguments));
+        Assert.NotEqual("-maxcpucount:1", MaxCpuCountArgument(defaultArguments));
+
+        using var configuredScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, "7");
+        var configuredArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
+
+        Assert.Equal("-maxcpucount:7", MaxCpuCountArgument(configuredArguments));
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_uses_warm_multicore_build_defaults")]
+    public void InvokeIsolatedDotnetUsesWarmMulticoreBuildDefaults()
     {
         var repoRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory();
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var script = File.ReadAllText(scriptPath);
 
-        Assert.True(script.Contains("\"--disable-build-servers\"", StringComparison.Ordinal));
-        Assert.True(script.Contains("$env:MSBUILDDISABLENODEREUSE = \"1\"", StringComparison.Ordinal));
-        Assert.True(script.Contains("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", StringComparison.Ordinal));
+        Assert.DoesNotContain("\"--disable-build-servers\"", script);
+        Assert.DoesNotContain("$env:MSBUILDDISABLENODEREUSE = \"1\"", script);
+        Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script);
+        Assert.DoesNotContain("-p:UseSharedCompilation=false", script);
+        Assert.True(script.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", StringComparison.Ordinal));
     }
 
     private static string ArgumentValue(IReadOnlyList<string> arguments, string name)
@@ -247,13 +302,20 @@ public sealed class DotnetBuildEnvironmentManagerTests
         return arguments[index + 1];
     }
 
+    private static string MaxCpuCountArgument(IReadOnlyList<string> arguments)
+    {
+        var argument = arguments.SingleOrDefault(argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
+        Assert.False(string.IsNullOrWhiteSpace(argument));
+        return argument!;
+    }
+
     private sealed class EnvVarScope : IDisposable
     {
         private readonly string _name;
         private readonly string? _originalValue;
-        private readonly string _root;
+        private readonly string? _root;
 
-        private EnvVarScope(string name, string value)
+        private EnvVarScope(string name, string? value)
         {
             _name = name;
             _originalValue = Environment.GetEnvironmentVariable(name);
@@ -268,9 +330,19 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-test-{Guid.NewGuid():N}"));
         }
 
+        public static EnvVarScope ForVariable(string name, string? value)
+        {
+            return new EnvVarScope(name, value);
+        }
+
         public void Dispose()
         {
             Environment.SetEnvironmentVariable(_name, _originalValue);
+            if (string.IsNullOrWhiteSpace(_root))
+            {
+                return;
+            }
+
             try
             {
                 if (Directory.Exists(_root))

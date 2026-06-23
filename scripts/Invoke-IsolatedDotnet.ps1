@@ -74,12 +74,69 @@ function Clear-ArtifactsDirectory {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
 
+function Get-BuildMaxCpuCount {
+    $configured = $env:MCG_BUILD_MAXCPUCOUNT
+    $value = 0
+    if ([int]::TryParse($configured, [ref]$value) -and $value -gt 1) {
+        return $value
+    }
+
+    return [Math]::Max(2, [int]([Environment]::ProcessorCount / 4))
+}
+
+function Test-OwnerMarkerMatches {
+    param(
+        [string]$Path,
+        [string]$OwnerToken
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        return [string]::Equals([string]$marker.ownerToken, $OwnerToken, [System.StringComparison]::Ordinal)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Initialize-ArtifactsDirectory {
+    param(
+        [string]$Path,
+        [string]$OwnerToken,
+        [bool]$ForceClean
+    )
+
+    $ownerPath = Join-Path $Path ".mcg-artifacts-owner.json"
+    $hasEntries = (Test-Path -LiteralPath $Path) -and $null -ne (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))) {
+        Clear-ArtifactsDirectory -Path $Path
+    }
+    else {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    }
+
+    $marker = [ordered]@{
+        version = 1
+        ownerToken = $OwnerToken
+        ownerProcessId = $PID
+        machineName = $env:COMPUTERNAME
+        lastAcquiredAt = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    ($marker | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath $ownerPath
+}
+
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
     $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
     $artifactsPath = Join-Path $slotRoot "artifacts"
     $leaseId = "run-slot-manual"
+    $ownerToken = "manual"
     $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
+    $staleLockCleared = $false
 }
 else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
@@ -89,6 +146,7 @@ else {
     $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\$slotName"
     $leaseRoot = Join-Path $runRoot "lease"
     $artifactsPath = Join-Path $slotRoot "artifacts"
+    $ownerToken = $leaseId
     $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
     New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
     $lockPath = Join-Path $leaseRoot "lease.lock"
@@ -123,14 +181,9 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
-    "--disable-build-servers",
-    "-maxcpucount:1",
-    "-p:UseSharedCompilation=false"
+    "-maxcpucount:$(Get-BuildMaxCpuCount)"
 )
 
-$env:DOTNET_CLI_USE_MSBUILD_SERVER = "0"
-$env:MSBUILDDISABLENODEREUSE = "1"
-$env:UseSharedCompilation = "false"
 $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
 
 $lockStream = $null
@@ -144,7 +197,7 @@ try {
         try {
             $lockStream.Lock(0, 1)
             $lockHeld = $true
-            Clear-ArtifactsDirectory -Path $artifactsPath
+            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $ownerToken -ForceClean $staleLockCleared
         }
         catch [System.IO.IOException] {
             $lockStream.Dispose()
