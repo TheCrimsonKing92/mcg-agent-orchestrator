@@ -313,6 +313,12 @@ internal static class Assert
     public static void EndsWith(string expectedEndString, string? actualString)
         => Xunit.Assert.EndsWith(expectedEndString, actualString);
 
+    public static void StartsWith(string expectedStartString, string? actualString, StringComparison comparisonType)
+        => Xunit.Assert.StartsWith(expectedStartString, actualString, comparisonType);
+
+    public static void DoesNotContain(string expectedSubstring, string actualString, StringComparison comparisonType)
+        => Xunit.Assert.DoesNotContain(expectedSubstring, actualString, comparisonType);
+
     public static void True(bool condition, string userMessage)
         => Xunit.Assert.True(condition, userMessage);
 }
