@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Win32.SafeHandles;
 
 // These tests mutate the process-global MCG_DOTNET_ISOLATED_ROOT env var (via EnvVarScope). xUnit
 // runs distinct test classes in parallel, so without a shared collection they clobber each other's
@@ -73,6 +75,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.DoesNotContain(first.Arguments, argument => argument.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal));
             Assert.Contains(first.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !argument.Equals("-maxcpucount:1", StringComparison.Ordinal));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
+            Assert.Contains(first.Arguments, argument => argument.Equals($"-p:ArtifactsPath={EnsureTrailingSeparator(first.ArtifactsPath)}", StringComparison.Ordinal));
+            Assert.Contains(first.Arguments, argument => argument.Equals($"-p:BaseIntermediateOutputPath={EnsureTrailingSeparator(Path.Combine(first.ArtifactsPath, "obj"))}", StringComparison.Ordinal));
+            Assert.Contains(first.Arguments, argument => argument.Equals($"-p:BaseOutputPath={EnsureTrailingSeparator(Path.Combine(first.ArtifactsPath, "bin"))}", StringComparison.Ordinal));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
             Assert.True(other.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
@@ -206,6 +211,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 File.WriteAllText(Path.Combine(first.ArtifactsPath, "warm-cache.txt"), "keep");
                 Directory.CreateDirectory(Path.Combine(first.ArtifactsPath, "obj"));
                 File.WriteAllText(Path.Combine(first.ArtifactsPath, "obj", "stale-cache.txt"), "delete");
+                Directory.CreateDirectory(Path.Combine(first.ArtifactsPath, "bin"));
+                File.WriteAllText(Path.Combine(first.ArtifactsPath, "bin", "stale.dll"), "delete");
             }
 
             var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "second");
@@ -218,8 +225,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var stale = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "stale-owner");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(stale))
             {
-                Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
+                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
                 Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "obj", "stale-cache.txt")));
+                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "bin", "stale.dll")));
             }
         }
         finally
@@ -284,6 +292,44 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script);
         Assert.DoesNotContain("-p:UseSharedCompilation=false", script);
         Assert.True(script.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", StringComparison.Ordinal));
+        Assert.True(script.Contains("-p:ArtifactsPath=$artifactsPath\\", StringComparison.Ordinal));
+        Assert.True(script.Contains("-p:BaseIntermediateOutputPath=$(Join-Path $artifactsPath 'obj')\\", StringComparison.Ordinal));
+        Assert.True(script.Contains("-p:BaseOutputPath=$(Join-Path $artifactsPath 'bin')\\", StringComparison.Ordinal));
+        Assert.True(script.Contains("$artifactsPath = Join-Path $slotRoot \"artifacts\"", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]
+    public void ProcessSpawnGuardClearsInheritableStateDbFileHandles()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var directory = Path.Combine(Path.GetTempPath(), $"mcg-state-handle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "state.db");
+        try
+        {
+            using var handle = CreateInheritableFileHandle(path);
+            Assert.True(ProcessSpawnGuard.IsHandleInheritable(handle.DangerousGetHandle()));
+
+            var cleared = ProcessSpawnGuard.ClearInheritableFileHandles("state.db");
+
+            Assert.True(cleared >= 1);
+            Assert.False(ProcessSpawnGuard.IsHandleInheritable(handle.DangerousGetHandle()));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 
     private static string ArgumentValue(IReadOnlyList<string> arguments, string name)
@@ -308,6 +354,47 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(string.IsNullOrWhiteSpace(argument));
         return argument!;
     }
+
+    private static string EnsureTrailingSeparator(string path) =>
+        Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
+
+    private static SafeFileHandle CreateInheritableFileHandle(string path)
+    {
+        var securityAttributes = new SecurityAttributes
+        {
+            Length = Marshal.SizeOf<SecurityAttributes>(),
+            InheritHandle = true
+        };
+        var handle = CreateFile(
+            path,
+            0x40000000,
+            0x00000001 | 0x00000002,
+            ref securityAttributes,
+            2,
+            0x80,
+            IntPtr.Zero);
+        Assert.False(handle.IsInvalid);
+        return handle;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int Length;
+        public IntPtr SecurityDescriptor;
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool InheritHandle;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        ref SecurityAttributes securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
 
     private sealed class EnvVarScope : IDisposable
     {

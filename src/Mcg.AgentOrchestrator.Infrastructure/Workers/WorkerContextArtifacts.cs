@@ -269,8 +269,8 @@ public static class WorkerContextArtifacts
                 string.Empty,
                 "## Build/Test Verification",
                 "- Do not run raw `dotnet test` or `dotnet build` directly: raw testhost binds an unauthorized port and blocks on a Windows Firewall prompt during unattended runs.",
-                "- DO self-verify before reporting using the firewall-safe stable-slot wrapper `.\\scripts\\Invoke-IsolatedDotnet.ps1` (see the Isolated .NET Verification section for the exact `-GoalPrefix`/`-AttemptName` command). It routes through the firewall-authorized build slots, so it is safe to run.",
-                "- The orchestrator acceptance gate re-verifies from stable slots before merge; a compile/test failure you can catch with the wrapper is a failure you must fix, not defer."
+                "- DO self-verify before reporting using the goal-scoped wrapper `.\\scripts\\Invoke-IsolatedDotnet.ps1` (see the Isolated .NET Verification section for the exact `-GoalPrefix`/`-AttemptName` command). It pins obj/bin/artifacts under the goal build root.",
+                "- The orchestrator acceptance gate re-verifies from goal-scoped build outputs before merge; a compile/test failure you can catch with the wrapper is a failure you must fix, not defer."
             ]);
         }
 
@@ -366,7 +366,7 @@ public static class WorkerContextArtifacts
             {
                 lines.Add("## Isolated .NET Verification");
                 lines.Add($"- Use `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal` instead of raw `dotnet test` for .NET checks.");
-                lines.Add($"- Goal build metadata is recorded under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}`; test artifacts use a bounded stable slot `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`.");
+                lines.Add($"- Goal build metadata and test artifacts are recorded under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}`; the artifact path is `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`.");
             }
             else if (toolchain == Toolchain.Go)
             {
