@@ -55,12 +55,22 @@ internal static class CliPersistentStateRunner
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
 
+        // Reconcile finished/orphaned dispatches OUTSIDE the command's write transaction.
+        // SweepExitedProcesses runs process kills, WaitForExit, git inspection/commit, and build-daemon
+        // reaping; running that while holding BEGIN IMMEDIATE on state.db lets a SINGLE stuck dispatch
+        // (exit file present but unreconciled, e.g. after a crashed loop) wedge EVERY state-mutating
+        // command with "database is locked" while reads keep working. Sweep a separately-loaded kernel
+        // with no write lock held, persist any reconciliation with a brief write, then run the command
+        // in its own transaction against the reconciled state. Mirrors the conduct-loop path above.
+        var sweepKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var sweptCount = new BackgroundDispatchRunner().SweepExitedProcesses(sweepKernel);
+        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
+        if (sweptCount > 0)
+            stateRepository.SaveAsync(sweepKernel).GetAwaiter().GetResult();
+
         var changed = stateRepository.TransactAsync(
                 (kernel, _) =>
                 {
-                    var sweptCount = new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
-                    GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
-
                     var commandAgents = nextAgents;
                     var commandProfiles = nextWorkerProfiles;
                     var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
@@ -78,8 +88,7 @@ internal static class CliPersistentStateRunner
                     nextAgents = commandAgents;
                     nextWorkerProfiles = commandProfiles;
                     nextCurrentGoal = commandGoal;
-                    var anySave = shouldSave || sweptCount > 0;
-                    return Task.FromResult((anySave, anySave));
+                    return Task.FromResult((shouldSave, shouldSave));
                 })
             .GetAwaiter()
             .GetResult();
