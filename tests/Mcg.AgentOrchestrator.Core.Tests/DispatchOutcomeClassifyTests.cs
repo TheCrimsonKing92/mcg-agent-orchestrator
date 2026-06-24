@@ -55,6 +55,58 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Classify_returns_EmptyOutputFlake_for_exit_zero_with_no_output_or_artifacts")]
+    public void Classify_ExitZeroEmptyOutputNoArtifactsIsFlake()
+    {
+        var task = SimpleTask();
+        var verification = Verification(0, "", "");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.True(outcome.HasZeroByteOutput);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_returns_VerifiedSuccess_for_exit_zero_with_worker_result_artifact")]
+    public void Classify_ExitZeroWorkerResultArtifactIsVerifiedSuccess()
+    {
+        var task = SimpleTask();
+        var verification = Verification(0, "", "");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification, workerResultPresent: true);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_returns_VerifiedSuccess_for_exit_zero_with_committed_changes")]
+    public void Classify_ExitZeroCommittedChangesIsVerifiedSuccess()
+    {
+        var task = SimpleTask();
+        var verification = Verification(0, "", "");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification, hasCommittedChanges: true);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_does_not_return_VerifiedSuccess_for_nonzero_exit_with_artifacts")]
+    public void Classify_NonZeroExitWithArtifactsIsNotVerifiedSuccess()
+    {
+        var task = SimpleTask();
+        var verification = Verification(1, "", "");
+
+        var outcome = DispatchFailureClassifier.Classify(
+            task,
+            verification,
+            workerResultPresent: true,
+            hasCommittedChanges: true);
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
     [Xunit.Fact(DisplayName = "Classify_returns_SandboxCommitBlocked_for_index_lock_with_worker_result")]
     public void Classify_SandboxCommitBlocked()
     {
