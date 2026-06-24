@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -1312,6 +1313,50 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         throw new ArgumentException("Use either --create-goal or --create-simple-goal, not both.");
     }
 
+    // Batch submission (a3f6b536): multiple positional filters each create one goal in a single command.
+    // Single-filter behaviour below is unchanged; batch only engages with 2+ filters and a create flag.
+    var batchFilters = parts
+        .Skip(1)
+        .Where(part => !part.StartsWith("--", StringComparison.Ordinal))
+        .ToList();
+    if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
+    {
+        var created = 0;
+        foreach (var filter in batchFilters)
+        {
+            var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 1);
+            if (itemPlan.Items.Count == 0)
+            {
+                Console.WriteLine($"No backlog item matched '{filter}'; skipping.");
+                continue;
+            }
+
+            var batchItem = itemPlan.Items.Single();
+            var batchGoal = createSimpleGoal
+                ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
+                : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter);
+
+            if (!string.IsNullOrEmpty(batchItem.Id))
+            {
+                context.Kernel.SetGoalSourceBacklogItemId(batchGoal.Id, batchItem.Id);
+            }
+
+            context.CurrentGoal = batchGoal;
+            created++;
+            Console.WriteLine(createSimpleGoal
+                ? $"Created simple goal from backlog slice '{batchItem.Heading}'."
+                : $"Created five-role goal from backlog slice '{batchItem.Heading}'.");
+        }
+
+        if (created == 0)
+        {
+            throw new InvalidOperationException("No backlog items matched the requested filters.");
+        }
+
+        Console.WriteLine($"Created {created} goal(s) from {batchFilters.Count} requested backlog slice(s).");
+        return true;
+    }
+
     var headingFilter = parts
         .Skip(1)
         .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
@@ -2062,6 +2107,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
+    var alreadyReset = new HashSet<TaskId>();
     foreach (var task in goal.Tasks)
     {
         if (task.Status is WorkTaskStatus.Completed || task.LastProcess is { IsRunning: true })
@@ -2085,12 +2131,44 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
         context.Kernel.RetryTask(goal.Id, task.Id, note);
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+        alreadyReset.Add(task.Id);
+        actions++;
+    }
+
+    // Detect lifecycle/task desync: a task is Assigned with no dispatch evidence while all
+    // earlier-stage tasks are Completed. This happens after flake-recovery when the conductor
+    // retried the task (leaving it Assigned) but previously set the goal aside with
+    // LifecycleEscalation. The 'recover' command never saw a stuck task so it printed
+    // "nothing to recover", even though the goal was permanently blocked. Detect and report so
+    // the operator knows to re-admit (restart the loop or run 'conduct <goal>').
+    foreach (var task in goal.Tasks)
+    {
+        if (alreadyReset.Contains(task.Id) ||
+            task.Status != WorkTaskStatus.Assigned ||
+            task.LastProcess is { IsRunning: true } ||
+            task.LastDispatch is not null ||
+            task.LastProcess is not null ||
+            task.LastVerification is not null)
+        {
+            continue;
+        }
+
+        var hasIncompleteEarlierStage = goal.Tasks.Any(candidate =>
+            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            candidate.Status != WorkTaskStatus.Completed);
+        if (hasIncompleteEarlierStage)
+        {
+            continue;
+        }
+
+        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}");
+        Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }
 
     if (actions == 0)
     {
-        Console.WriteLine("recover: nothing to recover (no pending input or stuck tasks).");
+        Console.WriteLine("recover: nothing to recover (no pending input, stuck tasks, or lifecycle/task desync).");
     }
 
     ConsoleViews.PrintGoal(goal);

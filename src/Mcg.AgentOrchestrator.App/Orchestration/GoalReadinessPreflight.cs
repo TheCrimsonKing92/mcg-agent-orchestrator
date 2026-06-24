@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -173,10 +174,15 @@ internal static class GoalReadinessPreflight
 
         if (findings.Count == 0)
         {
+            // Use the same candidate predicate (IsSubscriptionStartCandidate via HasAssignedDispatchCandidates)
+            // that the conductor uses for its ready-batch check so the two always agree on dispatchability.
+            var hasDispatchCandidates = GoalManagementCommandService.HasAssignedDispatchCandidates(goal);
             findings.Add(new GoalReadinessFinding(
                 GoalReadinessSeverity.Info,
                 "ready",
-                "Readiness preflight found no blockers for unattended start.",
+                hasDispatchCandidates
+                    ? "Readiness preflight found no blockers; assigned tasks are in a dispatchable state."
+                    : "Readiness preflight found no blockers for unattended start.",
                 CanOverride: true));
         }
 

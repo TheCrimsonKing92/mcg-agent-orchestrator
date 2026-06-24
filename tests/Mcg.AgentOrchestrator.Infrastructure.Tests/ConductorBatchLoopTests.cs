@@ -43,7 +43,8 @@ public sealed class ConductorBatchLoopTests
         Action<Goal>? record = null,
         Action<Goal>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
-        Func<Goal, ChangeRiskTier?>? classifyRisk = null) =>
+        Func<Goal, ChangeRiskTier?>? classifyRisk = null,
+        Func<GoalId, TaskId, string, TaskSpec>? retryTask = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -55,7 +56,7 @@ public sealed class ConductorBatchLoopTests
                 ? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria
                 : AcceptanceVerificationSummary.Failed,
             null,
-            null,
+            retryTask,
             null,
             null,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
@@ -329,6 +330,68 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(2, summary.Retried);
         Assert.True(escalationWritten);
         Assert.Equal(1, summary.Escalated);
+    }
+
+    // ── Regression: flake recovery followed by ownership-blocked dispatch must not escalate ──
+    // Before Fix 1+4, the conductor auto-recovered a watchdog-reaped Developer dispatch via
+    // _retryTask (setting the task to Assigned), then on the NEXT tick called _dispatchAndStart
+    // which returned EmptyBatch (high-risk ownership under Conservative policy). The empty-batch
+    // path immediately escalated → SetAside(LifecycleEscalation) → permanently stuck, even though
+    // `readiness` said "Proceed". Fix 1: dispatch in the SAME tick as recovery. Fix 4: on
+    // EmptyBatch with assigned tasks, return Held instead of Escalate.
+
+    [Xunit.Fact(DisplayName = "BatchLoop_flake_recovery_then_empty_batch_holds_not_escalates_no_paid_worker")]
+    public void BatchLoopFlakeRecoveryThenEmptyBatchHoldsNotEscalatesNoPaidWorker()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("src/Mcg.AgentOrchestrator.Core/Fix something");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var planner = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Planner);
+        var researcher = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Researcher);
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var now = DateTimeOffset.UtcNow;
+
+        // Advance Planner/Researcher to Completed so Developer is the current stage.
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Planner done.");
+        kernel.ReportTaskProgress(goal.Id, researcher.Id, WorkTaskStatus.Completed, "Researcher done.");
+
+        // Simulate a watchdog reap: Developer was dispatched but produced zero-byte stdout (empty flake).
+        kernel.RecordTaskDispatch(goal.Id, developer.Id,
+            new TaskDispatchRecord("test-worker", "dev.exe", "C:\\goal", now));
+        kernel.RecordDispatchExecutionResult(goal.Id, developer.Id,
+            new TaskVerificationRecord("dev.exe", "C:\\goal", 1, "", "", now));
+
+        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, developer.Id).Status);
+        Assert.Equal(1, developer.EmptyOutputRetryCount);
+
+        var escalated = false;
+        var dispatchAttempts = 0;
+        var paidWorkerCount = 0;
+
+        // _dispatchAndStart returns EmptyBatch to simulate high-risk ownership blocking
+        // under a Conservative policy (the typical trigger for this bug).
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => paidWorkerCount,
+            dispatchAndStart: _ =>
+            {
+                dispatchAttempts++;
+                return DispatchStartOutcome.EmptyBatch(
+                    "No tasks dispatched; all ready tasks require operator approval: high-risk ownership (src/Mcg.AgentOrchestrator.Core/)");
+            },
+            writeEscalation: (_, _, _) => { escalated = true; },
+            retryTask: (gid, tid, msg) => kernel.RetryTask(gid, tid, msg));
+
+        // Run one tick: Failed state → flake recovery → immediate dispatch attempt → EmptyBatch → Held.
+        var summary = new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative,
+            NoStopPath(), maxIterations: 1);
+
+        Assert.False(escalated); // must not escalate when empty batch follows flake recovery
+        Assert.Equal(0, paidWorkerCount); // no paid worker started (dispatch returned EmptyBatch)
+        Assert.Equal(1, dispatchAttempts); // dispatch was attempted in the same tick as recovery (Fix 1)
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, developer.Id).Status);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_readmits_awaiting_clarification_goal_when_blocker_clears")]
