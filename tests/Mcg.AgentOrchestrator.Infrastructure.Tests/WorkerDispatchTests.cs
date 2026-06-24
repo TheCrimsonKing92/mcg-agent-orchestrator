@@ -3415,6 +3415,89 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_worker_result_file_completes")]
+    public void BackgroundDispatchRunnerExitZeroEmptyStreamedOutputWithWorkerResultFileCompletes()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        string.Empty,
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(
+            Path.Combine(worktree, "WORKER_RESULT.md"),
+            WorkerResultBlock("none", "dotnet test --filter BufferedWorker", "not-run")),
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.WorkerResultPresent);
+    Assert.Equal(0, task.EmptyOutputRetryCount);
+    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_committed_change_completes")]
+    public void BackgroundDispatchRunnerExitZeroEmptyStreamedOutputWithCommittedChangeCompletes()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        string.Empty,
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.HasCommittedChanges);
+    Assert.Equal(0, task.EmptyOutputRetryCount);
+    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_nonzero_exit_with_artifacts_does_not_complete")]
+    public void BackgroundDispatchRunnerNonZeroExitWithArtifactsDoesNotComplete()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        string.Empty,
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(
+            Path.Combine(worktree, "WORKER_RESULT.md"),
+            WorkerResultBlock("none", "dotnet test --filter BufferedWorker", "not-run")),
+        taskDescription: "Verify behavior with automated and manual checks",
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.WorkerResultPresent);
+    Assert.NotEqual(
+        DispatchOutcomeKind.VerifiedSuccess,
+        DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
     public void BackgroundDispatchRunnerFileRoleWithCommittedChangePasses()
 {

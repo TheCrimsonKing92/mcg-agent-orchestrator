@@ -65,7 +65,9 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (verification.ExitCode == 0 &&
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        if (outcome.Kind == DispatchOutcomeKind.EmptyOutputFlake &&
+            verification.ExitCode == 0 &&
             string.IsNullOrWhiteSpace(verification.StandardOutput) &&
             string.IsNullOrWhiteSpace(verification.StandardError))
         {
@@ -80,8 +82,8 @@ public sealed partial class AgentOrchestratorKernel
         ReportTaskProgress(
             goalId,
             taskId,
-            verification.Succeeded ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
-            verification.Succeeded
+            outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
+            outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
                 ? $"Dispatch completed successfully: {task.LastDispatch.Command}"
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
     }

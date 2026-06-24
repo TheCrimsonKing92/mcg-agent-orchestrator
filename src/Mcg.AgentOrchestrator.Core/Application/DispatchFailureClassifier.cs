@@ -72,13 +72,29 @@ public static class DispatchFailureClassifier
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
-        if (!HasZeroByteStandardOutput(verification))
+        if (verification.ExitCode == 0 &&
+            HasArtifactEvidence(verification.WorkerResultPresent, verification.HasCommittedChanges))
         {
             return false;
         }
 
-        return verification.ExitCode != 0 ||
-            (verification.ExitCode == 0 && string.IsNullOrWhiteSpace(verification.StandardError));
+        if (HasStandardOutputFileBytes(verification))
+        {
+            return false;
+        }
+
+        if (verification.ExitCode != 0)
+        {
+            return string.IsNullOrWhiteSpace(verification.StandardOutput);
+        }
+
+        if (!string.IsNullOrWhiteSpace(verification.StandardOutput) ||
+            !string.IsNullOrWhiteSpace(verification.StandardError))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool HasZeroByteStandardOutput(TaskVerificationRecord verification)
@@ -90,6 +106,17 @@ public static class DispatchFailureClassifier
         }
 
         return verification.StandardOutput.Length == 0;
+    }
+
+    private static bool HasStandardOutputFileBytes(TaskVerificationRecord verification)
+    {
+        if (string.IsNullOrWhiteSpace(verification.StandardOutputPath) ||
+            !File.Exists(verification.StandardOutputPath))
+        {
+            return false;
+        }
+
+        return new FileInfo(verification.StandardOutputPath).Length > 0;
     }
 
     public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)
@@ -113,12 +140,20 @@ public static class DispatchFailureClassifier
         return true;
     }
 
-    public static DispatchOutcome Classify(TaskSpec task, TaskVerificationRecord verification)
+    public static DispatchOutcome Classify(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent = false,
+        bool hasCommittedChanges = false)
     {
+        workerResultPresent = workerResultPresent || verification.WorkerResultPresent;
+        hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges;
         var exitCode = verification.ExitCode;
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
-        if (verification.Succeeded)
+        if (verification.Succeeded &&
+            (!IsTransientEmptyOutputDispatchFlake(verification) ||
+             HasArtifactEvidence(workerResultPresent, hasCommittedChanges)))
         {
             return new DispatchOutcome(
                 DispatchOutcomeKind.VerifiedSuccess,
@@ -272,6 +307,9 @@ public static class DispatchFailureClassifier
              FractionPattern.IsMatch(output) ||
              ExitCodeZeroPattern.IsMatch(output));
     }
+
+    private static bool HasArtifactEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
+        workerResultPresent || hasCommittedChanges;
 
     // A Low-IL (sandboxed) worker can do valid work but be structurally unable to self-commit — it
     // cannot write .git (Medium integrity), and therefore cannot run the git-dependent suite to
