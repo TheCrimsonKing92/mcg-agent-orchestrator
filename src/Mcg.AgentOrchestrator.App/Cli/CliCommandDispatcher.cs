@@ -16,7 +16,8 @@ public static bool ExecuteCommand(
     IOperatorChannel? channel = null,
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
-    Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null)
+    Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
+    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
     kernel.SetEventWriter(eventWriter);
@@ -30,7 +31,8 @@ public static bool ExecuteCommand(
         channel,
         reloadKernel,
         persistKernel,
-        finalizeAcceptanceMerge)
+        finalizeAcceptanceMerge,
+        persistGoalKernel)
     {
         EventWriter = eventWriter
     };
