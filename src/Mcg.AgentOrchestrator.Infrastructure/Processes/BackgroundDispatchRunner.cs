@@ -323,9 +323,12 @@ public sealed class BackgroundDispatchRunner
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         ReleaseTrackedProcessJobs(processRecord);
         var task = kernel.GetTask(goalId, taskId);
+        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
+        var hasCommittedChanges = false;
         if (RequiresFileChangeEvidence(task) &&
             TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
         {
+            hasCommittedChanges = worktreeEvidence.HasRelevantCommitAfterDispatch;
             // Recovery (exit-code-agnostic): a Developer/Tester that EDITED the worktree and showed
             // verification evidence but never landed a commit is finished by the orchestrator. This
             // covers a low-integrity worker — which cannot write the medium-integrity .git (it lives
@@ -342,6 +345,7 @@ public sealed class BackgroundDispatchRunner
                 worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
             {
                 recovered = true;
+                hasCommittedChanges = true;
                 exitCode = 0;
                 standardErrorDiagnostic = AppendDiagnostic(
                     standardErrorDiagnostic ?? string.Empty,
@@ -363,7 +367,7 @@ public sealed class BackgroundDispatchRunner
             else if (!recovered && worktreeEvidence.IsClean)
             {
                 var requiresCommitEvidence =
-                    RequiresPostDispatchCommitEvidence(task, standardOutput, standardError) &&
+                    RequiresPostDispatchCommitEvidence(task, standardOutput, standardError, workerResultPresent) &&
                     !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
@@ -432,7 +436,9 @@ public sealed class BackgroundDispatchRunner
             standardError,
             completed.CompletedAt.Value,
             StandardOutputPath: processRecord.StandardOutputPath,
-            StandardErrorPath: processRecord.StandardErrorPath);
+            StandardErrorPath: processRecord.StandardErrorPath,
+            WorkerResultPresent: workerResultPresent,
+            HasCommittedChanges: hasCommittedChanges);
 
         TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
         return new DispatchRefreshOutcome(completed, verification, resultCommit);
@@ -460,21 +466,29 @@ public sealed class BackgroundDispatchRunner
             task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
     }
 
-    private static bool RequiresPostDispatchCommitEvidence(TaskSpec task, string standardOutput, string standardError)
+    private static bool RequiresPostDispatchCommitEvidence(
+        TaskSpec task,
+        string standardOutput,
+        string standardError,
+        bool workerResultPresent)
     {
         return task.RequiredRole switch
         {
             AgentRole.Developer => true,
-            AgentRole.Tester => !IsVerificationOnlyTesterCompletion(task, standardOutput, standardError),
+            AgentRole.Tester => !IsVerificationOnlyTesterCompletion(task, standardOutput, standardError, workerResultPresent),
             _ => false
         };
     }
 
-    private static bool IsVerificationOnlyTesterCompletion(TaskSpec task, string standardOutput, string standardError)
+    private static bool IsVerificationOnlyTesterCompletion(
+        TaskSpec task,
+        string standardOutput,
+        string standardError,
+        bool workerResultPresent)
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            HasCompletedVerification(task, standardOutput, standardError);
+            (HasCompletedVerification(task, standardOutput, standardError) || workerResultPresent);
     }
 
     // A verification-role worker proves it did its job either with a recognised test-runner result OR
@@ -494,6 +508,42 @@ public sealed class BackgroundDispatchRunner
     {
         return HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
             standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput, string standardError)
+    {
+        if (WorkerResultParser.TryParseFields(
+                $"{standardOutput}\n{standardError}",
+                out _,
+                out _))
+        {
+            return true;
+        }
+
+        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
+        {
+            var path = Path.Combine(workingDirectory, fileName);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (WorkerResultParser.TryParseFields(File.ReadAllText(path), out _, out _))
+                {
+                    return true;
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return false;
     }
 
     private static bool TesterTaskRequestsFileChanges(TaskSpec task)

@@ -45,7 +45,9 @@ public sealed record TaskVerificationRecord(
     DateTimeOffset CompletedAt,
     string? ModelFitNote = null,
     string? StandardOutputPath = null,
-    string? StandardErrorPath = null)
+    string? StandardErrorPath = null,
+    bool WorkerResultPresent = false,
+    bool HasCommittedChanges = false)
 {
     public bool Succeeded => ExitCode == 0;
 }
