@@ -86,6 +86,20 @@ public sealed partial class AgentOrchestratorKernel
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
     }
 
+    public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.SetDispatchBaseCommit(baseCommit);
+    }
+
+    public void RecordDispatchResultCommit(GoalId goalId, TaskId taskId, string resultCommit)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.SetDispatchResultCommit(resultCommit);
+    }
+
     public void RecordTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
     {
         var goal = GetGoal(goalId);
@@ -105,6 +119,7 @@ public sealed partial class AgentOrchestratorKernel
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}: {dispatch.Command}");
+        _eventWriter.AppendTaskDispatched(goalId, taskId, task.RequiredRole, dispatch.WorkerName);
     }
 
     public void RecordTaskProcessStarted(GoalId goalId, TaskId taskId, TaskProcessRecord process)

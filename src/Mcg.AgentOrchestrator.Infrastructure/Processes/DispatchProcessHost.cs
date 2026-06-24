@@ -317,10 +317,8 @@ public static void DropToLow() {
 
             heartbeatTimer.Change(HeartbeatInterval, HeartbeatInterval);
 
-            // Bounded supervision instead of an unbounded WaitForExit: reap the whole tree if the
-            // worker exceeds its max runtime or stalls (no log growth past the idle cap). lastProgressAt
-            // is maintained by the heartbeat from stdout/stderr byte growth, so a genuinely working
-            // worker (which streams continuously) is never killed; only a wedged tree is.
+            // Bounded supervision instead of an unbounded WaitForExit: reap the whole tree when
+            // ShouldReapWorker says so (runtime cap, or idle/stall cap once the worker has streamed).
             var maxRuntime = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_RUNTIME_MIN", DefaultMaxRuntime);
             var maxIdle = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_IDLE_MIN", DefaultMaxIdle);
             while (!worker.WaitForExit((int)WatchdogProbeInterval.TotalMilliseconds))
@@ -328,7 +326,8 @@ public static void DropToLow() {
                 var now = DateTimeOffset.UtcNow;
                 var runFor = now - startedAt;
                 var idleFor = now - lastProgressAt;
-                if (runFor < maxRuntime && idleFor < maxIdle)
+                var hasProducedOutput = lastStdoutBytes > 0 || lastStderrBytes > 0;
+                if (!ShouldReapWorker(runFor, idleFor, hasProducedOutput, maxRuntime, maxIdle))
                 {
                     continue;
                 }
@@ -415,6 +414,25 @@ public static void DropToLow() {
         {
             // Best-effort: worker may have already exited.
         }
+    }
+
+    // The idle/stall cap measures byte-growth stalls, which only have meaning once a worker has
+    // streamed output. A worker that has produced NO output yet (e.g. claude-cli -p buffers all
+    // output to the end) is bounded by maxRuntime alone, so a healthy buffering worker is not
+    // false-positive-reaped mid-task; a worker that streamed then went quiet is still reaped on idle.
+    internal static bool ShouldReapWorker(
+        TimeSpan runFor,
+        TimeSpan idleFor,
+        bool hasProducedOutput,
+        TimeSpan maxRuntime,
+        TimeSpan maxIdle)
+    {
+        if (runFor >= maxRuntime)
+        {
+            return true;
+        }
+
+        return hasProducedOutput && idleFor >= maxIdle;
     }
 
     private static TimeSpan ResolveWatchdogTimeout(string environmentVariable, TimeSpan fallback)

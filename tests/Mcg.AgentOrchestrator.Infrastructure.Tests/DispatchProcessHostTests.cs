@@ -108,6 +108,22 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ShouldReapWorker_spares_buffering_workers_until_maxRuntime")]
+    public void ShouldReapWorkerSparesBufferingWorkers()
+    {
+        var maxRuntime = TimeSpan.FromMinutes(60);
+        var maxIdle = TimeSpan.FromMinutes(20);
+
+        // A worker that has produced NO output (e.g. claude-cli -p buffers to the end) is NOT reaped
+        // on the idle cap even past it — only maxRuntime bounds it. This is the buffering-worker fix.
+        Assert.False(DispatchProcessHost.ShouldReapWorker(TimeSpan.FromMinutes(19), TimeSpan.FromMinutes(25), hasProducedOutput: false, maxRuntime, maxIdle));
+        Assert.True(DispatchProcessHost.ShouldReapWorker(TimeSpan.FromMinutes(61), TimeSpan.FromMinutes(25), hasProducedOutput: false, maxRuntime, maxIdle));
+
+        // A worker that streamed then went quiet past the idle cap IS reaped (stall detection preserved).
+        Assert.True(DispatchProcessHost.ShouldReapWorker(TimeSpan.FromMinutes(19), TimeSpan.FromMinutes(25), hasProducedOutput: true, maxRuntime, maxIdle));
+        Assert.False(DispatchProcessHost.ShouldReapWorker(TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(5), hasProducedOutput: true, maxRuntime, maxIdle));
+    }
+
     private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)
     {
         Exception? last = null;
