@@ -259,6 +259,9 @@ private static bool IsSubscriptionStartCandidate(TaskSpec task)
         task.LastProcess is not { IsRunning: true };
 }
 
+internal static bool HasAssignedDispatchCandidates(Goal goal) =>
+    goal.Tasks.Any(IsSubscriptionStartCandidate);
+
 private static string[] BuildIncompleteEarlierStageDependencies(Goal goal, TaskSpec task)
 {
     return goal.Tasks
@@ -275,6 +278,9 @@ private static bool IsEarlierSdlcStage(AgentRole candidate, AgentRole current)
         SdlcStageOrder(current) is { } currentOrder &&
         candidateOrder < currentOrder;
 }
+
+internal static bool IsEarlierSdlcStageOf(AgentRole candidate, AgentRole current) =>
+    IsEarlierSdlcStage(candidate, current);
 
 private static int? SdlcStageOrder(AgentRole role)
 {

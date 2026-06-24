@@ -207,7 +207,7 @@ public sealed class GoalDependencyTests
 
     // ── Conductor: dependent of escalated goal stays excluded ─────────────────
     //
-    // A escalates on its first advance (dispatch failure). B depends on A.
+    // A escalates on its first advance (spawn failure). B depends on A.
     // The dep-check prevents B from ever calling AdvanceOnce and creating a workspace.
 
     [Xunit.Fact(DisplayName = "GoalDependency_EscalatedPredecessor_DependentNeverRuns")]
@@ -221,7 +221,8 @@ public sealed class GoalDependencyTests
 
         var bWorkspaceCreated = false;
 
-        // A: WorkspaceExists=true → WorkspaceReady → dispatchAndStart fails → escalated.
+        // A: WorkspaceExists=true → WorkspaceReady → SpawnFailed (retry also fails) → Escalated.
+        // SpawnFailed triggers a retry + buildServerShutdown before escalating (unlike EmptyBatch).
         // B: WorkspaceExists=false → Created → would createWorkspace if dep check allowed it.
         var driver = new ConductorDriver(
             getFacts: g => g.Id == a.Id ? new GoalLifecycleFacts(WorkspaceExists: true) : GoalLifecycleFacts.None,
@@ -231,11 +232,11 @@ public sealed class GoalDependencyTests
                 if (g.Id == b.Id) bWorkspaceCreated = true;
                 return "/tmp/ws";
             },
-            dispatchAndStart: g => g.Id == a.Id // A fails → escalated
-                ? DispatchStartOutcome.EmptyBatch("Dispatch failed for A")
+            dispatchAndStart: g => g.Id == a.Id // A spawn-fails → escalated after retry
+                ? DispatchStartOutcome.SpawnFailed("Spawn failed for A")
                 : DispatchStartOutcome.Started(),
             startRecordedDispatches: null,
-            buildServerShutdown: null,
+            buildServerShutdown: () => { }, // required when SpawnFailed triggers retry + shutdown
             runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             runAdvisorySemanticAcceptance: null,
             retryTask: null,
@@ -253,7 +254,7 @@ public sealed class GoalDependencyTests
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 5);
 
         Assert.False(bWorkspaceCreated);
-        // A always escalates. B may be held or dep-escalated depending on tick ordering,
+        // A escalates (SpawnFailed). B may be held or dep-escalated depending on tick ordering,
         // but it never reaches createWorkspace.
         Assert.True(summary.Escalated >= 1);
     }
