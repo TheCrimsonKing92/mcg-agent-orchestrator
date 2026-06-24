@@ -4261,6 +4261,196 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "manifest.md")));
 }
 
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_exit0_with_output_yields_success_record_with_all_fields")]
+    public void DispatchDiagnosticExit0WithOutputYieldsSuccessRecordWithAllFields()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "abc12345-def67890-20260623.out.log");
+    var stderr = Path.Combine(root, "abc12345-def67890-20260623.err.log");
+    var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Test success diagnostic record", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var agent = new AgentDefinition(
+        new AgentId("test-planner"),
+        "Test Planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    File.WriteAllText(stdout, "Worker completed the task successfully.");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+    var spy = new CaptureDiagnosticWriter();
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: spy)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, spy.Records.Count);
+    var record = spy.Records.Single();
+    Assert.Equal(goal.Id.Value, record.GoalId);
+    Assert.Equal(task.Id.Value, record.TaskId);
+    Assert.Equal("abc12345-def67890-20260623", record.Prefix);
+    Assert.Equal(0, record.ExitCode);
+    Assert.Equal(stdout, record.OutputPath);
+    Assert.True(record.FileExists);
+    Assert.True(record.FileLen > 0);
+    Assert.True(record.ReadLen > 0);
+    Assert.Equal("success", record.Classification);
+    Assert.True(record.Reason.Contains("exit 0", StringComparison.OrdinalIgnoreCase));
+    Assert.NotEmpty(record.Timestamp);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_exit1_empty_output_yields_genuine_failure_record")]
+    public void DispatchDiagnosticExit1EmptyOutputYieldsGenuineFailureRecord()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "abc12345-def67890-20260623.out.log");
+    var stderr = Path.Combine(root, "abc12345-def67890-20260623.err.log");
+    var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Test genuine-failure diagnostic record", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var agent = new AgentDefinition(
+        new AgentId("test-planner"),
+        "Test Planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "1");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+    var spy = new CaptureDiagnosticWriter();
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: spy)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, spy.Records.Count);
+    var record = spy.Records.Single();
+    Assert.Equal(1, record.ExitCode);
+    Assert.Equal(0L, record.FileLen);
+    Assert.Equal(0L, record.ReadLen);
+    Assert.Equal("genuine-failure", record.Classification);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_exit1_rate_limit_in_stderr_yields_rate_limited_record")]
+    public void DispatchDiagnosticExit1RateLimitInStderrYieldsRateLimitedRecord()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "abc12345-def67890-20260623.out.log");
+    var stderr = Path.Combine(root, "abc12345-def67890-20260623.err.log");
+    var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Test rate-limited diagnostic record", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var agent = new AgentDefinition(
+        new AgentId("test-planner"),
+        "Test Planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex to purchase more credits or try again at 5:00 PM.");
+    File.WriteAllText(exit, "1");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+    var spy = new CaptureDiagnosticWriter();
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: spy)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, spy.Records.Count);
+    var record = spy.Records.Single();
+    Assert.Equal(1, record.ExitCode);
+    Assert.Equal("rate-limited", record.Classification);
+    Assert.True(record.Reason.Contains("usage limit", StringComparison.OrdinalIgnoreCase));
+}
+
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_exception_in_writer_does_not_propagate_to_caller")]
+    public void DispatchDiagnosticExceptionInWriterDoesNotPropagateToCaller()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "abc12345-def67890-20260623.out.log");
+    var stderr = Path.Combine(root, "abc12345-def67890-20260623.err.log");
+    var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Test diagnostic exception swallowing", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var agent = new AgentDefinition(
+        new AgentId("test-planner"),
+        "Test Planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    File.WriteAllText(stdout, "Worker completed.");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+
+    var completed = new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: new ThrowingDiagnosticWriter())
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(0, completed.ExitCode);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_FileDiagnosticWriter_produces_parseable_jsonl_with_all_required_fields")]
+    public void DispatchDiagnosticFileDiagnosticWriterProducesParseableJsonlWithAllRequiredFields()
+{
+    var root = CreateTempDirectory();
+    var logDir = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logDir);
+    var stdout = Path.Combine(logDir, "abc12345-def67890-20260623.out.log");
+    var stderr = Path.Combine(logDir, "abc12345-def67890-20260623.err.log");
+    var exit = Path.Combine(logDir, "abc12345-def67890-20260623.exit.txt");
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Test FileDiagnosticWriter JSONL output", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var agent = new AgentDefinition(
+        new AgentId("test-planner"),
+        "Test Planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    File.WriteAllText(stdout, "Worker produced output.");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: new FileDiagnosticWriter())
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    var logPath = Path.Combine(logDir, "dispatch-diagnostics.jsonl");
+    Assert.True(File.Exists(logPath));
+    var line = File.ReadAllLines(logPath).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+    Assert.NotNull(line);
+    var doc = JsonDocument.Parse(line!);
+    var root2 = doc.RootElement;
+    Assert.True(root2.TryGetProperty("goalId", out _));
+    Assert.True(root2.TryGetProperty("taskId", out _));
+    Assert.True(root2.TryGetProperty("prefix", out _));
+    Assert.True(root2.TryGetProperty("exitCode", out _));
+    Assert.True(root2.TryGetProperty("outputPath", out _));
+    Assert.True(root2.TryGetProperty("fileExists", out _));
+    Assert.True(root2.TryGetProperty("fileLen", out _));
+    Assert.True(root2.TryGetProperty("readLen", out _));
+    Assert.True(root2.TryGetProperty("stderrLen", out _));
+    Assert.True(root2.TryGetProperty("classification", out var cls));
+    Assert.Equal("success", cls.GetString());
+    Assert.True(root2.TryGetProperty("reason", out _));
+    Assert.True(root2.TryGetProperty("timestamp", out _));
+}
+
     private static TaskBrief CreateBudgetBrief(params string[] lines)
 {
     return new TaskBrief(
@@ -4540,6 +4730,18 @@ private static void WriteSkill(string workingDirectory, string skillName)
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter
+    {
+        public List<DispatchDiagnosticRecord> Records { get; } = [];
+        public void WriteRecord(DispatchDiagnosticRecord record) => Records.Add(record);
+    }
+
+    private sealed class ThrowingDiagnosticWriter : IDispatchDiagnosticWriter
+    {
+        public void WriteRecord(DispatchDiagnosticRecord record) =>
+            throw new InvalidOperationException("Diagnostic writer failure (test-injected).");
     }
 }
 
