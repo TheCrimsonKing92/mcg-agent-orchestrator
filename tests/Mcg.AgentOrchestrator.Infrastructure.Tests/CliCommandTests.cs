@@ -5059,6 +5059,21 @@ public sealed class CliCommandTests
             return result;
         }
 
+        public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
+        {
+            var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
+            return Task.FromResult<GoalSnapshot?>(snap);
+        }
+
+        public Task<T> TransactGoalAsync<T>(
+            GoalId goalId,
+            Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
+            return transaction(snap, cancellationToken).ContinueWith(t => t.Result.Result, TaskContinuationOptions.ExecuteSynchronously);
+        }
+
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
     }

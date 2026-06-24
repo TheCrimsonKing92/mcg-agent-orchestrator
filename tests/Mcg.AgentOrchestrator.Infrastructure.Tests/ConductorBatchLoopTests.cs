@@ -1257,4 +1257,39 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(0, summary.Advanced);
     }
+
+    // ── Per-tick write scope: persistGoalTick fires exactly for goals that changed ──
+
+    [Xunit.Fact(DisplayName = "PersistGoalTick_FiresExactlyForGoalsThatChangedDisposition")]
+    public void PersistGoalTick_FiresExactlyForGoalsThatChangedDisposition()
+    {
+        // Two goals: A advances (workspace creation), B is held by concurrent cap.
+        // persistGoalTick must be called exactly once for A and zero times for B.
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal A");
+        var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal B");
+
+        var createWorkspaceCalls = 0;
+        var driver = MakeDriver(
+            getFacts: g => g.Id == goalA.Id
+                ? GoalLifecycleFacts.None          // A: no workspace yet → workspace creation tick
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            // After A's workspace is created the running count hits cap, so B stays held.
+            getRunningCount: () => createWorkspaceCalls >= 1
+                ? ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers
+                : 0,
+            createWorkspace: _ => { createWorkspaceCalls++; return "/tmp/ws"; });
+
+        var persistedGoalIds = new List<GoalId>();
+
+        new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+            maxIterations: 1,
+            persistGoalTick: (_, changedGoalId) => persistedGoalIds.Add(changedGoalId));
+
+        // A changed disposition (workspace created); B was held with no state change.
+        Assert.Contains(goalA.Id, persistedGoalIds);
+        Assert.DoesNotContain(goalB.Id, persistedGoalIds);
+        Assert.Single(persistedGoalIds);
+    }
 }

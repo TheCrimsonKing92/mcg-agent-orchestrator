@@ -13,7 +13,8 @@ internal sealed class CliExecutionContext(
     IOperatorChannel? channel = null,
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
-    Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null)
+    Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
+    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -25,6 +26,9 @@ public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kerne
 /// survives a reload or a killed process. No-op for ordinary commands (which commit on return).
 /// </summary>
 public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persistKernel?.Invoke(checkpointKernel);
+
+public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, GoalId changedGoalId) =>
+    persistGoalKernel?.Invoke(checkpointKernel, changedGoalId);
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 

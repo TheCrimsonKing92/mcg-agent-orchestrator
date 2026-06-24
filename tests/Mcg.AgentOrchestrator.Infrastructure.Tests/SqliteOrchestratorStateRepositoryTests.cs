@@ -35,7 +35,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["ix_model_fit_history_model", "ix_model_fit_history_role"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix_model_fit_history_%' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "updated_at:TEXT:1", "snapshot_json:TEXT:1"],
+            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
     }
 
@@ -366,6 +366,183 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("Anthropic", best!.ProviderName);
         Assert.Equal("claude-sonnet-4-6", best.ModelName);
         Assert.Equal(ModelOutcomeRecommendation.Prefer, best.Recommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_version_column")]
+    public void IdempotentSchemaMigrationAddsVersionColumn()
+    {
+        // Simulate a DB created by an old binary (no version column) by creating schema manually.
+        var db = TempDb();
+        using var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
+        setupConn.Open();
+        // Microsoft.Data.Sqlite executes only one statement per ExecuteNonQuery; split each DDL.
+        static void Exec(SqliteConnection c, string sql) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
+        Exec(setupConn, "PRAGMA journal_mode=WAL");
+        Exec(setupConn, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+        Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
+        Exec(setupConn, "CREATE TABLE human_input_requests (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
+        Exec(setupConn, "CREATE TABLE model_fit_history (goal_id TEXT NOT NULL, task_id TEXT NOT NULL, role TEXT NOT NULL, provider_name TEXT NOT NULL, model_name TEXT NOT NULL, complexity TEXT NULL, task_shape TEXT NULL, outcome TEXT NOT NULL, self_rating TEXT NOT NULL, timestamp TEXT NOT NULL, PRIMARY KEY (goal_id, task_id, timestamp))");
+        Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
+        setupConn.Close();
+
+        // Opening the repo on this old-schema DB should add the version column without recreating tables.
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        checkConn.Open();
+        var columns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('goals') ORDER BY cid");
+        Assert.Contains("version", columns);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadGoalAsync_returns_snapshot_for_existing_goal")]
+    public async Task LoadGoalAsync_ReturnsSnapshotForExistingGoal()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Load target goal");
+        await repo.SaveAsync(kernel);
+
+        var snap = await repo.LoadGoalAsync(goal.Id);
+
+        Assert.NotNull(snap);
+        Assert.Equal(goal.Id.Value, snap.Id);
+        Assert.Equal("Load target goal", snap.Objective);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadGoalAsync_returns_null_for_missing_goal")]
+    public async Task LoadGoalAsync_ReturnsNullForMissingGoal()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var snap = await repo.LoadGoalAsync(GoalId.New());
+        Assert.Null(snap);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_writes_only_target_goal_row")]
+    public async Task TransactGoalAsync_WritesOnlyTargetGoalRow()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal("Goal A");
+        var goalB = kernel.CreateGoal("Goal B - untouched");
+        await repo.SaveAsync(kernel);
+
+        // TransactGoalAsync produces a snapshot with an updated objective for goal A only.
+        await repo.TransactGoalAsync<bool>(
+            goalA.Id,
+            (snap, ct) =>
+            {
+                // Return an updated snapshot with a sentinel in the timeline (not changing objective,
+                // just verifying the write path works; we reuse the loaded snapshot unchanged here).
+                return Task.FromResult((true, snap, true));
+            });
+
+        // Goal A was written (version should be 2 now - incremented by SaveAsync and TransactGoalAsync).
+        // Goal B must remain at version 1 (only touched by the initial SaveAsync).
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        conn.Open();
+        var versions = QueryStrings(conn,
+            "SELECT id || ':' || version FROM goals ORDER BY objective");
+        Assert.Equal(2, versions.Count);
+        var vA = versions.Single(v => v.StartsWith(goalA.Id.Value));
+        var vB = versions.Single(v => v.StartsWith(goalB.Id.Value));
+        var versionA = int.Parse(vA.Split(':')[1]);
+        var versionB = int.Parse(vB.Split(':')[1]);
+        Assert.True(versionA > versionB, $"Goal A (v{versionA}) should have a higher version than goal B (v{versionB}) after TransactGoalAsync");
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_stale_version_retries_and_succeeds")]
+    public async Task TransactGoalAsync_StaleVersionRetriesAndSucceeds()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("CAS retry goal");
+        await repo.SaveAsync(kernel);
+
+        var delegateCalls = 0;
+
+        // Simulate a concurrent write that increments the version between the first load and CAS.
+        // We do this by interleaving an extra SaveAsync on the first delegate call.
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            async (snap, ct) =>
+            {
+                delegateCalls++;
+                if (delegateCalls == 1)
+                {
+                    // Concurrent writer increments the version before our CAS write.
+                    await repo.SaveAsync(kernel);
+                }
+                return (true, snap, true);
+            });
+
+        // Delegate was called at least twice: once with stale version, once after retry.
+        Assert.True(delegateCalls >= 2, $"Expected retry on version mismatch, got {delegateCalls} delegate calls");
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_version_incremented_atomically")]
+    public async Task TransactGoalAsync_VersionIncrementedAtomically()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Atomic version goal");
+        await repo.SaveAsync(kernel);
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (snap, ct) => Task.FromResult((true, snap, true)));
+
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT version FROM goals WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", goal.Id.Value);
+        var version = Convert.ToInt32(cmd.ExecuteScalar());
+        // Initial SaveAsync gives version=1, TransactGoalAsync should give version=2.
+        Assert.Equal(2, version);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_disjoint_goals_do_not_block_each_other")]
+    public async Task TransactGoalAsync_DisjointGoalsDoNotBlockEachOther()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal("Concurrent goal A");
+        var goalB = kernel.CreateGoal("Concurrent goal B");
+        await repo.SaveAsync(kernel);
+
+        var snapA = await repo.LoadGoalAsync(goalA.Id);
+        var snapB = await repo.LoadGoalAsync(goalB.Id);
+
+        // Simulate goal A holding a long mutate outside the write tx, while goal B does a short CAS.
+        // Both use TransactGoalAsync which only holds BEGIN IMMEDIATE for the brief CAS write.
+        var taskA = Task.Run(async () =>
+        {
+            await repo.TransactGoalAsync<bool>(
+                goalA.Id,
+                async (snap, ct) =>
+                {
+                    await Task.Delay(500, ct); // long work outside write tx
+                    return (true, snap, true);
+                });
+        });
+
+        // Goal B should complete its short CAS write DURING goal A's long mutate delay.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await repo.TransactGoalAsync<bool>(
+            goalB.Id,
+            (snap, ct) => Task.FromResult((true, snap, true)));
+        sw.Stop();
+
+        // Goal B's write should complete well before goal A's 500 ms delay ends.
+        // Allow generous margin (250 ms) for test environment variance.
+        Assert.True(sw.ElapsedMilliseconds < 250,
+            $"Goal B's TransactGoalAsync took {sw.ElapsedMilliseconds}ms — should complete independently of goal A's long mutate");
+
+        await taskA; // ensure A also completes
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_goal_metadata")]

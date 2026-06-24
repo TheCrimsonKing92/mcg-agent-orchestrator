@@ -714,7 +714,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
-                    persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon);
+                    persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
+                    persistGoalTick: context.PersistGoalCheckpoint);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -766,7 +767,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
                     wakeSignal: watchWakeSignal,
                     maxDuration: watchMax,
-                    onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint);
+                    onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint,
+                    persistGoalTick: context.PersistGoalCheckpoint);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }
