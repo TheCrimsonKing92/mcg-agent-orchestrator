@@ -51,6 +51,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("intent-template", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("delegate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||

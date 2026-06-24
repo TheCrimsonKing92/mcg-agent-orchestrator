@@ -5062,4 +5062,45 @@ public sealed class CliCommandTests
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
     }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry")]
+    public void CliGoalMarkLandedRetiresCompletedGoalAndWritesCleanupJournalEntry()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Force-landed feature", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+        var goalPrefix = goal.Id.Value[..8];
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["goal-mark-landed", goalPrefix, "--confirm-goal-mark-landed", "--force"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        Xunit.Assert.Contains("CleanedUp", output);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
+            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+        Xunit.Assert.NotNull(cleanupEntry);
+        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+        Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
+    }
 }
