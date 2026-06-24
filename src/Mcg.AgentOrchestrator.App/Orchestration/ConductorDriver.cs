@@ -363,12 +363,11 @@ internal sealed class ConductorDriver
                     : $"Auto-retry empty-output dispatch flake {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
                         $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; " +
                         $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
-                _retryTask(goal.Id, flakedTask.Id,
-                    note);
-                return MakeResult(goal.Id.Value, goalPrefix, policy,
-                    new ConductorAdvanceOutcome.Executed(
-                        GoalLifecycleState.Failed,
-                        $"Auto-recovered empty-output dispatch flake on task {flakedTask.Id.Value[..8]}"));
+                _retryTask(goal.Id, flakedTask.Id, note);
+                // Immediately dispatch in the same tick after recovery, bypassing the next-tick
+                // WorkspaceReady path. If ownership blocks dispatch under Conservative policy,
+                // ExecuteDispatchAndStart returns Held (not Escalate) so the goal stays eligible.
+                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
         }
 
@@ -453,6 +452,20 @@ internal sealed class ConductorDriver
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
+        }
+
+        // When all ready tasks are blocked (e.g. high-risk ownership under a conservative policy)
+        // but there ARE assigned tasks waiting to dispatch, hold rather than escalate.
+        // Escalating here permanently sets the goal aside via LifecycleEscalation (which never
+        // re-admits); holding keeps the conductor retrying each tick until the policy changes or
+        // the operator approves. Agreeing with GoalReadinessPreflight which also says "Proceed"
+        // when assigned tasks exist with agents.
+        if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch &&
+            GoalManagementCommandService.HasAssignedDispatchCandidates(goal))
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(fromState,
+                    $"Assigned tasks exist but no ready batch formed; will retry next tick. {outcome.Reason}"));
         }
 
         return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);

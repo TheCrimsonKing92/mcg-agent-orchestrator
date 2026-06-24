@@ -925,8 +925,8 @@ public sealed class ConductorDriverTests
         Assert.Equal(spawnFailReason, escalationReason);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_empty_batch_escalates_immediately_without_retry")]
-    public void ConductorDriverWorkspaceReadyEmptyBatchEscalatesImmediatelyWithoutRetry()
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_empty_batch_with_assigned_tasks_holds_not_escalates")]
+    public void ConductorDriverWorkspaceReadyEmptyBatchWithAssignedTasksHoldsNotEscalates()
     {
         var (_, goal) = SimpleGoal();
         var callCount = 0;
@@ -947,7 +947,7 @@ public sealed class ConductorDriverTests
 
         Assert.Equal(1, callCount);
         Assert.False(shutdownCalled);
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held); // assigned tasks exist → Held, not Escalated
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_started_first_try_advances_without_retry")]
@@ -1067,8 +1067,8 @@ public sealed class ConductorDriverTests
 
     // ── Dispatch-start reason clarity (Defect 2 fix) ─────────────────────
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_empty_batch_escalation_names_batch_reason")]
-    public void ConductorDriverWorkspaceReadyEmptyBatchEscalationNamesBatchReason()
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_empty_batch_with_assigned_tasks_held_reason_includes_batch_reason")]
+    public void ConductorDriverWorkspaceReadyEmptyBatchWithAssignedTasksHeldReasonIncludesBatchReason()
     {
         var (_, goal) = SimpleGoal();
         string? escalationReason = null;
@@ -1082,9 +1082,11 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
-        Assert.Equal(emptyBatchReason, escalationReason);
-        Assert.Contains(escalationReason!, v => v.Contains("batch", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held); // assigned tasks exist → Held, not Escalated
+        Assert.Null(escalationReason); // writeEscalation not called for Held
+        var heldReason = ((ConductorAdvanceOutcome.Held)result.Outcome).Reason;
+        Assert.True(heldReason.Contains("batch", StringComparison.OrdinalIgnoreCase));
+        Assert.True(heldReason.Contains(emptyBatchReason, StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_failure_escalation_names_spawn_reason")]
