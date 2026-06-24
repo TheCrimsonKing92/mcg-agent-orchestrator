@@ -104,6 +104,10 @@ This is the most important section. Match the **observable symptom** to its caus
 | `acceptance <goal>` prints **"not accepted"** with `Tasks passed: N/5` | A task isn't verified yet (often a verification-role task). | `status <goal>` → if a Tester/Reviewer is `Failed`, `recover` it and re-run; the goal reconciles `Failed → Active`. |
 | Goal in `Failed` lifecycle but the work is committed in the worktree | A stage process was orphaned (e.g. a loop crash). The commit is safe. | `recover <goal> "<note>"` then re-run the loop, or `acceptance <goal>` to reconcile + land. |
 | Goal genuinely dead / wrong, can't proceed | — | `abandon-goal <goal> <single-token-reason> --confirm-goal-abandon` (remove its worktree first if a Low-IL `.mcg-sandbox` orphan blocks it). |
+| Worker log shows exit 0 and file changes exist in `.orchestrator-worktrees/<prefix>` but the task is still `[Dispatched]` / reconcile loop shows `held` indefinitely | Orphaned dispatch reconcile — loop crashed after worker exited. The work is safe in the worktree. | `recover <goal> "<note>"` resets the stale dispatch → then `acceptance <goal>` (or re-run the loop) to read the worktree commits. |
+| Acceptance build fails with `CS2012` / `MSB3491` — "file is being used by another process" | Roslyn / VBCSCompiler build server holds the output DLL. Transient; not a code defect. | `dotnet build-server shutdown` (releases the file handles), then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
+| `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> <text>` for each; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
+| You want two or more goals to advance concurrently | Goals with overlapping file scopes contend for the same worktree paths — running them together produces merge conflicts. | Verify non-overlapping file scopes first. Then intake all goals **before** starting a single `conduct --loop --watch --policy Permissive` — one loop tick advances every eligible goal; the slot cap (5 under Permissive) limits concurrent workers. |
 
 Notes that will save you time:
 - `recover <goal> <note>` takes a free-text note; **multi-word notes work**, but avoid `;` and other shell-special characters (the launcher mangles them).
@@ -112,7 +116,52 @@ Notes that will save you time:
 
 ---
 
-## 6. State & store map
+## 6. Autonomous conductor-loop lifecycle
+
+This section describes what the loop does on every goal's behalf so you can verify it ran correctly and know when to intervene.
+
+### 6.1 Goal-state lifecycle
+
+Each goal advances through `GoalLifecycleState` identifiers in order:
+
+```
+Created
+  → WorkspaceReady          # isolated git worktree created at .orchestrator-worktrees/<8-char-prefix>
+  → Dispatched              # first eligible task sent to a role-matched worker
+  → Running                 # worker process active; loop ticks poll for output
+  → AwaitingVerification    # worker exited; acceptance suite queued
+  → Verified                # acceptance suite green; change-risk gate evaluable
+  → Merged                  # goal branch merged into main (landing action)
+  → Recorded                # DOGFOOD_LOG entry written
+  → CleanedUp               # worktree removed; goal is terminal
+```
+
+Off-path states you will see in escalations: `AwaitingClarification` (refiner raised questions), `AwaitingHumanInput` (conductor needs an operator decision), `Failed` (a task exhausted retries), `Blocked` (operator hold). These stop the normal sequence; use §5 to clear them.
+
+**Loop-exit condition.** The loop halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* the loop started are **not** picked up — restart `conduct --loop` to process them.
+
+### 6.2 Orchestrator-commit-on-behalf + merge to main
+
+Workers write files only inside their isolated worktree (`.orchestrator-worktrees/<prefix>`), on branch `goal/<prefix>`. When a worker exits with uncommitted changes, the conductor auto-stages and commits them before running the acceptance suite. A successfully landed goal produces two paired commits visible in `git log main`:
+
+```
+Orchestrator-committed worker edits for goal <full-goal-id>
+Integrate goal/<prefix>: <goal-title-slug>
+```
+
+The first commit is made on `goal/<prefix>` inside the worktree. The second merges that branch into `main` via the `integration` branch (fast-forward). If you see both commits for a goal, the loop ran to completion for it. If you see only the first, the acceptance gate or change-risk gate stopped the landing — `status <goal>` and `next <goal> --full` explain why.
+
+### 6.3 Concurrency caps
+
+Two independent constraints bound useful parallelism:
+
+**Test-slot capacity.** The acceptance test grid has 4 slots (5 under Permissive policy). Launching more concurrent goals than available slots means acceptance runs queue — they do not fail, they wait for a slot to free up.
+
+**Provider rate-limit.** Each worker holds a `claude-cli` or `codex-cli` subscription session. Under heavy load the shared subscription can hit the provider's session rate-limit, causing workers to exit with zero bytes of output and retry in a loop. If you observe this pattern (workers exit-1 repeatedly with empty output), reduce the number of concurrent in-flight goals or stagger goal intake. There is no orchestrator-side setting that bypasses the upstream limit.
+
+---
+
+## 7. State & store map
 
 Durable state lives in stores, never in `.scratch`.
 
@@ -130,7 +179,7 @@ Durable state lives in stores, never in `.scratch`.
 
 ---
 
-## 7. Operating discipline (hard-won)
+## 8. Operating discipline (hard-won)
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
 - **State writes vs a running loop.** The loop tolerates a concurrent state-writing command (it retries transient SQLite locks), but it is still tidiest to do `goal`/`recover`/`attention dismiss`/`acceptance` while no loop is running. Do read-only inspection (`status`, `next`, git on worktrees, loop output) freely.
@@ -141,7 +190,7 @@ Durable state lives in stores, never in `.scratch`.
 
 ---
 
-## 8. Where else to look
+## 9. Where else to look
 
 - `AGENTS.md` — output/diagnosis/spec discipline and architecture invariants (read after this).
 - `.agents/skills/orchestrator-worker-verification/SKILL.md` — how to verify a worker result before trusting it.
