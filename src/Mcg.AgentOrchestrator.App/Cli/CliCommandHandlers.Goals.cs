@@ -1312,6 +1312,50 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         throw new ArgumentException("Use either --create-goal or --create-simple-goal, not both.");
     }
 
+    // Batch submission (a3f6b536): multiple positional filters each create one goal in a single command.
+    // Single-filter behaviour below is unchanged; batch only engages with 2+ filters and a create flag.
+    var batchFilters = parts
+        .Skip(1)
+        .Where(part => !part.StartsWith("--", StringComparison.Ordinal))
+        .ToList();
+    if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
+    {
+        var created = 0;
+        foreach (var filter in batchFilters)
+        {
+            var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 1);
+            if (itemPlan.Items.Count == 0)
+            {
+                Console.WriteLine($"No backlog item matched '{filter}'; skipping.");
+                continue;
+            }
+
+            var batchItem = itemPlan.Items.Single();
+            var batchGoal = createSimpleGoal
+                ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
+                : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter);
+
+            if (!string.IsNullOrEmpty(batchItem.Id))
+            {
+                context.Kernel.SetGoalSourceBacklogItemId(batchGoal.Id, batchItem.Id);
+            }
+
+            context.CurrentGoal = batchGoal;
+            created++;
+            Console.WriteLine(createSimpleGoal
+                ? $"Created simple goal from backlog slice '{batchItem.Heading}'."
+                : $"Created five-role goal from backlog slice '{batchItem.Heading}'.");
+        }
+
+        if (created == 0)
+        {
+            throw new InvalidOperationException("No backlog items matched the requested filters.");
+        }
+
+        Console.WriteLine($"Created {created} goal(s) from {batchFilters.Count} requested backlog slice(s).");
+        return true;
+    }
+
     var headingFilter = parts
         .Skip(1)
         .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));

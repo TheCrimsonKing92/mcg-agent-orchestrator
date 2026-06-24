@@ -33,6 +33,32 @@ public sealed class GoalBacklogLinkTests
         Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
     }
 
+    // ── Intake: batch (multiple filters -> one goal each) ─────────────────────
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_batch_intake_creates_one_linked_goal_per_filter")]
+    public void BatchIntakeCreatesOneLinkedGoalPerFilter()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Alpha Feature\n\nAlpha body.\n\n## Beta Feature\n\nBeta body.\n");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Alpha Feature", "Beta Feature", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.Equal(2, kernel.Goals.Count);
+        var seeded = new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult();
+        var alphaId = seeded.Single(entry => string.Equals(entry.Title, "Alpha Feature", StringComparison.Ordinal)).Id;
+        var betaId = seeded.Single(entry => string.Equals(entry.Title, "Beta Feature", StringComparison.Ordinal)).Id;
+        Assert.True(kernel.Goals.Any(goal => goal.SourceBacklogItemId == alphaId));
+        Assert.True(kernel.Goals.Any(goal => goal.SourceBacklogItemId == betaId));
+    }
+
     // ── Intake: skip already-done item ───────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_no_goal_for_already_done_backlog_item_at_intake")]
