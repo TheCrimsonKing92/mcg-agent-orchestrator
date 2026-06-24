@@ -172,6 +172,63 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             return true;
 
+        case "goal-mark-landed":
+        {
+            var landedPrefix = GetOptionalArgument(parts, "--confirm-goal-mark-landed", "--force");
+            if (landedPrefix is null)
+                throw new ArgumentException(
+                    "Usage: goal-mark-landed <goal-prefix> --confirm-goal-mark-landed [--force]");
+            if (!HasCliConfirmation(parts, "--confirm-goal-mark-landed"))
+                throw new InvalidOperationException(
+                    $"goal-mark-landed requires --confirm-goal-mark-landed to prevent accidental finalization. " +
+                    $"Re-run with --confirm-goal-mark-landed after verifying that goal {landedPrefix} was merged to main out-of-band.");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, landedPrefix);
+            var landedGoal = context.CurrentGoal;
+            var landedId = landedGoal.Id;
+            var landedGp = landedId.Value[..8];
+            if (landedGoal.Status != GoalStatus.Completed)
+                throw new InvalidOperationException(
+                    $"goal-mark-landed is only valid for Completed goals; goal {landedGp} is {landedGoal.Status}. " +
+                    "Active or InProgress goals self-heal via the conductor; only Completed (force-landed) goals need this command.");
+            var landedDir = context.Workspace.ExecutionDirectory;
+            var landedBranch = GoalWorktrees.BranchName(landedId);
+            if (!HasCliConfirmation(parts, "--force"))
+            {
+                var localExists = GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}").ExitCode == 0;
+                var remoteExists = !localExists &&
+                    GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}").ExitCode == 0;
+                if (!localExists && !remoteExists)
+                    throw new InvalidOperationException(
+                        $"goal-mark-landed: branch '{landedBranch}' was not found locally or remotely; ancestry check cannot run. " +
+                        "Use --force if you have manually confirmed the work is in main.");
+                var branchRef = localExists ? landedBranch : $"origin/{landedBranch}";
+                if (GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD").ExitCode != 0)
+                    throw new InvalidOperationException(
+                        $"goal-mark-landed: branch '{landedBranch}' is not an ancestor of the current HEAD; " +
+                        "verify the work was merged into main before using this command. Use --force to bypass this check.");
+            }
+            Console.WriteLine($"Marking goal {landedGp} as landed out-of-band (branch: {landedBranch}).");
+            if (GoalWorktrees.TryResolve(landedDir, landedId) is not null)
+            {
+                var removeResult = GoalWorktrees.Remove(landedDir, landedId, context.Kernel);
+                PrintWorkspaceRemoveResult(removeResult);
+            }
+            else
+            {
+                Console.WriteLine("No workspace to remove.");
+            }
+            if (DotnetBuildEnvironmentManager.InspectGoalLease(landedId).CanCleanup)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(landedId, out _, out var leaseDetail);
+                Console.WriteLine($"Build lease: {leaseDetail}");
+            }
+            GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:cleanup", "Out-of-band landing recorded via goal-mark-landed.");
+            GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:cleanup", $"Goal {landedGp} marked as landed out-of-band; workspace removed.");
+            context.EventWriter.AppendCleanedUp(landedId);
+            Console.WriteLine($"Goal {landedGp} is now in the terminal CleanedUp state; the conductor will not re-dispatch it.");
+            return true;
+        }
+
         case "park-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park]");
             context.CurrentGoal = HandleGoalParkCommand(context, parts);
