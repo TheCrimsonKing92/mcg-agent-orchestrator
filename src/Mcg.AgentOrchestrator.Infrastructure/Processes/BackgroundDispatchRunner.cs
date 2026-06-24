@@ -22,6 +22,7 @@ public sealed class BackgroundDispatchRunner
     private readonly bool _processStartDisabled;
     private readonly Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>> _findBuildDaemons;
     private readonly Func<int, bool> _tryKillBuildDaemon;
+    private readonly IDispatchDiagnosticWriter _diagnosticWriter;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -31,7 +32,8 @@ public sealed class BackgroundDispatchRunner
         bool? disableProcessStart = null,
         Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>>? findBuildDaemons = null,
         Func<int, bool>? tryKillBuildDaemon = null,
-        TimeSpan? progressStallTimeout = null)
+        TimeSpan? progressStallTimeout = null,
+        IDispatchDiagnosticWriter? diagnosticWriter = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -41,6 +43,7 @@ public sealed class BackgroundDispatchRunner
         _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
         _findBuildDaemons = findBuildDaemons ?? FindBuildDaemons;
         _tryKillBuildDaemon = tryKillBuildDaemon ?? TryKillBuildDaemonProcess;
+        _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -411,6 +414,7 @@ public sealed class BackgroundDispatchRunner
             StandardOutputPath: processRecord.StandardOutputPath,
             StandardErrorPath: processRecord.StandardErrorPath);
 
+        TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
         return new DispatchRefreshOutcome(completed, verification, resultCommit);
     }
 
@@ -1259,6 +1263,107 @@ public sealed class BackgroundDispatchRunner
     private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
     {
         return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void TryWriteDiagnosticRecord(
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord processRecord,
+        int exitCode,
+        string standardOutput,
+        string standardError)
+    {
+        try
+        {
+            const string exitSuffix = ".exit.txt";
+            var fn = Path.GetFileName(processRecord.ExitCodePath);
+            var prefix = fn.EndsWith(exitSuffix, StringComparison.OrdinalIgnoreCase)
+                ? fn[..^exitSuffix.Length]
+                : fn;
+
+            var outputPath = processRecord.StandardOutputPath;
+            var fileExists = File.Exists(outputPath);
+            var fileLen = fileExists ? new FileInfo(outputPath).Length : 0L;
+            var readLen = (long)standardOutput.Length;
+            var stderrLen = (long)standardError.Length;
+
+            var classification = ClassifyDispatch(
+                exitCode, fileLen, readLen, standardOutput, standardError, out var reason);
+
+            var record = new DispatchDiagnosticRecord(
+                goalId.Value,
+                taskId.Value,
+                prefix,
+                exitCode,
+                outputPath,
+                fileExists,
+                fileLen,
+                readLen,
+                stderrLen,
+                classification,
+                reason,
+                _clock.UtcNow.ToString("O"));
+
+            _diagnosticWriter.WriteRecord(record);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DispatchDiagnostic] Failed to record dispatch diagnostic: {ex.Message}");
+        }
+    }
+
+    private static string ClassifyDispatch(
+        int exitCode,
+        long fileLen,
+        long readLen,
+        string standardOutput,
+        string standardError,
+        out string reason)
+    {
+        if (exitCode == 0 && fileLen > 0)
+        {
+            reason = $"exit 0 with {fileLen} bytes in output file";
+            return "success";
+        }
+
+        var combined = $"{standardOutput}\n{standardError}";
+        if (exitCode != 0 && ContainsRateLimitSentinel(combined, out var sentinelDetail))
+        {
+            reason = sentinelDetail;
+            return "rate-limited";
+        }
+
+        if (exitCode != 0 && fileLen == 0 && readLen == 0)
+        {
+            reason = "exit non-zero with empty output file and empty captured stdout";
+            return "genuine-failure";
+        }
+
+        reason = exitCode == 0
+            ? $"exit 0; fileLen={fileLen}; readLen={readLen}"
+            : $"exit {exitCode}; fileLen={fileLen}; readLen={readLen}; stderrLen={standardError.Length}";
+        return exitCode == 0 ? "success" : "failed";
+    }
+
+    private static bool ContainsRateLimitSentinel(string combined, out string detail)
+    {
+        if (combined.Contains("usage limit", StringComparison.OrdinalIgnoreCase))
+        {
+            if (combined.Contains("try again", StringComparison.OrdinalIgnoreCase))
+            {
+                detail = "session limit sentinel ('usage limit' + 'try again') in stdout or stderr";
+                return true;
+            }
+
+            if (combined.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase))
+            {
+                detail = "session limit sentinel ('usage limit' + 'purchase more credits') in stdout or stderr";
+                return true;
+            }
+        }
+
+        detail = string.Empty;
+        return false;
     }
 
     private sealed record DispatchHeartbeat(
