@@ -316,7 +316,7 @@ public sealed class BackgroundDispatchRunner
             // for retry/escalation rather than landing unproven work.
             var recovered = false;
             if (!worktreeEvidence.IsClean &&
-                DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) &&
+                HasClassifiedVerificationEvidence(task, standardOutput, standardError) &&
                 TryCommitWorktreeEdits(processRecord.WorkingDirectory, goalId) &&
                 TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
                 worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
@@ -359,7 +359,7 @@ public sealed class BackgroundDispatchRunner
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
                 }
                 else if (exitCode != 0 &&
-                    HasCompletedVerification(standardOutput, standardError))
+                    HasCompletedVerification(task, standardOutput, standardError))
                 {
                     // Clean worktree, no commit required (e.g. a Tester verifying already-committed work),
                     // and the worker produced verification evidence — but it exited non-zero. Under the
@@ -454,7 +454,7 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            HasCompletedVerification(standardOutput, standardError);
+            HasCompletedVerification(task, standardOutput, standardError);
     }
 
     // A verification-role worker proves it did its job either with a recognised test-runner result OR
@@ -463,9 +463,16 @@ public sealed class BackgroundDispatchRunner
     // block, so without this a Tester that verified already-committed work is false-failed for "no
     // relevant file-change evidence". Scoped to the clean-worktree path; the acceptance suite re-runs
     // the real tests, and a worker that errored before producing a WORKER_RESULT still fails here.
-    private static bool HasCompletedVerification(string standardOutput, string standardError)
+    private static bool HasClassifiedVerificationEvidence(TaskSpec task, string standardOutput, string standardError)
     {
-        return DispatchFailureClassifier.HasVerificationEvidence(standardOutput, standardError) ||
+        var tempVerification = new TaskVerificationRecord(
+            string.Empty, string.Empty, 1, standardOutput, standardError, DateTimeOffset.UtcNow);
+        return DispatchFailureClassifier.Classify(task, tempVerification).EvidenceSummary.Length > 0;
+    }
+
+    private static bool HasCompletedVerification(TaskSpec task, string standardOutput, string standardError)
+    {
+        return HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
             standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
     }
 

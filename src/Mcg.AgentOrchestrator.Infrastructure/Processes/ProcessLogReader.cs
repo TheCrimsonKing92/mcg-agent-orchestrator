@@ -32,7 +32,8 @@ public sealed record DispatchHeartbeatStatus(
     TimeSpan? HeartbeatAge,
     TimeSpan? IdleDuration,
     long StandardOutputBytes,
-    long StandardErrorBytes);
+    long StandardErrorBytes,
+    long OwnedCpuMs = 0L);
 
 public static class ProcessLogReader
 {
@@ -80,7 +81,8 @@ public static class ProcessLogReader
                 observedAt - lastObservedAt,
                 observedAt - lastProgressAt,
                 GetInt64(root, "stdoutBytes"),
-                GetInt64(root, "stderrBytes"));
+                GetInt64(root, "stderrBytes"),
+                GetInt64(root, "ownedCpuMs"));
         }
         catch (IOException)
         {
