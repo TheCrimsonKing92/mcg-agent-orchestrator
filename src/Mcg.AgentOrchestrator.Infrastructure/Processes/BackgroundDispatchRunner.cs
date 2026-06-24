@@ -13,7 +13,15 @@ public sealed class BackgroundDispatchRunner
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
-    private static readonly TimeSpan DefaultStartupHangTimeout = TimeSpan.FromSeconds(240);
+    // 1200s (was 240s): API-bound CLI workers (claude/codex in -p/exec mode) burn a brief startup
+    // CPU burst then idle at near-zero local CPU while awaiting the provider API and buffering
+    // output, so a slow-but-healthy worker (e.g. an agentic claude Tester reviewing a diff over
+    // several API round-trips) can sit below CpuIdleEpsilonMs with 0 streamed bytes well past a
+    // short timeout and was being false-killed at 240s. A long window lets such workers complete
+    // (or accumulate CPU past the epsilon) before the check fires; only a genuinely never-started
+    // worker stays near-zero that long. The original startup-hang is already prevented by the
+    // stdin-EOF fix (2cdb0a7), so fast detection here is non-critical.
+    private static readonly TimeSpan DefaultStartupHangTimeout = TimeSpan.FromSeconds(1200);
     private const long CpuIdleEpsilonMs = 1000L;
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
