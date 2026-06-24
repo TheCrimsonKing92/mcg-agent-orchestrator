@@ -82,7 +82,7 @@ internal static class OperatorInbox
         {
             AddHumanInputItems(items, kernel, goal, acknowledgements);
             AddMonitorItems(items, kernel, goal, acknowledgements);
-            AddReadinessItems(items, goal, agents, workspace, acknowledgements);
+            AddReadinessItems(items, goal, agents, workerProfiles, workspace, acknowledgements);
             AddAcceptanceItems(items, kernel, goal, acknowledgements);
             AddSupervisorItems(items, kernel, goal, agents, workspace, acknowledgements);
             AddSubscriptionRouteItems(items, goal, agents, workerProfiles, acknowledgements);
@@ -264,6 +264,7 @@ internal static class OperatorInbox
         Dictionary<string, OperatorInboxItem> items,
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog workerProfiles,
         OrchestratorWorkspace workspace,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
@@ -272,7 +273,7 @@ internal static class OperatorInbox
             return;
         }
 
-        var readiness = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory);
+        var readiness = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory, workerProfiles);
         foreach (var finding in readiness.Findings.Where(finding => finding.Severity != GoalReadinessSeverity.Info))
         {
             var severity = finding.Severity == GoalReadinessSeverity.Blocker

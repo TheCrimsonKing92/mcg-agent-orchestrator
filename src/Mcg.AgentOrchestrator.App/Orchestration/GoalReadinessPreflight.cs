@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -96,7 +97,8 @@ internal static class GoalReadinessPreflight
     public static GoalReadinessPreflightReport Build(
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
-        string executionDirectory)
+        string executionDirectory,
+        WorkerProfileCatalog? profiles = null)
     {
         var findings = new List<GoalReadinessFinding>();
         var text = $"{goal.Objective}\n{string.Join('\n', goal.Tasks.Select(task => $"{task.Description}\n{task.VerificationPlan}"))}";
@@ -174,16 +176,34 @@ internal static class GoalReadinessPreflight
 
         if (findings.Count == 0)
         {
-            // Use the same candidate predicate (IsSubscriptionStartCandidate via HasAssignedDispatchCandidates)
-            // that the conductor uses for its ready-batch check so the two always agree on dispatchability.
-            var hasDispatchCandidates = GoalManagementCommandService.HasAssignedDispatchCandidates(goal);
-            findings.Add(new GoalReadinessFinding(
-                GoalReadinessSeverity.Info,
-                "ready",
-                hasDispatchCandidates
-                    ? "Readiness preflight found no blockers; assigned tasks are in a dispatchable state."
-                    : "Readiness preflight found no blockers for unattended start.",
-                CanOverride: true));
+            // Use the canonical DispatchReadinessEvaluator (when profiles are available) so the
+            // preflight verdict always agrees with the conductor's ready-batch and planner decisions.
+            var readinessVerdict = profiles is not null
+                ? DispatchReadinessEvaluator.EvaluateDispatchReadiness(
+                    goal,
+                    SubscriptionPlanBuilder.Build(goal, agents, profiles),
+                    DateTimeOffset.UtcNow)
+                : GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
+                    ? (DispatchReadinessVerdict)new DispatchReadinessReady()
+                    : new DispatchReadinessBlocked("No assigned dispatch candidates");
+            findings.Add(readinessVerdict switch
+            {
+                DispatchReadinessDeferred deferred => new GoalReadinessFinding(
+                    GoalReadinessSeverity.Info,
+                    "deferred",
+                    $"Readiness preflight found no blockers; assigned tasks are deferred by provider cooldown. {deferred.Reason}.",
+                    CanOverride: true),
+                DispatchReadinessReady => new GoalReadinessFinding(
+                    GoalReadinessSeverity.Info,
+                    "ready",
+                    "Readiness preflight found no blockers; assigned tasks are in a dispatchable state.",
+                    CanOverride: true),
+                _ => new GoalReadinessFinding(
+                    GoalReadinessSeverity.Info,
+                    "ready",
+                    "Readiness preflight found no blockers for unattended start.",
+                    CanOverride: true)
+            });
         }
 
         var hardBlockers = findings.Any(finding => finding is { Severity: GoalReadinessSeverity.Blocker, CanOverride: false });

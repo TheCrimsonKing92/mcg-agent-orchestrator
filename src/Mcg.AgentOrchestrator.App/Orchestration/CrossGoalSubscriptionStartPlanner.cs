@@ -69,6 +69,12 @@ internal static class CrossGoalSubscriptionStartPlanner
         WorkerProfileCatalog profiles)
     {
         var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+        var readinessVerdict = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, subscriptionPlan, DateTimeOffset.UtcNow);
+        if (readinessVerdict is not DispatchReadinessReady)
+        {
+            return null;
+        }
+
         var readyItems = subscriptionPlan.Items
             .Where(item => item is { CanPrepare: true, TaskStatus: WorkTaskStatus.Assigned })
             .ToList();

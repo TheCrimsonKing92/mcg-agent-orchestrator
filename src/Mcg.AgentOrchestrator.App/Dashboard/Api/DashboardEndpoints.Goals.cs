@@ -601,7 +601,8 @@ internal static partial class DashboardEndpoints
             return null;
         }
 
-        var report = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory);
+        var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+        var report = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory, profiles);
         if (report.AllowsStart(HasQueryConfirmation(context, "confirmReadinessRisk")))
         {
             return null;
