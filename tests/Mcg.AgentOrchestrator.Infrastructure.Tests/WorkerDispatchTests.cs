@@ -2700,6 +2700,139 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("heartbeat state=running", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_fast_path_fires_when_cpu_idle_and_no_output")]
+    public void BackgroundDispatchRunnerStartupHangFastPathFiresWhenCpuIdleAndNoOutput()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Startup hang with idle cpu and no output");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 0L);
+
+    var completed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            startupHangTimeout: TimeSpan.FromMinutes(4))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, completed.ExitCode);
+    Assert.Equal(clock.UtcNow, completed.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.True(File.Exists(exit));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("hung at startup", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("ownedCpuMs=0", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_cpu_above_epsilon")]
+    public void BackgroundDispatchRunnerStartupHangSuppressedWhenCpuAboveEpsilon()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("No startup hang when cpu active");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    // ownedCpuMs=2000 > CpuIdleEpsilonMs=1000: worker is actively burning CPU, suppress fast-path
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 2000L);
+
+    var refreshed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            startupHangTimeout: TimeSpan.FromMinutes(4),
+            progressStallTimeout: TimeSpan.FromMinutes(30))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(process, refreshed);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_ownedCpuMs_absent")]
+    public void BackgroundDispatchRunnerStartupHangSuppressedWhenOwnedCpuMsAbsent()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("No startup hang for old-format heartbeat");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    // ownedCpuMs absent (old-format heartbeat, pre-cf59ce9e): suppress fast-path entirely
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: null);
+
+    var refreshed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            startupHangTimeout: TimeSpan.FromMinutes(4),
+            progressStallTimeout: TimeSpan.FromMinutes(30))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(process, refreshed);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_output_bytes_nonzero")]
+    public void BackgroundDispatchRunnerStartupHangSuppressedWhenOutputBytesNonzero()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("No startup hang when output present");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "some output");
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    // stdoutBytes=11 nonzero: process communicated something, suppress fast-path
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 11, 0, ownedCpuMs: 0L);
+
+    var refreshed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            startupHangTimeout: TimeSpan.FromMinutes(4),
+            progressStallTimeout: TimeSpan.FromMinutes(30))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(process, refreshed);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_keeps_recent_heartbeat_running")]
     public void BackgroundDispatchRunnerRefreshKeepsRecentHeartbeatRunning()
 {
@@ -4536,9 +4669,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     string state,
     long stdoutBytes,
     long stderrBytes,
-    int? childPid = 888888)
+    int? childPid = 888888,
+    long? ownedCpuMs = null)
 {
     var childPidJson = childPid.HasValue ? childPid.Value.ToString() : "null";
+    var ownedCpuMsJson = ownedCpuMs.HasValue ? $",\"ownedCpuMs\":{ownedCpuMs.Value}" : string.Empty;
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
@@ -4551,6 +4686,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         $"\"stdoutBytes\":{stdoutBytes}," +
         $"\"stderrBytes\":{stderrBytes}," +
         "\"exitFileExists\":false" +
+        ownedCpuMsJson +
         "}");
 }
 

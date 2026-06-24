@@ -13,10 +13,13 @@ public sealed class BackgroundDispatchRunner
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan DefaultStartupHangTimeout = TimeSpan.FromSeconds(240);
+    private const long CpuIdleEpsilonMs = 1000L;
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly TimeSpan _progressStallTimeout;
+    private readonly TimeSpan _startupHangTimeout;
     private readonly Func<int, bool> _isStillRunning;
     private readonly Func<int, bool> _tryKillOwnedProcess;
     private readonly bool _processStartDisabled;
@@ -33,11 +36,13 @@ public sealed class BackgroundDispatchRunner
         Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>>? findBuildDaemons = null,
         Func<int, bool>? tryKillBuildDaemon = null,
         TimeSpan? progressStallTimeout = null,
-        IDispatchDiagnosticWriter? diagnosticWriter = null)
+        IDispatchDiagnosticWriter? diagnosticWriter = null,
+        TimeSpan? startupHangTimeout = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
         _progressStallTimeout = progressStallTimeout ?? DefaultProgressStallTimeout;
+        _startupHangTimeout = startupHangTimeout ?? DefaultStartupHangTimeout;
         _isStillRunning = isStillRunning ?? IsStillRunning;
         _tryKillOwnedProcess = tryKillOwnedProcess ?? TryKillProcess;
         _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
@@ -259,6 +264,13 @@ public sealed class BackgroundDispatchRunner
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
                 return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic);
+            }
+
+            if (TryDetectStartupHang(processRecord, out var startupHangDiagnostic))
+            {
+                TryKillTrackedProcesses(processRecord, waitForExit: true);
+                TryWriteExitCode(processRecord.ExitCodePath, 1);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, startupHangDiagnostic);
             }
 
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
@@ -1022,6 +1034,46 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
+    private bool TryDetectStartupHang(
+        TaskProcessRecord processRecord,
+        out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        if (File.Exists(processRecord.ExitCodePath) ||
+            !TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        {
+            return false;
+        }
+
+        if (heartbeat.OwnedCpuMs is null)
+        {
+            return false;
+        }
+
+        if (heartbeat.StandardOutputBytes + heartbeat.StandardErrorBytes > 0)
+        {
+            return false;
+        }
+
+        if (heartbeat.OwnedCpuMs.Value > CpuIdleEpsilonMs)
+        {
+            return false;
+        }
+
+        var aliveFor = _clock.UtcNow - processRecord.StartedAt;
+        if (aliveFor < _startupHangTimeout)
+        {
+            return false;
+        }
+
+        diagnostic =
+            $"Background dispatch appears hung at startup: ownedCpuMs={heartbeat.OwnedCpuMs}, " +
+            $"stdout_bytes={heartbeat.StandardOutputBytes}, stderr_bytes={heartbeat.StandardErrorBytes}, " +
+            $"alive_for={FormatDuration(aliveFor)}, startup_hang_timeout={FormatDuration(_startupHangTimeout)}. " +
+            "Worker never consumed meaningful CPU since start; process tree killed and dispatch marked failed.";
+        return true;
+    }
+
     private bool TryDetectProbableProgressStall(
         TaskSpec task,
         GoalId goalId,
@@ -1096,7 +1148,8 @@ public sealed class BackgroundDispatchRunner
                 lastObservedAt,
                 lastProgressAt,
                 GetInt64(root, "stdoutBytes"),
-                GetInt64(root, "stderrBytes"));
+                GetInt64(root, "stderrBytes"),
+                GetNullableInt64(root, "ownedCpuMs"));
             return true;
         }
         catch (IOException)
@@ -1150,6 +1203,16 @@ public sealed class BackgroundDispatchRunner
         return root.TryGetProperty(propertyName, out var property) && property.TryGetInt64(out var value)
             ? value
             : 0;
+    }
+
+    private static long? GetNullableInt64(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return property.TryGetInt64(out var value) ? value : null;
     }
 
     private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
@@ -1380,7 +1443,8 @@ public sealed class BackgroundDispatchRunner
         DateTimeOffset LastObservedAt,
         DateTimeOffset LastProgressAt,
         long StandardOutputBytes,
-        long StandardErrorBytes)
+        long StandardErrorBytes,
+        long? OwnedCpuMs = null)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
     }
