@@ -194,6 +194,16 @@ internal static class CliPersistentStateRunner
         void Persist(AgentOrchestratorKernel checkpoint) =>
             stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
 
+        void PersistGoal(AgentOrchestratorKernel checkpoint, GoalId changedGoalId)
+        {
+            var snap = checkpoint.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == changedGoalId.Value);
+            if (snap is null) return;
+            stateRepository.TransactGoalAsync(
+                changedGoalId,
+                (_, ct) => Task.FromResult((true, (GoalSnapshot?)snap, true)),
+                CancellationToken.None).GetAwaiter().GetResult();
+        }
+
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
             args,
             kernel,
@@ -204,7 +214,8 @@ internal static class CliPersistentStateRunner
             ref currentGoal,
             channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-            Persist);
+            Persist,
+            persistGoalKernel: PersistGoal);
 
         // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
         Persist(kernel);

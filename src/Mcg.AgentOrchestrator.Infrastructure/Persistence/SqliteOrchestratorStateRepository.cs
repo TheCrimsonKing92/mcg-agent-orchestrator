@@ -107,7 +107,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         conn.Open();
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         if (SchemaTablesAlreadyExist(conn))
+        {
+            MigrateVersionColumn(conn);
             return;
+        }
 
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, """
@@ -122,7 +125,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 status        TEXT NOT NULL,
                 objective     TEXT NOT NULL,
                 updated_at    TEXT NOT NULL,
-                snapshot_json TEXT NOT NULL
+                snapshot_json TEXT NOT NULL,
+                version       INTEGER NOT NULL DEFAULT 0
             )
             """);
         RunNonQuery(conn, """
@@ -150,6 +154,16 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_role ON model_fit_history(role)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_model ON model_fit_history(provider_name, model_name)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
+    }
+
+    // Idempotent migration: adds version column to existing schemas that pre-date this column.
+    // Old binaries ignore the extra column; this binary treats an absent column as version 0.
+    private void MigrateVersionColumn(SqliteConnection conn)
+    {
+        using var check = conn.CreateCommand();
+        check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name = 'version'";
+        if (Convert.ToInt32(check.ExecuteScalar()) == 0)
+            RunNonQuery(conn, "ALTER TABLE goals ADD COLUMN version INTEGER NOT NULL DEFAULT 0");
     }
 
     private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
@@ -353,6 +367,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                     status        = excluded.status,
                     objective     = excluded.objective,
                     snapshot_json = excluded.snapshot_json,
+                    version       = goals.version + 1,
                     updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
                                          THEN excluded.updated_at
                                          ELSE goals.updated_at END
@@ -385,6 +400,133 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
         {
             await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken);
+        }
+    }
+
+    public async Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT snapshot_json FROM goals WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", goalId.Value);
+            var json = (string?)await cmd.ExecuteScalarAsync(cancellationToken);
+            if (json is null) return (GoalSnapshot?)null;
+            return JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
+        }, cancellationToken);
+    }
+
+    public async Task<T> TransactGoalAsync<T>(
+        GoalId goalId,
+        Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        var versionMismatchDelay = 50;
+        for (var attempt = 1; ; attempt++)
+        {
+            // Load this goal's snapshot and version outside the write transaction.
+            // WAL mode provides a consistent reader snapshot without an explicit read lock.
+            var (loadedSnapshot, loadedVersion) = await LoadGoalSnapshotAndVersionAsync(goalId, cancellationToken);
+
+            // Delegate produces the new snapshot to write (runs outside the write lock).
+            var (shouldSave, newSnapshot, result) = await transaction(loadedSnapshot, cancellationToken);
+
+            if (!shouldSave || newSnapshot is null)
+                return result;
+
+            // Short BEGIN IMMEDIATE: re-read version, write one row if version unchanged.
+            var casSucceeded = await TryCasWriteGoalRowAsync(goalId, newSnapshot, loadedVersion, cancellationToken);
+            if (casSucceeded)
+                return result;
+
+            // Version mismatch detected: concurrent writer incremented the version between our
+            // load and our CAS write. Treat this as a transient error and retry the full
+            // load-mutate-CAS cycle — same retry budget as SQLITE_BUSY.
+            if (attempt >= MaxBusyRetries)
+                throw new InvalidOperationException(
+                    $"TransactGoalAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
+
+            await Task.Delay(versionMismatchDelay, cancellationToken);
+            versionMismatchDelay = Math.Min(versionMismatchDelay * 2, 1000);
+        }
+    }
+
+    private async Task<(GoalSnapshot? Snapshot, int Version)> LoadGoalSnapshotAndVersionAsync(
+        GoalId goalId, CancellationToken cancellationToken)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT snapshot_json, COALESCE(version, 0) FROM goals WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", goalId.Value);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                return ((GoalSnapshot?)null, 0);
+            var json = reader.GetString(0);
+            var version = reader.GetInt32(1);
+            var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
+            return (snapshot, version);
+        }, cancellationToken);
+    }
+
+    // Attempts a short CAS write for one goal row. Acquires BEGIN IMMEDIATE, re-reads the version,
+    // writes only if it matches expectedVersion, increments version, then commits.
+    // Returns true on success, false when the version has changed (caller should retry).
+    private async Task<bool> TryCasWriteGoalRowAsync(
+        GoalId goalId, GoalSnapshot snapshot, int expectedVersion, CancellationToken cancellationToken)
+    {
+        await using var conn = await BeginWriteAsync(cancellationToken);
+        try
+        {
+            int currentVersion;
+            await using (var checkCmd = conn.CreateCommand())
+            {
+                checkCmd.CommandText = "SELECT COALESCE(version, 0) FROM goals WHERE id = $id";
+                checkCmd.Parameters.AddWithValue("$id", goalId.Value);
+                var val = await checkCmd.ExecuteScalarAsync(cancellationToken);
+                currentVersion = val is null or DBNull ? 0 : Convert.ToInt32(val);
+            }
+
+            if (currentVersion != expectedVersion)
+            {
+                await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken);
+                return false;
+            }
+
+            var json = JsonSerializer.Serialize(snapshot, SerializerOptions);
+            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+            await using (var writeCmd = conn.CreateCommand())
+            {
+                writeCmd.CommandText = """
+                    INSERT INTO goals (id, status, objective, updated_at, snapshot_json, version)
+                    VALUES ($id, $status, $objective, $updated_at, $json, $version)
+                    ON CONFLICT(id) DO UPDATE SET
+                        status        = excluded.status,
+                        objective     = excluded.objective,
+                        snapshot_json = excluded.snapshot_json,
+                        version       = excluded.version,
+                        updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
+                                             THEN excluded.updated_at
+                                             ELSE goals.updated_at END
+                    """;
+                writeCmd.Parameters.AddWithValue("$id", goalId.Value);
+                writeCmd.Parameters.AddWithValue("$status", snapshot.Status.ToString());
+                writeCmd.Parameters.AddWithValue("$objective", snapshot.Objective);
+                writeCmd.Parameters.AddWithValue("$updated_at", updatedAt);
+                writeCmd.Parameters.AddWithValue("$json", json);
+                writeCmd.Parameters.AddWithValue("$version", currentVersion + 1);
+                await writeCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            return true;
+        }
+        catch
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            throw;
         }
     }
 

@@ -42,7 +42,8 @@ internal sealed class ConductorBatchLoop
         TimeSpan? maxDuration = null,
         string? onlyGoalId = null,
         Action<AgentOrchestratorKernel>? persistTick = null,
-        bool keepAliveWhenIdle = false)
+        bool keepAliveWhenIdle = false,
+        Action<AgentOrchestratorKernel, GoalId>? persistGoalTick = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
@@ -132,6 +133,7 @@ internal sealed class ConductorBatchLoop
 
             totalTicks++;
             var changedGoalLines = new List<string>();
+            var changedGoalIds = new HashSet<GoalId>();
 
             var tickAdvanced = 0;
             var tickHeld = 0;
@@ -150,6 +152,7 @@ internal sealed class ConductorBatchLoop
                     var progressLine = $"GOAL goal={label} result=held reason={Sanitize(depHoldReason)}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
                     {
+                        changedGoalIds.Add(goal.Id);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {depHoldReason}");
                         kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}");
                     }
@@ -180,6 +183,7 @@ internal sealed class ConductorBatchLoop
                     var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
                     changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
                     lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
+                    changedGoalIds.Add(goal.Id);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                     kernel.RecordGoalPolicyDecision(goal.Id, msg);
                     escalatedGoals.Add(goal.Id.Value);
@@ -200,6 +204,7 @@ internal sealed class ConductorBatchLoop
                         tickRetried++;
                         changedGoalLines.Add($"GOAL goal={label} result=retry attempt={retries}/{maxVerifyRetries}");
                         lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
+                        changedGoalIds.Add(goal.Id);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {goal.Id.Value[..8]} acceptance flake (retry {retries}/{maxVerifyRetries})");
                         kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})");
                         result = driver.AdvanceOnce(goal, policy);
@@ -209,6 +214,7 @@ internal sealed class ConductorBatchLoop
                 var goalProgressLine = FormatGoalProgressLine(label, result.Outcome);
                 if (RecordChangedDisposition(goal.Id.Value, goalProgressLine, lastGoalDisposition, changedGoalLines))
                 {
+                    changedGoalIds.Add(goal.Id);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
                     kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
                 }
@@ -243,7 +249,17 @@ internal sealed class ConductorBatchLoop
             // Without this the loop's mutations live only in memory until the whole command returns, so a
             // long-running watch loop never persists and a killed loop loses every dispatch on rollback —
             // the goal then re-dispatches the same stage forever and can never advance.
-            persistTick?.Invoke(kernel);
+            // When persistGoalTick is supplied, persist only the goals whose disposition changed this tick
+            // (short per-goal CAS writes). Fall back to whole-kernel persistTick if not supplied.
+            if (persistGoalTick is not null)
+            {
+                foreach (var changedGoalId in changedGoalIds)
+                    persistGoalTick(kernel, changedGoalId);
+            }
+            else
+            {
+                persistTick?.Invoke(kernel);
+            }
 
             var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false)
             {
