@@ -337,7 +337,7 @@ internal sealed class ConductorDriver
         {
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
-                t.LastVerification is { } latest && DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(latest) &&
+                t.LastVerification is { } latest && DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.EmptyOutputFlake &&
                 t.EmptyOutputRetryCount > 0);
             if (flakedTask is not null)
             {
