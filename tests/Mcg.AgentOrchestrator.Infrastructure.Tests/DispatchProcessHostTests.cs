@@ -124,6 +124,33 @@ public sealed class DispatchProcessHostTests
         Assert.False(DispatchProcessHost.ShouldReapWorker(TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(5), hasProducedOutput: true, maxRuntime, maxIdle));
     }
 
+    [Xunit.Fact(DisplayName = "HasProgressed_returns_true_when_cpu_grows_above_epsilon_with_flat_bytes")]
+    public void HasProgressedDetectsCpuGrowthWhenBytesFlat()
+    {
+        // CPU grows from 0 to 100ms (> 50ms epsilon), bytes flat
+        Assert.True(DispatchProcessHost.HasProgressed(0, 0, 0, 100, 50));
+    }
+
+    [Xunit.Fact(DisplayName = "HasProgressed_returns_false_when_both_cpu_and_bytes_are_flat")]
+    public void HasProgressedNoProgressWhenFlat()
+    {
+        // Both CPU and bytes flat
+        Assert.False(DispatchProcessHost.HasProgressed(0, 0, 0, 0, 50));
+    }
+
+    [Xunit.Fact(DisplayName = "HasProgressed_returns_false_when_cpu_growth_equals_epsilon_exactly")]
+    public void HasProgressedCpuAtEpsilonIsNotProgress()
+    {
+        // Delta = 50ms exactly at epsilon — not strictly greater, so not progress
+        Assert.False(DispatchProcessHost.HasProgressed(0, 0, 0, 50, 50));
+    }
+
+    [Xunit.Fact(DisplayName = "HasProgressed_returns_true_when_bytes_grow_regardless_of_cpu")]
+    public void HasProgressedDetectsByteGrowth()
+    {
+        Assert.True(DispatchProcessHost.HasProgressed(0, 10, 0, 0, 50));
+    }
+
     private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)
     {
         Exception? last = null;

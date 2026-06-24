@@ -26,6 +26,7 @@ public static class DispatchProcessHost
     private static readonly TimeSpan DefaultMaxRuntime = TimeSpan.FromMinutes(60);
     private static readonly TimeSpan DefaultMaxIdle = TimeSpan.FromMinutes(20);
     private static readonly TimeSpan WatchdogProbeInterval = TimeSpan.FromSeconds(15);
+    private const long CpuProgressEpsilonMs = 50L;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -216,6 +217,7 @@ public static void DropToLow() {
         var lastProgressAt = startedAt;
         long lastStdoutBytes = -1;
         long lastStderrBytes = -1;
+        long lastCpuMs = 0L;
         var exitCode = 1;
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
@@ -229,12 +231,20 @@ public static void DropToLow() {
 
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
-            if (stdoutBytes != lastStdoutBytes || stderrBytes != lastStderrBytes)
+            var ownedCpuMs = SumOwnedCpuMs(workerGroup?.ProcessIds ?? []);
+
+            if (HasProgressed(lastStdoutBytes + lastStderrBytes, stdoutBytes + stderrBytes, lastCpuMs, ownedCpuMs, CpuProgressEpsilonMs))
             {
                 lastProgressAt = DateTimeOffset.UtcNow;
+            }
+
+            if (stdoutBytes != lastStdoutBytes || stderrBytes != lastStderrBytes)
+            {
                 lastStdoutBytes = stdoutBytes;
                 lastStderrBytes = stderrBytes;
             }
+
+            lastCpuMs = ownedCpuMs;
 
             var payload = new
             {
@@ -247,6 +257,7 @@ public static void DropToLow() {
                 state,
                 stdoutBytes,
                 stderrBytes,
+                ownedCpuMs,
                 exitFileExists = File.Exists(parameters.ExitCodePath)
             };
 
@@ -433,6 +444,27 @@ public static void DropToLow() {
         }
 
         return hasProducedOutput && idleFor >= maxIdle;
+    }
+
+    internal static bool HasProgressed(long prevTotalBytes, long curTotalBytes, long prevCpuMs, long curCpuMs, long epsilonMs)
+        => curTotalBytes != prevTotalBytes || curCpuMs - prevCpuMs > epsilonMs;
+
+    private static long SumOwnedCpuMs(IReadOnlyList<int> processIds)
+    {
+        var total = 0L;
+        foreach (var pid in processIds)
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                total += (long)p.TotalProcessorTime.TotalMilliseconds;
+            }
+            catch
+            {
+                // Process exited or access denied — contribute 0.
+            }
+        }
+        return total;
     }
 
     private static TimeSpan ResolveWatchdogTimeout(string environmentVariable, TimeSpan fallback)
