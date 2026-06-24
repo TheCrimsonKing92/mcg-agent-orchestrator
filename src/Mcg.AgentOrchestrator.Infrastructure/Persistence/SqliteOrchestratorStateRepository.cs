@@ -361,8 +361,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             var json = JsonSerializer.Serialize(goal, SerializerOptions);
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO goals (id, status, objective, updated_at, snapshot_json)
-                VALUES ($id, $status, $objective, $updated_at, $json)
+                INSERT INTO goals (id, status, objective, updated_at, snapshot_json, version)
+                VALUES ($id, $status, $objective, $updated_at, $json, 1)
                 ON CONFLICT(id) DO UPDATE SET
                     status        = excluded.status,
                     objective     = excluded.objective,

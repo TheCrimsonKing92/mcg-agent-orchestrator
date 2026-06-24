@@ -214,7 +214,9 @@ internal sealed class ConductorBatchLoop
                 var goalProgressLine = FormatGoalProgressLine(label, result.Outcome);
                 if (RecordChangedDisposition(goal.Id.Value, goalProgressLine, lastGoalDisposition, changedGoalLines))
                 {
-                    changedGoalIds.Add(goal.Id);
+                    // Held goals have no kernel state mutation worth a per-goal CAS write.
+                    if (!result.IsHeld)
+                        changedGoalIds.Add(goal.Id);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
                     kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
                 }
