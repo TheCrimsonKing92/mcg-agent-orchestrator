@@ -2,6 +2,37 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
+public enum RecoveryRecommendation
+{
+    None,
+    AutoRetry,
+    Deferred,
+    CommitAndVerify,
+    OperatorNeeded
+}
+
+public enum DispatchOutcomeKind
+{
+    VerifiedSuccess,
+    RecoverableSubscriptionLimit,
+    EmptyOutputFlake,
+    SandboxCommitBlocked,
+    ProviderNeutralProgressStall,
+    ProviderConnectivity,
+    ProviderModelRejection,
+    DirtyWorktreeRecoverable,
+    UnknownFailure
+}
+
+public sealed record DispatchOutcome(
+    DispatchOutcomeKind Kind,
+    int ExitCode,
+    bool HasZeroByteOutput,
+    TimeSpan? RetryAfter,
+    TimeSpan? Cooldown,
+    RecoveryRecommendation RecoveryRecommendation,
+    string EvidenceSummary);
+
 public sealed record ProviderSubscriptionCooldown(
     string ProviderName,
     TaskId SourceTaskId,
@@ -82,7 +113,144 @@ public static class DispatchFailureClassifier
         return true;
     }
 
-    public static bool HasVerificationEvidence(string standardOutput, string standardError)
+    public static DispatchOutcome Classify(TaskSpec task, TaskVerificationRecord verification)
+    {
+        var exitCode = verification.ExitCode;
+        var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
+
+        if (verification.Succeeded)
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.VerifiedSuccess,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.None,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (IsRecoverableSubscriptionLimitFailure(verification))
+        {
+            TimeSpan? retryAfter = null;
+            if (TryGetSubscriptionLimitRetryAfter(verification, out var retryAfterAbs))
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (retryAfterAbs > now)
+                    retryAfter = retryAfterAbs - now;
+            }
+            return new DispatchOutcome(
+                DispatchOutcomeKind.RecoverableSubscriptionLimit,
+                exitCode,
+                hasZeroByteOutput,
+                retryAfter,
+                null,
+                retryAfter.HasValue ? RecoveryRecommendation.Deferred : RecoveryRecommendation.AutoRetry,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (IsTransientEmptyOutputDispatchFlake(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.EmptyOutputFlake,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                string.Empty);
+        }
+
+        if (IsSandboxCommitBlockedFailure(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.SandboxCommitBlocked,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.CommitAndVerify,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (IsProviderNeutralProgressStallFailure(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.ProviderNeutralProgressStall,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (IsRecoverableProviderConnectivityFailure(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.ProviderConnectivity,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (IsRecoverableProviderModelRejectionFailure(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.ProviderModelRejection,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (TryBuildDirtyDispatchRecovery(task, out _))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.DirtyWorktreeRecoverable,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildEvidenceSummary(verification));
+        }
+
+        return new DispatchOutcome(
+            DispatchOutcomeKind.UnknownFailure,
+            exitCode,
+            hasZeroByteOutput,
+            null,
+            null,
+            RecoveryRecommendation.OperatorNeeded,
+            BuildEvidenceSummary(verification));
+    }
+
+    private static string BuildEvidenceSummary(TaskVerificationRecord verification)
+    {
+        if (!HasVerificationEvidence(verification.StandardOutput, verification.StandardError))
+        {
+            return string.Empty;
+        }
+
+        var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
+        foreach (var rawLine in combined.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (HasVerificationEvidence(rawLine, string.Empty))
+            {
+                return rawLine.Length > 200 ? rawLine[..200] : rawLine;
+            }
+        }
+
+        return "Verification evidence found in output.";
+    }
+
+    private static bool HasVerificationEvidence(string standardOutput, string standardError)
     {
         var output = $"{standardOutput}\n{standardError}";
         if (output.Contains("test run successful", StringComparison.OrdinalIgnoreCase))
