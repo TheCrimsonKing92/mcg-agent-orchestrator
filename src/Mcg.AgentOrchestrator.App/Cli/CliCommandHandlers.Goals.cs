@@ -315,7 +315,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
                 context.CurrentGoal,
                 context.Agents,
-                context.Workspace.ExecutionDirectory));
+                context.Workspace.ExecutionDirectory,
+                context.WorkerProfiles));
             return false;
 
         case "goal-recovery":
@@ -1214,7 +1215,7 @@ private static string BuildLifecycleRunGoalNextCommand(string goalPrefix, RunGoa
 
 internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context, Goal goal, bool confirmed)
 {
-    var readiness = GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory);
+    var readiness = GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory, context.WorkerProfiles);
     if (!readiness.AllowsStart(confirmed))
     {
         ConsoleViews.PrintGoalReadinessPreflight(readiness);
@@ -1258,7 +1259,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     var goal = context.CurrentGoal!;
     ConsoleViews.PrintGoal(goal);
     ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(goal.Id));
-    ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory));
+    ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory, context.WorkerProfiles));
     ConsoleViews.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
     ConsoleViews.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
     ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));

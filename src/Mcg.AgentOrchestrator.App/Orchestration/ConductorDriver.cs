@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -27,6 +28,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
+    private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -272,6 +274,11 @@ internal sealed class ConductorDriver
             }
         };
         _emptyOutputBackoffDelay = Thread.Sleep;
+        _evaluateReadiness = goal =>
+        {
+            var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+            return DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
+        };
     }
 
     internal ConductorDriver(
@@ -293,7 +300,8 @@ internal sealed class ConductorDriver
         Action<Goal> cleanup,
         Action<Goal, GoalLifecycleState, string> writeEscalation,
         Func<Goal, ChangeRiskTier?> classifyChangeRisk,
-        Action<TimeSpan>? emptyOutputBackoffDelay = null)
+        Action<TimeSpan>? emptyOutputBackoffDelay = null,
+        Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -316,6 +324,10 @@ internal sealed class ConductorDriver
         _writeEscalation = writeEscalation;
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
+        _evaluateReadiness = evaluateReadiness ?? (goal =>
+            GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
+                ? new DispatchReadinessReady()
+                : new DispatchReadinessBlocked("No assigned dispatch candidates"));
     }
 
     public ConductorAdvanceResult AdvanceOnce(Goal goal, ConductorAutonomyPolicy policy)
@@ -454,18 +466,25 @@ internal sealed class ConductorDriver
                 new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
         }
 
-        // When all ready tasks are blocked (e.g. high-risk ownership under a conservative policy)
-        // but there ARE assigned tasks waiting to dispatch, hold rather than escalate.
-        // Escalating here permanently sets the goal aside via LifecycleEscalation (which never
-        // re-admits); holding keeps the conductor retrying each tick until the policy changes or
-        // the operator approves. Agreeing with GoalReadinessPreflight which also says "Proceed"
-        // when assigned tasks exist with agents.
-        if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch &&
-            GoalManagementCommandService.HasAssignedDispatchCandidates(goal))
+        // When all ready tasks are blocked or deferred, hold rather than escalate so the conductor
+        // retries on the next tick. Uses the canonical DispatchReadinessEvaluator so this decision
+        // always agrees with GoalReadinessPreflight and CrossGoalSubscriptionStartPlanner.
+        if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState,
-                    $"Assigned tasks exist but no ready batch formed; will retry next tick. {outcome.Reason}"));
+            var readiness = _evaluateReadiness(goal);
+            if (readiness is DispatchReadinessDeferred deferred)
+            {
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(fromState,
+                        $"All assigned tasks deferred by provider cooldown; {deferred.Reason}. Will retry next tick."));
+            }
+
+            if (readiness is not DispatchReadinessBlocked { HasCandidates: false })
+            {
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(fromState,
+                        $"Assigned tasks exist but no ready batch formed; will retry next tick. {outcome.Reason}"));
+            }
         }
 
         return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
