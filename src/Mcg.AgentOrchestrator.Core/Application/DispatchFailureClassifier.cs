@@ -775,6 +775,7 @@ public static class DispatchFailureClassifier
         line.StartsWith("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
         line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("exceeded retry limit", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
