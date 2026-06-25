@@ -13,16 +13,15 @@ public sealed class BackgroundDispatchRunner
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
-    // 1200s (was 240s): API-bound CLI workers (claude/codex in -p/exec mode) burn a brief startup
-    // CPU burst then idle at near-zero local CPU while awaiting the provider API and buffering
-    // output, so a slow-but-healthy worker (e.g. an agentic claude Tester reviewing a diff over
-    // several API round-trips) can sit below CpuIdleEpsilonMs with 0 streamed bytes well past a
-    // short timeout and was being false-killed at 240s. A long window lets such workers complete
-    // (or accumulate CPU past the epsilon) before the check fires; only a genuinely never-started
-    // worker stays near-zero that long. The original startup-hang is already prevented by the
-    // stdin-EOF fix (2cdb0a7), so fast detection here is non-critical.
-    private static readonly TimeSpan DefaultStartupHangTimeout = TimeSpan.FromSeconds(1200);
-    private const long CpuIdleEpsilonMs = 1000L;
+    // A startup-hang is a worker whose tool process never launched. The childPid/CPU-burst "invoked"
+    // check in TryDetectStartupHang makes this window safe to keep short: a worker that DID launch and
+    // is merely idling on the provider API (low local CPU, buffered output) is never flagged, so this
+    // only bounds how long a genuinely never-started tool may sit before it is reaped.
+    private static readonly TimeSpan DefaultStartupHangTimeout = TimeSpan.FromSeconds(120);
+
+    // ownedCpuMs above this means the tool consumed real CPU since start (it launched and ran), beyond
+    // the bare pwsh wrapper baseline - one of the signals that the tool was invoked.
+    private const long CpuStartupBurstMs = 1000L;
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
@@ -1103,17 +1102,16 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        if (heartbeat.OwnedCpuMs is null)
-        {
-            return false;
-        }
-
-        if (heartbeat.StandardOutputBytes + heartbeat.StandardErrorBytes > 0)
-        {
-            return false;
-        }
-
-        if (heartbeat.OwnedCpuMs.Value > CpuIdleEpsilonMs)
+        // Treat as a startup-hang ONLY if the tool process was never invoked. Any positive sign the
+        // tool launched and ran rules it out, however long it then idles: API-bound CLI workers
+        // (claude/codex in -p/exec mode) burn a brief startup CPU burst then wait at near-zero local
+        // CPU on the provider with output buffered, so a healthy worker's cumulative CPU stays low.
+        // The "tool was invoked" signals are a live child process, a startup CPU burst above the
+        // bare-wrapper baseline, or any produced output.
+        var hasLiveChild = heartbeat.ChildProcessId is not null;
+        var consumedStartupBurst = (heartbeat.OwnedCpuMs ?? 0L) > CpuStartupBurstMs;
+        var producedOutput = heartbeat.StandardOutputBytes + heartbeat.StandardErrorBytes > 0L;
+        if (hasLiveChild || consumedStartupBurst || producedOutput)
         {
             return false;
         }
@@ -1125,10 +1123,11 @@ public sealed class BackgroundDispatchRunner
         }
 
         diagnostic =
-            $"Background dispatch appears hung at startup: ownedCpuMs={heartbeat.OwnedCpuMs}, " +
-            $"stdout_bytes={heartbeat.StandardOutputBytes}, stderr_bytes={heartbeat.StandardErrorBytes}, " +
-            $"alive_for={FormatDuration(aliveFor)}, startup_hang_timeout={FormatDuration(_startupHangTimeout)}. " +
-            "Worker never consumed meaningful CPU since start; process tree killed and dispatch marked failed.";
+            $"Background dispatch never launched its tool process: childPid=null, " +
+            $"ownedCpuMs={heartbeat.OwnedCpuMs}, stdout_bytes={heartbeat.StandardOutputBytes}, " +
+            $"stderr_bytes={heartbeat.StandardErrorBytes}, alive_for={FormatDuration(aliveFor)}, " +
+            $"startup_hang_timeout={FormatDuration(_startupHangTimeout)}. " +
+            "No child process, startup CPU burst, or output since start; process tree killed and dispatch marked failed.";
         return true;
     }
 
