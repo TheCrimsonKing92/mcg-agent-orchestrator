@@ -323,11 +323,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("JsonException", row.Error);
         Assert.Contains($"QUARANTINED goal {bad.Id.Value[..8]}: JsonException", error.ToString());
 
-        var diagnostics = RunDotnet(
-            "run",
-            "--project",
-            Path.Combine(FindRepoRoot(), "scripts", "OrchestratorSqliteTools"),
-            "--",
+        var diagnostics = RunSqliteTool(
             "diagnostics",
             "--db",
             db);
@@ -338,11 +334,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     [Xunit.Fact(DisplayName = "OrchestratorSqliteTools_status_help_matches_Core_GoalStatus")]
     public void OrchestratorSqliteToolsStatusHelpMatchesCoreGoalStatus()
     {
-        var result = RunDotnet(
-            "run",
-            "--project",
-            Path.Combine(FindRepoRoot(), "scripts", "OrchestratorSqliteTools"),
-            "--",
+        var result = RunSqliteTool(
             "set-goal-status",
             "--help");
 
@@ -352,11 +344,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.DoesNotContain("Blocked", result.Output);
         Assert.DoesNotContain("Proposed", result.Output);
 
-        var rejected = RunDotnet(
-            "run",
-            "--project",
-            Path.Combine(FindRepoRoot(), "scripts", "OrchestratorSqliteTools"),
-            "--",
+        var rejected = RunSqliteTool(
             "set-goal-status",
             "--status",
             "Blocked",
@@ -858,37 +846,25 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         return Path.Combine(dir, "state.db");
     }
 
-    private static string FindRepoRoot()
-    {
-        var directory = new DirectoryInfo(Environment.CurrentDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
-                return directory.FullName;
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not find repository root.");
-    }
-
-    private static (int ExitCode, string Output) RunDotnet(params string[] arguments)
+    private static (int ExitCode, string Output) RunSqliteTool(params string[] arguments)
     {
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
-            WorkingDirectory = FindRepoRoot(),
+            WorkingDirectory = AppContext.BaseDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        process.StartInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "OrchestratorSqliteTools.dll"));
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
 
         process.Start();
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(90)), "dotnet process did not exit within 90 seconds.");
+        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(30)), "sqlite tool process did not exit within 30 seconds.");
         return (process.ExitCode, stdout + stderr);
     }
 
