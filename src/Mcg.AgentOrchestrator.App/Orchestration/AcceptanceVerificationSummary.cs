@@ -13,6 +13,7 @@ internal sealed record AcceptanceVerificationSummary(
     IReadOnlyList<string>? CoveredChecks = null,
     int PassedCount = 0,
     int FailedCount = 0,
+    int TotalCount = 0,
     string RunContext = "goal acceptance verifier")
 {
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);

@@ -259,7 +259,8 @@ public sealed partial class AgentOrchestratorKernel
         int failedCount,
         string? branchHeadSha = null,
         string? mainHeadSha = null,
-        IReadOnlyList<string>? failedChecks = null)
+        IReadOnlyList<string>? failedChecks = null,
+        int? totalCount = null)
     {
         var goal = GetGoal(goalId);
         goal.RecordExecutedTestReceipt(
@@ -271,12 +272,13 @@ public sealed partial class AgentOrchestratorKernel
             _clock.UtcNow,
             branchHeadSha,
             mainHeadSha,
-            failedChecks);
+            failedChecks,
+            totalCount);
         Append(
             goal,
             null,
             ProgressKind.TaskVerificationRecorded,
-            $"Executed test receipt recorded ({passedCount} passed, {failedCount} failed): {runContext}");
+            $"Executed test receipt recorded ({passedCount} passed, {failedCount} failed, {Math.Max(0, totalCount ?? passedCount + failedCount)} total): {runContext}");
         RefreshGoalStatus(goal);
     }
 

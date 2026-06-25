@@ -738,6 +738,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal("slot-path focused tests", receipt.RunContext);
     Assert.Equal(1, receipt.PassedCount);
     Assert.Equal(0, receipt.FailedCount);
+    Assert.Equal(1, receipt.TotalCount);
     Assert.Equal(["FooTests"], receipt.CoveredChecks);
     Assert.Equal("branch", receipt.BranchHeadSha);
 }

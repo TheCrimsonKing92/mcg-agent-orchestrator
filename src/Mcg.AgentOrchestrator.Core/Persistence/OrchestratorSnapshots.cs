@@ -31,7 +31,8 @@ public sealed record ExecutedTestReceiptSnapshot(
     int FailedCount,
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
-    IReadOnlyList<string>? FailedChecks = null);
+    IReadOnlyList<string>? FailedChecks = null,
+    int TotalCount = 0);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,

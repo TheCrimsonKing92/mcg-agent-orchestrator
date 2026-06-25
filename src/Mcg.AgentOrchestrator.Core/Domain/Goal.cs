@@ -70,7 +70,8 @@ public sealed class Goal
         DateTimeOffset occurredAt,
         string? branchHeadSha = null,
         string? mainHeadSha = null,
-        IReadOnlyList<string>? failedChecks = null)
+        IReadOnlyList<string>? failedChecks = null,
+        int? totalCount = null)
     {
         LatestExecutedTestReceipt = new ExecutedTestReceiptSummary(
             occurredAt,
@@ -81,7 +82,8 @@ public sealed class Goal
             Math.Max(0, failedCount),
             NormalizeSha(branchHeadSha),
             NormalizeSha(mainHeadSha),
-            NormalizeList(failedChecks ?? []));
+            NormalizeList(failedChecks ?? []),
+            Math.Max(0, totalCount ?? passedCount + failedCount));
     }
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
@@ -129,7 +131,8 @@ public sealed class Goal
                     LatestExecutedTestReceipt.FailedCount,
                     LatestExecutedTestReceipt.BranchHeadSha,
                     LatestExecutedTestReceipt.MainHeadSha,
-                    LatestExecutedTestReceipt.FailedChecks.ToList()));
+                    LatestExecutedTestReceipt.FailedChecks.ToList(),
+                    LatestExecutedTestReceipt.TotalCount));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -185,7 +188,8 @@ public sealed class Goal
                 receipt.OccurredAt,
                 receipt.BranchHeadSha,
                 receipt.MainHeadSha,
-                receipt.FailedChecks ?? []);
+                receipt.FailedChecks ?? [],
+                receipt.TotalCount > 0 ? receipt.TotalCount : null);
         }
 
         return goal;
@@ -233,7 +237,8 @@ public sealed record ExecutedTestReceiptSummary(
     int FailedCount,
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
-    IReadOnlyList<string>? FailedChecks = null)
+    IReadOnlyList<string>? FailedChecks = null,
+    int TotalCount = 0)
 {
     public bool Passed => CoveredChecks.Count > 0 && FailedCount == 0;
 }

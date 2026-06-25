@@ -14,6 +14,9 @@ internal sealed class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex DotnetTestCountPattern = new(
+        @"\b(?<name>Passed|Failed|Total):\s*(?<count>\d+)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
@@ -279,6 +282,7 @@ internal sealed class ConductorDriver
             var executedTestChecks = verification.Checks?
                 .Where(IsExecutedDotnetTestCheck)
                 .ToArray() ?? [];
+            var executedTestCounts = SummarizeExecutedDotnetTestCounts(executedTestChecks);
             if (verification.Passed)
                 GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
@@ -296,8 +300,9 @@ internal sealed class ConductorDriver
                 mainHeadSha,
                 changedFiles,
                 executedTestChecks.Select(check => check.Name).ToArray(),
-                executedTestChecks.Count(check => check.Passed),
-                executedTestChecks.Count(check => !check.Passed));
+                executedTestCounts.Passed,
+                executedTestCounts.Failed,
+                executedTestCounts.Total);
         };
 
         _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
@@ -320,7 +325,8 @@ internal sealed class ConductorDriver
                 acceptance.FailedCount,
                 acceptance.BranchHeadSha,
                 acceptance.MainHeadSha,
-                acceptance.FailedChecks);
+                acceptance.FailedChecks,
+                acceptance.TotalCount);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
 
@@ -1536,6 +1542,56 @@ internal sealed class ConductorDriver
         return check.ResultSummary.Contains("Passed:", StringComparison.OrdinalIgnoreCase) ||
             check.ResultSummary.Contains("Failed:", StringComparison.OrdinalIgnoreCase) ||
             check.ResultSummary.Contains("Total:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static (int Passed, int Failed, int Total) SummarizeExecutedDotnetTestCounts(IReadOnlyList<AcceptanceCheckResult> checks)
+    {
+        var passed = 0;
+        var failed = 0;
+        var total = 0;
+        foreach (var check in checks)
+        {
+            var counts = ParseDotnetTestCounts(check.ResultSummary);
+            passed += counts.Passed ?? (check.Passed ? 1 : 0);
+            failed += counts.Failed ?? (check.Passed ? 0 : 1);
+            total += counts.Total ?? ((counts.Passed ?? (check.Passed ? 1 : 0)) + (counts.Failed ?? (check.Passed ? 0 : 1)));
+        }
+
+        return (passed, failed, total);
+    }
+
+    private static (int? Passed, int? Failed, int? Total) ParseDotnetTestCounts(string? resultSummary)
+    {
+        if (string.IsNullOrWhiteSpace(resultSummary))
+        {
+            return (null, null, null);
+        }
+
+        int? passed = null;
+        int? failed = null;
+        int? total = null;
+        foreach (Match match in DotnetTestCountPattern.Matches(resultSummary))
+        {
+            if (!int.TryParse(match.Groups["count"].Value, out var count))
+            {
+                continue;
+            }
+
+            switch (match.Groups["name"].Value.ToLowerInvariant())
+            {
+                case "passed":
+                    passed = count;
+                    break;
+                case "failed":
+                    failed = count;
+                    break;
+                case "total":
+                    total = count;
+                    break;
+            }
+        }
+
+        return (passed, failed, total);
     }
 
     private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)

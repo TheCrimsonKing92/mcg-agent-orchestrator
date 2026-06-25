@@ -598,8 +598,9 @@ public sealed class ConductorDriverTests
                     [],
                     ChangedFiles: ["tests/FooTests.cs"],
                     CoveredChecks: ["FooTests"],
-                    PassedCount: 1,
+                    PassedCount: 12,
                     FailedCount: 0,
+                    TotalCount: 12,
                     BranchHeadSha: "branch",
                     MainHeadSha: "main");
             },
@@ -612,7 +613,8 @@ public sealed class ConductorDriverTests
                 summary.FailedCount,
                 summary.BranchHeadSha,
                 summary.MainHeadSha,
-                summary.FailedChecks));
+                summary.FailedChecks,
+                summary.TotalCount));
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
@@ -620,6 +622,9 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(GoalStatus.Verified, goal.Status);
         Assert.NotNull(goal.LatestExecutedTestReceipt);
+        Assert.Equal(12, goal.LatestExecutedTestReceipt.PassedCount);
+        Assert.Equal(0, goal.LatestExecutedTestReceipt.FailedCount);
+        Assert.Equal(12, goal.LatestExecutedTestReceipt.TotalCount);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_executed_test_receipt_counts_only_parsed_dotnet_test_checks")]
@@ -651,10 +656,13 @@ public sealed class ConductorDriverTests
 
         var executed = new[] { dotnetTest, grepCheck, buildStyleCheck, advisoryDotnetTest }
             .Where(ConductorDriver.IsExecutedDotnetTestCheck)
-            .Select(check => check.Name)
             .ToArray();
+        var counts = ConductorDriver.SummarizeExecutedDotnetTestCounts(executed);
 
-        Assert.Equal(["focused dotnet tests"], executed);
+        Assert.Equal(["focused dotnet tests"], executed.Select(check => check.Name).ToArray());
+        Assert.Equal(12, counts.Passed);
+        Assert.Equal(0, counts.Failed);
+        Assert.Equal(12, counts.Total);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_red_focused_acceptance_blocks_promotion")]
@@ -687,7 +695,8 @@ public sealed class ConductorDriverTests
                 summary.FailedCount,
                 summary.BranchHeadSha,
                 summary.MainHeadSha,
-                summary.FailedChecks),
+                summary.FailedChecks,
+                summary.TotalCount),
             recordAcceptanceFailure: (g, failedChecks, branch, main) => kernel.RecordAcceptanceFailure(g.Id, failedChecks, branch, main),
             writeEscalation: (_, _, reason) => { escalationReason = reason; });
 
