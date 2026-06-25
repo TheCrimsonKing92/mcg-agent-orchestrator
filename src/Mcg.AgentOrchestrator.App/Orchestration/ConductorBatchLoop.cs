@@ -173,6 +173,22 @@ internal sealed class ConductorBatchLoop
                     continue;
                 }
 
+                if (HasPersistedVerifiedAcceptanceEscalation(goal))
+                {
+                    var progressLine = $"GOAL goal={label} result=escalated state={GoalLifecycleState.Verified}";
+                    if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
+                    {
+                        changedGoalIds.Add(goal.Id);
+                        Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated at Verified — acceptance verification already requires operator action.");
+                    }
+
+                    escalatedGoals.Add(goal.Id.Value);
+                    SetAside(goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals);
+                    ReapGoalOnce(kernel, goal, reapedGoals);
+                    tickEscalated++;
+                    continue;
+                }
+
                 ConductorAdvanceResult result;
                 try
                 {
@@ -490,6 +506,32 @@ internal sealed class ConductorBatchLoop
         result.Outcome is ConductorAdvanceOutcome.Escalated esc
         && esc.State == GoalLifecycleState.Verified
         && esc.Reason.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasPersistedVerifiedAcceptanceEscalation(Goal goal)
+    {
+        foreach (var evt in goal.Timeline.Reverse())
+        {
+            if (ClearsPersistedVerifiedAcceptanceEscalation(evt))
+            {
+                return false;
+            }
+
+            if (evt.Kind == ProgressKind.GoalPolicyDecision
+                && evt.Message.Contains("escalated at Verified", StringComparison.OrdinalIgnoreCase)
+                && evt.Message.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ClearsPersistedVerifiedAcceptanceEscalation(ProgressEvent evt) =>
+        evt.Kind is ProgressKind.TaskRetried or ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded
+        || (evt.Kind == ProgressKind.HumanInputRequested
+            && evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+        || evt.Kind == ProgressKind.HumanInputReceived;
 
     private static bool IsStopRequested(string stopFilePath) =>
         !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);
