@@ -40,11 +40,20 @@ internal sealed class ConductorDriver
         IModelProviderRegistry? providers = null)
     {
         var dir = workspace.ExecutionDirectory;
+        var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
+        var journalSnapshot = GoalOperationJournal.ReadAll(dir, factGoalIds)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var clarificationSnapshot = GoalRefinementGate.HasOpenClarificationAll(workspace, kernel.Goals);
+        void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
 
         _getFacts = goal =>
         {
-            var workspaceExists = GoalWorktrees.TryResolve(dir, goal.Id) is not null;
-            var journal = GoalOperationJournal.Read(dir, goal.Id);
+            var workspaceExists = worktreeSnapshot.ContainsKey(goal.Id);
+            var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
+                ? summary
+                : new GoalOperationJournalSummary(GoalOperationJournal.PathFor(dir, goal.Id), [], [], []);
             var isMerged = journal.LatestByOperation.Any(e =>
                 e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
             var isRecorded = journal.LatestByOperation.Any(e =>
@@ -56,7 +65,8 @@ internal sealed class ConductorDriver
                 // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
                 // acceptance on a missing worktree and spam ghost escalations every tick.
                 || (!workspaceExists && goal.Status == GoalStatus.Completed);
-            var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
+            var hasOpenClarification = clarificationSnapshot.TryGetValue(goal.Id, out var hasClarification) &&
+                hasClarification;
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
 
@@ -68,6 +78,8 @@ internal sealed class ConductorDriver
             GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
             var path = GoalWorktrees.Ensure(dir, goal.Id);
             GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
+            worktreeSnapshot[goal.Id] = path;
+            RefreshJournal(goal.Id);
             return path;
         };
 
@@ -216,6 +228,7 @@ internal sealed class ConductorDriver
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:land", result.Message);
+            RefreshJournal(goal.Id);
             return result;
         };
 
@@ -230,6 +243,7 @@ internal sealed class ConductorDriver
             var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, workspace.BacklogStorePath, Console.WriteLine);
             GoalOperationJournal.Completed(dir, goal, "conductor:backlog-close",
                 closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
+            RefreshJournal(goal.Id);
         };
 
         _record = goal =>
@@ -240,6 +254,7 @@ internal sealed class ConductorDriver
             if (File.Exists(logPath))
                 File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + entry.Render());
             GoalOperationJournal.Completed(dir, goal, "conductor:record", logPath);
+            RefreshJournal(goal.Id);
         };
 
         _cleanup = goal =>
@@ -250,6 +265,9 @@ internal sealed class ConductorDriver
                 GoalOperationJournal.Completed(dir, goal, "conductor:cleanup", result.Message);
             else
                 GoalOperationJournal.Failed(dir, goal, "conductor:cleanup", result.Message);
+            if (result.IsComplete)
+                worktreeSnapshot.Remove(goal.Id);
+            RefreshJournal(goal.Id);
         };
 
         _writeEscalation = (goal, state, reason) =>

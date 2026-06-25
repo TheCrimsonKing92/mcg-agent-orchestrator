@@ -78,6 +78,32 @@ internal static class GoalRefinementGate
     public static bool HasOpenClarification(OrchestratorWorkspace workspace, Goal goal) =>
         GoalRefinementService.HasOpenClarification(ListGoalCollaborationItems(workspace, goal));
 
+    public static IReadOnlyDictionary<GoalId, bool> HasOpenClarificationAll(
+        OrchestratorWorkspace workspace,
+        IEnumerable<Goal> goals)
+    {
+        var goalIds = goals.Select(goal => goal.Id).Distinct().ToArray();
+        var itemsByGoalId = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(null)
+            .GetAwaiter()
+            .GetResult()
+            .Where(item => !string.IsNullOrWhiteSpace(item.GoalId))
+            .GroupBy(item => item.GoalId!, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<CollaborationItem>)group.ToArray(),
+                StringComparer.Ordinal);
+
+        var results = new Dictionary<GoalId, bool>();
+        foreach (var goalId in goalIds)
+        {
+            results[goalId] = itemsByGoalId.TryGetValue(goalId.Value, out var items) &&
+                GoalRefinementService.HasOpenClarification(items);
+        }
+
+        return results;
+    }
+
     private static GoalRefinementService CreateService(
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,

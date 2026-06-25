@@ -1620,9 +1620,17 @@ public sealed class CliCommandTests
         GoalOperationJournal.Begin(root, goal, "acceptance", "start");
 
         var summary = GoalOperationJournal.Read(root, goal.Id);
+        var missingGoalId = GoalId.New();
+        var summaries = GoalOperationJournal.ReadAll(root, [goal.Id, missingGoalId]);
 
         Xunit.Assert.True(File.Exists(summary.Path));
         Xunit.Assert.Equal(3, summary.Entries.Count);
+        Xunit.Assert.Equal(summary.Path, summaries[goal.Id].Path);
+        Xunit.Assert.Equal(summary.Entries, summaries[goal.Id].Entries);
+        Xunit.Assert.Equal(summary.LatestByOperation, summaries[goal.Id].LatestByOperation);
+        Xunit.Assert.Equal(summary.InterruptedOperations, summaries[goal.Id].InterruptedOperations);
+        Xunit.Assert.False(summaries[missingGoalId].HasEntries);
+        Xunit.Assert.Equal(GoalOperationJournal.PathFor(root, missingGoalId), summaries[missingGoalId].Path);
         Xunit.Assert.Contains(summary.LatestByOperation, entry =>
             entry.Operation == "workspace:create" &&
             entry.Status == GoalOperationStatus.Completed);
