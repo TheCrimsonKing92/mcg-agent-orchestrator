@@ -7,6 +7,8 @@ internal sealed record OrchestratorWorkspace(
     string RootDirectory,
     string ExecutionDirectory,
     string OrchestratorDirectory,
+    string ProjectName,
+    bool IsProjectScoped,
     string TenantName,
     bool IsTenantScoped,
     string SqliteStatePath,
@@ -17,6 +19,7 @@ internal sealed record OrchestratorWorkspace(
     string ContinuationStorePath,
     string TranscriptPath)
 {
+    public const string DefaultProjectName = "default";
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";
     public const string RepoRootEnvironmentVariable = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";
@@ -64,14 +67,70 @@ internal sealed record OrchestratorWorkspace(
         var executionRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(executionDirectory) ? rootDirectory : executionDirectory);
         var normalizedTenant = OrchestratorTenantSelection.NormalizeTenantName(tenantName);
         var isTenantScoped = !normalizedTenant.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase);
-        var orchestrator = isTenantScoped
-            ? Path.Combine(root, ".orchestrator", "tenants", normalizedTenant)
-            : Path.Combine(root, ".orchestrator");
+        var orchestrator = ResolveOrchestratorDirectory(root, null, normalizedTenant);
+        return Create(
+            root,
+            executionRoot,
+            orchestrator,
+            DefaultProjectName,
+            false,
+            normalizedTenant,
+            isTenantScoped);
+    }
+
+    public static OrchestratorWorkspace ForProject(
+        string projectName,
+        string rootDirectory,
+        string? executionDirectory = null,
+        string? tenantName = null)
+    {
+        var normalizedProject = OrchestratorProjectSelection.NormalizeProjectName(projectName);
+        if (normalizedProject.Equals(DefaultProjectName, StringComparison.OrdinalIgnoreCase))
+        {
+            return ForDirectory(rootDirectory, executionDirectory, tenantName);
+        }
+
+        var root = Path.GetFullPath(rootDirectory);
+        var executionRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(executionDirectory) ? rootDirectory : executionDirectory);
+        var normalizedTenant = OrchestratorTenantSelection.NormalizeTenantName(tenantName);
+        var isTenantScoped = !normalizedTenant.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase);
+        var orchestrator = ResolveOrchestratorDirectory(root, normalizedProject, normalizedTenant);
+        return Create(
+            root,
+            executionRoot,
+            orchestrator,
+            normalizedProject,
+            true,
+            normalizedTenant,
+            isTenantScoped);
+    }
+
+    private static string ResolveOrchestratorDirectory(string root, string? projectName, string tenantName)
+    {
+        var baseDirectory = string.IsNullOrWhiteSpace(projectName)
+            ? Path.Combine(root, ".orchestrator")
+            : Path.Combine(root, ".orchestrator", "projects", projectName);
+        return tenantName.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase)
+            ? baseDirectory
+            : Path.Combine(baseDirectory, "tenants", tenantName);
+    }
+
+    private static OrchestratorWorkspace Create(
+        string root,
+        string executionRoot,
+        string orchestrator,
+        string projectName,
+        bool isProjectScoped,
+        string tenantName,
+        bool isTenantScoped)
+    {
         return new OrchestratorWorkspace(
             root,
             executionRoot,
             orchestrator,
-            normalizedTenant,
+            projectName,
+            isProjectScoped,
+            tenantName,
             isTenantScoped,
             Path.Combine(orchestrator, "state.db"),
             Path.Combine(orchestrator, "agents.json"),

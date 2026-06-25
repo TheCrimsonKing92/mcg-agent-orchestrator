@@ -136,6 +136,14 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintTenant(context.Workspace);
                 return false;
 
+            case "project":
+                ProjectCliCommand.Execute(
+                    parts,
+                    OrchestratorProjectRegistry.CreateDefault(),
+                    context.Workspace.RootDirectory,
+                    activeProjectOverride: null);
+                return false;
+
             case "architecture":
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;

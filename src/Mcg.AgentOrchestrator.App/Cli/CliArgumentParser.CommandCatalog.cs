@@ -7,6 +7,7 @@ private static bool IsSimpleCommand(string command)
     return command.Equals("attention", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("status", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("doctor", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("project", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("provider-smoke", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("prototype", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
