@@ -182,9 +182,9 @@ public sealed class BackgroundDispatchRunner
     }
 
     /// <summary>
-    /// Scans all Running tasks across all goals for an exit file and auto-reconciles any
+    /// Scans all tasks across all goals for an exit file and auto-reconciles any
     /// whose dispatched process has written its exit code. Idempotent: a task whose
-    /// process already completed (IsRunning == false) is skipped on repeat calls.
+    /// process completion has already been applied as verification is skipped on repeat calls.
     /// Returns the number of tasks reconciled.
     /// </summary>
     public int SweepExitedProcesses(AgentOrchestratorKernel kernel)
@@ -195,7 +195,7 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is not { IsRunning: true })
+                if (process is null || task.LastVerification is not null)
                     continue;
 
                 if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, out var outcome))
