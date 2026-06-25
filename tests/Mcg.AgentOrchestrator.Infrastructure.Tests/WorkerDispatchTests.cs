@@ -2634,6 +2634,142 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("done", task.LastVerification!.StandardOutput);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_completes_dead_exiting_worker_from_exit_file")]
+    public void BackgroundDispatchRunnerReconcileCompletesDeadExitingWorkerFromExitFile()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-25T06:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Complete dead exiting worker from exit file");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "WORKER_RESULT:");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(
+        999999,
+        "codex exec prompt",
+        root,
+        stdout,
+        stderr,
+        exit,
+        now.AddMinutes(-5),
+        null,
+        null,
+        OwnedProcessIds: [111, 222]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(
+        process,
+        now.AddMinutes(-1),
+        now.AddMinutes(-1),
+        "exiting",
+        14,
+        0,
+        childPid: null,
+        ownedPids: [111, 222],
+        exitFileExists: true);
+
+    var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.NotNull(outcome.Verification);
+    Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+    Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_exit_file_when_child_pid_is_recorded")]
+    public void BackgroundDispatchRunnerReconcileHoldsExitFileWhenChildPidIsRecorded()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-25T06:05:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Hold live child despite exit file");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "WORKER_RESULT:");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(
+        process,
+        now.AddMinutes(-1),
+        now.AddMinutes(-1),
+        "running",
+        14,
+        0,
+        childPid: 333,
+        exitFileExists: true);
+
+    var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Null(outcome.Verification);
+    Assert.Null(outcome.ProcessRecord.ExitCode);
+    Assert.Null(outcome.ProcessRecord.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_exit_file_when_owned_pid_still_running")]
+    public void BackgroundDispatchRunnerReconcileHoldsExitFileWhenOwnedPidStillRunning()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-25T06:10:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Hold live owned process despite exit file");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "WORKER_RESULT:");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(
+        999998,
+        "codex exec prompt",
+        root,
+        stdout,
+        stderr,
+        exit,
+        now.AddMinutes(-5),
+        null,
+        null,
+        OwnedProcessIds: [444, 555]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(
+        process,
+        now.AddMinutes(-1),
+        now.AddMinutes(-1),
+        "exiting",
+        14,
+        0,
+        childPid: null,
+        ownedPids: [444, 555],
+        exitFileExists: true);
+
+    var outcome = new BackgroundDispatchRunner(clock, isStillRunning: pid => pid == 444)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Null(outcome.Verification);
+    Assert.Null(outcome.ProcessRecord.ExitCode);
+    Assert.Null(outcome.ProcessRecord.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_fails_idle_codex_wrapper_after_final_output")]
     public void BackgroundDispatchRunnerRefreshFailsIdleCodexWrapperAfterFinalOutput()
 {
@@ -4787,22 +4923,29 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     long stdoutBytes,
     long stderrBytes,
     int? childPid = 888888,
-    long? ownedCpuMs = null)
+    long? ownedCpuMs = null,
+    IReadOnlyList<int>? ownedPids = null,
+    bool exitFileExists = false)
 {
     var childPidJson = childPid.HasValue ? childPid.Value.ToString() : "null";
     var ownedCpuMsJson = ownedCpuMs.HasValue ? $",\"ownedCpuMs\":{ownedCpuMs.Value}" : string.Empty;
+    var ownedPidsJson = ownedPids is { Count: > 0 }
+        ? string.Join(",", ownedPids)
+        : string.Empty;
+    var exitFileExistsJson = exitFileExists ? "true" : "false";
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
         "\"pid\":999999," +
         $"\"childPid\":{childPidJson}," +
+        $"\"ownedPids\":[{ownedPidsJson}]," +
         $"\"startedAt\":\"{process.StartedAt:O}\"," +
         $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
         $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +
         $"\"state\":\"{state}\"," +
         $"\"stdoutBytes\":{stdoutBytes}," +
         $"\"stderrBytes\":{stderrBytes}," +
-        "\"exitFileExists\":false" +
+        $"\"exitFileExists\":{exitFileExistsJson}" +
         ownedCpuMsJson +
         "}");
 }

@@ -198,10 +198,10 @@ public sealed class BackgroundDispatchRunner
                 if (process is not { IsRunning: true })
                     continue;
 
-                if (!TryReadExitCode(process.ExitCodePath, out _))
+                if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, out var outcome))
                     continue;
 
-                RefreshLatestProcess(kernel, goal.Id, task.Id);
+                ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
                 reconciled++;
             }
         }
@@ -223,15 +223,8 @@ public sealed class BackgroundDispatchRunner
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
-        if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
-        {
-            if (AnyTrackedProcessStillRunning(processRecord))
-            {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
-            }
-
-            return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, exitCode);
-        }
+        if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, out var completion))
+            return completion;
 
         if (_isStillRunning(processRecord.ProcessId))
         {
@@ -297,6 +290,46 @@ public sealed class BackgroundDispatchRunner
 
         TryKillTrackedProcesses(processRecord, waitForExit: false);
         return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1);
+    }
+
+    private bool TryCompleteFromExitFile(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord processRecord,
+        out DispatchRefreshOutcome outcome)
+    {
+        IReadOnlyList<int>? ownedProcessIds = null;
+        if (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        {
+            if (heartbeat.ChildProcessId is not null)
+            {
+                outcome = new DispatchRefreshOutcome(processRecord, null);
+                return false;
+            }
+
+            ownedProcessIds = heartbeat.OwnedProcessIds;
+        }
+
+        if (ownedProcessIds?.Any(_isStillRunning) == true)
+        {
+            outcome = new DispatchRefreshOutcome(processRecord, null);
+            return false;
+        }
+
+        if (!TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
+        {
+            outcome = new DispatchRefreshOutcome(processRecord, null);
+            return false;
+        }
+
+        if (AnyTrackedProcessStillRunning(processRecord))
+        {
+            TryKillTrackedProcesses(processRecord, waitForExit: true);
+        }
+
+        outcome = BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, exitCode);
+        return true;
     }
 
     public static void ApplyRefreshOutcome(
@@ -1206,7 +1239,8 @@ public sealed class BackgroundDispatchRunner
                 lastProgressAt,
                 GetInt64(root, "stdoutBytes"),
                 GetInt64(root, "stderrBytes"),
-                GetNullableInt64(root, "ownedCpuMs"));
+                GetNullableInt64(root, "ownedCpuMs"),
+                GetInt32Array(root, "ownedPids"));
             return true;
         }
         catch (IOException)
@@ -1270,6 +1304,25 @@ public sealed class BackgroundDispatchRunner
         }
 
         return property.TryGetInt64(out var value) ? value : null;
+    }
+
+    private static List<int> GetInt32Array(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var values = new List<int>();
+        foreach (var item in property.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var value))
+            {
+                values.Add(value);
+            }
+        }
+
+        return values;
     }
 
     private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
@@ -1501,7 +1554,8 @@ public sealed class BackgroundDispatchRunner
         DateTimeOffset LastProgressAt,
         long StandardOutputBytes,
         long StandardErrorBytes,
-        long? OwnedCpuMs = null)
+        long? OwnedCpuMs = null,
+        IReadOnlyList<int>? OwnedProcessIds = null)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
     }
