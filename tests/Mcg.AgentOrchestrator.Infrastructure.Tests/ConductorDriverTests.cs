@@ -40,6 +40,29 @@ public sealed class ConductorDriverTests
     private static GoalWorktreeRebaseResult DefaultRebaseSuccess() =>
         new(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "Already fast-forwardable", [], null);
 
+    private static string CreateTempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-conductor-driver-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static GoalLifecycleFacts ReadFactsPerGoal(OrchestratorWorkspace workspace, Goal goal)
+    {
+        var dir = workspace.ExecutionDirectory;
+        var workspaceExists = GoalWorktrees.TryResolve(dir, goal.Id) is not null;
+        var journal = GoalOperationJournal.Read(dir, goal.Id);
+        var isMerged = journal.LatestByOperation.Any(e =>
+            e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
+        var isRecorded = journal.LatestByOperation.Any(e =>
+            e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
+        var isCleanedUp = journal.LatestByOperation.Any(e =>
+            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed)
+            || (!workspaceExists && goal.Status == GoalStatus.Completed);
+        var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
+        return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
+    }
+
     private static ConductorDriver MakeDriver(
         Func<Goal, GoalLifecycleFacts>? getFacts = null,
         Func<int>? getRunningCount = null,
@@ -88,7 +111,85 @@ public sealed class ConductorDriverTests
             emptyOutputBackoffDelay);
     }
 
+    private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
+    {
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
+    }
+
     // ── Empty-batch escalation diagnostics ───────────────────────────────
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_match_per_goal_read_path")]
+    public void ConductorDriverRealFactsMatchPerGoalReadPath()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var merged = kernel.CreateGoal("Merged goal");
+        var cleaned = kernel.CreateGoal("Cleaned goal");
+        var missing = kernel.CreateGoal("Missing journal goal");
+        var clarified = kernel.CreateGoal("Clarified goal");
+
+        var worktreePath = GoalWorktrees.WorktreePath(root, merged.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: test");
+        GoalOperationJournal.Completed(root, merged, "conductor:land", "landed");
+        GoalOperationJournal.Completed(root, merged, "conductor:record", "recorded");
+        GoalOperationJournal.Completed(root, cleaned, "conductor:cleanup", "cleaned");
+        CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .RaiseAsync(
+                CollaborationItemType.Clarification,
+                clarified.Id.Value,
+                "clarify",
+                "body",
+                $"spec-clarification:{clarified.Id.Value}:test")
+            .GetAwaiter()
+            .GetResult();
+
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        foreach (var goal in new[] { merged, cleaned, missing, clarified })
+        {
+            Assert.Equal(ReadFactsPerGoal(workspace, goal), driver.GetFacts(goal));
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_refresh_after_conductor_record")]
+    public void ConductorDriverRealFactsRefreshAfterConductorRecord()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Record refresh goal");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: test");
+        GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Merged, executed.FromState);
+        Assert.True(driver.GetFacts(goal).IsRecorded);
+        Assert.Equal(ReadFactsPerGoal(workspace, goal), driver.GetFacts(goal));
+    }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_operator_approval_reasons")]
     public void ConductorDriverEmptyBatchSurfacesOperatorApprovalReasons()

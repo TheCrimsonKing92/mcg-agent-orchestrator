@@ -125,12 +125,55 @@ internal static class GoalOperationJournal
             return new GoalOperationJournalSummary(path, [], [], []);
         }
 
-        var entries = File.ReadLines(path)
+        var entries = ReadEntries(path);
+        return BuildSummary(path, entries);
+    }
+
+    public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(string executionDirectory) =>
+        ReadAll(executionDirectory, []);
+
+    public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(
+        string executionDirectory,
+        IEnumerable<GoalId> expectedGoalIds)
+    {
+        var root = System.IO.Path.Combine(
+            System.IO.Path.GetFullPath(executionDirectory),
+            ".orchestrator",
+            "goal-operations");
+        var summaries = new Dictionary<GoalId, GoalOperationJournalSummary>();
+        if (Directory.Exists(root))
+        {
+            foreach (var path in Directory.EnumerateFiles(root, "*.jsonl", SearchOption.TopDirectoryOnly))
+            {
+                var fileName = System.IO.Path.GetFileNameWithoutExtension(path);
+                if (fileName.Equals("lifecycle-index", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var goalId = new GoalId(fileName);
+                summaries[goalId] = BuildSummary(path, ReadEntries(path));
+            }
+        }
+
+        foreach (var goalId in expectedGoalIds)
+        {
+            summaries.TryAdd(goalId, new GoalOperationJournalSummary(PathFor(executionDirectory, goalId), [], [], []));
+        }
+
+        return summaries;
+    }
+
+    private static GoalOperationJournalEntry[] ReadEntries(string path) =>
+        File.ReadLines(path)
             .Select(TryDeserialize)
             .Where(entry => entry is not null)
             .Select(entry => entry!)
             .OrderBy(entry => entry.At)
             .ToArray();
+
+    private static GoalOperationJournalSummary BuildSummary(string path, GoalOperationJournalEntry[] entries)
+    {
         var latest = entries
             .GroupBy(entry => entry.IdempotencyKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderBy(entry => entry.At).Last())
