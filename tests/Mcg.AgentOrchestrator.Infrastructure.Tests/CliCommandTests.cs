@@ -126,6 +126,8 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("* client_a:", output);
         Xunit.Assert.Contains($"Root: {projectRoot}", output);
         Xunit.Assert.Contains(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db"), output);
+        Xunit.Assert.True(File.Exists(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db")));
+        Xunit.Assert.True(File.Exists(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "backlog.db")));
         Xunit.Assert.Equal("client_a", registry.ReadSelectedProjectName());
     }
 

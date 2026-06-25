@@ -1,4 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -71,6 +73,11 @@ internal static class ProjectCliCommand
         var project = registry.CreateProject(parts[2], root);
         var workspace = project.ResolveWorkspace();
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(new AgentOrchestratorKernel())
+            .GetAwaiter()
+            .GetResult();
+        _ = new BacklogStore(workspace.BacklogStorePath);
         Console.WriteLine($"Project created: {project.Name}");
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");
