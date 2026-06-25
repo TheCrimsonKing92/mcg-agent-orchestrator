@@ -282,6 +282,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Verified", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
 
@@ -321,6 +322,31 @@ public sealed class GoalLifecycleTests
     Assert.Equal(["FooTests.Fails"], goal.LatestExecutedTestReceipt!.FailedChecks);
 }
 
+    [Xunit.Fact(DisplayName = "Passing_executed_test_receipt_without_dispatch_result_commit_does_not_Verify")]
+    public void PassingExecutedTestReceiptWithoutDispatchResultCommitDoesNotVerify()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("No commit receipt", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "branch");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    Assert.False(gate.IsSatisfied);
+    Assert.Equal(VerificationGateReason.MissingExecutedTestReceipt, gate.Reason);
+}
+
     [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_for_completed_goal_without_integration_cleanup_facts")]
     public void ResolveStateReturnsVerifiedForCompletedGoalWithoutIntegrationCleanupFacts()
 {
@@ -328,6 +354,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Completed before durable cleanup", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);
@@ -344,6 +371,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Retry redispatch", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);
@@ -401,6 +429,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Receiptless completed goal", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     var snapshot = kernel.ExportSnapshot();
@@ -513,6 +542,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Merged", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);
@@ -527,6 +557,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Recorded", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);
@@ -541,6 +572,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("CleanedUp", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);
@@ -555,6 +587,7 @@ public sealed class GoalLifecycleTests
     var goal = kernel.CreateGoal("Cleanup only is not landed", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);
@@ -638,6 +671,7 @@ static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, Agent
 
 static void CompleteWithVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string standardOutput)
 {
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, standardOutput, "", DateTimeOffset.UtcNow));
     if (goal.Tasks.All(candidate => candidate.Status == WorkTaskStatus.Completed && candidate.LastVerification is { Succeeded: true }))
@@ -657,6 +691,12 @@ static void RecordPassingReceipt(AgentOrchestratorKernel kernel, Goal goal)
         failedCount: 0,
         branchHeadSha: "branch",
         mainHeadSha: "main");
+}
+
+static void RecordDispatchResult(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
+{
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "codex exec prompt.md", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "branch");
 }
 
 static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
@@ -780,7 +820,9 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
 {
     var kernel = new AgentOrchestratorKernel(new FakeClock());
     var goal = kernel.CreateGoal("Already accepted", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     RecordPassingReceipt(kernel, goal);

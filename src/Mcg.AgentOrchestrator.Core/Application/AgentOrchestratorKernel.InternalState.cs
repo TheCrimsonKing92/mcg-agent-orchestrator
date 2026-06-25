@@ -129,7 +129,7 @@ public sealed partial class AgentOrchestratorKernel
             .Select(dispatch => dispatch!.ResultCommit)
             .FirstOrDefault();
 
-        return candidateCommit is null ||
+        return candidateCommit is not null &&
             string.Equals(receipt.BranchHeadSha, candidateCommit, StringComparison.OrdinalIgnoreCase);
     }
 

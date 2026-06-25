@@ -21,6 +21,7 @@ public sealed class ConductorDriverTests
     {
         var dispatch = new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, "branch");
     }
 
     private static void PassVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
@@ -619,6 +620,41 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(GoalStatus.Verified, goal.Status);
         Assert.NotNull(goal.LatestExecutedTestReceipt);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_executed_test_receipt_counts_only_parsed_dotnet_test_checks")]
+    public void ConductorDriverExecutedTestReceiptCountsOnlyParsedDotnetTestChecks()
+    {
+        var dotnetTest = new AcceptanceCheckResult(
+            "focused dotnet tests",
+            true,
+            0,
+            null,
+            ArtifactsPath: "artifacts/acceptance",
+            BrokerName: "goal-acceptance-verifier",
+            ResultSummary: "Passed: 12, Failed: 0, Total: 12");
+        var grepCheck = new AcceptanceCheckResult(
+            "forbidden changed paths",
+            true,
+            0,
+            null,
+            ResultSummary: "no forbidden paths");
+        var buildStyleCheck = new AcceptanceCheckResult(
+            "build-check",
+            true,
+            0,
+            null,
+            ArtifactsPath: "artifacts/build",
+            BrokerName: "goal-acceptance-verifier",
+            ResultSummary: "Build succeeded.");
+        var advisoryDotnetTest = dotnetTest with { Name = "advisory tests", Advisory = true };
+
+        var executed = new[] { dotnetTest, grepCheck, buildStyleCheck, advisoryDotnetTest }
+            .Where(ConductorDriver.IsExecutedDotnetTestCheck)
+            .Select(check => check.Name)
+            .ToArray();
+
+        Assert.Equal(["focused dotnet tests"], executed);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_red_focused_acceptance_blocks_promotion")]

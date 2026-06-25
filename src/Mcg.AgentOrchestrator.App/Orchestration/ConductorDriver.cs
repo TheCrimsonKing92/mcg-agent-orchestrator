@@ -276,6 +276,9 @@ internal sealed class ConductorDriver
                 .Where(check => !check.Advisory && !check.Passed)
                 .Select(check => check.Name)
                 .ToArray() ?? [];
+            var executedTestChecks = verification.Checks?
+                .Where(IsExecutedDotnetTestCheck)
+                .ToArray() ?? [];
             if (verification.Passed)
                 GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
@@ -292,9 +295,9 @@ internal sealed class ConductorDriver
                 branchHeadSha,
                 mainHeadSha,
                 changedFiles,
-                verification.Checks?.Select(check => check.Name).ToArray() ?? [],
-                verification.Checks?.Count(check => !check.Advisory && check.Passed) ?? 0,
-                verification.Checks?.Count(check => !check.Advisory && !check.Passed) ?? 0);
+                executedTestChecks.Select(check => check.Name).ToArray(),
+                executedTestChecks.Count(check => check.Passed),
+                executedTestChecks.Count(check => !check.Passed));
         };
 
         _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
@@ -1519,6 +1522,21 @@ internal sealed class ConductorDriver
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.TrimEnd())
             .Where(line => !string.IsNullOrWhiteSpace(line));
+
+    internal static bool IsExecutedDotnetTestCheck(AcceptanceCheckResult check)
+    {
+        if (check.Advisory ||
+            !string.Equals(check.BrokerName, "goal-acceptance-verifier", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(check.ArtifactsPath) ||
+            string.IsNullOrWhiteSpace(check.ResultSummary))
+        {
+            return false;
+        }
+
+        return check.ResultSummary.Contains("Passed:", StringComparison.OrdinalIgnoreCase) ||
+            check.ResultSummary.Contains("Failed:", StringComparison.OrdinalIgnoreCase) ||
+            check.ResultSummary.Contains("Total:", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
     {

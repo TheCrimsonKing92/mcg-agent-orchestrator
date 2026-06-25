@@ -109,6 +109,7 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Contains(blocked.Blockers, item => item.Kind == GoalAcceptanceBlockerKind.VerificationNotReady && item.TaskId == needsInput.Id);
 
     kernel.SubmitHumanInput(kernel.GetPendingHumanInput(goal.Id).Single().Id, "Use main.");
+    RecordDispatchResult(kernel, goal, needsInput, clock);
     kernel.ReportTaskProgress(goal.Id, needsInput.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, needsInput.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
     kernel.RecordTaskVerification(goal.Id, missing.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
@@ -159,6 +160,7 @@ public sealed class VerificationAndInputWorklistTests
         "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
 
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -213,6 +215,7 @@ public sealed class VerificationAndInputWorklistTests
         "**skills**: none",
         "**confidence**: high",
         "END_WORKER_RESULT");
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
 
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -268,6 +271,7 @@ public sealed class VerificationAndInputWorklistTests
         "**skills**: none",
         "**confidence**: high",
         "END_WORKER_RESULT");
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
 
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -298,6 +302,7 @@ public sealed class VerificationAndInputWorklistTests
         [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
     kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Reviewer)]);
     var reviewer = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
         "reviewer stdout",
@@ -325,6 +330,7 @@ public sealed class VerificationAndInputWorklistTests
         [new TaskSpec(TaskId.New(), "Implement result", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Developer)]);
     var developer = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, developer, clock);
     kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Completed, "Developer done.");
     kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
         "developer stdout",
@@ -482,6 +488,7 @@ public sealed class VerificationAndInputWorklistTests
     var goal = kernel.CreateGoal("Complete on proof", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task, clock);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
 
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
@@ -528,6 +535,7 @@ public sealed class VerificationAndInputWorklistTests
     var goal = kernel.CreateGoal("Complete after input", [new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task, clock);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
     var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "ok", "", clock.UtcNow));
@@ -628,6 +636,18 @@ private static void RecordPassingExecutedTestReceipt(AgentOrchestratorKernel ker
         ["tests/FooTests.cs"],
         ["FooTests"],
         passedCount: 1,
-        failedCount: 0);
+        failedCount: 0,
+        branchHeadSha: "branch");
+}
+
+private static void RecordDispatchResult(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    FakeClock clock)
+{
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "branch");
+    clock.Advance();
 }
 }
