@@ -61,6 +61,33 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_resolve_all_matches_per_goal_try_resolve")]
+    public void GoalWorktreesResolveAllMatchesPerGoalTryResolve()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var first = GoalId.New();
+            var second = GoalId.New();
+            var missing = GoalId.New();
+            var firstPath = GoalWorktrees.Ensure(repo, first);
+            var secondPath = GoalWorktrees.Ensure(repo, second);
+
+            var resolved = GoalWorktrees.ResolveAll(repo, [first, second, missing]);
+
+            Assert.Equal(firstPath, resolved[first]);
+            Assert.Equal(secondPath, resolved[second]);
+            Assert.False(resolved.ContainsKey(missing));
+            Assert.Equal(GoalWorktrees.TryResolve(repo, first), resolved[first]);
+            Assert.Equal(GoalWorktrees.TryResolve(repo, second), resolved[second]);
+            Assert.Equal(GoalWorktrees.TryResolve(repo, missing), resolved.GetValueOrDefault(missing));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_ensure_fast_forwards_undriven_stale_worktree_to_base")]
     public void GoalWorktreesEnsureFastForwardsUndrivenStaleWorktreeToBase()
     {

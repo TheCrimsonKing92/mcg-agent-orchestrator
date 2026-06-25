@@ -135,6 +135,34 @@ public static class GoalWorktrees
         return File.Exists(Path.Combine(path, ".git")) ? path : null;
     }
 
+    public static IReadOnlyDictionary<GoalId, string> ResolveAll(
+        string executionDirectory,
+        IEnumerable<GoalId> goalIds)
+    {
+        var root = Path.Combine(Path.GetFullPath(executionDirectory), DirectoryName);
+        if (!Directory.Exists(root))
+        {
+            return new Dictionary<GoalId, string>();
+        }
+
+        var linkedWorktreePaths = Directory.EnumerateDirectories(root)
+            .Where(path => File.Exists(Path.Combine(path, ".git")))
+            .ToDictionary(
+                path => Path.GetFileName(path),
+                path => path,
+                StringComparer.OrdinalIgnoreCase);
+        var resolved = new Dictionary<GoalId, string>();
+        foreach (var goalId in goalIds)
+        {
+            if (linkedWorktreePaths.TryGetValue(Prefix(goalId), out var path))
+            {
+                resolved[goalId] = path;
+            }
+        }
+
+        return resolved;
+    }
+
     public static string Ensure(string executionDirectory, GoalId goalId)
     {
         var existing = TryResolve(executionDirectory, goalId);
