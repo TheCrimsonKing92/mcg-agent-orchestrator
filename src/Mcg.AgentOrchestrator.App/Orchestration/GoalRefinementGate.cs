@@ -78,13 +78,13 @@ internal static class GoalRefinementGate
     public static bool HasOpenClarification(OrchestratorWorkspace workspace, Goal goal) =>
         GoalRefinementService.HasOpenClarification(ListGoalCollaborationItems(workspace, goal));
 
-    public static IReadOnlyDictionary<GoalId, bool> HasOpenClarificationAll(
+    public static IReadOnlySet<GoalId> OpenClarificationGoalIds(
         OrchestratorWorkspace workspace,
-        IEnumerable<Goal> goals)
+        IEnumerable<GoalId> goalIds)
     {
-        var goalIds = goals.Select(goal => goal.Id).Distinct().ToArray();
+        var scopedGoalIds = goalIds.Distinct().ToArray();
         var itemsByGoalId = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
-            .ListAsync(null)
+            .ListForGoalIdsAsync(scopedGoalIds.Select(goalId => goalId.Value))
             .GetAwaiter()
             .GetResult()
             .Where(item => !string.IsNullOrWhiteSpace(item.GoalId))
@@ -94,11 +94,14 @@ internal static class GoalRefinementGate
                 group => (IReadOnlyList<CollaborationItem>)group.ToArray(),
                 StringComparer.Ordinal);
 
-        var results = new Dictionary<GoalId, bool>();
-        foreach (var goalId in goalIds)
+        var results = new HashSet<GoalId>();
+        foreach (var goalId in scopedGoalIds)
         {
-            results[goalId] = itemsByGoalId.TryGetValue(goalId.Value, out var items) &&
-                GoalRefinementService.HasOpenClarification(items);
+            if (itemsByGoalId.TryGetValue(goalId.Value, out var items) &&
+                GoalRefinementService.HasOpenClarification(items))
+            {
+                results.Add(goalId);
+            }
         }
 
         return results;

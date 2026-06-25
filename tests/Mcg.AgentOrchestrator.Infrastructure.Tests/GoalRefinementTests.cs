@@ -563,6 +563,7 @@ public sealed class GoalRefinementTests
         var openGoal = kernel.CreateGoal("Needs operator decision");
         var resolvedGoal = kernel.CreateGoal("Resolved operator decision");
         var missingGoal = kernel.CreateGoal("No clarification");
+        var unrelatedGoal = kernel.CreateGoal("Outside current run");
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
 
         await store.RaiseAsync(
@@ -578,14 +579,21 @@ public sealed class GoalRefinementTests
             "body",
             $"spec-clarification:{resolvedGoal.Id.Value}:resolved");
         await store.TryResolveAsync(resolvedItem.CorrelationKey!, "done");
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            unrelatedGoal.Id.Value,
+            "unrelated",
+            "body",
+            $"spec-clarification:{unrelatedGoal.Id.Value}:unrelated");
 
-        var bulk = GoalRefinementGate.HasOpenClarificationAll(
+        var bulk = GoalRefinementGate.OpenClarificationGoalIds(
             workspace,
-            [openGoal, resolvedGoal, missingGoal]);
+            [openGoal.Id, resolvedGoal.Id, missingGoal.Id]);
 
-        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, openGoal), bulk[openGoal.Id]);
-        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, resolvedGoal), bulk[resolvedGoal.Id]);
-        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, missingGoal), bulk[missingGoal.Id]);
+        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, openGoal), bulk.Contains(openGoal.Id));
+        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, resolvedGoal), bulk.Contains(resolvedGoal.Id));
+        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, missingGoal), bulk.Contains(missingGoal.Id));
+        Xunit.Assert.DoesNotContain(unrelatedGoal.Id, bulk);
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementGate_is_idempotent_for_refined_goal")]
