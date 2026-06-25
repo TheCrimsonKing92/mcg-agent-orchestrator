@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
+using System.Text.Json;
 
 public sealed class CliCommandTests
 {
@@ -4849,6 +4850,89 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]
+    public void PersistentRunnerAcceptanceIgnoresVolatileSnapshotChurn()
+    {
+        var root = CreateAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Land despite volatile metadata churn", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var fullSnapshotChanged = false;
+        var stableProjectionChanged = true;
+        repository.BeforeNextTransaction = stored =>
+        {
+            var before = stored.ExportSnapshot().Goals.Single(candidate => candidate.Id == goal.Id.Value);
+            stored.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed again.", root, DateTimeOffset.Parse("2026-06-25T15:01:00Z")));
+            var after = stored.ExportSnapshot().Goals.Single(candidate => candidate.Id == goal.Id.Value);
+            fullSnapshotChanged = JsonSerializer.Serialize(before) != JsonSerializer.Serialize(after);
+            stableProjectionChanged = BuildTaskStatusProjectionJson(before) != BuildTaskStatusProjectionJson(after);
+        };
+
+        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--skip-verify", "--keep-workspace"],
+            repository,
+            OrchestratorWorkspace.ForDirectory(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.True(fullSnapshotChanged);
+        Xunit.Assert.False(stableProjectionChanged);
+        Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
+        Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
+        Xunit.Assert.True(Directory.Exists(worktree));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_blocks_task_status_change")]
+    public void PersistentRunnerAcceptanceBlocksTaskStatusChange()
+    {
+        var root = CreateAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Block stale task state", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        repository.BeforeNextTransaction = stored =>
+            stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Task moved during acceptance.");
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--skip-verify", "--keep-workspace"],
+            repository,
+            OrchestratorWorkspace.ForDirectory(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal)));
+
+        Xunit.Assert.Contains("state changed during acceptance verification", ex.Message);
+        Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
+        Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_recover_does_not_implicitly_reconcile_exit_file")]
     public void PersistentRunnerRecoverDoesNotImplicitlyReconcileExitFile()
     {
@@ -5003,6 +5087,45 @@ public sealed class CliCommandTests
             goal.Id,
             task.Id,
             new TaskProcessRecord(999999, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+    }
+
+    private static string CreateAcceptanceRepository()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.com");
+        RunGit(root, "config", "user.name", "CLI Tests");
+        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "-A");
+        RunGit(root, "commit", "-m", "Seed");
+        return root;
+    }
+
+    private static string CommitGoalWork(string root, GoalId goalId, string relativePath, string content)
+    {
+        var worktree = GoalWorktrees.Ensure(root, goalId);
+        File.WriteAllText(Path.Combine(worktree, relativePath), content);
+        RunGit(worktree, "add", "-A");
+        RunGit(worktree, "commit", "-m", "Goal work");
+        return worktree;
+    }
+
+    private static string BuildTaskStatusProjectionJson(GoalSnapshot snapshot)
+    {
+        var landingRelevantState = new
+        {
+            Tasks = snapshot.Tasks
+                .OrderBy(task => task.Id, StringComparer.Ordinal)
+                .Select(task => new
+                {
+                    task.Id,
+                    Role = task.RequiredRole,
+                    task.Status
+                })
+        };
+
+        return JsonSerializer.Serialize(landingRelevantState);
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)
