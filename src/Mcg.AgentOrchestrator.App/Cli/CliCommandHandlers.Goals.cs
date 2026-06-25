@@ -2138,7 +2138,19 @@ private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalI
 {
     var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
         ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-    return JsonSerializer.Serialize(snapshot);
+    var landingRelevantState = new
+    {
+        Tasks = snapshot.Tasks
+            .OrderBy(task => task.Id, StringComparer.Ordinal)
+            .Select(task => new
+            {
+                task.Id,
+                Role = task.RequiredRole,
+                task.Status
+            })
+    };
+
+    return JsonSerializer.Serialize(landingRelevantState);
 }
 
 // Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the
