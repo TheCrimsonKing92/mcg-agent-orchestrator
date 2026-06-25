@@ -12,11 +12,15 @@ if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
 }
 
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
+OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;
 try
 {
-    tenantSelection = OrchestratorTenantSelection.FromArgs(
+    projectSelection = OrchestratorProjectSelection.FromArgs(
         args,
+        Environment.GetEnvironmentVariable(OrchestratorProjectSelection.ProjectEnvironmentVariable));
+    tenantSelection = OrchestratorTenantSelection.FromArgs(
+        projectSelection.CommandArgs,
         Environment.GetEnvironmentVariable(OrchestratorTenantSelection.TenantEnvironmentVariable));
 }
 catch (Exception ex)
@@ -34,10 +38,40 @@ var startupArgs = tenantSelection.CommandArgs.Count == 0
 var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
-var workspace = OrchestratorWorkspace.ForDirectory(
-    repoRoot,
-    string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
-    tenantSelection.TenantName);
+var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
+if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        return ProjectCliCommand.Execute(startupArgs, projectRegistry, repoRoot, projectSelection.ProjectName);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+OrchestratorProject activeProject;
+try
+{
+    activeProject = projectRegistry.ResolveActiveProject(repoRoot, projectSelection.ProjectName);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
+}
+
+var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
+    ? OrchestratorWorkspace.ForDirectory(
+        activeProject.RootDirectory,
+        string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
+        tenantSelection.TenantName)
+    : OrchestratorWorkspace.ForProject(
+        activeProject.Name,
+        activeProject.RootDirectory,
+        tenantName: tenantSelection.TenantName);
 WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
 WorkerProcessJobs.SweepStartupOrphans();
 GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
@@ -122,6 +156,7 @@ if (startupArgs.Count > 0)
 }
 
 Console.WriteLine("MCG Agent Orchestrator");
+Console.WriteLine($"Project: {workspace.ProjectName}");
 Console.WriteLine($"Tenant: {workspace.TenantName}");
 Console.WriteLine($"State: {workspace.SqliteStatePath}");
 Console.WriteLine();
@@ -139,6 +174,8 @@ Console.WriteLine("  stop <goal-id> <reason> --as cancel|park|abandon|supersede 
 Console.WriteLine("    Stop a goal using the specified disposal mode.");
 Console.WriteLine("  config <agents|profiles|policy|doctor>");
 Console.WriteLine("    View configuration: agents=agent catalog, profiles=worker profiles, policy=autonomy policies, doctor=health check.");
+Console.WriteLine("  project list|show [name]|create <name> --root <path>|select <name>");
+Console.WriteLine("    Manage global project registry and active project selection.");
 Console.WriteLine("  dashboard [path] [--refresh seconds] | --mode local|hosted|read-only [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("    Render static dashboard HTML or launch a hosted dashboard server.");
 Console.WriteLine();
@@ -146,7 +183,7 @@ Console.WriteLine("Advanced/Internal (used by automation, tests, and advanced wo
 Console.WriteLine("  Inspection verbs folded into 'next --full': status, monitor, readiness, evidence, stages, gates,");
 Console.WriteLine("    verify-needed, input-needed, subscription-plan, model-outcomes, durations, loop-health, failure-triage,");
 Console.WriteLine("    goal-recovery, supervisor, operator-inbox. All still work standalone.");
-Console.WriteLine("  doctor, architecture, tenant");
+Console.WriteLine("  doctor, architecture, tenant, project");
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
 Console.WriteLine("  prototype [objective], prototype-ui [url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  serve-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
@@ -214,7 +251,14 @@ while (true)
 
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(CliArgumentParser.SplitCommand(line), stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        var command = CliArgumentParser.SplitCommand(line);
+        if (command.Count > 0 && command[0].Equals("project", StringComparison.OrdinalIgnoreCase))
+        {
+            ProjectCliCommand.Execute(command, projectRegistry, repoRoot, projectSelection.ProjectName);
+            continue;
+        }
+
+        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
     }
     catch (Exception ex)
     {

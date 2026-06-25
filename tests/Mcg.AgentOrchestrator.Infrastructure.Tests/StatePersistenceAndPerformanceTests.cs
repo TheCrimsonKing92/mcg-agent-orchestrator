@@ -262,6 +262,32 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.False(defaultWorkspace.SqliteStatePath.Equals(tenantWorkspace.SqliteStatePath, StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "OrchestratorWorkspace_default_project_preserves_existing_paths")]
+    public void OrchestratorWorkspaceDefaultProjectPreservesExistingPaths()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForProject("default", root);
+
+        Assert.Equal("default", workspace.ProjectName);
+        Assert.False(workspace.IsProjectScoped);
+        Assert.Equal(Path.Combine(root, ".orchestrator"), workspace.OrchestratorDirectory);
+        Assert.Equal(Path.Combine(root, ".orchestrator", "state.db"), workspace.SqliteStatePath);
+        Assert.Equal(Path.Combine(root, ".orchestrator", "backlog.db"), workspace.BacklogStorePath);
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorWorkspace_non_default_project_uses_project_scoped_state")]
+    public void OrchestratorWorkspaceNonDefaultProjectUsesProjectScopedState()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForProject("client_a", root);
+
+        Assert.Equal("client_a", workspace.ProjectName);
+        Assert.True(workspace.IsProjectScoped);
+        Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a"), workspace.OrchestratorDirectory);
+        Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a", "state.db"), workspace.SqliteStatePath);
+        Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a", "backlog.db"), workspace.BacklogStorePath);
+    }
+
     [Xunit.Fact(DisplayName = "OrchestratorTenantSelection_accepts_cli_override_and_rejects_path_segments")]
     public void OrchestratorTenantSelectionAcceptsCliOverrideAndRejectsPathSegments()
     {
@@ -272,6 +298,71 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal("customer-1", selection.TenantName);
         Assert.True(selection.CommandArgs.SequenceEqual(["simple-goal", "Do work"]));
         Assert.Throws<ArgumentException>(() => OrchestratorTenantSelection.FromArgs(["--tenant=../bad", "goals"], null));
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorProjectSelection_accepts_cli_override_and_rejects_path_segments")]
+    public void OrchestratorProjectSelectionAcceptsCliOverrideAndRejectsPathSegments()
+    {
+        var selection = OrchestratorProjectSelection.FromArgs(
+            ["--project", "customer-1", "goals"],
+            "from_env");
+
+        Assert.Equal("customer-1", selection.ProjectName);
+        Assert.True(selection.CommandArgs.SequenceEqual(["goals"]));
+        Assert.Throws<ArgumentException>(() => OrchestratorProjectSelection.FromArgs(["--project=../bad", "goals"], null));
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorProjectRegistry_selection_routes_to_project_workspace")]
+    public void OrchestratorProjectRegistrySelectionRoutesToProjectWorkspace()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        registry.CreateProject("client_a", projectRoot);
+        registry.SelectProject("client_a");
+
+        var active = registry.ResolveActiveProject(defaultRoot, null);
+        var workspace = active.ResolveWorkspace();
+
+        Assert.Equal("client_a", active.Name);
+        Assert.Equal(projectRoot, active.RootDirectory);
+        Assert.Equal(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db"), workspace.SqliteStatePath);
+
+        registry.SelectProject("default");
+        var restoredDefault = registry.ResolveActiveProject(defaultRoot, null);
+        Assert.Equal("default", restoredDefault.Name);
+        Assert.Equal(defaultRoot, restoredDefault.RootDirectory);
+    }
+
+    [Xunit.Fact(DisplayName = "Project_workspaces_physically_isolate_goal_and_backlog_state")]
+    public async Task ProjectWorkspacesPhysicallyIsolateGoalAndBacklogState()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        var defaultWorkspace = OrchestratorWorkspace.ForDirectory(defaultRoot);
+        var projectWorkspace = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+
+        var projectKernel = new AgentOrchestratorKernel();
+        projectKernel.CreateGoal("Project-only goal");
+        await new SqliteOrchestratorStateRepository(projectWorkspace.SqliteStatePath).SaveAsync(projectKernel);
+        await new BacklogStore(projectWorkspace.BacklogStorePath).UpsertAsync(new BacklogItem(
+            "project-only",
+            "Project-only backlog",
+            "Project scoped item",
+            BacklogItemStatus.Open,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            SourceGoalId: null));
+
+        var defaultGoals = await new SqliteOrchestratorStateRepository(defaultWorkspace.SqliteStatePath).LoadAsync();
+        var defaultBacklog = await new BacklogStore(defaultWorkspace.BacklogStorePath).ListAsync(includeAll: true);
+        var restoredProject = await new SqliteOrchestratorStateRepository(projectWorkspace.SqliteStatePath).LoadAsync();
+        var projectBacklog = await new BacklogStore(projectWorkspace.BacklogStorePath).ListAsync(includeAll: true);
+
+        Assert.Empty(defaultGoals.Goals);
+        Assert.Empty(defaultBacklog);
+        Xunit.Assert.Contains(restoredProject.Goals, goal => goal.Objective == "Project-only goal");
+        Xunit.Assert.Contains(projectBacklog, item => item.Id == "project-only");
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_handles_concurrent_saves")]

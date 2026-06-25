@@ -90,6 +90,45 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(goal.Tasks.Single().LastExecution);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_project_commands_create_select_list_and_show")]
+    public void CliProjectCommandsCreateSelectListAndShow()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+
+        var output = CaptureConsole(() =>
+        {
+            Xunit.Assert.Equal(0, ProjectCliCommand.Execute(
+                ["project", "create", "client_a", "--root", projectRoot],
+                registry,
+                defaultRoot,
+                activeProjectOverride: null));
+            Xunit.Assert.Equal(0, ProjectCliCommand.Execute(
+                ["project", "select", "client_a"],
+                registry,
+                defaultRoot,
+                activeProjectOverride: null));
+            Xunit.Assert.Equal(0, ProjectCliCommand.Execute(
+                ["project", "list"],
+                registry,
+                defaultRoot,
+                activeProjectOverride: null));
+            Xunit.Assert.Equal(0, ProjectCliCommand.Execute(
+                ["project", "show"],
+                registry,
+                defaultRoot,
+                activeProjectOverride: null));
+        });
+
+        Xunit.Assert.Contains("Project created: client_a", output);
+        Xunit.Assert.Contains("Project selected: client_a", output);
+        Xunit.Assert.Contains("* client_a:", output);
+        Xunit.Assert.Contains($"Root: {projectRoot}", output);
+        Xunit.Assert.Contains(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db"), output);
+        Xunit.Assert.Equal("client_a", registry.ReadSelectedProjectName());
+    }
+
     [Xunit.Fact(DisplayName = "Cli_tenant_and_architecture_report_tenant_scoped_runtime_paths")]
     public void CliTenantAndArchitectureReportTenantScopedRuntimePaths()
     {
