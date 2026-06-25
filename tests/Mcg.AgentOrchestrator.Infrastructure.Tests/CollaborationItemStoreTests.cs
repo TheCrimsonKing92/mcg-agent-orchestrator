@@ -90,6 +90,20 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("goal-aaa", filtered[0].GoalId);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_list_filters_by_goal_ids")]
+    public async Task ListFiltersByGoalIds()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-aaa", "s1", "b1");
+        await store.RaiseAsync(CollaborationItemType.Clarification, "goal-bbb", "s2", "b2");
+        await store.RaiseAsync(CollaborationItemType.Verify, "goal-ccc", "s3", "b3");
+
+        var filtered = await store.ListForGoalIdsAsync(["goal-aaa", "goal-bbb", "goal-missing"]);
+
+        Xunit.Assert.Equal(["goal-aaa", "goal-bbb"], filtered.Select(item => item.GoalId).ToArray());
+    }
+
     // --- Resolution ---
 
     [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_transitions_item_to_Resolved")]
@@ -295,4 +309,13 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     public Task<IReadOnlyList<CollaborationItem>> ListAsync(string? goalId = null, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<CollaborationItem>>(
             goalId is null ? _items : _items.Where(i => i.GoalId == goalId).ToList());
+
+    public Task<IReadOnlyList<CollaborationItem>> ListForGoalIdsAsync(
+        IEnumerable<string> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        var scopedGoalIds = goalIds.ToHashSet(StringComparer.Ordinal);
+        return Task.FromResult<IReadOnlyList<CollaborationItem>>(
+            _items.Where(item => item.GoalId is not null && scopedGoalIds.Contains(item.GoalId)).ToList());
+    }
 }
