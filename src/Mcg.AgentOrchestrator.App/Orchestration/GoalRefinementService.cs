@@ -17,8 +17,8 @@ internal sealed record RefinementResult(RefinementOutcome Outcome, RefinedSpec S
 
 // Orchestrates the goal refinement stage: calls the spec-refiner model function, classifies each
 // fork on three axes, raises Clarification items for high-stakes ambiguities the refiner can't
-// resolve, and attaches the resulting RefinedSpec to the goal. Falls back to a minimal spec when
-// no spec-refiner binding is configured so refinement never blocks goals silently.
+// resolve, and attaches the resulting RefinedSpec to the goal. Configuration errors are surfaced
+// immediately so refinement cannot silently run on the wrong model.
 internal sealed class GoalRefinementService
 {
     // Correlation key prefix used to look up open clarification items for a goal.
@@ -257,11 +257,7 @@ internal sealed class GoalRefinementService
         string objective,
         CancellationToken cancellationToken)
     {
-        var bindings = _catalog.ForPurpose(ModelFunctionPurposes.SpecRefiner);
-        if (bindings.Count == 0)
-            return SpecRefinementOutput.Invalid("No spec-refiner model function configured.");
-
-        var binding = bindings[0];
+        var binding = ResolveSpecRefinerBinding(_catalog.Bindings);
         var prompt = SpecRefinerPlanner.BuildPrompt(objective);
         if (binding.Subscription is { } subscription && _workerProfiles is not null)
         {
@@ -293,6 +289,33 @@ internal sealed class GoalRefinementService
             return SpecRefinementOutput.Invalid($"Spec refiner model call failed: {ex.Message}");
         }
     }
+
+    private static ModelFunctionBinding ResolveSpecRefinerBinding(IReadOnlyList<ModelFunctionBinding> bindings)
+    {
+        const string identifier = ModelFunctionPurposes.SpecRefiner;
+        var matches = bindings
+            .Where(binding => string.Equals(BindingIdentifier(binding), identifier, StringComparison.Ordinal))
+            .ToList();
+
+        if (matches.Count == 1)
+            return matches[0];
+
+        var configured = bindings.Count == 0
+            ? "<none>"
+            : string.Join(", ", bindings.Select(binding =>
+                $"{BindingIdentifier(binding)} ({binding.Model.ProviderName}/{binding.Model.ModelName})"));
+        if (matches.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"No model-function binding found for '{identifier}'. Configured bindings: {configured}.");
+        }
+
+        throw new InvalidOperationException(
+            $"Multiple model-function bindings found for '{identifier}'. Configured bindings: {configured}.");
+    }
+
+    private static string BindingIdentifier(ModelFunctionBinding binding) =>
+        string.IsNullOrWhiteSpace(binding.Name) ? binding.Purpose : binding.Name;
 
     private async Task<SpecRefinementOutput> RunSubscriptionRefinerAsync(
         SubscriptionLaunchProfile subscription,
