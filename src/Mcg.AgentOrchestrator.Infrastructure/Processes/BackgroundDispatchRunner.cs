@@ -299,6 +299,24 @@ public sealed class BackgroundDispatchRunner
         TaskProcessRecord processRecord,
         out DispatchRefreshOutcome outcome)
     {
+        IReadOnlyList<int>? ownedProcessIds = null;
+        if (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        {
+            if (heartbeat.ChildProcessId is not null)
+            {
+                outcome = new DispatchRefreshOutcome(processRecord, null);
+                return false;
+            }
+
+            ownedProcessIds = heartbeat.OwnedProcessIds;
+        }
+
+        if (ownedProcessIds?.Any(_isStillRunning) == true)
+        {
+            outcome = new DispatchRefreshOutcome(processRecord, null);
+            return false;
+        }
+
         if (!TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
             outcome = new DispatchRefreshOutcome(processRecord, null);
@@ -1221,7 +1239,8 @@ public sealed class BackgroundDispatchRunner
                 lastProgressAt,
                 GetInt64(root, "stdoutBytes"),
                 GetInt64(root, "stderrBytes"),
-                GetNullableInt64(root, "ownedCpuMs"));
+                GetNullableInt64(root, "ownedCpuMs"),
+                GetInt32Array(root, "ownedPids"));
             return true;
         }
         catch (IOException)
@@ -1285,6 +1304,25 @@ public sealed class BackgroundDispatchRunner
         }
 
         return property.TryGetInt64(out var value) ? value : null;
+    }
+
+    private static List<int> GetInt32Array(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var values = new List<int>();
+        foreach (var item in property.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var value))
+            {
+                values.Add(value);
+            }
+        }
+
+        return values;
     }
 
     private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
@@ -1516,7 +1554,8 @@ public sealed class BackgroundDispatchRunner
         DateTimeOffset LastProgressAt,
         long StandardOutputBytes,
         long StandardErrorBytes,
-        long? OwnedCpuMs = null)
+        long? OwnedCpuMs = null,
+        IReadOnlyList<int>? OwnedProcessIds = null)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
     }
