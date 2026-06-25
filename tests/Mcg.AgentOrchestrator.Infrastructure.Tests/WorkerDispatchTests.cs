@@ -2634,6 +2634,46 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("done", task.LastVerification!.StandardOutput);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_completes_dead_exiting_worker_from_exit_file")]
+    public void BackgroundDispatchRunnerReconcileCompletesDeadExitingWorkerFromExitFile()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-25T06:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Complete dead exiting worker from exit file");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "WORKER_RESULT:");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(
+        999999,
+        "codex exec prompt",
+        root,
+        stdout,
+        stderr,
+        exit,
+        now.AddMinutes(-5),
+        null,
+        null,
+        OwnedProcessIds: [111, 222]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "exiting", 14, 0, childPid: null);
+
+    var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Xunit.Assert.NotNull(outcome.Verification);
+    Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+    Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_fails_idle_codex_wrapper_after_final_output")]
     public void BackgroundDispatchRunnerRefreshFailsIdleCodexWrapperAfterFinalOutput()
 {
