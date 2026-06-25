@@ -60,6 +60,23 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("Rate limit reached", outcome.EvidenceSummary);
     }
 
+    [Xunit.Fact(DisplayName = "Classify_returns_RecoverableSubscriptionLimit_for_codex_retry_limit_429_stderr")]
+    public void Classify_CodexRetryLimit429Stderr()
+    {
+        var task = SimpleTask();
+        var verification = Verification(
+            1,
+            "",
+            "exceeded retry limit, last status: 429 Too Many Requests, request id: req_123");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("429 Too Many Requests", outcome.EvidenceSummary);
+    }
+
     [Xunit.Fact(DisplayName = "Classify_returns_RecoverableSubscriptionLimit_for_claude_usage_window_stderr")]
     public void Classify_ClaudeUsageWindowStderr()
     {
