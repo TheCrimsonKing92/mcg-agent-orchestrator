@@ -554,6 +554,40 @@ public sealed class GoalRefinementTests
         GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     }
 
+    [Xunit.Fact(DisplayName = "GoalRefinementGate_bulk_open_clarification_matches_per_goal_helper")]
+    public async Task GoalRefinementGateBulkOpenClarificationMatchesPerGoalHelper()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var openGoal = kernel.CreateGoal("Needs operator decision");
+        var resolvedGoal = kernel.CreateGoal("Resolved operator decision");
+        var missingGoal = kernel.CreateGoal("No clarification");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            openGoal.Id.Value,
+            "open",
+            "body",
+            $"spec-clarification:{openGoal.Id.Value}:open");
+        var resolvedItem = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            resolvedGoal.Id.Value,
+            "resolved",
+            "body",
+            $"spec-clarification:{resolvedGoal.Id.Value}:resolved");
+        await store.TryResolveAsync(resolvedItem.CorrelationKey!, "done");
+
+        var bulk = GoalRefinementGate.HasOpenClarificationAll(
+            workspace,
+            [openGoal, resolvedGoal, missingGoal]);
+
+        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, openGoal), bulk[openGoal.Id]);
+        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, resolvedGoal), bulk[resolvedGoal.Id]);
+        Xunit.Assert.Equal(GoalRefinementGate.HasOpenClarification(workspace, missingGoal), bulk[missingGoal.Id]);
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementGate_is_idempotent_for_refined_goal")]
     public void GoalRefinementGateIsIdempotentForRefinedGoal()
     {

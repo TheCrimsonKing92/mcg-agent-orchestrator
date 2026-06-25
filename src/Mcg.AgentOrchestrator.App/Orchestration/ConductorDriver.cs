@@ -45,6 +45,7 @@ internal sealed class ConductorDriver
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var clarificationSnapshot = GoalRefinementGate.HasOpenClarificationAll(workspace, kernel.Goals);
         void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
 
         _getFacts = goal =>
@@ -64,7 +65,8 @@ internal sealed class ConductorDriver
                 // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
                 // acceptance on a missing worktree and spam ghost escalations every tick.
                 || (!workspaceExists && goal.Status == GoalStatus.Completed);
-            var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
+            var hasOpenClarification = clarificationSnapshot.TryGetValue(goal.Id, out var hasClarification) &&
+                hasClarification;
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
 
