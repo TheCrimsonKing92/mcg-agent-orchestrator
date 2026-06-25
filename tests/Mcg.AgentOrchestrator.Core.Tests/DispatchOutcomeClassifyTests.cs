@@ -42,6 +42,73 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
     }
 
+    [Xunit.Fact(DisplayName = "Classify_returns_RecoverableSubscriptionLimit_for_codex_rate_limit_stderr")]
+    public void Classify_CodexRateLimitStderr()
+    {
+        var task = SimpleTask();
+        var verification = Verification(
+            1,
+            "",
+            "Rate limit reached for gpt-5.5. Please try again in 42s.");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
+        Xunit.Assert.True(outcome.RetryAfter is { TotalSeconds: > 0 });
+        Xunit.Assert.Contains("Rate limit reached", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_returns_RecoverableSubscriptionLimit_for_codex_retry_limit_429_stderr")]
+    public void Classify_CodexRetryLimit429Stderr()
+    {
+        var task = SimpleTask();
+        var verification = Verification(
+            1,
+            "",
+            "exceeded retry limit, last status: 429 Too Many Requests, request id: req_123");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("429 Too Many Requests", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_returns_RecoverableSubscriptionLimit_for_claude_usage_window_stderr")]
+    public void Classify_ClaudeUsageWindowStderr()
+    {
+        var task = SimpleTask();
+        var verification = Verification(
+            1,
+            "",
+            "Error: reached your usage limit for this period. Resets in: 1h 15m");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
+        Xunit.Assert.True(outcome.RetryAfter is { TotalMinutes: > 70 });
+        Xunit.Assert.Contains("usage limit", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_keeps_zero_byte_local_kill_as_EmptyOutputFlake_without_provider_reason")]
+    public void Classify_LocalKillWithoutProviderReasonIsNotRateLimit()
+    {
+        var task = SimpleTask();
+        var verification = Verification(
+            1,
+            "",
+            "Background dispatch killed after startup hang; no provider output was captured.");
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+    }
+
     [Xunit.Fact(DisplayName = "Classify_returns_EmptyOutputFlake_for_zero_byte_stdout_with_nonzero_exit")]
     public void Classify_EmptyOutputFlake()
     {

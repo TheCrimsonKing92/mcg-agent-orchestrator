@@ -64,9 +64,20 @@ public static class DispatchFailureClassifier
     private static readonly Regex ExitCodeZeroPattern = new(
         @"\bexit code\s*0\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex TryAgainInPattern = new(
+        @"\btry again in\s+(?<value>\d+)\s*(?<unit>ms|milliseconds?|s|sec|secs|seconds?|m|mins?|minutes?|h|hrs?|hours?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ResetsInPattern = new(
+        @"\bresets?\s+in\s*:?\s*(?:(?<hours>\d+)\s*h(?:ours?)?)?\s*(?:(?<minutes>\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(?<seconds>\d+)\s*s(?:ec(?:ond)?s?)?)?",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
+        if (verification.Succeeded)
+        {
+            return false;
+        }
+
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
@@ -268,6 +279,11 @@ public static class DispatchFailureClassifier
 
     private static string BuildEvidenceSummary(TaskVerificationRecord verification)
     {
+        if (TryGetRecoverableSubscriptionLimitLine(verification, out var providerLimitLine))
+        {
+            return TruncateEvidence(providerLimitLine);
+        }
+
         if (!HasVerificationEvidence(verification.StandardOutput, verification.StandardError))
         {
             return string.Empty;
@@ -278,12 +294,15 @@ public static class DispatchFailureClassifier
         {
             if (HasVerificationEvidence(rawLine, string.Empty))
             {
-                return rawLine.Length > 200 ? rawLine[..200] : rawLine;
+                return TruncateEvidence(rawLine);
             }
         }
 
         return "Verification evidence found in output.";
     }
+
+    private static string TruncateEvidence(string evidence) =>
+        evidence.Length > 200 ? evidence[..200] : evidence;
 
     private static bool HasVerificationEvidence(string standardOutput, string standardError)
     {
@@ -509,6 +528,12 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (TryGetRelativeRetryAfter(output, out var retryAfterDelay))
+        {
+            retryAfter = verification.CompletedAt.Add(retryAfterDelay);
+            return true;
+        }
+
         var marker = "try again at ";
         var markerIndex = output.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
         if (markerIndex < 0)
@@ -549,16 +574,7 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var candidate in GetProviderErrorLines(verification.StandardOutput))
-        {
-            if (IsRecoverableSubscriptionLimitText(candidate))
-            {
-                line = candidate;
-                return true;
-            }
-        }
-
-        foreach (var candidate in GetProviderErrorLines(verification.StandardError))
+        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
         {
             if (IsRecoverableSubscriptionLimitText(candidate))
             {
@@ -573,9 +589,68 @@ public static class DispatchFailureClassifier
 
     private static bool IsRecoverableSubscriptionLimitText(string text)
     {
-        return text.Contains("usage limit", StringComparison.OrdinalIgnoreCase) &&
-            (text.Contains("try again", StringComparison.OrdinalIgnoreCase) ||
-             text.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase));
+        return (text.Contains("usage limit", StringComparison.OrdinalIgnoreCase) &&
+                (text.Contains("try again", StringComparison.OrdinalIgnoreCase) ||
+                 text.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase) ||
+                 text.Contains("resets in", StringComparison.OrdinalIgnoreCase))) ||
+            text.Contains("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("rate limit exceeded", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("rate limit reached", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
+    {
+        var tryAgainMatch = TryAgainInPattern.Match(output);
+        if (tryAgainMatch.Success &&
+            int.TryParse(tryAgainMatch.Groups["value"].Value, out var retryValue))
+        {
+            retryAfter = ToTimeSpan(retryValue, tryAgainMatch.Groups["unit"].Value);
+            return retryAfter > TimeSpan.Zero;
+        }
+
+        var resetsMatch = ResetsInPattern.Match(output);
+        if (resetsMatch.Success)
+        {
+            var hours = ParseIntGroup(resetsMatch, "hours");
+            var minutes = ParseIntGroup(resetsMatch, "minutes");
+            var seconds = ParseIntGroup(resetsMatch, "seconds");
+            retryAfter = new TimeSpan(hours, minutes, seconds);
+            return retryAfter > TimeSpan.Zero;
+        }
+
+        retryAfter = default;
+        return false;
+    }
+
+    private static int ParseIntGroup(Match match, string groupName) =>
+        match.Groups[groupName].Success && int.TryParse(match.Groups[groupName].Value, out var value)
+            ? value
+            : 0;
+
+    private static TimeSpan ToTimeSpan(int value, string unit)
+    {
+        if (unit.StartsWith("ms", StringComparison.OrdinalIgnoreCase) ||
+            unit.StartsWith("millisecond", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromMilliseconds(value);
+        }
+
+        if (unit.StartsWith("m", StringComparison.OrdinalIgnoreCase) &&
+            !unit.StartsWith("ms", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromMinutes(value);
+        }
+
+        if (unit.StartsWith("h", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromHours(value);
+        }
+
+        return TimeSpan.FromSeconds(value);
     }
 
     private static bool IsSubscriptionProviderCliDispatch(TaskSpec task)
@@ -661,6 +736,50 @@ public static class DispatchFailureClassifier
             }
         }
     }
+
+    private static IEnumerable<string> GetProviderSignalLines(params string[] outputs)
+    {
+        foreach (var output in outputs)
+        {
+            foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = rawLine.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                if (IsProviderErrorLine(line))
+                {
+                    yield return line;
+                    continue;
+                }
+
+                var powerShellError = PowerShellNativeErrorPrefix.Match(line);
+                if (powerShellError.Success)
+                {
+                    yield return line[powerShellError.Groups["error"].Index..];
+                    continue;
+                }
+
+                if (IsBareProviderLimitSignalLine(line))
+                {
+                    yield return line;
+                }
+            }
+        }
+    }
+
+    private static bool IsBareProviderLimitSignalLine(string line) =>
+        line.StartsWith("You've hit your usage limit", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("exceeded retry limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsProviderErrorLine(string line)
     {
