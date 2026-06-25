@@ -60,6 +60,19 @@ internal sealed class ConductorBatchLoop
         var stopRequested = false;
         var started = DateTimeOffset.UtcNow;
 
+        // Prime dependency-tracking from already-terminal goals WITHOUT reconciling them. Terminal goals
+        // are excluded from the per-tick eligible set below, so they are never AdvanceOnce'd - this kills
+        // the multi-minute startup "re-sweep" of hundreds of already-done goals on every loop restart.
+        // Dependency gating still needs to know which prior goals completed/failed, so seed that from
+        // current status here (a cheap status read, not a per-goal reconcile).
+        foreach (var seedGoal in kernel.Goals)
+        {
+            if (seedGoal.Status is GoalStatus.Completed)
+                completedGoals.Add(seedGoal.Id.Value);
+            else if (seedGoal.Status is GoalStatus.Failed)
+                escalatedGoals.Add(seedGoal.Id.Value);
+        }
+
         while (true)
         {
             if (IsStopRequested(stopFilePath))
@@ -98,8 +111,7 @@ internal sealed class ConductorBatchLoop
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !excludedGoals.Contains(g.Id.Value)
                     && !setAsideGoals.ContainsKey(g.Id.Value)
-                    && g.Status is not GoalStatus.Cancelled
-                    && g.Status is not GoalStatus.Superseded)
+                    && !IsTerminalGoal(g))
                 .ToArray();
 
             if (eligible.Length == 0)
