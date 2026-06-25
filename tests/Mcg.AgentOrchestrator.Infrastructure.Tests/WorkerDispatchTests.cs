@@ -2677,7 +2677,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-    Xunit.Assert.NotNull(outcome.Verification);
+    Assert.NotNull(outcome.Verification);
     Assert.Equal(0, outcome.ProcessRecord.ExitCode);
     Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
@@ -2715,7 +2715,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-    Xunit.Assert.Null(outcome.Verification);
+    Assert.Null(outcome.Verification);
     Assert.Null(outcome.ProcessRecord.ExitCode);
     Assert.Null(outcome.ProcessRecord.CompletedAt);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
@@ -2764,7 +2764,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var outcome = new BackgroundDispatchRunner(clock, isStillRunning: pid => pid == 444)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-    Xunit.Assert.Null(outcome.Verification);
+    Assert.Null(outcome.Verification);
     Assert.Null(outcome.ProcessRecord.ExitCode);
     Assert.Null(outcome.ProcessRecord.CompletedAt);
     Assert.Equal(WorkTaskStatus.Running, task.Status);

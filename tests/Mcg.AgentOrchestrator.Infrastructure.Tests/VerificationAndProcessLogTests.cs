@@ -304,7 +304,7 @@ public sealed class VerificationAndProcessLogTests
 
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Xunit.Assert.Equal<int>([111, 222], killed);
+    Assert.Equal<int>([111, 222], killed);
     Assert.False(task.LastProcess!.IsRunning);
 }
 
