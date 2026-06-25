@@ -137,7 +137,7 @@ internal sealed record OrchestratorWorkspace(
             Path.Combine(orchestrator, "workers.json"),
             Path.Combine(orchestrator, "prompts"),
             Path.Combine(orchestrator, "logs"),
-            isTenantScoped
+            isProjectScoped || isTenantScoped
                 ? Path.Combine(orchestrator, ContinuationStoreFileName)
                 : Path.Combine(root, ContinuationStoreFileName),
             Path.Combine(orchestrator, "transcript.md"));

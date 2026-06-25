@@ -273,6 +273,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(Path.Combine(root, ".orchestrator"), workspace.OrchestratorDirectory);
         Assert.Equal(Path.Combine(root, ".orchestrator", "state.db"), workspace.SqliteStatePath);
         Assert.Equal(Path.Combine(root, ".orchestrator", "backlog.db"), workspace.BacklogStorePath);
+        Assert.Equal(Path.Combine(root, OrchestratorWorkspace.ContinuationStoreFileName), workspace.ContinuationStorePath);
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorWorkspace_non_default_project_uses_project_scoped_state")]
@@ -286,6 +287,9 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a"), workspace.OrchestratorDirectory);
         Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a", "state.db"), workspace.SqliteStatePath);
         Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a", "backlog.db"), workspace.BacklogStorePath);
+        Assert.Equal(
+            Path.Combine(root, ".orchestrator", "projects", "client_a", OrchestratorWorkspace.ContinuationStoreFileName),
+            workspace.ContinuationStorePath);
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorTenantSelection_accepts_cli_override_and_rejects_path_segments")]
