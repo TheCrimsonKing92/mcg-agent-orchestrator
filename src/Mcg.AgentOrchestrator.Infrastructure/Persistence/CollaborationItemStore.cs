@@ -28,6 +28,10 @@ public interface ICollaborationItemStore
     Task<IReadOnlyList<CollaborationItem>> ListAsync(
         string? goalId = null,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<CollaborationItem>> ListForGoalIdsAsync(
+        IEnumerable<string> goalIds,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class CollaborationItemStore : ICollaborationItemStore
@@ -105,6 +109,10 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         RunNonQuery(conn, """
             CREATE INDEX IF NOT EXISTS idx_collaboration_items_correlation
                 ON collaboration_items (correlation_key)
+            """);
+        RunNonQuery(conn, """
+            CREATE INDEX IF NOT EXISTS idx_collaboration_items_goal_id
+                ON collaboration_items (goal_id)
             """);
     }
 
@@ -265,6 +273,41 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
             cmd.CommandText = "SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution FROM collaboration_items WHERE goal_id = $goal_id ORDER BY raised_at ASC";
             cmd.Parameters.AddWithValue("$goal_id", goalId);
         }
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(ReadItem(reader));
+        return results;
+    }
+
+    public async Task<IReadOnlyList<CollaborationItem>> ListForGoalIdsAsync(
+        IEnumerable<string> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        var scopedGoalIds = goalIds
+            .Where(goalId => !string.IsNullOrWhiteSpace(goalId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (scopedGoalIds.Length == 0)
+        {
+            return [];
+        }
+
+        await using var conn = OpenConnection();
+        var results = new List<CollaborationItem>();
+        await using var cmd = conn.CreateCommand();
+        var parameterNames = new string[scopedGoalIds.Length];
+        for (var i = 0; i < scopedGoalIds.Length; i++)
+        {
+            parameterNames[i] = $"$goal_id_{i}";
+            cmd.Parameters.AddWithValue(parameterNames[i], scopedGoalIds[i]);
+        }
+
+        cmd.CommandText = $"""
+            SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution
+            FROM collaboration_items
+            WHERE goal_id IN ({string.Join(", ", parameterNames)})
+            ORDER BY raised_at ASC
+            """;
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
             results.Add(ReadItem(reader));

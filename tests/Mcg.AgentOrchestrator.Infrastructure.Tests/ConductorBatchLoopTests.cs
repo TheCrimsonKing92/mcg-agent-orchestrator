@@ -332,6 +332,69 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_skips_prior_verified_acceptance_escalation_without_spending_retry_budget")]
+    public void BatchLoopSkipsPriorVerifiedAcceptanceEscalationWithoutSpendingRetryBudget()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed");
+
+        var acceptanceAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ =>
+            {
+                acceptanceAttempts++;
+                return false;
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            maxVerifyRetries: 2);
+
+        Assert.Equal(0, acceptanceAttempts);
+        Assert.Equal(0, summary.Retried);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(0, summary.Advanced);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_operator_retry_clears_prior_verified_acceptance_escalation")]
+    public void BatchLoopOperatorRetryClearsPriorVerifiedAcceptanceEscalation()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed");
+        kernel.RetryTask(goal.Id, task.Id, "Operator retry after fixing acceptance failure.");
+
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                dispatches++;
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("test-worker", "test.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, dispatches);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(0, summary.Retried);
+    }
+
     // ── Regression: flake recovery followed by ownership-blocked dispatch must not escalate ──
     // Before Fix 1+4, the conductor auto-recovered a watchdog-reaped Developer dispatch via
     // _retryTask (setting the task to Assigned), then on the NEXT tick called _dispatchAndStart

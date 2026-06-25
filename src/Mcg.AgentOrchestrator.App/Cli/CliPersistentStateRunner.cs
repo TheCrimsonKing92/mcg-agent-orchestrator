@@ -561,7 +561,19 @@ internal static class CliPersistentStateRunner
     {
         var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
             ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry acceptance.");
-        return JsonSerializer.Serialize(snapshot);
+        var landingRelevantState = new
+        {
+            Tasks = snapshot.Tasks
+                .OrderBy(task => task.Id, StringComparer.Ordinal)
+                .Select(task => new
+                {
+                    task.Id,
+                    Role = task.RequiredRole,
+                    task.Status
+                })
+        };
+
+        return JsonSerializer.Serialize(landingRelevantState);
     }
 
     private static Goal? ResolveCurrentGoal(AgentOrchestratorKernel kernel, string? currentGoalId)
