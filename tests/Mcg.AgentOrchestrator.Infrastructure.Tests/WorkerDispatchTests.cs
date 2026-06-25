@@ -2683,6 +2683,81 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_sweep_completes_role_boundary_exited_worker_from_exit_file")]
+    public void BackgroundDispatchRunnerSweepCompletesRoleBoundaryExitedWorkerFromExitFile()
+    {
+        var root = CreateTempDirectory();
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        var now = DateTimeOffset.Parse("2026-06-25T06:30:00Z");
+        var clock = new TestClock(now);
+        File.WriteAllText(stdout, "WORKER_RESULT:");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+
+        var developerId = TaskId.New().Value;
+        var testerId = TaskId.New().Value;
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-role-boundary",
+                    "Complete role boundary worker",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(
+                            developerId,
+                            "Developer task exited at role boundary",
+                            AgentRole.Developer,
+                            WorkTaskStatus.Assigned,
+                            "agent-dev",
+                            null,
+                            null,
+                            [],
+                            new TaskDispatchSnapshot("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)),
+                            new TaskProcessSnapshot(
+                                999999,
+                                "codex exec prompt",
+                                root,
+                                stdout,
+                                stderr,
+                                exit,
+                                now.AddMinutes(-5),
+                                now.AddMinutes(-1),
+                                0,
+                                OwnedProcessIds: [111, 222])),
+                        new TaskSnapshot(
+                            testerId,
+                            "Tester task should be next",
+                            AgentRole.Tester,
+                            WorkTaskStatus.Assigned,
+                            "agent-test",
+                            null,
+                            null,
+                            [],
+                            null,
+                            null)
+                    ],
+                    [])
+            ],
+            []));
+        var goal = kernel.Goals.Single();
+        var developer = goal.Tasks.First(task => task.Id.Value == developerId);
+        var tester = goal.Tasks.First(task => task.Id.Value == testerId);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+
+        var swept = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .SweepExitedProcesses(kernel);
+        var nextActions = kernel.BuildNextActions(goal.Id).Items;
+
+        Assert.Equal(1, swept);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(0, developer.LastVerification!.ExitCode);
+        Assert.Equal(clock.UtcNow, developer.LastProcess!.CompletedAt);
+        Assert.DoesNotContain(nextActions, action => action.TaskId == developer.Id);
+        Assert.Contains(nextActions, action => action.TaskId == tester.Id && action.Kind == NextActionKind.RunAssignedTask);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_exit_file_when_child_pid_is_recorded")]
     public void BackgroundDispatchRunnerReconcileHoldsExitFileWhenChildPidIsRecorded()
 {
