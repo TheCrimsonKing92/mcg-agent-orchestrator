@@ -460,6 +460,11 @@ public sealed class BackgroundDispatchRunner
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
         var resultCommit = TryGetWorktreeHead(processRecord.WorkingDirectory);
 
+        // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
+        var heartbeatStdoutBytes = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
+            ? completionHeartbeat.StandardOutputBytes
+            : (long?)null;
+
         var verification = new TaskVerificationRecord(
             processRecord.Command,
             processRecord.WorkingDirectory,
@@ -470,7 +475,8 @@ public sealed class BackgroundDispatchRunner
             StandardOutputPath: processRecord.StandardOutputPath,
             StandardErrorPath: processRecord.StandardErrorPath,
             WorkerResultPresent: workerResultPresent,
-            HasCommittedChanges: hasCommittedChanges);
+            HasCommittedChanges: hasCommittedChanges,
+            HeartbeatStandardOutputBytes: heartbeatStdoutBytes);
 
         TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
         return new DispatchRefreshOutcome(completed, verification, resultCommit);
