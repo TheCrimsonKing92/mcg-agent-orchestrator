@@ -2718,7 +2718,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
     var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 0L);
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
 
     var completed = new BackgroundDispatchRunner(
             clock,
@@ -2730,8 +2730,42 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.True(File.Exists(exit));
-    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("hung at startup", StringComparison.Ordinal));
+    Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("never launched", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("ownedCpuMs=0", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_child_alive_and_idle")]
+    public void BackgroundDispatchRunnerStartupHangSuppressedWhenChildAliveAndIdle()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("API-bound worker: child alive but idle on the provider");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    // childPid set (tool launched) but ownedCpuMs idle + no output: an API-bound claude/codex -p worker
+    // waiting on the provider. The tool WAS invoked, so the startup-hang fast-path must NOT fire.
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 0L, childPid: 4242);
+
+    var refreshed = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => true,
+            startupHangTimeout: TimeSpan.FromMinutes(4),
+            progressStallTimeout: TimeSpan.FromMinutes(30))
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(process, refreshed);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_cpu_above_epsilon")]
