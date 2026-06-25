@@ -198,10 +198,10 @@ public sealed class BackgroundDispatchRunner
                 if (process is not { IsRunning: true })
                     continue;
 
-                if (!TryReadExitCode(process.ExitCodePath, out _))
+                if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, out var outcome))
                     continue;
 
-                RefreshLatestProcess(kernel, goal.Id, task.Id);
+                ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
                 reconciled++;
             }
         }
@@ -223,15 +223,8 @@ public sealed class BackgroundDispatchRunner
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
-        if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
-        {
-            if (AnyTrackedProcessStillRunning(processRecord))
-            {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
-            }
-
-            return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, exitCode);
-        }
+        if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, out var completion))
+            return completion;
 
         if (_isStillRunning(processRecord.ProcessId))
         {
@@ -297,6 +290,28 @@ public sealed class BackgroundDispatchRunner
 
         TryKillTrackedProcesses(processRecord, waitForExit: false);
         return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1);
+    }
+
+    private bool TryCompleteFromExitFile(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord processRecord,
+        out DispatchRefreshOutcome outcome)
+    {
+        if (!TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
+        {
+            outcome = new DispatchRefreshOutcome(processRecord, null);
+            return false;
+        }
+
+        if (AnyTrackedProcessStillRunning(processRecord))
+        {
+            TryKillTrackedProcesses(processRecord, waitForExit: true);
+        }
+
+        outcome = BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, exitCode);
+        return true;
     }
 
     public static void ApplyRefreshOutcome(
