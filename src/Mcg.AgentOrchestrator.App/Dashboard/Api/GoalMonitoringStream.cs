@@ -45,13 +45,7 @@ internal static class GoalMonitoringStream
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or ArgumentException)
         {
-            await DashboardMonitoringEvents.WriteServerSentEventAsync(
-                stream,
-                DashboardMonitoringEvents.MonitorErrorEventName,
-                new MonitorErrorEventDto(goalId, "goal_not_found", ex.Message),
-                id: null,
-                cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await WriteGoalNotFoundAsync(stream, goalId, ex, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -124,9 +118,32 @@ internal static class GoalMonitoringStream
             await DashboardMonitoringEvents.WriteKeepAliveAsync(stream, cancellationToken).ConfigureAwait(false);
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
-            current = await loadKernel(cancellationToken).ConfigureAwait(false);
-            goal = OrchestratorEntityResolver.ResolveGoal(current, OrchestratorEntityResolver.GetLatestGoal(current), goalId);
+            try
+            {
+                current = await loadKernel(cancellationToken).ConfigureAwait(false);
+                goal = OrchestratorEntityResolver.ResolveGoal(current, OrchestratorEntityResolver.GetLatestGoal(current), goalId);
+            }
+            catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or ArgumentException)
+            {
+                await WriteGoalNotFoundAsync(stream, goalId, ex, cancellationToken).ConfigureAwait(false);
+                return;
+            }
         }
+    }
+
+    private static async Task WriteGoalNotFoundAsync(
+        Stream stream,
+        string goalId,
+        Exception ex,
+        CancellationToken cancellationToken)
+    {
+        await DashboardMonitoringEvents.WriteServerSentEventAsync(
+            stream,
+            DashboardMonitoringEvents.MonitorErrorEventName,
+            new MonitorErrorEventDto(goalId, "goal_not_found", ex.Message),
+            id: null,
+            cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<IReadOnlyList<ConductorTickEvent>> ReadConductorTicksAsync(
