@@ -427,7 +427,7 @@ public sealed class FundamentalAliasTests
     public void CliGoalSimpleFlagCreatesSingleDeveloperTaskGoal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
