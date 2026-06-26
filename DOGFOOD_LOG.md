@@ -1948,3 +1948,10 @@ Goal aeddde7f: Backlog slice: Fix Claude CLI authentication under the Low-IL wor
 
 - Operator gate: Researcher: not-run; research-only task, no repository changes (exit 0); Tester: pass; 159 passed, 0 failed; targeted new tests (DispatchProcessHostInjectsClaudeEnvironmentForClaudeWorkerSandbox, DispatchProcessHostDoesNotInjectClaudeEnvironmentForCodexWorkerSandbox, DispatchFailureClassifierClassifiesClaude401AsProviderAuthenticationFailure) individually verified with exit 0 (exit 0); Reviewer: pass — Tester reported 159/159; Developer slot-routed run exit 0 (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - structured code review across 5 changed files against spec acceptance criteria - sufficient context and reasoning depth for diff analysis without requiring Opus.
+
+## 2026-06-26 - # GOAL: Align CLI acceptance with conductor pre-landing rebase order  Source ...
+
+Goal a5449acf: # GOAL: Align CLI acceptance with conductor pre-landing rebase order  Source backlog: 049ca7c4af144c589618024ad41d4a8.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 09f3c63). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 09f3c63). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner task only, source/test paths inspected (exit 0); Researcher: not-run; read-only research task (exit 0); Developer: pass - GoalWorktreeTests 68 passed, 0 failed (exit 0); Tester: pass - GoalWorktreeTests 68 passed, 0 failed after build-server shutdown; git diff --check passed (exit 0); Reviewer: pass - prior isolated GoalWorktreeTests 68 passed, 0 failed; reviewer git diff --check main...HEAD passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused code review - repository context and diff inspection were sufficient.
