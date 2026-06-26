@@ -647,6 +647,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 TimeSpan? maxDuration = null;
                 if (GetFlagValue(parts, "--max-duration") is { } mdStr)
                     maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
+                var quietWatchProgress = HasCliConfirmation(parts, "--quiet");
 
                 // --daemon: run as a PERSISTENT conductor — never exit on an empty backlog. The loop stays
                 // alive and polls, so goals submitted later (via a separate `goal` command, backlog
@@ -716,7 +717,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
-                    persistGoalTick: context.PersistGoalCheckpoint);
+                    persistGoalTick: context.PersistGoalCheckpoint,
+                    quiet: quietWatchProgress);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }

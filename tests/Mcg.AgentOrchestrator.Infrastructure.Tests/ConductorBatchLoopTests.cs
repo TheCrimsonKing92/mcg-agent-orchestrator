@@ -81,6 +81,79 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
+    private static IReadOnlyList<AgentDefinition> BuildAgents(params AgentRole[] roles)
+    {
+        var capability = ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse;
+        return roles
+            .Select(role => new AgentDefinition(
+                AgentId.New(),
+                role.ToString(),
+                role,
+                new ModelProfile("OpenAI", "test", capability, SubscriptionMode.ApiKey)))
+            .ToArray();
+    }
+
+    private static void StartProcess(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset dispatchedAt,
+        string baseCommit,
+        int processId = 111)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-watch-progress-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var command = $"worker {task.RequiredRole}";
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", command, root, dispatchedAt, BaseCommit: baseCommit));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+            processId,
+            command,
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "exit.txt"),
+            dispatchedAt,
+            null,
+            null,
+            OwnedProcessIds: [processId]));
+    }
+
+    private static ConductorWatchProgressReporter FakeWatchReporter(
+        DateTimeOffset now,
+        long stdoutBytes,
+        long stderrBytes,
+        TimeSpan idle,
+        IReadOnlyList<int> ownedPids,
+        IReadOnlyCollection<int> alivePids,
+        IReadOnlyList<string> files) =>
+        new(
+            readHeartbeat: (process, observedAt) => Heartbeat(process, observedAt, stdoutBytes, stderrBytes, idle, ownedPids),
+            readChanges: (_, _) => new DispatchLiveChangeSnapshot(files, files.Take(3).ToArray(), Math.Max(0, files.Count - 3)),
+            isProcessAlive: alivePids.Contains,
+            now: () => now);
+
+    private static DispatchHeartbeatStatus Heartbeat(
+        TaskProcessRecord process,
+        DateTimeOffset observedAt,
+        long stdoutBytes,
+        long stderrBytes,
+        TimeSpan idle,
+        IReadOnlyList<int> ownedPids) =>
+        new(
+            BackgroundDispatchRunner.GetHeartbeatPath(process),
+            true,
+            null,
+            process.ProcessId,
+            null,
+            ownedPids,
+            "running",
+            observedAt,
+            observedAt - idle,
+            TimeSpan.Zero,
+            idle,
+            stdoutBytes,
+            stderrBytes);
+
     // ── Loop scheduling: loop advances while progress, stops when held ────
 
     [Xunit.Fact(DisplayName = "BatchLoop_goal_advances_then_stops_when_held")]
@@ -1229,6 +1302,180 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(lines.Where(l => l.StartsWith("TICK_END tick=", StringComparison.Ordinal)));
         Assert.DoesNotContain(lines, l => l.StartsWith("TICK_END tick=2 ", StringComparison.Ordinal));
         Assert.True(ticks.Skip(1).All(t => t.ProgressLines is not null && t.ProgressLines.Count == 0));
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_emits_dispatch_role_liveness_bytes_and_files")]
+    public void WatchProgressEmitsDispatchRoleLivenessBytesAndFiles()
+    {
+        var (kernel, goal) = SimpleGoal("watch progress");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-2), "abc123");
+        var reporter = FakeWatchReporter(
+            now,
+            stdoutBytes: 42,
+            stderrBytes: 8,
+            idle: TimeSpan.FromSeconds(15),
+            ownedPids: [111, 222],
+            alivePids: [222],
+            files: ["src/A.cs", "src/B.cs", "src/C.cs", "src/D.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => true,
+            onTick: ticks.Add);
+
+        var line = ticks.Single().ProgressLines!.Single(l => l.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal));
+        Assert.Contains($"goal={goal.Id.Value[..8]}", line);
+        Assert.Contains($"role={task.RequiredRole}", line);
+        Assert.Contains("task=1/", line);
+        Assert.Contains("elapsed=2m0s", line);
+        Assert.Contains("liveness=\"alive\"", line);
+        Assert.Contains("output_delta=50", line);
+        Assert.Contains("last_progress_age=15s", line);
+        Assert.Contains("files=4", line);
+        Assert.Contains("src/A.cs", line);
+        Assert.Contains("+1 more", line);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_throttles_until_output_or_file_count_changes")]
+    public void WatchProgressThrottlesUntilOutputOrFileCountChanges()
+    {
+        var (kernel, goal) = SimpleGoal("watch throttle");
+        var task = goal.Tasks.First();
+        var start = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, start.AddMinutes(-1), "abc123");
+        var nowCalls = 0;
+        var heartbeatCalls = 0;
+        var reporter = new ConductorWatchProgressReporter(
+            readHeartbeat: (process, observedAt) =>
+            {
+                heartbeatCalls++;
+                var bytes = heartbeatCalls < 3 ? 10 : 11;
+                return Heartbeat(process, observedAt, bytes, 0, TimeSpan.FromSeconds(5), [111]);
+            },
+            readChanges: (_, _) => new DispatchLiveChangeSnapshot(["src/A.cs"], ["src/A.cs"], 0),
+            isProcessAlive: pid => pid == 111,
+            now: () => start.AddSeconds(nowCalls++ * 10));
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        var progressLines = ticks.SelectMany(t => t.ProgressLines ?? []).Where(l => l.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, progressLines.Length);
+        Assert.Contains("output_delta=1", progressLines[1]);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_quiet_suppresses_human_lines_but_keeps_machine_lines")]
+    public void WatchProgressQuietSuppressesHumanLinesButKeepsMachineLines()
+    {
+        var (kernel, goal) = SimpleGoal("watch quiet");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123");
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111], [111], ["src/A.cs"]);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            new ConductorBatchLoop(watchProgressReporter: reporter).Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ => true,
+                quiet: true);
+        });
+
+        Assert.Contains("TICK tick=1", output);
+        Assert.DoesNotContain("WATCH_PROGRESS", output);
+        Assert.DoesNotContain("WATCH_WARNING", output);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_warns_when_owned_pids_are_dead")]
+    public void WatchProgressWarnsWhenOwnedPidsAreDead()
+    {
+        var (kernel, goal) = SimpleGoal("watch warning");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123");
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(20), [111], [], ["src/A.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => true,
+            onTick: ticks.Add);
+
+        var warning = ticks.Single().ProgressLines!.Single(l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
+        Assert.Contains($"goal={goal.Id.Value[..8]}", warning);
+        Assert.Contains("reason=no-live-worker", warning);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_emits_transition_after_role_completion")]
+    public void WatchProgressEmitsTransitionAfterRoleCompletion()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner);
+        var second = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("watch transition", [first, second]);
+        kernel.ActivateGoal(goal.Id, BuildAgents(AgentRole.Planner, AgentRole.Developer));
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, first, now.AddMinutes(-3), "abc123");
+        var calls = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            calls++;
+            if (calls != 2)
+            {
+                return;
+            }
+
+            loopKernel.RecordDispatchResultCommit(goal.Id, first.Id, "deadbeefcafebabe");
+            var firstProcess = loopKernel.GetTask(goal.Id, first.Id).LastProcess!;
+            loopKernel.RecordTaskProcessRefreshed(goal.Id, first.Id, firstProcess with { CompletedAt = now, ExitCode = 0 }, null);
+            loopKernel.RecordTaskVerification(goal.Id, first.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "ok", "", now));
+            StartProcess(loopKernel, goal, second, now.AddMinutes(-1), "def456", processId: 222);
+        };
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111, 222], [111, 222], ["src/A.cs", "src/B.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(sweep: sweep, watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        var transition = ticks.SelectMany(t => t.ProgressLines ?? []).Single(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal));
+        Assert.Contains("Planner=done", transition);
+        Assert.Contains("commit=deadbeefcafe", transition);
+        Assert.Contains("files=2", transition);
+        Assert.Contains("next=Developer", transition);
+        Assert.True(ticks.SelectMany(t => t.ProgressLines ?? []).Any(l => l.Contains("role=Developer", StringComparison.Ordinal)));
     }
 
     // ── Fault isolation: a throwing goal is escalated, others still advance ─

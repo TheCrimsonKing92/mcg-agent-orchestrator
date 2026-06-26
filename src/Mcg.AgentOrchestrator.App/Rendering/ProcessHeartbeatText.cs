@@ -13,6 +13,7 @@ internal static class ProcessHeartbeatText
 
         return
             $"heartbeat {heartbeat.State}: path={heartbeat.Path}; pid={heartbeat.ProcessId}; child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"}; " +
+            $"owned_pids={FormatOwnedPids(heartbeat.OwnedProcessIds)}; " +
             $"last_observed={FormatTimestamp(heartbeat.LastObservedAt)}; last_progress={FormatTimestamp(heartbeat.LastProgressAt)}; " +
             $"heartbeat_age={FormatDuration(heartbeat.HeartbeatAge)}; idle_for={FormatDuration(heartbeat.IdleDuration)}; " +
             $"stdout_bytes={heartbeat.StandardOutputBytes}; stderr_bytes={heartbeat.StandardErrorBytes}";
@@ -31,7 +32,7 @@ internal static class ProcessHeartbeatText
 
         return
         [
-            $"heartbeat: available state={heartbeat.State} pid={heartbeat.ProcessId} child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"}",
+            $"heartbeat: available state={heartbeat.State} pid={heartbeat.ProcessId} child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"} owned_pids={FormatOwnedPids(heartbeat.OwnedProcessIds)}",
             $"heartbeat path: {heartbeat.Path}",
             $"last observed: {FormatTimestamp(heartbeat.LastObservedAt)} age={FormatDuration(heartbeat.HeartbeatAge)}",
             $"last progress: {FormatTimestamp(heartbeat.LastProgressAt)} idle={FormatDuration(heartbeat.IdleDuration)}",
@@ -64,4 +65,7 @@ internal static class ProcessHeartbeatText
 
         return $"{Math.Max(0, (int)duration.TotalSeconds)}s";
     }
+
+    private static string FormatOwnedPids(IReadOnlyList<int> processIds) =>
+        processIds.Count == 0 ? "none" : string.Join(",", processIds);
 }
