@@ -19,8 +19,7 @@ public enum WorkerSandboxProvider
 public sealed record WorkerSandboxOptions(
     bool Enabled,
     string Account,
-    string CredentialTarget,
-    WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown)
+    string CredentialTarget)
 {
     public const string EnabledVariable = "MCG_WORKER_SANDBOX";
     public const string AccountVariable = "MCG_WORKER_ACCOUNT";

@@ -382,6 +382,12 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxOptions_has_no_provider_property")]
+    public void WorkerSandboxOptionsHasNoProviderProperty()
+{
+    Assert.Null(typeof(WorkerSandboxOptions).GetProperty("Provider"));
+}
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_claude_auth_environment_for_claude_worker_sandbox")]
     public void DispatchProcessHostSeedsClaudeAuthEnvironmentForClaudeWorkerSandbox()
 {
@@ -400,6 +406,35 @@ public sealed class WorkerDispatchTests
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
         Assert.True(Directory.Exists(claudeConfigDir));
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(claudeConfigDir!, "settings.json")));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_claude_auth_diagnostic_when_api_key_missing")]
+    public void DispatchProcessHostWritesClaudeAuthDiagnosticWhenApiKeyMissing()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+        var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome, stderrPath);
+
+        Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
+        Assert.True(Directory.Exists(claudeConfigDir));
+        var stderr = File.ReadAllText(stderrPath);
+        Assert.Contains("ANTHROPIC_API_KEY is not set", stderr);
+        Assert.Contains("Claude", stderr);
     }
     finally
     {

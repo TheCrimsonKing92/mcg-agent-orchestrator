@@ -91,7 +91,7 @@ public static class DispatchProcessHost
             throw new InvalidOperationException($"Failed to apply Low integrity label to sandbox root '{sandboxRoot}'.");
         }
 
-        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome);
+        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome, parameters.StderrPath);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
@@ -117,18 +117,19 @@ public static class DispatchProcessHost
         ProcessStartInfo startInfo,
         WorkerSandboxProvider provider,
         string sandboxRoot,
-        string codexHome)
+        string codexHome,
+        string? stderrPath = null)
     {
         if (provider == WorkerSandboxProvider.Claude)
         {
-            SeedClaudeEnvironment(startInfo, sandboxRoot);
+            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
             return;
         }
 
         SeedCodexAuth(codexHome);
     }
 
-    private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot)
+    private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath)
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
         Directory.CreateDirectory(claudeConfigDir);
@@ -143,8 +144,25 @@ public static class DispatchProcessHost
         {
             startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
         }
+        else if (!string.IsNullOrWhiteSpace(stderrPath))
+        {
+            AppendDispatchStderrDiagnostic(
+                stderrPath,
+                "Claude worker sandbox diagnostic: ANTHROPIC_API_KEY is not set; Claude may fail to authenticate.");
+        }
 
         startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
+    }
+
+    private static void AppendDispatchStderrDiagnostic(string stderrPath, string message)
+    {
+        var directory = Path.GetDirectoryName(stderrPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.AppendAllText(stderrPath, message + Environment.NewLine);
     }
 
     internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable)
