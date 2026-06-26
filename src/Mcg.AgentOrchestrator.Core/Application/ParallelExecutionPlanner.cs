@@ -5,7 +5,8 @@ public static class ParallelExecutionPlanner
     public static ParallelExecutionPlan Build(
         IReadOnlyList<ParallelExecutionIntent> intents,
         IReadOnlyList<ParallelExecutionProviderQuota>? providerQuotas = null,
-        bool approveHighRiskOwnership = false)
+        bool approveHighRiskOwnership = false,
+        IReadOnlyCollection<string>? alreadySatisfiedDependencies = null)
     {
         var quotas = providerQuotas?.ToDictionary(quota => quota.ProviderKey, StringComparer.OrdinalIgnoreCase)
             ?? new Dictionary<string, ParallelExecutionProviderQuota>(StringComparer.OrdinalIgnoreCase);
@@ -43,7 +44,7 @@ public static class ParallelExecutionPlanner
             remaining.Add(guardedIntent);
         }
 
-        var scheduled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var scheduled = new HashSet<string>(alreadySatisfiedDependencies ?? [], StringComparer.OrdinalIgnoreCase);
         while (remaining.Count > 0)
         {
             var batchItems = new List<ParallelExecutionIntent>();

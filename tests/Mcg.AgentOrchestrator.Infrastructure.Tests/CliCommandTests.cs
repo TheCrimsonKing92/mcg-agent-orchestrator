@@ -5315,6 +5315,86 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(1, repository.TransactionCount);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_loads_only_non_terminal_goals")]
+    public void PersistentRunnerConductLoopLoadsOnlyNonTerminalGoals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var completedGoalIds = new List<string>();
+        for (var i = 0; i < 200; i++)
+        {
+            var completed = kernel.CreateGoal($"Completed audit goal {i}", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+            kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+                new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            completedGoalIds.Add(completed.Id.Value);
+        }
+
+        var cleanedUp = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cleaned-up audit goal");
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active conductor goal");
+        var failed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Failed conductor goal");
+        kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "Still needs conductor/operator attention");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        repository.CleanedUpGoalIds.Add(cleanedUp.Id.Value);
+
+        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["conduct", "--loop", "--max-iterations", "1"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.True(repository.LoadGoalsCount >= 1);
+        Xunit.Assert.DoesNotContain(repository.LoadedGoalIds, id => completedGoalIds.Contains(id));
+        Xunit.Assert.DoesNotContain(cleanedUp.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(failed.Id.Value, repository.LoadedGoalIds);
+        var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        Xunit.Assert.All(repository.LoadGoalBatches, batch =>
+            Xunit.Assert.Equal(
+                expectedLoadedIds,
+                batch.OrderBy(id => id, StringComparer.Ordinal).ToArray()));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_preserves_terminal_dependency_readiness_without_loading_dependency")]
+    public void PersistentRunnerConductLoopPreservesTerminalDependencyReadinessWithoutLoadingDependency()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var completed = kernel.CreateGoal("Completed dependency", [new TaskSpec(TaskId.New(), "Done", AgentRole.Planner)]);
+        var active = kernel.CreateGoal("Ready dependent goal", [new TaskSpec(TaskId.New(), "Plan src/Ready.cs", AgentRole.Planner)]);
+        var agents = new[] { SubscriptionPlanner("codex-cli", "Planner Codex") };
+        kernel.ActivateGoal(completed.Id, agents);
+        kernel.ActivateGoal(active.Id, agents);
+        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel.SetGoalDependency(active.Id, completed.Id);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+        var plan = CrossGoalSubscriptionStartPlanner.Build(loaded, agents, WorkerProfileCatalog.Default());
+
+        Xunit.Assert.DoesNotContain(completed.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(completed.Id, loaded.KnownCompletedDependencyGoals);
+        Xunit.Assert.Single(loaded.Goals);
+        Xunit.Assert.Equal(active.Id, loaded.Goals.Single().Id);
+        Xunit.Assert.Single(plan.Candidates);
+        Xunit.Assert.Contains(active.Id.Value, plan.FirstBatchCandidates.Select(candidate => candidate.GoalId));
+        Xunit.Assert.DoesNotContain(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
+            reason => reason.Equals("dependency could not be scheduled", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static AgentDefinition SubscriptionPlanner(string id, string name) => new(
         new AgentId(id),
         name,
@@ -5438,10 +5518,37 @@ public sealed class CliCommandTests
 
         public int TransactionCount { get; private set; }
 
+        public int LoadCount { get; private set; }
+
+        public int LoadGoalsCount { get; private set; }
+
+        public List<string> LoadedGoalIds { get; } = [];
+
+        public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
+
+        public HashSet<string> CleanedUpGoalIds { get; } = new(StringComparer.Ordinal);
+
         public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
 
-        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(Clone(_kernel));
+        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            return Task.FromResult(Clone(_kernel));
+        }
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default)
+        {
+            LoadGoalsCount++;
+            LoadGoalBatches.Add(goalIds.Select(id => id.Value).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+            var snapshot = _kernel.ExportSnapshot();
+            var filtered = snapshot.Goals
+                .Where(goal => goalIds.Any(id => id.Value == goal.Id))
+                .ToList();
+            LoadedGoalIds.AddRange(filtered.Select(goal => goal.Id));
+            return Task.FromResult(AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = filtered }));
+        }
 
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
@@ -5450,7 +5557,23 @@ public sealed class CliCommandTests
         }
 
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GoalSummary>>([]);
+            Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
+                .Select(goal => new GoalSummary(
+                    goal.Id.Value,
+                    CleanedUpGoalIds.Contains(goal.Id.Value) ? "CleanedUp" : goal.Status.ToString(),
+                    goal.Objective,
+                    DateTimeOffset.UtcNow.ToString("O")))
+                .ToList());
+
+        public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
+                .Where(goal => goal.Status != GoalStatus.Completed && !CleanedUpGoalIds.Contains(goal.Id.Value))
+                .Select(goal => new GoalSummary(
+                    goal.Id.Value,
+                    CleanedUpGoalIds.Contains(goal.Id.Value) ? "CleanedUp" : goal.Status.ToString(),
+                    goal.Objective,
+                    DateTimeOffset.UtcNow.ToString("O")))
+                .ToList());
 
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
