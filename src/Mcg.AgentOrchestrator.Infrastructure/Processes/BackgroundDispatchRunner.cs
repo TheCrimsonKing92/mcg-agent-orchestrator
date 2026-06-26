@@ -1066,7 +1066,7 @@ public sealed class BackgroundDispatchRunner
     private bool TryDetectHungCodexWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
     {
         diagnostic = string.Empty;
-        if (!IsCodexDispatch(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
+        if (!UsesCodexExitFileBehavior(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
         {
             return false;
         }
@@ -1093,7 +1093,7 @@ public sealed class BackgroundDispatchRunner
     {
         diagnostic = string.Empty;
         // Codex dispatches have their own output-content detector; skip them here.
-        if (IsCodexDispatch(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
+        if (UsesCodexExitFileBehavior(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
         {
             return false;
         }
@@ -1331,17 +1331,8 @@ public sealed class BackgroundDispatchRunner
         return values;
     }
 
-    private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
-    {
-        if (dispatch is null)
-        {
-            return false;
-        }
-
-        return dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.TrimStart().StartsWith("codex ", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.TrimStart().StartsWith("& codex ", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
+        WorkerProviderResolver.Resolve(dispatch?.WorkerName).UsesCodexExitFileBehavior;
 
     private static bool ContainsCodexFinalOutput(string value)
     {

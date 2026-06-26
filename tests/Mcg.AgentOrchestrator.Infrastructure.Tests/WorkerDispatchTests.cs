@@ -2877,6 +2877,50 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
 }
 
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_refresh_uses_provider_identity_for_codex_exit_file_behavior")]
+    [Xunit.InlineData("codex-cli", "subscription worker prompt", true)]
+    [Xunit.InlineData("claude-cli", "claude prompt", false)]
+    [Xunit.InlineData("custom-agent", "codex exec prompt", false)]
+    public void BackgroundDispatchRunnerRefreshUsesProviderIdentityForCodexExitFileBehavior(
+        string workerProfileName,
+        string command,
+        bool expectedExitFile)
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-11T16:10:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Detect profile-specific wrapper behavior");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stderr, "Tokens used: input=123 output=45");
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerProfileName, command, root, now.AddMinutes(-5)));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, command, root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+
+    var refreshed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(expectedExitFile, File.Exists(exit));
+    if (expectedExitFile)
+    {
+        Assert.Equal(1, refreshed.ExitCode);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
+    }
+    else
+    {
+        Assert.Null(refreshed.ExitCode);
+        Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Assert.Null(task.LastVerification);
+    }
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_fails_provider_neutral_stall_after_heartbeat_progress_timeout")]
     public void BackgroundDispatchRunnerRefreshFailsProviderNeutralStallAfterHeartbeatProgressTimeout()
 {
