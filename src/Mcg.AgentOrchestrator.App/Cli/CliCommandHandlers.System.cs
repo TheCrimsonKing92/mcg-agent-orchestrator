@@ -41,25 +41,6 @@ internal static partial class CliCommandHandlers
         };
     }
 
-    private static bool TryResolveAttentionGoalForAnswer(AgentOrchestratorKernel kernel, string goalPrefix, out Goal? goal)
-    {
-        var matches = kernel.Goals
-            .Where(candidate => candidate.Id.Value.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (matches.Count == 0)
-        {
-            goal = null;
-            return false;
-        }
-
-        if (matches.Count > 1)
-            throw new InvalidOperationException($"Goal prefix '{goalPrefix}' is ambiguous ({matches.Count} matches).");
-
-        goal = matches[0];
-        return true;
-    }
-
     private static CollaborationItem ResolveClarificationByShortId(
         IReadOnlyList<CollaborationItem> clarifications,
         string id,
@@ -76,17 +57,6 @@ internal static partial class CliCommandHandlers
             throw new ArgumentException(string.Format(ambiguousMessage, matches.Count));
 
         return matches[0];
-    }
-
-    private static bool HasClarificationShortId(IReadOnlyList<CollaborationItem> clarifications, string id)
-    {
-        return clarifications.Any(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool IsLikelyClarificationShortId(string value)
-    {
-        return !string.IsNullOrWhiteSpace(value) &&
-            value.All(c => char.IsAsciiHexDigit(c));
     }
 
     // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
@@ -167,21 +137,9 @@ internal static partial class CliCommandHandlers
                     if (parts.Count < 4)
                         throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
-                    Goal? goal = null;
                     var globalClarifications = OpenClarifications(store);
-                    var scoped = false;
-                    if (parts.Count >= 5)
-                    {
-                        if (TryResolveAttentionGoalForAnswer(context.Kernel, parts[2], out goal))
-                        {
-                            scoped = true;
-                        }
-                        else if (!HasClarificationShortId(globalClarifications, parts[2]) &&
-                            IsLikelyClarificationShortId(parts[3]))
-                        {
-                            throw new KeyNotFoundException($"No goal found matching prefix '{parts[2]}'.");
-                        }
-                    }
+                    var scoped = parts.Count >= 5;
+                    var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
                     var id = scoped ? parts[3] : parts[2];
                     var answer = string.Join(' ', parts.Skip(scoped ? 4 : 3));
