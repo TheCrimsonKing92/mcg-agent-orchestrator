@@ -3947,6 +3947,24 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"does not belong to goal '{target.Id.Value}'", ex.Message);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_unknown_goal_prefix_errors")]
+    public async Task CliAttentionAnswerUnknownGoalPrefixErrors()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var known = kernel.CreateGoal(new GoalId("abcdef12aaaaaaaaaaaaaaaaaaaaaaaa"), "Known goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, known.Id.Value, "Known clarification", "Known body", $"spec-clarification:{known.Id.Value}:scope:77777777");
+
+        var ex = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+            ExecuteCliAndCapture(["attention", "answer", "99999999", "77777777", "Use the known answer."], kernel, workspace));
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Contains("No goal found matching prefix '99999999'", ex.Message);
+        Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{known.Id.Value}:scope:77777777");
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_answer_global_multi_word_answer_preserves_compatibility")]
     public async Task CliAttentionAnswerGlobalMultiWordAnswerPreservesCompatibility()
     {

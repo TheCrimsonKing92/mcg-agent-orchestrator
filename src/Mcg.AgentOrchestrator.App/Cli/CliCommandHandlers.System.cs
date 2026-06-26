@@ -78,6 +78,11 @@ internal static partial class CliCommandHandlers
         return matches[0];
     }
 
+    private static bool HasClarificationShortId(IReadOnlyList<CollaborationItem> clarifications, string id)
+    {
+        return clarifications.Any(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase));
+    }
+
     // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
     // (spec-clarification:<goal>:<fork-kind>:<hash>). Intrinsic to the item, so answering one clarification
     // never renumbers the others — unlike a positional index.
@@ -157,7 +162,19 @@ internal static partial class CliCommandHandlers
                         throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
                     Goal? goal = null;
-                    var scoped = parts.Count >= 5 && TryResolveAttentionGoalForAnswer(context.Kernel, parts[2], out goal);
+                    var globalClarifications = OpenClarifications(store);
+                    var scoped = false;
+                    if (parts.Count >= 5)
+                    {
+                        scoped = TryResolveAttentionGoalForAnswer(context.Kernel, parts[2], out goal);
+                        if (!scoped &&
+                            HasClarificationShortId(globalClarifications, parts[3]) &&
+                            !HasClarificationShortId(globalClarifications, parts[2]))
+                        {
+                            throw new KeyNotFoundException($"No goal found matching prefix '{parts[2]}'.");
+                        }
+                    }
+
                     var id = scoped ? parts[3] : parts[2];
                     var answer = string.Join(' ', parts.Skip(scoped ? 4 : 3));
                     var clarification = scoped
@@ -167,7 +184,7 @@ internal static partial class CliCommandHandlers
                             $"Clarification id '{id}' does not belong to goal '{goal!.Id.Value}'.",
                             $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show {goal!.Id.Value[..8]}`.")
                         : ResolveClarificationByShortId(
-                            OpenClarifications(store),
+                            globalClarifications,
                             id,
                             $"No open clarification matches id '{id}'; run `attention show`.",
                             $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show`.");
