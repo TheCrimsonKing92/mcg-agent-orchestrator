@@ -625,6 +625,50 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => m.Status == GoalStatus.Draft.ToString()));
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_conduct_loop_metadata_without_terminal_goals")]
+    public async Task SqliteRepositoryListsConductLoopMetadataWithoutTerminalGoals()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var completed = kernel.CreateGoal("Completed audit goal", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        var cleanedUp = kernel.CreateGoal("Cleaned up audit goal", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        var active = kernel.CreateGoal("Active conductor goal");
+        var failed = kernel.CreateGoal("Failed conductor goal", [new TaskSpec(TaskId.New(), "Failed", AgentRole.Developer)]);
+        var waiting = kernel.CreateGoal("Waiting conductor goal", [new TaskSpec(TaskId.New(), "Input", AgentRole.Developer)]);
+        kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(cleanedUp.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(active.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(failed.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(waiting.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", "C:\\tmp", 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel.RecordTaskVerification(cleanedUp.Id, cleanedUp.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", "C:\\tmp", 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "failed");
+        kernel.RequestHumanInput(waiting.Id, waiting.Tasks.Single().Id, "Need operator input");
+        await repo.SaveAsync(kernel);
+
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE goals SET status = $status WHERE id = $id";
+            cmd.Parameters.AddWithValue("$status", "CleanedUp");
+            cmd.Parameters.AddWithValue("$id", cleanedUp.Id.Value);
+            cmd.ExecuteNonQuery();
+        }
+
+        var listing = await repo.ListConductLoopGoalMetadataAsync();
+        var ids = listing.Select(goal => goal.Id).ToHashSet(StringComparer.Ordinal);
+
+        Assert.DoesNotContain(completed.Id.Value, ids);
+        Assert.DoesNotContain(cleanedUp.Id.Value, ids);
+        Assert.Contains(active.Id.Value, ids);
+        Assert.Contains(failed.Id.Value, ids);
+        Assert.Contains(waiting.Id.Value, ids);
+    }
+
     private static string TempDb()
     {
         var dir = CreateTempDirectory();

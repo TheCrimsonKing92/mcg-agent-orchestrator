@@ -299,6 +299,34 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return results;
     }
 
+    public async Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        var results = new List<GoalSummary>();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, status, objective, updated_at
+            FROM goals
+            WHERE status NOT IN ($completed, $cleanedUp)
+            ORDER BY updated_at DESC
+            """;
+        cmd.Parameters.AddWithValue("$completed", GoalStatus.Completed.ToString());
+        cmd.Parameters.AddWithValue("$cleanedUp", "CleanedUp");
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new GoalSummary(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3)));
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();

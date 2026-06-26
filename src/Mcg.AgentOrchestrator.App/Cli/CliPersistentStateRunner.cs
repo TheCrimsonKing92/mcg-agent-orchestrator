@@ -197,7 +197,7 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
-        var kernel = LoadConductLoopKernel(stateRepository, workspace.ExecutionDirectory);
+        var kernel = LoadConductLoopKernel(stateRepository);
         new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -224,7 +224,7 @@ internal static class CliPersistentStateRunner
             ref workerProfiles,
             ref currentGoal,
             channel,
-            () => LoadConductLoopKernel(stateRepository, workspace.ExecutionDirectory),
+            () => LoadConductLoopKernel(stateRepository),
             Persist,
             persistGoalKernel: PersistGoal);
 
@@ -234,35 +234,13 @@ internal static class CliPersistentStateRunner
     }
 
     private static AgentOrchestratorKernel LoadConductLoopKernel(
-        ITransactionalOrchestratorStateRepository stateRepository,
-        string executionDirectory)
+        ITransactionalOrchestratorStateRepository stateRepository)
     {
-        var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var eligibleIds = summaries
-            .Where(summary => IsConductLoopLoadEligible(summary, executionDirectory))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         return stateRepository.LoadGoalsAsync(eligibleIds).GetAwaiter().GetResult();
-    }
-
-    private static bool IsConductLoopLoadEligible(GoalSummary summary, string executionDirectory)
-    {
-        if (summary.Status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (!summary.Status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var goalId = new GoalId(summary.Id);
-        var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goalId) is not null;
-        var journal = GoalOperationJournal.Read(executionDirectory, goalId);
-        var cleanupRecorded = journal.LatestByOperation.Any(entry =>
-            entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed);
-        return workspaceExists && !cleanupRecorded;
     }
 
     private static bool ExecuteCommandWithoutTransaction(

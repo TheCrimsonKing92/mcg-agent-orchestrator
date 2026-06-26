@@ -14,6 +14,8 @@ public interface IOrchestratorStateRepository
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(

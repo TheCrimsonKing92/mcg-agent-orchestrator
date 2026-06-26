@@ -5172,6 +5172,8 @@ public sealed class CliCommandTests
         }
 
         var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active conductor goal");
+        var failed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Failed conductor goal");
+        kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "Still needs conductor/operator attention");
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -5191,6 +5193,14 @@ public sealed class CliCommandTests
         Xunit.Assert.True(repository.LoadGoalsCount >= 1);
         Xunit.Assert.DoesNotContain(repository.LoadedGoalIds, id => completedGoalIds.Contains(id));
         Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(failed.Id.Value, repository.LoadedGoalIds);
+        var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        Xunit.Assert.All(repository.LoadGoalBatches, batch =>
+            Xunit.Assert.Equal(
+                expectedLoadedIds,
+                batch.OrderBy(id => id, StringComparer.Ordinal).ToArray()));
     }
 
     private static AgentDefinition SubscriptionPlanner(string id, string name) => new(
@@ -5322,6 +5332,8 @@ public sealed class CliCommandTests
 
         public List<string> LoadedGoalIds { get; } = [];
 
+        public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
+
         public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
@@ -5335,6 +5347,7 @@ public sealed class CliCommandTests
             CancellationToken cancellationToken = default)
         {
             LoadGoalsCount++;
+            LoadGoalBatches.Add(goalIds.Select(id => id.Value).OrderBy(id => id, StringComparer.Ordinal).ToArray());
             var snapshot = _kernel.ExportSnapshot();
             var filtered = snapshot.Goals
                 .Where(goal => goalIds.Any(id => id.Value == goal.Id))
@@ -5351,6 +5364,16 @@ public sealed class CliCommandTests
 
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
+                .Select(goal => new GoalSummary(
+                    goal.Id.Value,
+                    goal.Status.ToString(),
+                    goal.Objective,
+                    DateTimeOffset.UtcNow.ToString("O")))
+                .ToList());
+
+        public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
+                .Where(goal => goal.Status != GoalStatus.Completed)
                 .Select(goal => new GoalSummary(
                     goal.Id.Value,
                     goal.Status.ToString(),
