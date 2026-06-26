@@ -12,7 +12,7 @@ public sealed class GoalBacklogLinkTests
     {
         var root = CreateTempDirectory();
         SeedBacklog(root, "# Backlog\n\n## My Feature\n\nFeature body.\n");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = [];
         var providers = new InMemoryModelProviderRegistry([]);
@@ -40,7 +40,7 @@ public sealed class GoalBacklogLinkTests
     {
         var root = CreateTempDirectory();
         SeedBacklog(root, "# Backlog\n\n## Alpha Feature\n\nAlpha body.\n\n## Beta Feature\n\nBeta body.\n");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = [];
         var providers = new InMemoryModelProviderRegistry([]);
