@@ -3662,6 +3662,45 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_git_metadata_permission_failure_is_nonfatal_with_dirty_worker_result")]
+    public void BackgroundDispatchRunnerGitMetadataPermissionFailureIsNonfatalWithDirtyWorkerResult()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Edited the requested files, but git commit was blocked." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "git add -A; git commit -m Feature", "not-run"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git metadata failure"));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var indexLockPath = Path.GetFullPath(Path.Combine(
+        root,
+        ".git",
+        "worktrees",
+        goal.Id.Value[..8],
+        "index.lock"));
+    File.WriteAllText(
+        process.StandardErrorPath,
+        $"fatal: Unable to create '{indexLockPath}': Permission denied");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Classified worker git metadata write failure as non-fatal", StringComparison.Ordinal));
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("index_lock=", StringComparison.Ordinal));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyUnverifiedStaysFailed()
 {
