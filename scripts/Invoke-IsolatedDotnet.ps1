@@ -185,6 +185,9 @@ $isolatedArguments = @(
 )
 
 $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
+Remove-Item Env:MCG_WORKER_SANDBOX -ErrorAction SilentlyContinue
+Remove-Item Env:MCG_WORKER_ACCOUNT -ErrorAction SilentlyContinue
+Remove-Item Env:MCG_WORKER_CREDENTIAL_TARGET -ErrorAction SilentlyContinue
 
 $lockStream = $null
 $lockHeld = $false
