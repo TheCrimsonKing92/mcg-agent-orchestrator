@@ -83,6 +83,12 @@ internal static partial class CliCommandHandlers
         return clarifications.Any(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsLikelyClarificationShortId(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value) &&
+            value.All(c => char.IsAsciiHexDigit(c));
+    }
+
     // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
     // (spec-clarification:<goal>:<fork-kind>:<hash>). Intrinsic to the item, so answering one clarification
     // never renumbers the others — unlike a positional index.
@@ -166,10 +172,12 @@ internal static partial class CliCommandHandlers
                     var scoped = false;
                     if (parts.Count >= 5)
                     {
-                        scoped = TryResolveAttentionGoalForAnswer(context.Kernel, parts[2], out goal);
-                        if (!scoped &&
-                            HasClarificationShortId(globalClarifications, parts[3]) &&
-                            !HasClarificationShortId(globalClarifications, parts[2]))
+                        if (TryResolveAttentionGoalForAnswer(context.Kernel, parts[2], out goal))
+                        {
+                            scoped = true;
+                        }
+                        else if (!HasClarificationShortId(globalClarifications, parts[2]) &&
+                            IsLikelyClarificationShortId(parts[3]))
                         {
                             throw new KeyNotFoundException($"No goal found matching prefix '{parts[2]}'.");
                         }

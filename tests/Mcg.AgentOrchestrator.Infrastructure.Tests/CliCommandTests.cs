@@ -3965,6 +3965,20 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{known.Id.Value}:scope:77777777");
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_unknown_goal_prefix_errors_even_when_clarification_id_is_unknown")]
+    public void CliAttentionAnswerUnknownGoalPrefixErrorsEvenWhenClarificationIdIsUnknown()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        _ = kernel.CreateGoal(new GoalId("abcdef12aaaaaaaaaaaaaaaaaaaaaaaa"), "Known goal");
+
+        var ex = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+            ExecuteCliAndCapture(["attention", "answer", "99999999", "88888888", "Use the answer."], kernel, workspace));
+
+        Xunit.Assert.Contains("No goal found matching prefix '99999999'", ex.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_answer_global_multi_word_answer_preserves_compatibility")]
     public async Task CliAttentionAnswerGlobalMultiWordAnswerPreservesCompatibility()
     {
