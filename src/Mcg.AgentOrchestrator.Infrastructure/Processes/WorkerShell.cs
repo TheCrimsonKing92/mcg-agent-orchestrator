@@ -42,6 +42,12 @@ public static class WorkerShell
 
     private static IEnumerable<string> WindowsPowerShellCandidates()
     {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            yield return Path.Combine(localAppData, "Programs", "PowerShell", "7", "pwsh.exe");
+        }
+
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         if (!string.IsNullOrWhiteSpace(programFiles))
         {
