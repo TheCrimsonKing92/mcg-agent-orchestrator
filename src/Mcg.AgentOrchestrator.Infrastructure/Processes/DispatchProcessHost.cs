@@ -73,7 +73,10 @@ public static class DispatchProcessHost
         // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
-        SetLowIntegrity(parameters.WorkingDirectory);
+        if (!SetLowIntegrity(parameters.WorkingDirectory, recursive: true))
+        {
+            throw new InvalidOperationException($"Failed to apply Low integrity label to worktree '{parameters.WorkingDirectory}'.");
+        }
 
         // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
         // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
@@ -82,8 +85,12 @@ public static class DispatchProcessHost
         var tempDir = Path.Combine(sandboxRoot, "temp");
         Directory.CreateDirectory(codexHome);
         Directory.CreateDirectory(tempDir);
+        if (!SetLowIntegrity(sandboxRoot, recursive: true))
+        {
+            throw new InvalidOperationException($"Failed to apply Low integrity label to sandbox root '{sandboxRoot}'.");
+        }
+
         SeedCodexAuth(codexHome);
-        SetLowIntegrity(sandboxRoot);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
@@ -216,7 +223,7 @@ public static void DropToLow() {
 [P.N]::DropToLow()
 ";
 
-    private static void SetLowIntegrity(string path)
+    private static bool SetLowIntegrity(string path, bool recursive)
     {
         try
         {
@@ -231,11 +238,43 @@ public static void DropToLow() {
             psi.ArgumentList.Add(path);
             psi.ArgumentList.Add("/setintegritylevel");
             psi.ArgumentList.Add("(OI)(CI)L");
-            psi.ArgumentList.Add("/T");
+            if (recursive)
+            {
+                psi.ArgumentList.Add("/T");
+            }
+
             using var process = Process.Start(psi);
-            process?.WaitForExit(120000);
+            if (process is null)
+            {
+                return false;
+            }
+
+            var copyOut = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+            var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            if (!WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2)))
+            {
+                return false;
+            }
+
+            try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
+            return process.ExitCode == 0;
         }
-        catch { /* best-effort */ }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool WaitForIntegrityLabeler(Process process, TimeSpan timeout)
+    {
+        if (process.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            return true;
+        }
+
+        try { process.Kill(entireProcessTree: true); } catch { }
+        try { process.WaitForExit(5000); } catch { }
+        return false;
     }
 
     private static void SeedCodexAuth(string codexHome)
@@ -364,6 +403,7 @@ public static void DropToLow() {
                 startInfo.Environment["UseSharedCompilation"] = "false";
             }
 
+            WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             ApplyWorkerSandbox(startInfo, parameters);
 
             WriteHeartbeat("starting");

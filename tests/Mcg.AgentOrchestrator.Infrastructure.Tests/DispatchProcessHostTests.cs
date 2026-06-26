@@ -169,6 +169,43 @@ public sealed class DispatchProcessHostTests
         Assert.True(DispatchProcessHost.HasProgressed(0, 10, 0, 0, 50));
     }
 
+    [Xunit.Fact(DisplayName = "WaitForIntegrityLabeler_kills_helper_when_timeout_expires")]
+    public void WaitForIntegrityLabelerKillsTimedOutHelper()
+    {
+        using var process = StartLongRunningHelper();
+
+        var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromMilliseconds(100));
+
+        Assert.False(completed);
+        Assert.True(process.HasExited);
+    }
+
+    private static Process StartLongRunningHelper()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "ping.exe" : "sleep",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("-n");
+            startInfo.ArgumentList.Add("30");
+            startInfo.ArgumentList.Add("127.0.0.1");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("30");
+        }
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start long-running helper.");
+    }
+
     private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)
     {
         Exception? last = null;
