@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Name = "command",
     [string]$AppDll,
@@ -68,7 +69,6 @@ finally {
 
 [pscustomobject]@{
     pid = [int]$process.Id
-    logPath = $stdoutPath
     stdoutPath = $stdoutPath
     stderrPath = $stderrPath
     args = @($Arguments)
