@@ -510,6 +510,12 @@ public sealed class WorkerDispatchTests
     var goal = kernel.CreateGoal(
         "Plan architecture work",
         [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Plan architecture work",
+        ["Profile dispatch metadata is recorded from the selected subscription model."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
     var agent = new AgentDefinition(
         new AgentId("developer"),
         "Developer",

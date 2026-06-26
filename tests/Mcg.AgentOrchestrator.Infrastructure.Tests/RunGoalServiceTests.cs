@@ -46,6 +46,18 @@ public sealed class RunGoalServiceTests
 
     private static WorkerProfileCatalog Profiles(params WorkerProfile[] profiles) => new WorkerProfileCatalog(profiles);
 
+    private static Goal CreateRefinedGoal(AgentOrchestratorKernel kernel, string objective, IReadOnlyList<TaskSpec> tasks)
+    {
+        var goal = kernel.CreateGoal(objective, tasks);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            objective,
+            ["RunGoalService fixture goal is already refined."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        return goal;
+    }
+
     private static void RecordRecoverableUsageLimit(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -111,7 +123,7 @@ public sealed class RunGoalServiceTests
         var kernel = new AgentOrchestratorKernel();
         var task1 = new TaskSpec(TaskId.New(), "First echo task", AgentRole.Planner);
         var task2 = new TaskSpec(TaskId.New(), "Second echo task", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Sequential echo run", [task1, task2]);
+        var goal = CreateRefinedGoal(kernel, "Sequential echo run", [task1, task2]);
         var agent = EchoAgent();
         var profiles = EchoProfiles();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -143,7 +155,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task that will fail", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal with failing task", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal with failing task", [task]);
         var agent = EchoAgent();
         kernel.ActivateGoal(goal.Id, [agent]);
         var now = DateTimeOffset.UtcNow;
@@ -179,7 +191,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task requiring human input", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal with human input block", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal with human input block", [task]);
         var agent = EchoAgent();
         kernel.ActivateGoal(goal.Id, [agent]);
         kernel.RequestHumanInput(goal.Id, task.Id, "Which approach should be used?");
@@ -206,7 +218,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with repeated limit failures", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal hitting usage limit", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal hitting usage limit", [task]);
         var agent = EchoAgent();
         kernel.ActivateGoal(goal.Id, [agent]);
         var now = DateTimeOffset.UtcNow;
@@ -243,7 +255,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task deferred by retry window", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal with subscription retry deferral", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal with subscription retry deferral", [task]);
         var agent = EchoAgent();
         kernel.ActivateGoal(goal.Id, [agent]);
         var now = DateTimeOffset.UtcNow;
@@ -281,7 +293,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with recoverable usage limit", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should fail over usage limit", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should fail over usage limit", [task]);
         var limited = SubscriptionPlanner("limited-planner", "Limited Planner", "limited");
         var alternate = SubscriptionPlanner("alternate-planner", "Alternate Planner", "alternate");
         kernel.ActivateGoal(goal.Id, [limited, alternate]);
@@ -333,7 +345,7 @@ public sealed class RunGoalServiceTests
             Subscription: new SubscriptionLaunchProfile("claude-cli"));
         var agents = AgentCatalog.Default().AddOrReplaceById(alternate).Agents;
         var task = new TaskSpec(TaskId.New(), "Task with catalog failover alternate", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should fail over to a catalog alternate", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should fail over to a catalog alternate", [task]);
         kernel.ActivateGoal(goal.Id, agents);
         Assert.Equal("openai-planner", task.AssignedAgentId!.Value);
         RecordRecoverableUsageLimit(
@@ -372,7 +384,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with heartbeat stall", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should fail over heartbeat stall", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should fail over heartbeat stall", [task]);
         var stalled = SubscriptionPlanner("stalled-planner", "Stalled Planner", "stalled");
         var alternate = SubscriptionPlanner("heartbeat-alternate", "Heartbeat Alternate", "alternate");
         kernel.ActivateGoal(goal.Id, [stalled, alternate]);
@@ -406,7 +418,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with codex websocket failure", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should ask for alternate after codex connectivity failure", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should ask for alternate after codex connectivity failure", [task]);
         var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
         kernel.ActivateGoal(goal.Id, [primary]);
         RecordProviderConnectivityFailure(
@@ -445,7 +457,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with useful stdout plus connectivity text", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should not fail over after useful stdout", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should not fail over after useful stdout", [task]);
         var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
         kernel.ActivateGoal(goal.Id, [primary]);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex-cli exec", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
@@ -479,7 +491,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with claude API connectivity failure", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should ask for alternate after claude connectivity failure", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should ask for alternate after claude connectivity failure", [task]);
         var primary = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
         kernel.ActivateGoal(goal.Id, [primary]);
         RecordProviderConnectivityFailure(
@@ -516,7 +528,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with provider connectivity failover", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should continue with same-role alternate", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should continue with same-role alternate", [task]);
         var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
         var alternate = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
         kernel.ActivateGoal(goal.Id, [primary, alternate]);
@@ -563,7 +575,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with provider model rejection", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should fail over unsupported model", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should fail over unsupported model", [task]);
         var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
         var alternate = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
         kernel.ActivateGoal(goal.Id, [primary, alternate]);
@@ -605,7 +617,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task without alternate", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should ask for alternate", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should ask for alternate", [task]);
         var limited = SubscriptionPlanner("limited-planner", "Limited Planner", "limited");
         kernel.ActivateGoal(goal.Id, [limited]);
         RecordRecoverableUsageLimit(
@@ -642,7 +654,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with two failed agents", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal should not ping-pong failover", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal should not ping-pong failover", [task]);
         var first = SubscriptionPlanner("first-planner", "First Planner", "first");
         var second = SubscriptionPlanner("second-planner", "Second Planner", "second");
         kernel.ActivateGoal(goal.Id, [first, second]);
@@ -677,7 +689,7 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Goal with oversized paid prompt", [task]);
+        var goal = CreateRefinedGoal(kernel, "Goal with oversized paid prompt", [task]);
         var agent = EchoAgent();
         kernel.ActivateGoal(goal.Id, [agent]);
         var now = DateTimeOffset.UtcNow;
