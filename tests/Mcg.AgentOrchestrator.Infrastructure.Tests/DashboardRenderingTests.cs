@@ -934,7 +934,7 @@ public sealed class DashboardRenderingTests
     public async Task DashboardApiSubscriptionDispatchAcknowledgesLimitReview()
 {
     var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var workspace = CreateRefinedWorkspace(root);
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Review dashboard subscription limits", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
     IReadOnlyList<AgentDefinition> agents =

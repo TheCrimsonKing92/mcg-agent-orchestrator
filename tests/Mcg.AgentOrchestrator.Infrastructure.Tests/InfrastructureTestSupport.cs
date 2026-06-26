@@ -33,6 +33,24 @@ public static string CreateTempDirectory()
     return path;
 }
 
+public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
+{
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    SeedSpecRefinerBinding(workspace);
+    return workspace;
+}
+
+public static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)
+{
+    ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+        new ModelFunctionBinding(
+            ModelFunctionPurposes.SpecRefiner,
+            ModelLane.CheapApi,
+            new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            Name: ModelFunctionPurposes.SpecRefiner)
+    ]));
+}
+
 public static string BacklogStorePathFor(string root) =>
     Path.Combine(root, ".orchestrator", "backlog.db");
 
