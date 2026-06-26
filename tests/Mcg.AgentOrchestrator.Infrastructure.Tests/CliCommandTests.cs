@@ -3779,6 +3779,31 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(["recover", "abc123ef", "reconcile after crash"], multi);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_normalizes_one_shot_subcommands")]
+    public void CliAttentionNormalizesOneShotSubcommands()
+    {
+        var show = CliArgumentParser.NormalizeArgs(["attention", "show", "abc123ef"]);
+        var dismiss = CliArgumentParser.NormalizeArgs(["attention", "dismiss", "abc123ef"]);
+        var answer = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", "abc123ef", "391ce87f", "Use", "a", "static", "helper."]);
+
+        Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
+        Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_splits_interactive_subcommands")]
+    public void CliAttentionSplitsInteractiveSubcommands()
+    {
+        var show = CliArgumentParser.SplitCommand("attention show abc123ef");
+        var dismiss = CliArgumentParser.SplitCommand("attention dismiss abc123ef");
+        var answer = CliArgumentParser.SplitCommand("attention answer abc123ef 391ce87f Use a static helper.");
+
+        Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
+        Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_task_commands_normalize_one_shot_legacy_task_notes")]
     public void CliTaskCommandsNormalizeOneShotLegacyTaskNotes()
     {
