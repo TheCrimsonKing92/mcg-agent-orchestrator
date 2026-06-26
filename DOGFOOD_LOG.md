@@ -1920,3 +1920,10 @@ Goal 58714413: Implement a small typed worker-provider identity helper for mcg-a
 
 - Operator gate: (no receipt)
 - (no receipt)
+
+## 2026-06-26 - Backlog slice: Make orchestrator-commit-on-behalf-of-worker the DEFAULT (not ...
+
+Goal 7cfc511b: Backlog slice: Make orchestrator-commit-on-behalf-of-worker the DEFAULT (not just sandbox-blocked recovery): orchestr.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit none (verification only, no changes made)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner-only source/context inspection, workspace clean (exit 0); Researcher: not-run; research-only task; git status clean (exit 0); Developer: pass; core 41/41, infrastructure WorkerDispatchTests 143/143, git diff --check passed (exit 0); Tester: pass - Core.Tests 403 passed; Infrastructure.Tests 1148 passed (4 unrelated pre-existing failures) (exit 0); Reviewer: not-run (Reviewer role; no file edits) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - reviewer/evidence-analysis task - spec cross-check, dead-code detection, and guard-condition reasoning require close reading rather than broad search; sonnet is sufficient.
