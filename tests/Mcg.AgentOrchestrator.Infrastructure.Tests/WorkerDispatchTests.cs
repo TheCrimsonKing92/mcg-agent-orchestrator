@@ -382,6 +382,160 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_claude_cli_only_auth_under_low_integrity_before_dispatch")]
+    public void WorkerProfileDispatcherPreflightBlocksClaudeCliOnlyAuthUnderLowIntegrityBeforeDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude auth preflight", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var credentialPath = Path.Combine(root, ".claude", ".credentials.json");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: credentialPath);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox));
+
+    var findings = string.Join("\n", preflight.Findings);
+    Assert.False(preflight.Allowed);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
+    Assert.Contains("Low-IL Claude subscription dispatch is refused before worker start", findings);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_skips_claude_auth_guard_for_codex_low_integrity_dispatch")]
+    public void WorkerProfileDispatcherPreflightSkipsClaudeAuthGuardForCodexLowIntegrityDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify codex auth preflight isolation", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    Func<ClaudeCliAuthState> authProbe = () => throw new InvalidOperationException("Claude auth probe must not run for codex workers.");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Null(preflight.ErrorCode);
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_claude_low_integrity_when_api_key_is_present")]
+    public void WorkerProfileDispatcherPreflightAllowsClaudeLowIntegrityWhenApiKeyIsPresent()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude api key auth preflight", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: Path.Combine(root, ".claude", ".credentials.json"));
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Null(preflight.ErrorCode);
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Null(task.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "WorkerSandboxOptions_has_no_provider_property")]
     public void WorkerSandboxOptionsHasNoProviderProperty()
 {
