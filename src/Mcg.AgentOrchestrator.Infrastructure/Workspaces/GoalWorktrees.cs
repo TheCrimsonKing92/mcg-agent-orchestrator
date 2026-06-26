@@ -579,6 +579,8 @@ public static class GoalWorktrees
                 WorkingDirectory = workingDirectory
             };
 
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add("core.longpaths=true");
             foreach (var arg in args)
             {
                 startInfo.ArgumentList.Add(arg);

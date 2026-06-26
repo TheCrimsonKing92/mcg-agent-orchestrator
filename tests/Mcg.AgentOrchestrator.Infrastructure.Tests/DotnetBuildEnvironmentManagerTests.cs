@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using Mcg.AgentOrchestrator.Core;
@@ -335,6 +336,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.ArgumentList.Add("--no-restore");
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
             startInfo.EnvironmentVariables[WorkerSandboxOptions.EnabledVariable] = "1";
             startInfo.EnvironmentVariables[WorkerSandboxOptions.AccountVariable] = "sandbox-user";
             startInfo.EnvironmentVariables[WorkerSandboxOptions.CredentialTargetVariable] = "sandbox-target";
@@ -343,8 +345,10 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 ?? throw new InvalidOperationException("Failed to start PowerShell.");
             var stdout = process.StandardOutput.ReadToEnd();
             var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000));
-            Assert.Equal(0, process.ExitCode);
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));

@@ -38,6 +38,19 @@ public sealed class GoalWorktreeTests
         new WorkerProfile("local", "git add -A; if ((git status --short).Length -gt 0) { git commit -m Lifecycle-work }; Write-Output {subscriptionModelName}")
     ]);
 
+    private static IModelProviderRegistry SeedSpecRefiner(OrchestratorWorkspace workspace)
+    {
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        return new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider("{}", providerName: "fake-refiner")
+        ]);
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_creates_and_resolves_worktree_per_goal")]
     public void GoalWorktreesCreatesAndResolvesWorktreePerGoal()
     {
@@ -448,7 +461,9 @@ public sealed class GoalWorktreeTests
             var rebase = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
             var merge = GoalWorktrees.TryFastForwardMerge(repo, goalId);
 
-            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, rebase.Status);
+            Assert.True(
+                rebase.Status == GoalWorktreeRebaseStatus.Rebased,
+                $"{rebase.Status}: {rebase.Message}");
             Assert.True(rebase.ConflictFiles.Count == 0);
             Assert.True(merge is not null);
             Assert.True(merge!.FastForwarded);
@@ -480,7 +495,9 @@ public sealed class GoalWorktreeTests
 
             var rebase = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
 
-            Assert.Equal(GoalWorktreeRebaseStatus.Conflict, rebase.Status);
+            Assert.True(
+                rebase.Status == GoalWorktreeRebaseStatus.Conflict,
+                $"{rebase.Status}: {rebase.Message}");
             Assert.Equal(1, rebase.ConflictFiles.Count);
             Assert.Equal("seed.txt", rebase.ConflictFiles[0]);
             Assert.True(rebase.SuggestedCommand?.Contains("Create an operator task", StringComparison.Ordinal) == true);
@@ -1021,7 +1038,7 @@ public sealed class GoalWorktreeTests
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
-            var providers = new InMemoryModelProviderRegistry([]);
+            var providers = SeedSpecRefiner(workspace);
             var profiles = EchoProfiles();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
 
@@ -1815,7 +1832,7 @@ public sealed class GoalWorktreeTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
-            var providers = new InMemoryModelProviderRegistry([]);
+            var providers = SeedSpecRefiner(workspace);
             var profiles = EchoProfiles();
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
@@ -1860,7 +1877,7 @@ public sealed class GoalWorktreeTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             IReadOnlyList<AgentDefinition> agents = EchoAgents();
-            var providers = new InMemoryModelProviderRegistry([]);
+            var providers = SeedSpecRefiner(workspace);
             var profiles = EchoProfiles();
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
@@ -1898,7 +1915,7 @@ public sealed class GoalWorktreeTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
-            var providers = new InMemoryModelProviderRegistry([]);
+            var providers = SeedSpecRefiner(workspace);
             var profiles = EchoProfiles();
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
@@ -1976,7 +1993,7 @@ public sealed class GoalWorktreeTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
-            var providers = new InMemoryModelProviderRegistry([]);
+            var providers = SeedSpecRefiner(workspace);
             // Touch a real source file so acceptance classifies a behavior
             // change and actually runs verification (the failing fakeVerifier).
             // Relying on the worker committing scratch like .orchestrator-context

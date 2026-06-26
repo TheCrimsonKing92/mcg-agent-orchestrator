@@ -84,6 +84,14 @@ function Get-BuildMaxCpuCount {
     return [Math]::Max(2, [int]([Environment]::ProcessorCount / 4))
 }
 
+function Get-IsolatedRootBase {
+    if (-not [string]::IsNullOrWhiteSpace($env:MCG_DOTNET_ISOLATED_ROOT)) {
+        return $env:MCG_DOTNET_ISOLATED_ROOT
+    }
+
+    return (Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated")
+}
+
 function Test-OwnerMarkerMatches {
     param(
         [string]$Path,
@@ -130,8 +138,9 @@ function Initialize-ArtifactsDirectory {
 }
 
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
+$isolatedRoot = Get-IsolatedRootBase
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
-    $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
+    $slotRoot = Join-Path $isolatedRoot "slots\manual"
     $artifactsPath = Join-Path $slotRoot "artifacts"
     $leaseId = "run-slot-manual"
     $ownerToken = "manual"
@@ -142,8 +151,8 @@ else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
     $slotName = Get-StableSlotName -Value $safeGoalPrefix
     $leaseId = "goal-$safeGoalPrefix"
-    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\goals\$safeGoalPrefix"
-    $slotRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\$slotName"
+    $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
+    $slotRoot = Join-Path $isolatedRoot "slots\$slotName"
     $leaseRoot = Join-Path $runRoot "lease"
     $artifactsPath = Join-Path $slotRoot "artifacts"
     $ownerToken = $leaseId
