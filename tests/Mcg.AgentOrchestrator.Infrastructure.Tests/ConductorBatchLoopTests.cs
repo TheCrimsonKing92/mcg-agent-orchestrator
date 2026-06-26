@@ -1471,11 +1471,37 @@ public sealed class ConductorBatchLoopTests
             onTick: ticks.Add);
 
         var transition = ticks.SelectMany(t => t.ProgressLines ?? []).Single(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal));
-        Assert.Contains("Planner=done", transition);
+        Assert.Contains("Planner=✓", transition);
         Assert.Contains("commit=deadbeefcafe", transition);
         Assert.Contains("files=2", transition);
         Assert.Contains("next=Developer", transition);
         Assert.True(ticks.SelectMany(t => t.ProgressLines ?? []).Any(l => l.Contains("role=Developer", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_uses_operator_supplied_stall_warning_threshold")]
+    public void WatchProgressUsesOperatorSuppliedStallWarningThreshold()
+    {
+        var (kernel, goal) = SimpleGoal("watch custom stall threshold");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123");
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(45), [111], [111], ["src/A.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => true,
+            onTick: ticks.Add,
+            stallWarningThreshold: TimeSpan.FromSeconds(30));
+
+        var warning = ticks.Single().ProgressLines!.Single(l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
+        Assert.Contains("reason=last-progress-stale", warning);
+        Assert.Contains("stall=45s", warning);
     }
 
     // ── Fault isolation: a throwing goal is escalated, others still advance ─

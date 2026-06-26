@@ -154,7 +154,7 @@ internal sealed class ConductorWatchProgressReporter
         }
 
         return
-            $"WATCH_TRANSITION goal={previous.GoalPrefix} {previous.Role}=done commit={commit} " +
+            $"WATCH_TRANSITION goal={previous.GoalPrefix} {previous.Role}=✓ commit={commit} " +
             $"files={previous.ChangedFileCount} elapsed={FormatDuration(previous.Elapsed)} next={next.RequiredRole} task={ConsoleViews.GetTaskDisplayNumber(goal, next.Id)}/{goal.Tasks.Count}";
     }
 

@@ -648,6 +648,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 if (GetFlagValue(parts, "--max-duration") is { } mdStr)
                     maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
                 var quietWatchProgress = HasCliConfirmation(parts, "--quiet");
+                var stallWarningThreshold = ResolveWatchStallWarningThreshold(parts);
 
                 // --daemon: run as a PERSISTENT conductor — never exit on an empty backlog. The loop stays
                 // alive and polls, so goals submitted later (via a separate `goal` command, backlog
@@ -718,7 +719,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
                     persistGoalTick: context.PersistGoalCheckpoint,
-                    quiet: quietWatchProgress);
+                    quiet: quietWatchProgress,
+                    stallWarningThreshold: stallWarningThreshold);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -1733,6 +1735,31 @@ private static List<string> RemoveFlagWithValue(IReadOnlyList<string> parts, str
 private static AutonomyPolicy ResolveCliAutonomyPolicy(IReadOnlyList<string> parts)
 {
     return AutonomyPolicy.Parse(GetFlagValue(parts, "--autonomy") ?? GetFlagValue(parts, "--autonomy-policy"));
+}
+
+private static TimeSpan? ResolveWatchStallWarningThreshold(IReadOnlyList<string> parts)
+{
+    if (GetFlagValue(parts, "--stall-warning-seconds") is { } secondsValue)
+    {
+        return TimeSpan.FromSeconds(ParsePositiveInteger(secondsValue, "--stall-warning-seconds"));
+    }
+
+    if (GetFlagValue(parts, "--stall-warning-minutes") is { } minutesValue)
+    {
+        return TimeSpan.FromMinutes(ParsePositiveInteger(minutesValue, "--stall-warning-minutes"));
+    }
+
+    return null;
+}
+
+private static int ParsePositiveInteger(string value, string flag)
+{
+    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+    {
+        throw new ArgumentException($"{flag} requires a positive integer value.");
+    }
+
+    return parsed;
 }
 
 private static void EnsurePolicyAllows(
