@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using Mcg.AgentOrchestrator.Core;
@@ -277,19 +278,103 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Equal("-maxcpucount:7", MaxCpuCountArgument(configuredArguments));
     }
 
-    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_uses_warm_multicore_build_defaults")]
-    public void InvokeIsolatedDotnetUsesWarmMulticoreBuildDefaults()
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_and_strips_worker_environment")]
+    public void InvokeIsolatedDotnetForwardsArgsAndStripsWorkerEnvironment()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         var repoRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory();
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
-        var script = File.ReadAllText(scriptPath);
+        var root = CreateTempDirectory();
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        try
+        {
+            var logPath = Path.Combine(root, "dotnet.log");
+            var shimPath = Path.Combine(shimDirectory, "dotnet.cmd");
+            File.WriteAllText(
+                shimPath,
+                """
+                @echo off
+                >> "%DOTNET_SHIM_LOG%" echo cwd=%CD%
+                >> "%DOTNET_SHIM_LOG%" echo args=%*
+                >> "%DOTNET_SHIM_LOG%" echo repo=%MCG_ORCHESTRATOR_REPOSITORY_ROOT%
+                >> "%DOTNET_SHIM_LOG%" echo sandbox=%MCG_WORKER_SANDBOX%
+                >> "%DOTNET_SHIM_LOG%" echo account=%MCG_WORKER_ACCOUNT%
+                >> "%DOTNET_SHIM_LOG%" echo target=%MCG_WORKER_CREDENTIAL_TARGET%
+                exit /b 0
+                """);
 
-        Assert.DoesNotContain("\"--disable-build-servers\"", script);
-        Assert.DoesNotContain("$env:MSBUILDDISABLENODEREUSE = \"1\"", script);
-        Assert.DoesNotContain("$env:DOTNET_CLI_USE_MSBUILD_SERVER = \"0\"", script);
-        Assert.DoesNotContain("-p:UseSharedCompilation=false", script);
-        Assert.True(script.Contains("-maxcpucount:$(Get-BuildMaxCpuCount)", StringComparison.Ordinal));
-        Assert.True(script.Contains("$artifactsPath = Join-Path $slotRoot \"artifacts\"", StringComparison.Ordinal));
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-InputFormat");
+            startInfo.ArgumentList.Add("None");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("feedbeef");
+            startInfo.ArgumentList.Add("-AttemptName");
+            startInfo.ArgumentList.Add("Shim Test");
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add("Fake.Tests.csproj");
+            startInfo.ArgumentList.Add("--no-restore");
+            startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+            startInfo.EnvironmentVariables[WorkerSandboxOptions.EnabledVariable] = "1";
+            startInfo.EnvironmentVariables[WorkerSandboxOptions.AccountVariable] = "sandbox-user";
+            startInfo.EnvironmentVariables[WorkerSandboxOptions.CredentialTargetVariable] = "sandbox-target";
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+
+            var log = File.ReadAllText(logPath);
+            Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
+            Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --artifacts-path ", StringComparison.Ordinal));
+            Assert.True(log.Contains("-maxcpucount:", StringComparison.Ordinal));
+            Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
+            Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
+            Assert.DoesNotContain("--disable-build-servers", log);
+            Assert.DoesNotContain("-p:UseSharedCompilation=false", log);
+            Assert.DoesNotContain("sandbox=1", log);
+            Assert.DoesNotContain("account=sandbox-user", log);
+            Assert.DoesNotContain("target=sandbox-target", log);
+            Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]
