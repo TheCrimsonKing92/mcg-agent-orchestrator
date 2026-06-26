@@ -198,6 +198,7 @@ Console.WriteLine("  intent-template [template request] [--create-goal|--create-
 Console.WriteLine("  goals, agents, autonomy-policies");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");
 Console.WriteLine("  agent-add <role> <provider> <model> [name] [--complex-model <model>] (add/replace id)");
+Console.WriteLine("  monitor-goal <goal-id> [--since <event-id>] [--once]");
 Console.WriteLine("  monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
 Console.WriteLine("  acceptance [goal-id] [--autonomy <policy>], workspace [create|merge|remove] [goal-id-prefix] [--autonomy <policy>]");
 Console.WriteLine("  advance [goal-id], advance-subscription [goal-id] --confirm-subscription-advance [--autonomy <policy>]");

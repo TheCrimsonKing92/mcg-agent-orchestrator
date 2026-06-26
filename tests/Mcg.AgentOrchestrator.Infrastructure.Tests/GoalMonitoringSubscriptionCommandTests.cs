@@ -1,7 +1,9 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalMonitoringSubscriptionCommandTests
 {
@@ -21,6 +23,21 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal(42, options.SinceEventId);
         Assert.Equal("http://localhost:5087/api/goals/abc123/events?since=42", GoalMonitoringSubscriptionCommand.BuildSnapshotUri(options).ToString());
         Assert.Equal("http://localhost:5087/api/goals/abc123/events/stream?since=42", GoalMonitoringSubscriptionCommand.BuildStreamUri(options).ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_parses_local_goal_subscription_without_dashboard_url")]
+    public void MonitorGoalParsesLocalGoalSubscriptionWithoutDashboardUrl()
+    {
+        var options = GoalMonitoringSubscriptionCommand.Parse([
+            "monitor-goal",
+            "abc123",
+            "--once"
+        ]);
+
+        Assert.True(options.IsLocal);
+        Assert.Null(options.DashboardUri);
+        Assert.Equal("abc123", options.GoalId);
+        Assert.True(options.Once);
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_and_timeline_lines")]
@@ -120,5 +137,67 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal("3", evt.Id);
         Assert.Equal("timeline", evt.Event);
         Xunit.Assert.Contains("Created", evt.Data);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_once_emits_snapshot_before_incremental_events")]
+    public async Task MonitorGoalLocalOnceEmitsSnapshotBeforeIncrementalEvents()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement local monitor", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor locally", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--once"],
+            output,
+            kernel,
+            workspace,
+            [agent],
+            WorkerProfileCatalog.Default());
+
+        var text = output.ToString();
+        var snapshotIndex = text.IndexOf("event: goal.snapshot", StringComparison.Ordinal);
+        var timelineIndex = text.IndexOf("event: timeline", StringComparison.Ordinal);
+        Assert.True(snapshotIndex >= 0);
+        Assert.True(timelineIndex > snapshotIndex);
+        Assert.Contains("event: task.status", text);
+        Assert.Contains("Started local work.", text);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_unknown_goal_emits_structured_error_event")]
+    public async Task MonitorGoalLocalUnknownGoalEmitsStructuredErrorEvent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", "missing", "--once"],
+            output,
+            new AgentOrchestratorKernel(),
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        var text = output.ToString();
+        Assert.Contains("event: monitor.error", text);
+        Assert.Contains("\"GoalId\": \"missing\"", text);
+        Assert.Contains("\"Code\": \"goal_not_found\"", text);
+    }
+
+    private static string CreateTempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "mcg-monitor-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
     }
 }
