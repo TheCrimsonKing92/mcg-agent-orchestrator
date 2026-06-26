@@ -382,6 +382,146 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxOptions_has_no_provider_property")]
+    public void WorkerSandboxOptionsHasNoProviderProperty()
+{
+    Assert.Null(typeof(WorkerSandboxOptions).GetProperty("Provider"));
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_claude_auth_environment_for_claude_worker_sandbox")]
+    public void DispatchProcessHostSeedsClaudeAuthEnvironmentForClaudeWorkerSandbox()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome);
+
+        Assert.Equal("test-claude-key", startInfo.Environment["ANTHROPIC_API_KEY"]);
+        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
+        Assert.True(Directory.Exists(claudeConfigDir));
+        Assert.Equal("{}\n", File.ReadAllText(Path.Combine(claudeConfigDir!, "settings.json")));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_claude_auth_diagnostic_when_api_key_missing")]
+    public void DispatchProcessHostWritesClaudeAuthDiagnosticWhenApiKeyMissing()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+        var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome, stderrPath);
+
+        Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
+        Assert.True(Directory.Exists(claudeConfigDir));
+        var stderr = File.ReadAllText(stderrPath);
+        Assert.Contains("ANTHROPIC_API_KEY is not set", stderr);
+        Assert.Contains("Claude", stderr);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_diagnostic")]
+    public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthDiagnostic()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+        var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome, stderrPath);
+
+        using (var stderr = DispatchProcessHost.OpenWorkerStderrStream(stderrPath))
+        using (var writer = new StreamWriter(stderr))
+        {
+            writer.WriteLine("worker stderr");
+        }
+
+        var text = File.ReadAllText(stderrPath);
+        Assert.Contains("ANTHROPIC_API_KEY is not set", text);
+        Assert.Contains("worker stderr", text);
+        Assert.True(
+            text.IndexOf("ANTHROPIC_API_KEY is not set", StringComparison.Ordinal) <
+            text.IndexOf("worker stderr", StringComparison.Ordinal),
+            text);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_does_not_inject_claude_environment_for_codex_worker_sandbox")]
+    public void DispatchProcessHostDoesNotInjectClaudeEnvironmentForCodexWorkerSandbox()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Codex, sandboxRoot, codexHome);
+
+        Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchFailureClassifier_classifies_claude_401_as_provider_authentication_failure")]
+    public void DispatchFailureClassifierClassifiesClaude401AsProviderAuthenticationFailure()
+{
+    var task = new TaskSpec(TaskId.New(), "Implement with Claude.", AgentRole.Developer);
+    var verification = new TaskVerificationRecord(
+        "claude --model claude-haiku-4-5 -p prompt",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: Failed to authenticate: API Error 401 Unauthorized",
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"));
+
+    var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+    Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
+    Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    Assert.True(outcome.EvidenceSummary.Contains("401", StringComparison.OrdinalIgnoreCase), outcome.EvidenceSummary);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_repo_scoped_skill_targets")]
     public void WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets()
 {
@@ -1022,6 +1162,55 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_records_provider_from_claude_launcher")]
+    public void WorkerProfileDispatcherReadyBatchRecordsProviderFromClaudeLauncher()
+{
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Dispatch Claude write worker",
+        [new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-haiku-4-5"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        goal.Tasks.Single(),
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        dispatchedAt);
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Single(results);
+    var developer = goal.Tasks.Single();
+    Assert.Equal("claude-cli", developer.LastDispatch!.WorkerName);
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("claude --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", StringComparison.Ordinal));
+    Assert.Equal("Anthropic", developer.LastDispatch.ProviderName);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_escalates_default_openai_agents_for_complex_subscription_tasks")]
     public void WorkerProfileDispatcherEscalatesDefaultOpenAiAgentsForComplexSubscriptionTasks()
 {
@@ -3662,6 +3851,45 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_git_metadata_permission_failure_is_nonfatal_with_dirty_worker_result")]
+    public void BackgroundDispatchRunnerGitMetadataPermissionFailureIsNonfatalWithDirtyWorkerResult()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Edited the requested files, but git commit was blocked." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "git add -A; git commit -m Feature", "not-run"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git metadata failure"));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var indexLockPath = Path.GetFullPath(Path.Combine(
+        root,
+        ".git",
+        "worktrees",
+        goal.Id.Value[..8],
+        "index.lock"));
+    File.WriteAllText(
+        process.StandardErrorPath,
+        $"fatal: Unable to create '{indexLockPath}': Permission denied");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Classified worker git metadata write failure as non-fatal", StringComparison.Ordinal));
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("index_lock=", StringComparison.Ordinal));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyUnverifiedStaysFailed()
 {
@@ -4783,6 +5011,67 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(currentTask, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_latest_acceptance_failure_before_context_digest_on_retry")]
+    public void BuildTaskBriefPutsLatestAcceptanceFailureBeforeContextDigestOnRetry()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    var contextDirectory = Path.Combine(root, "context");
+    Directory.CreateDirectory(workingDirectory);
+    Directory.CreateDirectory(contextDirectory);
+    var clock = new MutableClock(DateTimeOffset.Parse("2026-06-26T12:00:00Z"));
+    var kernel = new AgentOrchestratorKernel(clock);
+    var task = new TaskSpec(TaskId.New(), "Fix acceptance-failed schema assertions.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Retry after acceptance failure", [task]);
+    kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+
+    var firstAttempt = kernel.BuildTaskBrief(
+        goal.Id,
+        task.Id,
+        workingDirectory: workingDirectory,
+        contextDirectory: contextDirectory).Content;
+    Assert.DoesNotContain("ACCEPTANCE FAILURE", firstAttempt, StringComparison.Ordinal);
+
+    kernel.RecordAcceptanceFailure(goal.Id, [
+        "OldSchemaTests.OldFailure"
+    ]);
+    clock.Advance();
+    kernel.RetryTask(goal.Id, task.Id, "old operator feedback");
+    clock.Advance();
+    kernel.RecordAcceptanceFailure(goal.Id, [
+        "SqliteOrchestratorStateRepositoryTests.Loads_existing_goal_schema",
+        "SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"
+    ]);
+    clock.Advance();
+    var operatorFeedback = "Operator rejection: acceptance failed on sqlite schema assertions; fix the schema mapping before reporting complete.";
+    kernel.RetryTask(goal.Id, task.Id, operatorFeedback);
+
+    var retryPrompt = kernel.BuildTaskBrief(
+        goal.Id,
+        task.Id,
+        workingDirectory: workingDirectory,
+        contextDirectory: contextDirectory).Content;
+
+    var failureStart = retryPrompt.IndexOf("<!-- ACCEPTANCE_FAILURE_START -->", StringComparison.Ordinal);
+    var instructions = retryPrompt.IndexOf("## Instructions", StringComparison.Ordinal);
+    var contextPointer = retryPrompt.IndexOf("Context files:", StringComparison.Ordinal);
+    Assert.True(failureStart >= 0, retryPrompt);
+    Assert.True(failureStart < contextPointer, retryPrompt);
+    Assert.True(failureStart < instructions, retryPrompt);
+    Assert.True(retryPrompt.Contains("<!-- ACCEPTANCE_FAILURE_END -->", StringComparison.Ordinal), retryPrompt);
+    Assert.True(retryPrompt.Contains(operatorFeedback, StringComparison.Ordinal), retryPrompt);
+    Assert.True(retryPrompt.Contains("SqliteOrchestratorStateRepositoryTests.Loads_existing_goal_schema", StringComparison.Ordinal), retryPrompt);
+    Assert.True(retryPrompt.Contains("SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns", StringComparison.Ordinal), retryPrompt);
+    var failureEnd = retryPrompt.IndexOf("<!-- ACCEPTANCE_FAILURE_END -->", StringComparison.Ordinal);
+    var failureBlock = retryPrompt[failureStart..failureEnd];
+    Assert.DoesNotContain("OldSchemaTests.OldFailure", failureBlock, StringComparison.Ordinal);
+    Assert.DoesNotContain("old operator feedback", failureBlock, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]
     public void WorkerProfileDispatcherLateFileAccessSubscriptionPromptStaysBelowLargePaidThreshold()
 {
@@ -5061,6 +5350,19 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         AgentRole.Developer,
         "Developer: budget",
         string.Join(Environment.NewLine, lines));
+}
+
+    private static ProcessStartInfo CreateSandboxStartInfo(string workingDirectory)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = WorkerShell.Executable,
+        WorkingDirectory = workingDirectory,
+        UseShellExecute = false
+    };
+    startInfo.Environment.Remove("ANTHROPIC_API_KEY");
+    startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+    return startInfo;
 }
 
     private static TaskDispatchRecord ReopenTaskWithRecoverableDispatchLimit(
@@ -5342,6 +5644,15 @@ private static void WriteSkill(string workingDirectory, string skillName)
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class MutableClock(DateTimeOffset utcNow) : IClock
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public DateTimeOffset UtcNow => _utcNow;
+
+        public void Advance() => _utcNow = _utcNow.AddSeconds(1);
     }
 
     private sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter

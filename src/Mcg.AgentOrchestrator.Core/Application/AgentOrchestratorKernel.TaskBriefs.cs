@@ -48,7 +48,10 @@ public sealed partial class AgentOrchestratorKernel
         var headerLines = new List<string>
         {
             "# Agent Task Brief",
-            string.Empty,
+            string.Empty
+        };
+        headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task));
+        headerLines.AddRange([
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
@@ -57,7 +60,7 @@ public sealed partial class AgentOrchestratorKernel
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",
             $"Task id: {task.Id.Value}",
-        };
+        ]);
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
@@ -346,6 +349,42 @@ public sealed partial class AgentOrchestratorKernel
         complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
         complexLines.Add(modelFitInstruction);
         return complexLines;
+    }
+
+    private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task)
+    {
+        if (goal.LatestAcceptanceFailure is not { } failure)
+        {
+            return [];
+        }
+
+        var retryEvent = goal.Timeline
+            .Where(evt =>
+                evt.TaskId == task.Id &&
+                evt.Kind == ProgressKind.TaskRetried &&
+                evt.OccurredAt >= failure.OccurredAt)
+            .OrderByDescending(evt => evt.OccurredAt)
+            .FirstOrDefault();
+        if (retryEvent is null)
+        {
+            return [];
+        }
+
+        var lines = new List<string>
+        {
+            "<!-- ACCEPTANCE_FAILURE_START -->",
+            "## ACCEPTANCE FAILURE - FIX FIRST",
+            "This retry follows a failed acceptance round. Address this before using prior task history or context digests.",
+            string.Empty,
+            "Operator feedback (verbatim):",
+            retryEvent.Message,
+            string.Empty,
+            "Failing tests/checks:",
+        };
+        lines.AddRange(failure.FailedChecks.Select(check => $"- {check}"));
+        lines.Add("<!-- ACCEPTANCE_FAILURE_END -->");
+        lines.Add(string.Empty);
+        return lines;
     }
 
     private static string BuildModelFitInstruction(string? modelFitTarget)

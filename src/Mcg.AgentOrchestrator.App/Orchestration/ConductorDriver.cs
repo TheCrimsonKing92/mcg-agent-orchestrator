@@ -20,6 +20,8 @@ internal sealed class ConductorDriver
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
+    private readonly Action<Goal, IReadOnlyList<string>> _recordAcceptanceFailure;
+    private readonly Action<Goal> _clearAcceptanceFailure;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
     private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
@@ -179,6 +181,10 @@ internal sealed class ConductorDriver
             var unmetCriteria = verification.Checks?
                 .Where(check => check.Advisory && !check.Passed)
                 .ToArray() ?? [];
+            var failedChecks = verification.Checks?
+                .Where(check => !check.Advisory && !check.Passed)
+                .Select(check => check.Name)
+                .ToArray() ?? [];
             if (verification.Passed)
                 GoalOperationJournal.Completed(dir, goal, "conductor:acceptance",
                     unmetCriteria.Length == 0
@@ -190,12 +196,15 @@ internal sealed class ConductorDriver
             return new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
-                verification.Passed ? null : verification.OutputTail);
+                verification.Passed ? null : verification.OutputTail,
+                failedChecks);
         };
 
         _retryTask = kernel.RetryTask;
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
+        _recordAcceptanceFailure = (goal, failedChecks) => kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+        _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
 
         _runAdvisorySemanticAcceptance = (goal, _) =>
         {
@@ -318,7 +327,9 @@ internal sealed class ConductorDriver
         Action<Goal, GoalLifecycleState, string> writeEscalation,
         Func<Goal, ChangeRiskTier?> classifyChangeRisk,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
-        Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null)
+        Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
+        Action<Goal, IReadOnlyList<string>>? recordAcceptanceFailure = null,
+        Action<Goal>? clearAcceptanceFailure = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -333,6 +344,8 @@ internal sealed class ConductorDriver
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
+        _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _) => { });
+        _clearAcceptanceFailure = clearAcceptanceFailure ?? (_ => { });
         _rebaseOntoMain = rebaseOntoMain;
         _land = land;
         _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
@@ -588,10 +601,17 @@ internal sealed class ConductorDriver
         var acceptance = _runAcceptanceVerification(goal);
         if (!acceptance.Passed)
         {
+            if (acceptance.FailedChecks is { Count: > 0 })
+            {
+                _recordAcceptanceFailure(goal, acceptance.FailedChecks);
+            }
+
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
                 "Acceptance verification failed; review and fix before landing." +
                 FormatFailureTail(acceptance.FailureDetail));
         }
+
+        _clearAcceptanceFailure(goal);
 
         if (acceptance.UnmetCriteria.Count > 0)
         {

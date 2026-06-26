@@ -51,6 +51,11 @@ internal static class CliPersistentStateRunner
             return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
+        if (IsBacklogIntakeCommand(args))
+        {
+            return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -171,6 +176,11 @@ internal static class CliPersistentStateRunner
             args[0].Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args)
+    {
+        return args.Count > 0 && args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase);
+    }
+
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
     // progress via an independent SaveAsync (passed to the loop as PersistCheckpoint). This makes a
     // started dispatch durable the moment its tick completes — so a stopped/killed/long-running loop
@@ -249,6 +259,42 @@ internal static class CliPersistentStateRunner
         if (shouldSave)
         {
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+        }
+
+        return shouldSave;
+    }
+
+    private static bool ExecuteBacklogIntakeOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+
+        void Persist(AgentOrchestratorKernel checkpoint) =>
+            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            Persist);
+
+        if (shouldSave)
+        {
+            Persist(kernel);
         }
 
         return shouldSave;

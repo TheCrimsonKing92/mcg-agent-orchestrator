@@ -18,6 +18,7 @@ public enum DispatchOutcomeKind
     EmptyOutputFlake,
     SandboxCommitBlocked,
     ProviderNeutralProgressStall,
+    ProviderAuthentication,
     ProviderConnectivity,
     ProviderModelRejection,
     DirtyWorktreeRecoverable,
@@ -201,6 +202,18 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
+        if (IsRecoverableProviderAuthenticationFailure(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.ProviderAuthentication,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildEvidenceSummary(verification));
+        }
+
         if (IsTransientEmptyOutputDispatchFlake(verification))
         {
             return new DispatchOutcome(
@@ -288,6 +301,11 @@ public static class DispatchFailureClassifier
         if (TryGetRecoverableSubscriptionLimitLine(verification, out var providerLimitLine))
         {
             return TruncateEvidence(providerLimitLine);
+        }
+
+        if (TryGetProviderAuthenticationLine(verification, out var providerAuthLine))
+        {
+            return TruncateEvidence(providerAuthLine);
         }
 
         if (!HasVerificationEvidence(verification.StandardOutput, verification.StandardError))
@@ -393,6 +411,14 @@ public static class DispatchFailureClassifier
             IsRecoverableProviderConnectivityFailure(latest);
     }
 
+    public static bool HasRecoverableProviderAuthenticationFailure(TaskSpec task)
+    {
+        return task.Status == WorkTaskStatus.Failed &&
+            IsSubscriptionProviderCliDispatch(task) &&
+            task.LastVerification is { Succeeded: false } latest &&
+            IsRecoverableProviderAuthenticationFailure(latest);
+    }
+
     public static bool HasRecoverableProviderModelRejectionFailure(TaskSpec task)
     {
         return task.Status == WorkTaskStatus.Failed &&
@@ -406,6 +432,22 @@ public static class DispatchFailureClassifier
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
             IsRecoverableProviderConnectivityFailure(verification));
+    }
+
+    public static bool IsRecoverableProviderAuthenticationFailure(TaskVerificationRecord verification)
+    {
+        if (verification.Succeeded)
+        {
+            return false;
+        }
+
+        var output = string.Join(
+            Environment.NewLine,
+            verification.StandardOutput,
+            verification.StandardError);
+
+        return ContainsProviderAuthenticationText(output) &&
+            !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
     public static bool IsRecoverableProviderConnectivityFailure(TaskVerificationRecord verification)
@@ -697,6 +739,16 @@ public static class DispatchFailureClassifier
               text.Contains("failed", StringComparison.OrdinalIgnoreCase)));
     }
 
+    private static bool ContainsProviderAuthenticationText(string text)
+    {
+        return text.Contains("Failed to authenticate", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("API Error 401", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("401 Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("authentication failed", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("invalid api key", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool ContainsProviderModelRejectionText(string text)
     {
         return (text.Contains("model", StringComparison.OrdinalIgnoreCase) ||
@@ -774,6 +826,22 @@ public static class DispatchFailureClassifier
                 }
             }
         }
+    }
+
+    private static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line)
+    {
+        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = rawLine.Trim();
+            if (ContainsProviderAuthenticationText(candidate))
+            {
+                line = candidate;
+                return true;
+            }
+        }
+
+        line = string.Empty;
+        return false;
     }
 
     private static bool IsBareProviderLimitSignalLine(string line) =>

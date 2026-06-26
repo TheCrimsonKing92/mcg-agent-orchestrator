@@ -33,6 +33,196 @@ public sealed class GoalBacklogLinkTests
         Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
     }
 
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_new_source_backlog_id_creates_goal_and_persists_indexed_record")]
+    public async Task NewSourceBacklogIdCreatesGoalAndPersistsIndexedRecord()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Indexed Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Indexed Feature", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.True(changed);
+        Assert.NotNull(currentGoal);
+        var seededId = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Indexed Feature", StringComparison.Ordinal))
+            .Id;
+        Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
+
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath}");
+        await conn.OpenAsync();
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT source_backlog_item_id FROM goals WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", currentGoal.Id.Value);
+            Assert.Equal(seededId, (string?)await cmd.ExecuteScalarAsync());
+        }
+
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_goals_source_backlog_item_id'";
+            Assert.Equal(1L, (long)(await cmd.ExecuteScalarAsync() ?? 0L));
+        }
+
+        var intakeRecord = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Get(seededId);
+        Assert.NotNull(intakeRecord);
+        Assert.Equal("GoalCreated", intakeRecord!.Status);
+        Assert.Equal(currentGoal.Id.Value, intakeRecord.GoalId);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_duplicate_source_backlog_id_returns_existing_goal_without_new_goal")]
+    public void DuplicateSourceBacklogIdReturnsExistingGoalWithoutNewGoal()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var firstChanged = CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Retry Feature", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        var firstGoal = currentGoal!;
+
+        var output = CaptureConsole(() =>
+        {
+            var secondChanged = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Retry Feature", "--create-simple-goal"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(secondChanged);
+        });
+
+        Assert.True(firstChanged);
+        Assert.Single(kernel.Goals);
+        Assert.Equal(firstGoal.Id, currentGoal!.Id);
+        Assert.Contains($"already has goal {firstGoal.Id.Value[..8]}", output);
+        Assert.Contains("no new goal created", output);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_persistent_duplicate_returns_existing_goal_without_new_goal_row")]
+    public void PersistentDuplicateReturnsExistingGoalWithoutNewGoalRow()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Persistent Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var firstChanged = CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        var firstGoalId = currentGoal!.Id.Value;
+
+        var secondOutput = CaptureConsole(() =>
+        {
+            var secondChanged = CliPersistentStateRunner.ExecuteCommand(
+                ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(secondChanged);
+        });
+
+        var restored = repository.LoadAsync().GetAwaiter().GetResult();
+        Assert.True(firstChanged);
+        Assert.Single(restored.Goals);
+        Assert.Equal(firstGoalId, restored.Goals.Single().Id.Value);
+        Assert.Equal(firstGoalId, currentGoal!.Id.Value);
+        Assert.Contains($"already has goal {firstGoalId[..8]}", secondOutput);
+        Assert.Contains("no new goal created", secondOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_in_progress_intake_retry_reports_record_without_new_goal")]
+    public void InProgressIntakeRetryReportsRecordWithoutNewGoal()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Active Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var item = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Active Retry Feature", StringComparison.Ordinal));
+        new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(item.Id, item.Title);
+
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Active Retry Feature", "--create-simple-goal"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(changed);
+        });
+
+        Assert.Empty(kernel.Goals);
+        Assert.Null(currentGoal);
+        Assert.Contains("is InProgress", output);
+        Assert.Contains("no new goal created", output);
+        Assert.Contains("--force-reclaim", output);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_in_progress_intake_reports_launcher_log_paths")]
+    public void InProgressIntakeReportsLauncherLogPaths()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Logged Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var item = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Logged Retry Feature", StringComparison.Ordinal));
+        var stdoutPath = Path.Combine(root, "logs", "intake.out.log");
+        var stderrPath = Path.Combine(root, "logs", "intake.err.log");
+        var previousStdout = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH");
+        var previousStderr = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", stdoutPath);
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", stderrPath);
+            new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(item.Id, item.Title);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", previousStdout);
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", previousStderr);
+        }
+
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Logged Retry Feature", "--create-simple-goal"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(changed);
+        });
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains(Path.GetFullPath(stdoutPath), output);
+        Assert.Contains(Path.GetFullPath(stderrPath), output);
+    }
+
     // ── Intake: batch (multiple filters -> one goal each) ─────────────────────
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_batch_intake_creates_one_linked_goal_per_filter")]

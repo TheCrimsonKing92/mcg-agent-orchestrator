@@ -124,6 +124,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 id            TEXT PRIMARY KEY,
                 status        TEXT NOT NULL,
                 objective     TEXT NOT NULL,
+                source_backlog_item_id TEXT NULL,
                 updated_at    TEXT NOT NULL,
                 snapshot_json TEXT NOT NULL,
                 version       INTEGER NOT NULL DEFAULT 0
@@ -153,17 +154,26 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_role ON model_fit_history(role)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_model ON model_fit_history(provider_name, model_name)");
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
     }
 
-    // Idempotent migration: adds version column to existing schemas that pre-date this column.
-    // Old binaries ignore the extra column; this binary treats an absent column as version 0.
+    // Idempotent migration: adds metadata columns to existing schemas that pre-date them.
+    // Old binaries ignore the extra columns; this binary treats absent version as 0.
     private void MigrateVersionColumn(SqliteConnection conn)
     {
         using var check = conn.CreateCommand();
         check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name = 'version'";
         if (Convert.ToInt32(check.ExecuteScalar()) == 0)
             RunNonQuery(conn, "ALTER TABLE goals ADD COLUMN version INTEGER NOT NULL DEFAULT 0");
+
+        using var sourceCheck = conn.CreateCommand();
+        sourceCheck.CommandText = "SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name = 'source_backlog_item_id'";
+        if (Convert.ToInt32(sourceCheck.ExecuteScalar()) == 0)
+            RunNonQuery(conn, "ALTER TABLE goals ADD COLUMN source_backlog_item_id TEXT NULL");
+
+        if (!IndexExists(conn, "ix_goals_source_backlog_item_id"))
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
     }
 
     private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
@@ -180,6 +190,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$human_input_requests", "human_input_requests");
         cmd.Parameters.AddWithValue("$model_fit_history", "model_fit_history");
         return Convert.ToInt32(cmd.ExecuteScalar()) == SchemaTableNames.Length;
+    }
+
+    private static bool IndexExists(SqliteConnection conn, string indexName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = $name";
+        cmd.Parameters.AddWithValue("$name", indexName);
+        return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
 
     public async Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
@@ -361,11 +379,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             var json = JsonSerializer.Serialize(goal, SerializerOptions);
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO goals (id, status, objective, updated_at, snapshot_json, version)
-                VALUES ($id, $status, $objective, $updated_at, $json, 1)
+                INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
+                VALUES ($id, $status, $objective, $source_backlog_item_id, $updated_at, $json, 1)
                 ON CONFLICT(id) DO UPDATE SET
                     status        = excluded.status,
                     objective     = excluded.objective,
+                    source_backlog_item_id = excluded.source_backlog_item_id,
                     snapshot_json = excluded.snapshot_json,
                     version       = goals.version + 1,
                     updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
@@ -375,6 +394,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             cmd.Parameters.AddWithValue("$id", goal.Id);
             cmd.Parameters.AddWithValue("$status", goal.Status.ToString());
             cmd.Parameters.AddWithValue("$objective", goal.Objective);
+            cmd.Parameters.AddWithValue("$source_backlog_item_id", (object?)goal.SourceBacklogItemId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$updated_at", updatedAt);
             cmd.Parameters.AddWithValue("$json", json);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -500,11 +520,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             await using (var writeCmd = conn.CreateCommand())
             {
                 writeCmd.CommandText = """
-                    INSERT INTO goals (id, status, objective, updated_at, snapshot_json, version)
-                    VALUES ($id, $status, $objective, $updated_at, $json, $version)
+                    INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
+                    VALUES ($id, $status, $objective, $source_backlog_item_id, $updated_at, $json, $version)
                     ON CONFLICT(id) DO UPDATE SET
                         status        = excluded.status,
                         objective     = excluded.objective,
+                        source_backlog_item_id = excluded.source_backlog_item_id,
                         snapshot_json = excluded.snapshot_json,
                         version       = excluded.version,
                         updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
@@ -514,6 +535,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 writeCmd.Parameters.AddWithValue("$id", goalId.Value);
                 writeCmd.Parameters.AddWithValue("$status", snapshot.Status.ToString());
                 writeCmd.Parameters.AddWithValue("$objective", snapshot.Objective);
+                writeCmd.Parameters.AddWithValue("$source_backlog_item_id", (object?)snapshot.SourceBacklogItemId ?? DBNull.Value);
                 writeCmd.Parameters.AddWithValue("$updated_at", updatedAt);
                 writeCmd.Parameters.AddWithValue("$json", json);
                 writeCmd.Parameters.AddWithValue("$version", currentVersion + 1);

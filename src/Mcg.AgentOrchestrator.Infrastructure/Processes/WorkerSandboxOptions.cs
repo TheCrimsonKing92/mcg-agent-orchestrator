@@ -1,5 +1,13 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public enum WorkerSandboxProvider
+{
+    Unknown,
+    Codex,
+    Claude,
+    Ollama
+}
+
 /// <summary>
 /// Configuration for the OS-level worker sandbox: when enabled (and on Windows), write-capable
 /// worker dispatches (Developer/Tester) run at Low integrity as the operator account. Mandatory
@@ -8,7 +16,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// by the orchestrator after verified edits. Gated by environment so it is off by default and a
 /// no-op on non-Windows hosts.
 /// </summary>
-public sealed record WorkerSandboxOptions(bool Enabled, string Account, string CredentialTarget)
+public sealed record WorkerSandboxOptions(
+    bool Enabled,
+    string Account,
+    string CredentialTarget)
 {
     public const string EnabledVariable = "MCG_WORKER_SANDBOX";
     public const string AccountVariable = "MCG_WORKER_ACCOUNT";

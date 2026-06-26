@@ -5,10 +5,13 @@ set "MCG_ORCHESTRATOR_REPOSITORY_ROOT=%ROOT%"
 set "LOCK_DIR=%ROOT%.build-lock"
 set "APP_PROJECT=%ROOT%src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj"
 set "APP_DLL=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+set "APP_HEAD=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll.git-head"
 
-:: Up-to-date check -- if App.dll exists and is newer than all source files, skip build entirely.
+:: Up-to-date check -- if App.dll exists, matches the current git HEAD, and is newer than all
+:: source files, skip build entirely. The HEAD marker catches merges where source timestamps do
+:: not reliably make the existing binary look stale.
 if exist "%APP_DLL%" (
-    powershell -NoProfile -Command "$dll=Get-Item '%APP_DLL%';$stale=Get-ChildItem '%ROOT%src' -Recurse -Include *.cs,*.csproj,*.props -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -gt $dll.LastWriteTime} | Select-Object -First 1;if($stale){exit 1}else{exit 0}"
+    powershell -NoProfile -Command "$dll=Get-Item '%APP_DLL%';$gitHead='';try{$gitHead=(& git -C '%ROOT%' rev-parse HEAD 2>$null).Trim()}catch{};$marker='%APP_HEAD%';$headOk=($gitHead -eq '' -or ((Test-Path -LiteralPath $marker) -and ((Get-Content -Raw -LiteralPath $marker).Trim() -eq $gitHead)));$stale=Get-ChildItem '%ROOT%src' -Recurse -Include *.cs,*.csproj,*.props -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -gt $dll.LastWriteTime} | Select-Object -First 1;if($headOk -and -not $stale){exit 0}else{exit 1}"
     if not errorlevel 1 goto run_app
 )
 
@@ -41,6 +44,7 @@ set BUILD_EXIT=%ERRORLEVEL%
 rmdir /s /q "%LOCK_DIR%" 2>nul
 
 if %BUILD_EXIT% neq 0 goto build_failed
+powershell -NoProfile -Command "try{$gitHead=(& git -C '%ROOT%' rev-parse HEAD 2>$null).Trim();if($gitHead){Set-Content -LiteralPath '%APP_HEAD%' -Value $gitHead -NoNewline -Encoding ASCII}}catch{}"
 del "%BUILD_LOG%" 2>nul
 
 :run_app

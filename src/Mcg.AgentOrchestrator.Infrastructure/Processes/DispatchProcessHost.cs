@@ -46,7 +46,8 @@ public static class DispatchProcessHost
         // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP.
         // The worker can only EDIT the worktree (the shared .git stays medium and out of reach); the
         // orchestrator commits the worker's edits afterwards. Default = run at medium integrity.
-        bool SandboxLowIntegrity = false);
+        bool SandboxLowIntegrity = false,
+        WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -90,7 +91,7 @@ public static class DispatchProcessHost
             throw new InvalidOperationException($"Failed to apply Low integrity label to sandbox root '{sandboxRoot}'.");
         }
 
-        SeedCodexAuth(codexHome);
+        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome, parameters.StderrPath);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
@@ -110,6 +111,63 @@ public static class DispatchProcessHost
         {
             startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+    }
+
+    internal static void SeedProviderEnvironment(
+        ProcessStartInfo startInfo,
+        WorkerSandboxProvider provider,
+        string sandboxRoot,
+        string codexHome,
+        string? stderrPath = null)
+    {
+        if (provider == WorkerSandboxProvider.Claude)
+        {
+            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+            return;
+        }
+
+        SeedCodexAuth(codexHome);
+    }
+
+    private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath)
+    {
+        var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
+        Directory.CreateDirectory(claudeConfigDir);
+        var settingsPath = Path.Combine(claudeConfigDir, "settings.json");
+        if (!File.Exists(settingsPath))
+        {
+            File.WriteAllText(settingsPath, "{}\n");
+        }
+
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
+        }
+        else if (!string.IsNullOrWhiteSpace(stderrPath))
+        {
+            AppendDispatchStderrDiagnostic(
+                stderrPath,
+                "Claude worker sandbox diagnostic: ANTHROPIC_API_KEY is not set; Claude may fail to authenticate.");
+        }
+
+        startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
+    }
+
+    private static void AppendDispatchStderrDiagnostic(string stderrPath, string message)
+    {
+        var directory = Path.GetDirectoryName(stderrPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.AppendAllText(stderrPath, message + Environment.NewLine);
+    }
+
+    internal static FileStream OpenWorkerStderrStream(string stderrPath)
+    {
+        return new FileStream(stderrPath, FileMode.Append, FileAccess.Write, FileShare.Read);
     }
 
     internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable)
@@ -414,7 +472,7 @@ public static void DropToLow() {
 
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
             using var stdout = new FileStream(parameters.StdoutPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-            using var stderr = new FileStream(parameters.StderrPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            using var stderr = OpenWorkerStderrStream(parameters.StderrPath);
             using var drainCts = new CancellationTokenSource();
             var copyOut = worker.StandardOutput.BaseStream.CopyToAsync(stdout, drainCts.Token);
             var copyErr = worker.StandardError.BaseStream.CopyToAsync(stderr, drainCts.Token);

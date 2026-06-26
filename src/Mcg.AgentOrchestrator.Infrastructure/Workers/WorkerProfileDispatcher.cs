@@ -401,6 +401,8 @@ public static class WorkerProfileDispatcher
                 continue;
             }
 
+            var dispatchProviderName = ResolveDispatchProviderName(subscriptionModel.Model.ProviderName, profile.Name, null);
+
             results.Add(PrepareTask(
                 kernel,
                 goal,
@@ -410,7 +412,7 @@ public static class WorkerProfileDispatcher
                 workingDirectory,
                 dispatchedAt,
                 BuildSubscriptionTemplateVariables(selection.Agent, subscriptionModel),
-                subscriptionModel.Model.ProviderName,
+                dispatchProviderName,
                 ResolveEffectiveSubscriptionModelName(selection.Agent, subscriptionModel),
                 reasoningEffort,
                 subscriptionModel.Complexity,
@@ -473,11 +475,6 @@ public static class WorkerProfileDispatcher
 
     private static string ResolveDispatchProviderName(string selectedProviderName, string profileName, DispatchModelOverride? modelOverride)
     {
-        if (modelOverride is null)
-        {
-            return selectedProviderName;
-        }
-
         if (profileName.Equals(OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
         {
             return "OpenAI";

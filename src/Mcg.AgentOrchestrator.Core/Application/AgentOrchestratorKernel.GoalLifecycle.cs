@@ -209,6 +209,18 @@ public sealed partial class AgentOrchestratorKernel
         return task.CriterionRetryCount;
     }
 
+    public void RecordAcceptanceFailure(GoalId goalId, IReadOnlyList<string> failedChecks)
+    {
+        var goal = GetGoal(goalId);
+        goal.RecordAcceptanceFailure(failedChecks, _clock.UtcNow);
+    }
+
+    public void ClearAcceptanceFailure(GoalId goalId)
+    {
+        var goal = GetGoal(goalId);
+        goal.ClearAcceptanceFailure();
+    }
+
     public void ClearCriterionRetryFeedback(GoalId goalId, TaskId taskId)
     {
         var goal = GetGoal(goalId);
@@ -404,6 +416,15 @@ public sealed partial class AgentOrchestratorKernel
         return _goals.TryGetValue(goalId, out var goal)
             ? goal
             : throw new KeyNotFoundException($"Goal '{goalId}' was not found.");
+    }
+
+    public Goal? FindGoalBySourceBacklogItemId(string backlogItemId)
+    {
+        if (string.IsNullOrWhiteSpace(backlogItemId))
+            return null;
+
+        return _goals.Values.FirstOrDefault(goal =>
+            string.Equals(goal.SourceBacklogItemId, backlogItemId, StringComparison.Ordinal));
     }
 
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;

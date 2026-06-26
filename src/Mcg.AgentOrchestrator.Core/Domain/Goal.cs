@@ -23,6 +23,8 @@ public sealed class Goal
 
     public RefinedSpec? RefinedSpec { get; private set; }
 
+    public AcceptanceFailureSummary? LatestAcceptanceFailure { get; private set; }
+
     public string? SourceBacklogItemId { get; private set; }
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
@@ -36,6 +38,20 @@ public sealed class Goal
     internal void SetRefinedSpec(RefinedSpec spec) => RefinedSpec = spec;
 
     internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
+
+    internal void RecordAcceptanceFailure(IReadOnlyList<string> failedChecks, DateTimeOffset occurredAt)
+    {
+        var checks = failedChecks
+            .Select(item => item.Trim())
+            .Where(item => item.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        LatestAcceptanceFailure = checks.Length == 0
+            ? null
+            : new AcceptanceFailureSummary(occurredAt, checks);
+    }
+
+    internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
 
@@ -63,7 +79,12 @@ public sealed class Goal
                 RefinedSpec.AcceptanceCriteria.ToList(),
                 RefinedSpec.VerificationClass.ToString(),
                 RefinedSpec.Decisions.Select(d => new RefinedSpecDecisionSnapshot(d.Question, d.Choice, d.Rationale)).ToList(),
-                RefinedSpec.OpenQuestions.Select(q => new RefinedSpecOpenQuestionSnapshot(q.Id, q.Question, q.ForkKind, q.Status, q.Answer)).ToList()));
+                RefinedSpec.OpenQuestions.Select(q => new RefinedSpecOpenQuestionSnapshot(q.Id, q.Question, q.ForkKind, q.Status, q.Answer)).ToList()),
+            LatestAcceptanceFailure is null
+                ? null
+                : new AcceptanceFailureSnapshot(
+                    LatestAcceptanceFailure.OccurredAt,
+                    LatestAcceptanceFailure.FailedChecks.ToList()));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -99,6 +120,11 @@ public sealed class Goal
                 rs.OpenQuestions.Select(q => new RefinedSpecOpenQuestion(q.Id, q.Question, q.ForkKind, q.Status, q.Answer)).ToList()));
         }
 
+        if (snapshot.LatestAcceptanceFailure is { } failure)
+        {
+            goal.RecordAcceptanceFailure(failure.FailedChecks, failure.OccurredAt);
+        }
+
         return goal;
     }
 
@@ -118,3 +144,7 @@ public sealed class Goal
         return value.Trim();
     }
 }
+
+public sealed record AcceptanceFailureSummary(
+    DateTimeOffset OccurredAt,
+    IReadOnlyList<string> FailedChecks);

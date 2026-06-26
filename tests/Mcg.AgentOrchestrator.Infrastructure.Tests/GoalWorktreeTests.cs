@@ -947,6 +947,108 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_rebases_before_verification_and_lands_verified_head")]
+    public void CliAcceptanceRebasesBeforeVerificationAndLandsVerifiedHead()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance rebase ordering test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var staleGoalHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main work");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main work");
+
+            string? verifierHead = null;
+            var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
+            {
+                verifierHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+            });
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+            var landedHead = RunGitOutput(repo, "rev-parse", "HEAD");
+
+            Assert.True(output.Contains("Workspace rebase: Rebased", StringComparison.Ordinal));
+            Assert.Equal(1, fakeVerifier.RunCount);
+            Assert.False(string.IsNullOrWhiteSpace(verifierHead));
+            Assert.NotEqual(staleGoalHead, verifierHead);
+            Assert.Equal(verifierHead, landedHead);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "main-advanced.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_rebase_conflict_blocks_before_verification_and_restores_worktree")]
+    public void CliAcceptanceRebaseConflictBlocksBeforeVerificationAndRestoresWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance rebase conflict test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "seed.txt"), "goal edit");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal edit");
+            var originalGoalHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "main edit");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main edit");
+            var mainHeadBeforeAcceptance = RunGitOutput(repo, "rev-parse", "HEAD");
+
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("Workspace rebase: Rebase", StringComparison.Ordinal));
+            Assert.True(output.Contains("Conflict files:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Acceptance evidence: blocked; merge blocked", StringComparison.Ordinal));
+            Assert.Equal(0, fakeVerifier.RunCount);
+            Assert.Equal(mainHeadBeforeAcceptance, RunGitOutput(repo, "rev-parse", "HEAD"));
+            Assert.Equal(originalGoalHead, RunGitOutput(worktreePath, "rev-parse", "HEAD"));
+            Assert.Equal("goal edit", File.ReadAllText(Path.Combine(worktreePath, "seed.txt")));
+            Assert.Equal("main edit", File.ReadAllText(Path.Combine(repo, "seed.txt")));
+            Assert.Equal(string.Empty, RunGitOutput(worktreePath, "status", "--short"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_lands_when_discord_token_is_invalid")]
     public void CliAcceptanceLandsWhenDiscordTokenIsInvalid()
     {
@@ -1971,6 +2073,46 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_removes_workspace_and_marks_goal_cleaned_up")]
+    public void CliGoalMarkLandedRemovesWorkspaceAndMarksGoalCleanedUp()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Out-of-band landed goal", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "landed.txt"), "landed");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            RunGit(repo, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Assert.True(output.Contains("CleanedUp", StringComparison.Ordinal));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+            Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_safe_auto_stops_before_acceptance")]
     public void CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance()
     {
@@ -2317,6 +2459,77 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_acceptance_failed_retry_clears_completed_task_evidence_before_redispatch")]
+    public void GoalWorktreesAcceptanceFailedRetryClearsCompletedTaskEvidenceBeforeRedispatch()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Retry after acceptance failure", [task]);
+            kernel.ActivateGoal(goal.Id, EchoAgents());
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            var oldDispatch = new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec old-prompt.md",
+                worktree,
+                DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+                BaseCommit: "old-base",
+                ResultCommit: "old-result");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, oldDispatch);
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    1234,
+                    oldDispatch.Command,
+                    worktree,
+                    "old.out.log",
+                    "old.err.log",
+                    "old.exit.txt",
+                    oldDispatch.DispatchedAt,
+                    oldDispatch.DispatchedAt.AddSeconds(5),
+                    0));
+            kernel.RecordDispatchExecutionResult(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(
+                    oldDispatch.Command,
+                    worktree,
+                    0,
+                    "WORKER_RESULT:\nfiles: src/Old.cs\ncommands: old\nEND_WORKER_RESULT",
+                    string.Empty,
+                    oldDispatch.DispatchedAt.AddSeconds(10)));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+
+            kernel.RecordAcceptanceFailure(goal.Id, ["SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"]);
+            kernel.RetryTask(goal.Id, task.Id, "Operator rejection: fix the failing sqlite schema assertion.");
+            var newDispatch = new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec retry-prompt.md",
+                worktree,
+                DateTimeOffset.Parse("2026-06-26T12:05:00Z"),
+                BaseCommit: "retry-base");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, newDispatch);
+
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            Assert.Equal(WorkTaskStatus.Running, task.Status);
+            Assert.Null(task.LastVerification);
+            Assert.Null(task.LastProcess);
+            Assert.Equal(newDispatch, task.LastDispatch);
+            Assert.Equal("codex exec retry-prompt.md", task.LastDispatch!.Command);
+            Assert.Equal("retry-base", task.LastDispatch.BaseCommit);
+            Assert.Null(task.LastDispatch.ResultCommit);
+            Assert.Equal(worktree, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_skips_protected_recorded_worker_process")]
     public void GoalWorktreesRemoveSkipsProtectedRecordedWorkerProcess()
     {
@@ -2567,6 +2780,35 @@ public sealed class GoalWorktreeTests
         {
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
         }
+    }
+
+    private static string RunGitOutput(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)!;
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit(60000);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        }
+
+        return output.Trim();
     }
 
     private static int RunGitExitCode(string workingDirectory, params string[] arguments)

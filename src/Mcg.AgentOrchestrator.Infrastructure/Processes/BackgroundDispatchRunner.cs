@@ -117,7 +117,8 @@ public sealed class BackgroundDispatchRunner
             heartbeatPath,
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
-            SandboxLowIntegrity: useSandbox));
+            SandboxLowIntegrity: useSandbox,
+            Provider: ResolveSandboxProvider(dispatch)));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
@@ -179,6 +180,32 @@ public sealed class BackgroundDispatchRunner
             // Best-effort: if the gate cannot be written, the dispatch host fails closed rather than
             // launching a worker outside the supervisor job.
         }
+    }
+
+    private static WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
+    {
+        if (dispatch.ProviderName?.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) == true ||
+            dispatch.WorkerName.Contains("claude", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.Contains("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerSandboxProvider.Claude;
+        }
+
+        if (dispatch.ProviderName?.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) == true ||
+            dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.Contains("codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerSandboxProvider.Codex;
+        }
+
+        if (dispatch.ProviderName?.Equals("Ollama", StringComparison.OrdinalIgnoreCase) == true ||
+            dispatch.WorkerName.Contains("qwen", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.Contains("qwen", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerSandboxProvider.Ollama;
+        }
+
+        return WorkerSandboxProvider.Unknown;
     }
 
     /// <summary>
@@ -365,8 +392,10 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
+            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(processRecord, standardOutput, standardError);
             if (!worktreeEvidence.IsClean &&
                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                 sandboxCommitBlocked ||
                  worktreeEvidence.HasRelevantCommitAfterDispatch) &&
                 TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
@@ -381,6 +410,13 @@ public sealed class BackgroundDispatchRunner
                     standardErrorDiagnostic ?? string.Empty,
                     "Orchestrator committed the worker's verified worktree edits. " +
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+                if (sandboxCommitBlocked)
+                {
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic,
+                        "Classified worker git metadata write failure as non-fatal; orchestrator commit-on-behalf is the commit path. " +
+                        $"index_lock={TryResolveIndexLockPath(processRecord.WorkingDirectory)}.");
+                }
             }
 
             if (!orchestratorCommitted && !worktreeEvidence.IsClean && exitCode == 0)
@@ -544,6 +580,33 @@ public sealed class BackgroundDispatchRunner
     {
         return HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
             standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasSandboxCommitBlockedEvidence(
+        TaskProcessRecord processRecord,
+        string standardOutput,
+        string standardError)
+    {
+        var verification = new TaskVerificationRecord(
+            processRecord.Command,
+            processRecord.WorkingDirectory,
+            1,
+            standardOutput,
+            standardError,
+            DateTimeOffset.UtcNow);
+        return DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification);
+    }
+
+    private static string TryResolveIndexLockPath(string workingDirectory)
+    {
+        try
+        {
+            return GoalWorktrees.InspectGitMetadataAccess(workingDirectory).IndexLockPath;
+        }
+        catch
+        {
+            return Path.Combine(workingDirectory, ".git", "index.lock");
+        }
     }
 
     private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput, string standardError)

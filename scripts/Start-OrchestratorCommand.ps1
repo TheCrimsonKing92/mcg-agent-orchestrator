@@ -1,5 +1,6 @@
 param(
     [string]$Name = "command",
+    [string]$AppDll,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -8,14 +9,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$Arguments = @($Arguments)
 if ($Arguments.Count -eq 0) {
     throw "Usage: .\scripts\Start-OrchestratorCommand.ps1 [-Name <name>] <orchestrator-args...>"
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$appDll = Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
-if (-not (Test-Path -LiteralPath $appDll)) {
-    throw "App DLL not found. Build the app first: $appDll"
+$resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
+    Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+} else {
+    [System.IO.Path]::GetFullPath($AppDll)
+}
+if (-not (Test-Path -LiteralPath $resolvedAppDll)) {
+    throw "App DLL not found. Build the app first: $resolvedAppDll"
 }
 
 $logsRoot = Join-Path $repoRoot ".orchestrator\logs"
@@ -36,20 +42,34 @@ function ConvertTo-SafeName {
 
 $stamp = Get-Date -Format "yyyyMMddHHmmss"
 $safeName = ConvertTo-SafeName $Name
-$stdoutPath = Join-Path $logsRoot "operator-$safeName-$stamp.out.log"
-$stderrPath = Join-Path $logsRoot "operator-$safeName-$stamp.err.log"
-$processArguments = @($appDll) + $Arguments
+$stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
+$stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
+$processArguments = @($resolvedAppDll) + $Arguments
 
-$process = Start-Process `
-    -WindowStyle Hidden `
-    -PassThru `
-    -FilePath "dotnet" `
-    -WorkingDirectory $repoRoot `
-    -ArgumentList $processArguments `
-    -RedirectStandardOutput $stdoutPath `
-    -RedirectStandardError $stderrPath
+$previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
+$previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
+try {
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $stdoutPath, "Process")
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $stderrPath, "Process")
 
-Write-Output "pid=$($process.Id)"
-Write-Output "stdout=$stdoutPath"
-Write-Output "stderr=$stderrPath"
-Write-Output "args=$($Arguments -join ' ')"
+    $process = Start-Process `
+        -WindowStyle Hidden `
+        -PassThru `
+        -FilePath "dotnet" `
+        -WorkingDirectory $repoRoot `
+        -ArgumentList $processArguments `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath
+}
+finally {
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $previousStdoutLogPath, "Process")
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $previousStderrLogPath, "Process")
+}
+
+[pscustomobject]@{
+    pid = [int]$process.Id
+    logPath = $stdoutPath
+    stdoutPath = $stdoutPath
+    stderrPath = $stderrPath
+    args = @($Arguments)
+} | ConvertTo-Json -Compress

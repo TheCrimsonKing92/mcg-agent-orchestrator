@@ -20,6 +20,8 @@ Use this skill when the task changes or validates the orchestrator by running wo
 
 The lower-level manual verbs (`workspace create` → `subscription-dispatch` → `start-dispatch` → `refresh-dispatch` → `acceptance` → `workspace remove`) remain for granular or fallback control only; under the conductor those steps are automatic. See [`docs/operator-runbook.md`](../../../docs/operator-runbook.md).
 
+If a retry leaves a goal `Completed` while one or more tasks are still `Assigned`, try `recover` first. If the conductor remains blocked by the terminal status, the repo-bounded recovery helper is `.\scripts\Invoke-RepoScript.ps1 scripts\Set-OrchestratorGoalStatus.ps1 --status Active <goal>`; use it only as operator repair for that desync.
+
 ## Operator Gate
 
 Before accepting a goal:

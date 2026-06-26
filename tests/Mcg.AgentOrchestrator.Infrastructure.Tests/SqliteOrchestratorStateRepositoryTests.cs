@@ -35,7 +35,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["ix_model_fit_history_model", "ix_model_fit_history_role"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix_model_fit_history_%' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
+            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
     }
 
@@ -64,6 +64,35 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(GoalStatus.Active, restored.Goals.Single().Status);
         Assert.Equal("Run dotnet test", restored.GetTask(goal.Id, task.Id).VerificationPlan);
         Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_acceptance_retry_context")]
+    public async Task AcceptanceRetryContextRoundtripsThroughSqlite()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Retry acceptance failure");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var failingCheck = "SqliteOrchestratorStateRepositoryTests.Acceptance_retry_check_failed";
+        var operatorFeedback = "Operator rejection: fix the SQLite acceptance retry context before reporting complete.";
+        kernel.RecordAcceptanceFailure(goal.Id, [failingCheck]);
+        kernel.RetryTask(goal.Id, task.Id, operatorFeedback);
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        var restoredGoal = restored.Goals.Single();
+        Assert.NotNull(restoredGoal.LatestAcceptanceFailure);
+        Assert.Contains(failingCheck, restoredGoal.LatestAcceptanceFailure.FailedChecks);
+        var restoredBrief = restored.BuildTaskBrief(goal.Id, task.Id).Content;
+        Assert.Contains(failingCheck, restoredBrief);
+        Assert.Contains(operatorFeedback, restoredBrief);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_per_goal_upsert_preserves_unmodified_goal")]
@@ -379,9 +408,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         static void Exec(SqliteConnection c, string sql) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
         Exec(setupConn, "PRAGMA journal_mode=WAL");
         Exec(setupConn, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-        Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
+        Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, source_backlog_item_id TEXT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE human_input_requests (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE model_fit_history (goal_id TEXT NOT NULL, task_id TEXT NOT NULL, role TEXT NOT NULL, provider_name TEXT NOT NULL, model_name TEXT NOT NULL, complexity TEXT NULL, task_shape TEXT NULL, outcome TEXT NOT NULL, self_rating TEXT NOT NULL, timestamp TEXT NOT NULL, PRIMARY KEY (goal_id, task_id, timestamp))");
+        Exec(setupConn, "CREATE INDEX ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
         setupConn.Close();
 

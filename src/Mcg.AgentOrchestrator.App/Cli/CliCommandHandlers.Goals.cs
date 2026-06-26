@@ -1372,6 +1372,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 {
     var createGoal = HasCliConfirmation(parts, "--create-goal");
     var createSimpleGoal = HasCliConfirmation(parts, "--create-simple-goal");
+    var forceReclaim = HasCliConfirmation(parts, "--force-reclaim");
     if (createGoal && createSimpleGoal)
     {
         throw new ArgumentException("Use either --create-goal or --create-simple-goal, not both.");
@@ -1386,6 +1387,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
     {
         var created = 0;
+        var matched = 0;
         foreach (var filter in batchFilters)
         {
             var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 1);
@@ -1396,6 +1398,25 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             }
 
             var batchItem = itemPlan.Items.Single();
+            matched++;
+            if (TryReuseBacklogIntakeGoal(context, batchItem, out var reusedBatchGoal) ||
+                TryReuseBacklogIntakeRecord(context, batchItem, out reusedBatchGoal))
+            {
+                if (reusedBatchGoal is not null)
+                {
+                    context.CurrentGoal = reusedBatchGoal;
+                    Console.WriteLine($"Backlog slice '{batchItem.Heading}' already has goal {reusedBatchGoal.Id.Value[..8]}; no new goal created.");
+                }
+                continue;
+            }
+
+            var batchReservation = ReserveBacklogIntake(context, batchItem, forceReclaim);
+            if (batchReservation.Kind != BacklogIntakeReservationKind.Acquired)
+            {
+                PrintBacklogIntakeRecord(batchReservation.Record, context.Kernel);
+                continue;
+            }
+
             var batchGoal = createSimpleGoal
                 ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
                 : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter);
@@ -1406,19 +1427,20 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             }
 
             context.CurrentGoal = batchGoal;
+            PersistBacklogIntakeGoal(context, batchItem, batchGoal);
             created++;
             Console.WriteLine(createSimpleGoal
                 ? $"Created simple goal from backlog slice '{batchItem.Heading}'."
                 : $"Created five-role goal from backlog slice '{batchItem.Heading}'.");
         }
 
-        if (created == 0)
+        if (matched == 0)
         {
             throw new InvalidOperationException("No backlog items matched the requested filters.");
         }
 
         Console.WriteLine($"Created {created} goal(s) from {batchFilters.Count} requested backlog slice(s).");
-        return true;
+        return created > 0;
     }
 
     var headingFilter = parts
@@ -1452,6 +1474,24 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     var item = plan.Items.Single();
     var backlogItemId = item.Id;
+    if (TryReuseBacklogIntakeGoal(context, item, out var existingGoal) ||
+        TryReuseBacklogIntakeRecord(context, item, out existingGoal))
+    {
+        if (existingGoal is not null)
+        {
+            context.CurrentGoal = existingGoal;
+            Console.WriteLine($"Backlog slice already has goal {existingGoal.Id.Value[..8]}; no new goal created.");
+            ConsoleViews.PrintGoal(existingGoal);
+        }
+        return false;
+    }
+
+    var reservation = ReserveBacklogIntake(context, item, forceReclaim);
+    if (reservation.Kind != BacklogIntakeReservationKind.Acquired)
+    {
+        PrintBacklogIntakeRecord(reservation.Record, context.Kernel);
+        return false;
+    }
 
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
@@ -1462,9 +1502,81 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, backlogItemId);
     }
 
+    PersistBacklogIntakeGoal(context, item, context.CurrentGoal);
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
+}
+
+private static bool TryReuseBacklogIntakeGoal(
+    CliExecutionContext context,
+    BacklogIntakeItem item,
+    [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
+{
+    existingGoal = string.IsNullOrWhiteSpace(item.Id)
+        ? null
+        : context.Kernel.FindGoalBySourceBacklogItemId(item.Id);
+    return existingGoal is not null;
+}
+
+private static bool TryReuseBacklogIntakeRecord(
+    CliExecutionContext context,
+    BacklogIntakeItem item,
+    [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
+{
+    existingGoal = null;
+    if (string.IsNullOrWhiteSpace(item.Id))
+        return false;
+
+    var record = new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).Get(item.Id);
+    if (record is null || string.IsNullOrWhiteSpace(record.GoalId))
+        return false;
+
+    existingGoal = context.Kernel.Goals.FirstOrDefault(goal =>
+        goal.Id.Value.Equals(record.GoalId, StringComparison.Ordinal));
+    return existingGoal is not null;
+}
+
+private static BacklogIntakeReservation ReserveBacklogIntake(
+    CliExecutionContext context,
+    BacklogIntakeItem item,
+    bool forceReclaim)
+{
+    return new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath)
+        .Reserve(item.Id, item.Heading, forceReclaim);
+}
+
+private static void PersistBacklogIntakeGoal(CliExecutionContext context, BacklogIntakeItem item, Goal goal)
+{
+    if (string.IsNullOrWhiteSpace(item.Id))
+        return;
+
+    context.PersistCheckpoint(context.Kernel);
+    new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).MarkGoalCreated(item.Id, goal.Id.Value);
+}
+
+private static void PrintBacklogIntakeRecord(BacklogIntakeRecord record, AgentOrchestratorKernel kernel)
+{
+    Console.WriteLine($"Backlog intake for source {record.SourceBacklogItemId} is {record.Status}; no new goal created.");
+    if (!string.IsNullOrWhiteSpace(record.GoalId))
+    {
+        Console.WriteLine($"Goal: {record.GoalId[..Math.Min(8, record.GoalId.Length)]}");
+        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value.Equals(record.GoalId, StringComparison.Ordinal));
+        if (goal is not null)
+            ConsoleViews.PrintGoal(goal);
+        Console.WriteLine($"Recommended next command: next {record.GoalId[..Math.Min(8, record.GoalId.Length)]} --full");
+        return;
+    }
+
+    Console.WriteLine($"Started: {record.StartedAt:O}");
+    Console.WriteLine($"Last heartbeat: {record.LastHeartbeatAt:O}");
+    if (record.OwnerProcessId is int ownerPid)
+        Console.WriteLine($"Owner PID: {ownerPid}");
+    if (!string.IsNullOrWhiteSpace(record.StdoutPath))
+        Console.WriteLine($"Log: {record.StdoutPath}");
+    if (!string.IsNullOrWhiteSpace(record.StderrPath))
+        Console.WriteLine($"Error log: {record.StderrPath}");
+    Console.WriteLine($"Recommended next command: retry after the owner exits, or rerun backlog-intake \"{record.Heading}\" --force-reclaim after confirming it is stale.");
 }
 
 private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IReadOnlyList<string> parts)
@@ -2041,9 +2153,27 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
     var worktreePath = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
-    var testedWorktreeHead = worktreePath is null ? null : ResolveWorktreeHead(worktreePath);
+    string? testedWorktreeHead = null;
     if (worktreePath is not null)
     {
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var needsRebase = GitCli.Run(context.Workspace.ExecutionDirectory, "merge-base", "--is-ancestor", "HEAD", branch).ExitCode != 0;
+        if (needsRebase)
+        {
+            var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+            Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
+
+            if (!rebase.UpdatedBranch)
+            {
+                var failedChecks = new[] { $"workspace rebase: {rebase.Status.ToString().ToLowerInvariant()}" };
+                context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+                context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
+                Console.WriteLine("Acceptance evidence: blocked; merge blocked");
+                return false;
+            }
+        }
+
+        testedWorktreeHead = ResolveWorktreeHead(worktreePath);
         var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
         if (skipVerify)
         {
@@ -2084,6 +2214,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             .Where(c => !c.Passed && !c.Advisory)
             .Select(c => c.Name)
             .ToList() ?? ["acceptance evidence blocked"];
+        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         return false;
     }
@@ -2114,18 +2245,6 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
             var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-            if (merge is { FastForwarded: false })
-            {
-                // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
-                // onto main and retry the ff instead of punting the merge to the operator. A rebase
-                // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
-                var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
-                Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
-                if (rebase.UpdatedBranch)
-                {
-                    merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-                }
-            }
 
             if (merge is null)
             {
@@ -2144,10 +2263,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     {
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
+        {
+            context.Kernel.ClearAcceptanceFailure(goal.Id);
             context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+        }
         return mergeCommit.FastForwarded;
     }
 
+    context.Kernel.ClearAcceptanceFailure(goal.Id);
     context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
     return true;
 }
