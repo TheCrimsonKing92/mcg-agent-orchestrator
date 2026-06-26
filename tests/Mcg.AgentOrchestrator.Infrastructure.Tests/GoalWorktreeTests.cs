@@ -74,6 +74,71 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_git_metadata_access_resolves_linked_index_lock_path")]
+    public void GoalWorktreesGitMetadataAccessResolvesLinkedIndexLockPath()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            var access = GoalWorktrees.InspectGitMetadataAccess(
+                path,
+                new WorkerSandboxOptions(Enabled: false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+
+            var expected = Path.GetFullPath(Path.Combine(
+                repo,
+                ".git",
+                "worktrees",
+                goalId.Value[..8],
+                "index.lock"));
+            Assert.Equal(NormalizePath(expected), NormalizePath(access.IndexLockPath));
+            Assert.Equal(Path.GetFullPath(path), access.WorktreePath);
+            Assert.True(access.CurrentProcessCanWriteIndexLock, access.Error ?? "index.lock probe failed");
+            Assert.True(access.WorkerCanWriteIndexLock, access.WorkerWriteDisposition);
+            Assert.Equal("same-as-orchestrator", access.WorkerWriteDisposition);
+            Assert.Contains("orchestrator commits", access.CommitContract);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_git_metadata_access_marks_low_integrity_worker_non_committing")]
+    public void GoalWorktreesGitMetadataAccessMarksLowIntegrityWorkerNonCommitting()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+
+            var access = GoalWorktrees.InspectGitMetadataAccess(
+                path,
+                new WorkerSandboxOptions(Enabled: OperatingSystem.IsWindows(), WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(access.WorkerCanWriteIndexLock);
+                Assert.Equal("blocked-by-low-integrity", access.WorkerWriteDisposition);
+            }
+            else
+            {
+                Assert.Equal("same-as-orchestrator", access.WorkerWriteDisposition);
+            }
+
+            Assert.EndsWith(
+                NormalizePathSeparators(Path.Combine(".git", "worktrees", goalId.Value[..8], "index.lock")),
+                NormalizePath(access.IndexLockPath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_resolve_all_matches_per_goal_try_resolve")]
     public void GoalWorktreesResolveAllMatchesPerGoalTryResolve()
     {
@@ -2532,6 +2597,13 @@ public sealed class GoalWorktreeTests
         process.WaitForExit(60000);
         return process.ExitCode;
     }
+
+    private static string NormalizePath(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+
+    private static string NormalizePathSeparators(string path) =>
+        path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
 
     [Xunit.Fact(DisplayName = "DeleteDirectory_removes_tree_containing_read_only_files")]
     public void DeleteDirectoryRemovesTreeContainingReadOnlyFiles()
