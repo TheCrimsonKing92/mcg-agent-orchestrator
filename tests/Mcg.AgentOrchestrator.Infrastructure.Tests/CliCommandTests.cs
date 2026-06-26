@@ -5171,6 +5171,7 @@ public sealed class CliCommandTests
             completedGoalIds.Add(completed.Id.Value);
         }
 
+        var cleanedUp = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cleaned-up audit goal");
         var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active conductor goal");
         var failed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Failed conductor goal");
         kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "Still needs conductor/operator attention");
@@ -5179,6 +5180,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
         var repository = new InMemoryTransactionalStateRepository(kernel);
+        repository.CleanedUpGoalIds.Add(cleanedUp.Id.Value);
 
         CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             ["conduct", "--loop", "--max-iterations", "1"],
@@ -5192,6 +5194,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(0, repository.LoadCount);
         Xunit.Assert.True(repository.LoadGoalsCount >= 1);
         Xunit.Assert.DoesNotContain(repository.LoadedGoalIds, id => completedGoalIds.Contains(id));
+        Xunit.Assert.DoesNotContain(cleanedUp.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(failed.Id.Value, repository.LoadedGoalIds);
         var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
@@ -5334,6 +5337,8 @@ public sealed class CliCommandTests
 
         public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
 
+        public HashSet<string> CleanedUpGoalIds { get; } = new(StringComparer.Ordinal);
+
         public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
@@ -5366,17 +5371,17 @@ public sealed class CliCommandTests
             Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
                 .Select(goal => new GoalSummary(
                     goal.Id.Value,
-                    goal.Status.ToString(),
+                    CleanedUpGoalIds.Contains(goal.Id.Value) ? "CleanedUp" : goal.Status.ToString(),
                     goal.Objective,
                     DateTimeOffset.UtcNow.ToString("O")))
                 .ToList());
 
         public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
-                .Where(goal => goal.Status != GoalStatus.Completed)
+                .Where(goal => goal.Status != GoalStatus.Completed && !CleanedUpGoalIds.Contains(goal.Id.Value))
                 .Select(goal => new GoalSummary(
                     goal.Id.Value,
-                    goal.Status.ToString(),
+                    CleanedUpGoalIds.Contains(goal.Id.Value) ? "CleanedUp" : goal.Status.ToString(),
                     goal.Objective,
                     DateTimeOffset.UtcNow.ToString("O")))
                 .ToList());
