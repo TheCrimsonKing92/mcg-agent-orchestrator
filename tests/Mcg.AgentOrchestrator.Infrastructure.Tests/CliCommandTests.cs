@@ -3947,6 +3947,33 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"does not belong to goal '{target.Id.Value}'", ex.Message);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_global_multi_word_answer_preserves_compatibility")]
+    public async Task CliAttentionAnswerGlobalMultiWordAnswerPreservesCompatibility()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal(new GoalId("a1a1a1a1111111111111111111111111"), "A");
+        var goalB = kernel.CreateGoal(new GoalId("b2b2b2b2222222222222222222222222"), "B");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goalA.Id.Value, "Target global clarification", "Target body", $"spec-clarification:{goalA.Id.Value}:global:66666666");
+        for (var index = 0; index < 10; index++)
+        {
+            _ = await store.RaiseAsync(CollaborationItemType.Clarification, goalB.Id.Value, $"Unrelated clarification {index}", "Other body", $"spec-clarification:{goalB.Id.Value}:global:{index:00000000}");
+        }
+
+        var output = ExecuteCliAndCapture(
+            ["attention", "answer", "66666666", "Use", "the", "global", "answer."],
+            kernel,
+            workspace);
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Equal($"Answered clarification '66666666'.{Environment.NewLine}", output);
+        Xunit.Assert.DoesNotContain("Unrelated clarification", output);
+        Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{goalA.Id.Value}:global:66666666");
+        Xunit.Assert.Equal(10, queue.Count);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_show_global_lists_full_queue")]
     public async Task CliAttentionShowGlobalListsFullQueue()
     {

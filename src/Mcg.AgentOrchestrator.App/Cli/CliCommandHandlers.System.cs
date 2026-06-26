@@ -41,6 +41,25 @@ internal static partial class CliCommandHandlers
         };
     }
 
+    private static bool TryResolveAttentionGoalForAnswer(AgentOrchestratorKernel kernel, string goalPrefix, out Goal? goal)
+    {
+        var matches = kernel.Goals
+            .Where(candidate => candidate.Id.Value.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            goal = null;
+            return false;
+        }
+
+        if (matches.Count > 1)
+            throw new InvalidOperationException($"Goal prefix '{goalPrefix}' is ambiguous ({matches.Count} matches).");
+
+        goal = matches[0];
+        return true;
+    }
+
     private static CollaborationItem ResolveClarificationByShortId(
         IReadOnlyList<CollaborationItem> clarifications,
         string id,
@@ -137,8 +156,8 @@ internal static partial class CliCommandHandlers
                     if (parts.Count < 4)
                         throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
-                    var scoped = parts.Count >= 5;
-                    var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
+                    Goal? goal = null;
+                    var scoped = parts.Count >= 5 && TryResolveAttentionGoalForAnswer(context.Kernel, parts[2], out goal);
                     var id = scoped ? parts[3] : parts[2];
                     var answer = string.Join(' ', parts.Skip(scoped ? 4 : 3));
                     var clarification = scoped
