@@ -36,6 +36,38 @@ public sealed class WorkerDispatchTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Headless_monitor_goal_preflight_does_not_start_paid_worker_dispatch")]
+    public async Task HeadlessMonitorGoalPreflightDoesNotStartPaidWorkerDispatch()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Do paid subscription work.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Observe paid-capable goal without dispatch", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    using var output = new StringWriter();
+
+    await GoalMonitoringSubscriptionCommand.RunAsync(
+        ["monitor-goal", goal.Id.Value[..8], "--once"],
+        output,
+        kernel,
+        workspace,
+        [agent],
+        WorkerProfileCatalog.Default());
+
+    Assert.Contains("event: goal.snapshot", output.ToString());
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+    Assert.False(Directory.Exists(Path.Combine(workspace.OrchestratorDirectory, "prompts")));
+}
+
     [Xunit.Fact(DisplayName = "WorkerCommandTemplate_expands_profile_template_and_writes_prompt")]
     public void WorkerCommandTemplateExpandsProfileTemplateAndWritesPrompt()
 {
