@@ -1091,6 +1091,55 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_records_provider_from_claude_launcher")]
+    public void WorkerProfileDispatcherReadyBatchRecordsProviderFromClaudeLauncher()
+{
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Dispatch Claude write worker",
+        [new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-haiku-4-5"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        goal.Tasks.Single(),
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        dispatchedAt);
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Single(results);
+    var developer = goal.Tasks.Single();
+    Assert.Equal("claude-cli", developer.LastDispatch!.WorkerName);
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains("claude --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", StringComparison.Ordinal));
+    Assert.Equal("Anthropic", developer.LastDispatch.ProviderName);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_escalates_default_openai_agents_for_complex_subscription_tasks")]
     public void WorkerProfileDispatcherEscalatesDefaultOpenAiAgentsForComplexSubscriptionTasks()
 {
