@@ -56,6 +56,16 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             : args;
     }
 
+    if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
+    {
+        if (args.Length >= 5 && args[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
+        {
+            return [command, args[1], args[2], args[3], string.Join(' ', args.Skip(4))];
+        }
+
+        return args;
+    }
+
     if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeBacklogTextCommandWithFileFlag(args, "--body-file");

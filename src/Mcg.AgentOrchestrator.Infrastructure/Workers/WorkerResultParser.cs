@@ -12,7 +12,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class WorkerResultParser
 {
     internal static readonly string[] RequiredFields =
-        ["files", "commands", "tests", "commit", "blockers", "model_fit", "skills", "confidence"];
+        ["files", "commands", "tests", "blockers", "model_fit", "skills", "confidence"];
 
     // Strips *, #, ` from strings for opener/end-marker matching.
     private static readonly Regex MarkdownCharsPattern =
@@ -29,7 +29,7 @@ internal static class WorkerResultParser
     /// <list type="bullet">
     ///   <item>A block opener is found but required fields are missing (substance gap, not format).</item>
     ///   <item>No opener and the field scan cannot recover the minimal viable receipt
-    ///         (commit + files + tests).</item>
+    ///         (files + tests).</item>
     /// </list>
     /// </summary>
     public static bool TryParseFields(
@@ -169,9 +169,8 @@ internal static class WorkerResultParser
             }
         }
 
-        // Minimal viable receipt: commit, files, and tests must be recoverable.
-        return fields.ContainsKey("commit") &&
-               fields.ContainsKey("files") &&
+        // Minimal viable receipt: files and tests must be recoverable. commit is advisory.
+        return fields.ContainsKey("files") &&
                fields.ContainsKey("tests");
     }
 

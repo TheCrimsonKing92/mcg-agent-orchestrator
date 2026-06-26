@@ -14,6 +14,8 @@ All commands must minimize output by default.
 - Prefer bounded `rg`/`rg --files` for discovery. Use exact paths or symbols once known.
 - Exclude generated/noisy trees when surveying source using `-g "!**/bin/**"` style globs for `bin`, `obj`, `.scratch`, `.orchestrator-prototype`, `TestResults`, and `playwright-report`.
 - Do not run broad repo-root `rg` unless the path and pattern are tight.
+- For checked-in PowerShell scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts from ad-hoc shell one-liners.
+- If direct `git` commands prompt, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 <git-args...>`; it runs git from the repository root through the same repo-bounded script prefix.
 - Avoid `rg -C` until match count is known. Prefer `rg -n --count PATTERN path`, then inspect exact files/symbols.
 - Do not dump full files unless known small. Prefer targeted search or narrow line windows.
 - For `git diff`, use `git diff --stat` first, then inspect one file at a time.
@@ -107,6 +109,7 @@ Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the
 
 - **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so a raw `dotnet test` in a worktree no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
 - At a landing, the conductor records the `DOGFOOD_LOG` entry itself; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
+- Daemon mode is for a small, curated active-goal set. Do not point it at a stale/open backlog wholesale; use `backlog-list` and filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal`, then keep the first daemon runs bounded with `--max-duration`.
 
 **Manual lower-level verbs (fallback / granular control only — prefer `conduct --loop`):** `subscription-dispatch <n>` → `start-dispatch <n> --confirm-dispatch-start` (the cost guard blocks ONLY on an *anomalous* prompt — disproportionate to task complexity, ≥2× the per-complexity ceiling, or batch total ≥2× the batch ceiling; routine/legitimately-large Complex briefs proceed silently, so `--confirm-large-paid-subscription-start` is needed only when a genuinely bloated prompt trips it) → wait on the printed pid → `refresh-dispatch <n>` → operator gate → `accept`. `acceptance`/`accept` fast-forwards only when main has not advanced mid-goal; otherwise run the printed `git merge goal/<prefix>`. ApiOnly tasks (e.g. the local Reviewer) run via `run <n>` with no file access — output reflects prompt text, not branch state; close HUMAN_INPUT with `answer <request-id>`, then `verify-manual <n> passed "<evidence incl. Model fit: line>"`. To put an operator note into an undispatched task's brief: `progress <n> running "<note>"` → `progress <n> failed "<reset>"` → `retry <n> "<msg>"`.
 

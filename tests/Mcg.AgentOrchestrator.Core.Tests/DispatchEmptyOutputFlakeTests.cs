@@ -51,4 +51,25 @@ public sealed class DispatchEmptyOutputFlakeTests
 
         Xunit.Assert.True(isFlake);
     }
+
+    // Reproduces backlog 58407042: a worker exits 0 and its heartbeat reports stdout bytes (it streamed output),
+    // but the out.log file read races the exit flush and momentarily reports empty (StandardOutputPath unset here).
+    // It must NOT be a transient empty-output flake — the heartbeat stdout-byte count is the flush-race-proof
+    // signal of real output. (A genuine stall reports zero heartbeat bytes and stays a flake, per the test above.)
+    [Xunit.Fact(DisplayName = "IsTransientEmptyOutputDispatchFlake_false_for_exit0_with_heartbeat_stdout_bytes_and_empty_outlog")]
+    public void ReturnsFalseForExit0WithHeartbeatStdoutBytesAndEmptyOutLog()
+    {
+        var verification = new TaskVerificationRecord(
+            "claude -p",
+            "C:\\repo",
+            0,
+            string.Empty,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            HeartbeatStandardOutputBytes: 4228);
+
+        var isFlake = DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification);
+
+        Xunit.Assert.False(isFlake);
+    }
 }

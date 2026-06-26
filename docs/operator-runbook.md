@@ -2,7 +2,7 @@
 
 **If you are a new AI instance about to operate this orchestrator, read this first.** It is the canonical guide for *driving, observing, and recovering* goals. It supersedes the older "Core Loop" in `README.md` (manual verbs) and the manual sequence in `.agents/skills/orchestrator-dogfood/SKILL.md` — those are fallbacks, not the default path.
 
-All commands below are invoked through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
+Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). For checked-in helper scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts. Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
 
 ---
 
@@ -38,7 +38,7 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 | `--policy <P>` | autonomy policy: `Conservative` (default) \| `Permissive` \| `Manual` |
 | `--poll-seconds <n>` | seconds between ticks (15 is fine) |
 | `--max-duration <s>` / `--max-iterations <n>` | bound the run |
-| `--daemon` | long-running daemon mode |
+| `--daemon` | persistent mode for controlled active-goal intake; stays alive on an empty backlog and picks up goals submitted after the loop starts |
 | `--dashboard-url <url>` | attach to a running dashboard |
 
 **Stop a loop** by creating a `.conduct-stop` file in the repo root (graceful) or Ctrl-C. The loop is now interrupt-safe — a stop no longer cancels in-flight worker tasks.
@@ -88,6 +88,19 @@ acceptance suite output → git diff / commits in the worktree → verification 
 
 Read the loop's own output too — `TICK`, `held`, `escalated`, `LOOP_STOP` lines tell you exactly what each goal did. Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
 
+For long-running conductor/acceptance commands, keep the operator seat free by launching a bounded background command and polling:
+
+```
+.\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <goal>-acceptance acceptance <goal> --autonomy supervised-auto
+.\scripts\Invoke-RepoScript.ps1 scripts\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix operator -TaskPrefix <goal>-acceptance -TailLines 20
+```
+
+For worker logs, use the same bounded helper instead of ad hoc `.orchestrator` PowerShell reads:
+
+```
+.\scripts\Invoke-RepoScript.ps1 scripts\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> -TaskPrefix <task> -TailLines 20
+```
+
 ---
 
 ## 5. Stuck-goal playbook (symptom → first command)
@@ -103,6 +116,9 @@ This is the most important section. Match the **observable symptom** to its caus
 | `escalated at Verified - Acceptance verification failed` | The acceptance build/test suite failed against the worktree (a real defect, or a worker-written test bug). | Inspect the worktree, run the suite there (`scripts/Invoke-TestSummary.ps1 -Target <worktree project>`), fix + commit in the worktree, then `acceptance <goal>`. |
 | `acceptance <goal>` prints **"not accepted"** with `Tasks passed: N/5` | A task isn't verified yet (often a verification-role task). | `status <goal>` → if a Tester/Reviewer is `Failed`, `recover` it and re-run; the goal reconciles `Failed → Active`. |
 | Goal in `Failed` lifecycle but the work is committed in the worktree | A stage process was orphaned (e.g. a loop crash). The commit is safe. | `recover <goal> "<note>"` then re-run the loop, or `acceptance <goal>` to reconcile + land. |
+| Worker exits 0, worktree has uncommitted changes, and logs say `index.lock: Permission denied` under `.git\worktrees\<goal>` | Low-integrity worker could edit files but could not write git metadata, so conductor commit-on-behalf did not complete. | Inspect the diff, run focused tests, then from a normal-integrity operator shell run the `git -C .orchestrator-worktrees/<goal> add ...` and `git -C .orchestrator-worktrees/<goal> commit -m "<message>"` steps as separate commands; use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 ...` if direct git prompts. Record `progress <goal> <task> completed "<evidence>"` + `verify-manual <goal> <task> passed "<tests; Model fit: ...>"`, then `acceptance <goal>`. |
+| Codex task fails with `exec error: Access is denied. (os error 5)` and stderr names `C:\Program Files\WindowsApps\...\pwsh.exe`, or fails immediately with `unexpected argument '<word>' found` after falling back to Windows PowerShell | Codex can run under same-user Low IL, but WindowsApps/package PowerShell activation can fail; Windows PowerShell 5.1 can also split `(Get-Content -Raw prompt)` into multiple native arguments. | Treat this as a launcher regression, not proof that Low IL is unusable. Verify `WorkerShell` pins a real PowerShell 7 host, preferring `%LOCALAPPDATA%\Programs\PowerShell\7\pwsh.exe`; extract/install a real filesystem `pwsh.exe` there if only the Store alias exists. Verify `DispatchProcessHost` removes WindowsApps from Low-IL `PATH`, then rerun focused `WorkerShellTests` / `DispatchProcessHostTests` before falling back to another Developer provider. |
+| Low-IL dispatch shows no stdout/stderr files and no heartbeat for minutes, while process inspection shows `icacls ... /setintegritylevel ... /T` under `__dispatch-run` | The sandbox is still applying Mandatory Integrity labels before the worker launch. Older builds redirected `icacls` output without draining it, causing pipe backpressure, 120s startup timeouts, orphaned `icacls`, and duplicate retries; a completed `icacls` can also return nonzero on a previously used worktree. | Stop the loop with `.conduct-stop`, then stop only the exact orphan dispatch PIDs if the task was already retried. Verify `DispatchProcessHost.SetLowIntegrity` drains `icacls`, kills it on timeout, treats completed nonzero exits as non-fatal, and emits a `preparing-sandbox` heartbeat before restarting the conductor. |
 | Goal genuinely dead / wrong, can't proceed | — | `abandon-goal <goal> <single-token-reason> --confirm-goal-abandon` (remove its worktree first if a Low-IL `.mcg-sandbox` orphan blocks it). |
 | Worker log shows exit 0 and file changes exist in `.orchestrator-worktrees/<prefix>` but the task is still `[Dispatched]` / reconcile loop shows `held` indefinitely | Orphaned dispatch reconcile — loop crashed after worker exited. The work is safe in the worktree. | `recover <goal> "<note>"` resets the stale dispatch → then `acceptance <goal>` (or re-run the loop) to read the worktree commits. |
 | Acceptance build fails with `CS2012` / `MSB3491` — "file is being used by another process" | Roslyn / VBCSCompiler build server holds the output DLL. Transient; not a code defect. | `dotnet build-server shutdown` (releases the file handles), then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
@@ -138,7 +154,7 @@ Created
 
 Off-path states you will see in escalations: `AwaitingClarification` (refiner raised questions), `AwaitingHumanInput` (conductor needs an operator decision), `Failed` (a task exhausted retries), `Blocked` (operator hold). These stop the normal sequence; use §5 to clear them.
 
-**Loop-exit condition.** The loop halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* the loop started are **not** picked up — restart `conduct --loop` to process them.
+**Loop-exit condition.** A plain `conduct --loop` batch run halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* a plain loop started are **not** picked up — restart `conduct --loop` to process them. Use `conduct --loop --daemon` only for controlled active-goal intake: it stays alive on an empty backlog and picks up goals submitted later, but it is not a safe "drain the backlog" mode.
 
 ### 6.2 Orchestrator-commit-on-behalf + merge to main
 
@@ -150,6 +166,8 @@ Integrate goal/<prefix>: <goal-title-slug>
 ```
 
 The first commit is made on `goal/<prefix>` inside the worktree. The second merges that branch into `main` via the `integration` branch (fast-forward). If you see both commits for a goal, the loop ran to completion for it. If you see only the first, the acceptance gate or change-risk gate stopped the landing — `status <goal>` and `next <goal> --full` explain why.
+
+If the worker ran at low integrity and git metadata under `.git\worktrees\<prefix>` rejects `index.lock`, the worker may exit 0 with a correct dirty worktree and no commit. Treat that as operator recovery, not an implementation failure: inspect the diff, run focused tests, commit the worker changes from a normal-integrity shell, then record manual verification and run acceptance.
 
 ### 6.3 Concurrency caps
 
@@ -182,6 +200,8 @@ Durable state lives in stores, never in `.scratch`.
 ## 8. Operating discipline (hard-won)
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
+- **Backlog is candidate input, not an automatic queue.** A stale/open backlog can contain obsolete, overlapping, or underspecified work. Before daemon mode, curate a small active set with `backlog-list` + filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal`; avoid unfiltered `goal-plan --create-*` or multi-filter batch creation unless you have reviewed dependencies and file scopes. Keep daemon runs bounded with `--max-duration` until the active set is proven healthy.
+- **Keep long waits out of the foreground.** Use `scripts\Start-OrchestratorCommand.ps1` through `scripts\Invoke-RepoScript.ps1` for long acceptance/conductor runs, then poll `next <goal> --full`, `Find-OrchestratorLocks.ps1`, and `Show-OrchestratorLogArtifacts.ps1`. Avoid raw `Start-Sleep` loops and broad `.orchestrator` filesystem commands.
 - **State writes vs a running loop.** Light writes (`attention answer`, `backlog-add` — the latter on a separate `backlog.db`) are safe concurrent with the loop. But a burst of HEAVY state-`db` writes — `goal --brief-file`, `abandon-goal`, `park-goal` (each does a whole-kernel load+save) — racing a write-heavy tick can exhaust the SQLite busy-retry and **crash** the loop (observed twice, 2026-06-25). Serialize those *between* loop runs (stop → mutate → restart). Read-only inspection (`status`, `next`, git on worktrees, loop output) is always free.
 - **Scope the test suite to the changed project**, not the whole solution; run it foreground (or poll). Use `scripts/Invoke-TestSummary.ps1 -Target <project>` for compact results.
 - **Provider requirements:** `claude-cli` needs a valid model id (`claude-sonnet-4-6`/`sonnet`/`haiku`/`opus`) **and** a permission mode (the default profile carries both). `codex-cli` on a ChatGPT account accepts `gpt-5.5`. API runs (`run`/`api-run`) have **no file access** — embed needed data in the task description.

@@ -83,8 +83,14 @@ public static class DispatchFailureClassifier
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
+        // exit 0 with evidence the worker actually produced output is never a transient empty-output flake.
+        // The heartbeat stdout-byte count is the flush-race-proof signal: a worker that streamed bytes per its
+        // heartbeat genuinely ran (the out.log file read can race the exit flush and momentarily report empty,
+        // which mis-flaked successful exit-0 workers ~21x — backlog 58407042). A genuine exit-0 STALL reports
+        // zero heartbeat bytes and no artifact, so it still falls through to the flake path for failover.
         if (verification.ExitCode == 0 &&
-            HasArtifactEvidence(verification.WorkerResultPresent, verification.HasCommittedChanges))
+            (HasArtifactEvidence(verification.WorkerResultPresent, verification.HasCommittedChanges) ||
+             verification.HeartbeatStandardOutputBytes > 0))
         {
             return false;
         }

@@ -6,21 +6,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalRefinementTests
 {
-    // --- Fallback when no model binding configured ---
+    // --- Binding selection and configuration failures ---
 
-    [Xunit.Fact(DisplayName = "GoalRefinementService_falls_back_to_minimal_spec_when_no_model_binding")]
-    public async Task FallsBackToMinimalSpecWhenNoModelBinding()
+    [Xunit.Fact(DisplayName = "GoalRefinementService_throws_when_no_refiner_binding")]
+    public async Task ThrowsWhenNoRefinerBinding()
     {
         var (service, kernel, goalId, _) = BuildScenario(
             ModelFunctionCatalog.Empty,
             responseJson: "{}");
 
-        var result = await service.RefineAsync(kernel, goalId);
+        var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.RefineAsync(kernel, goalId));
 
-        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
-        var goal = kernel.GetGoal(goalId);
-        Xunit.Assert.NotNull(goal.RefinedSpec);
-        Xunit.Assert.Contains("Implement:", goal.RefinedSpec!.BehavioralContract);
+        Xunit.Assert.Contains(ModelFunctionPurposes.SpecRefiner, ex.Message);
+        Xunit.Assert.Contains("<none>", ex.Message);
     }
 
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_refines_with_fallback_before_activation_and_planner_brief")]
@@ -29,6 +28,12 @@ public sealed class GoalRefinementTests
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var providers = new InMemoryModelProviderRegistry([]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
         var kernel = new AgentOrchestratorKernel();
 
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(
@@ -44,6 +49,91 @@ public sealed class GoalRefinementTests
         var brief = kernel.BuildTaskBrief(goal.Id, planner.Id).Content;
         Xunit.Assert.Contains("Refined Spec", brief);
         Xunit.Assert.Contains(goal.RefinedSpec.BehavioralContract, brief);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_selects_named_refiner_binding_when_not_first")]
+    public async Task SelectsNamedRefinerBindingWhenNotFirst()
+    {
+        var json = """
+            ```json
+            {
+              "behavioralContract": "The intended refiner model was used.",
+              "acceptanceCriteria": ["Selected by name"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var provider = new FakeSmokeProvider(text: json, providerName: "fake-refiner");
+        var registry = new InMemoryModelProviderRegistry([provider]);
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "wrong-first-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: "wrong-refiner"),
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "intended-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]);
+        var service = new GoalRefinementService(
+            registry,
+            catalog,
+            new FakeCollaborationItemStore(),
+            new SpecRefinerPrecedentStore(Path.Combine(CreateTempDirectory(), "precedents.json")));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Refine with intended model");
+
+        var result = await service.RefineAsync(kernel, goal.Id);
+
+        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
+        Xunit.Assert.Equal("intended-model", provider.LastRequest!.Options.ModelName);
+        Xunit.Assert.Equal("The intended refiner model was used.", kernel.GetGoal(goal.Id).RefinedSpec!.BehavioralContract);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_throws_when_refiner_binding_missing_among_other_bindings")]
+    public async Task ThrowsWhenRefinerBindingMissingAmongOtherBindings()
+    {
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "wrong-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: "wrong-refiner")
+        ]);
+        var (service, kernel, goalId, _) = BuildScenario(catalog);
+
+        var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.RefineAsync(kernel, goalId));
+
+        Xunit.Assert.Contains(ModelFunctionPurposes.SpecRefiner, ex.Message);
+        Xunit.Assert.Contains("wrong-refiner", ex.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_throws_when_refiner_binding_is_duplicated")]
+    public async Task ThrowsWhenRefinerBindingIsDuplicated()
+    {
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "first-model", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new ModelFunctionBinding(
+                "other-purpose",
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "second-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]);
+        var (service, kernel, goalId, _) = BuildScenario(catalog);
+
+        var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.RefineAsync(kernel, goalId));
+
+        Xunit.Assert.Contains(ModelFunctionPurposes.SpecRefiner, ex.Message);
+        Xunit.Assert.Contains("Multiple model-function bindings", ex.Message);
     }
 
     // --- Clean auto-refine (no ask forks) ---

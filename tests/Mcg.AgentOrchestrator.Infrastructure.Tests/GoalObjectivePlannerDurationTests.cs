@@ -42,7 +42,7 @@ public sealed class GoalObjectivePlannerDurationTests
     public void CliDurationsPrintsLegitimateRuntimeAndOverhead()
     {
         var root = InfrastructureTestSupport.CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var clock = new TestClock(new DateTimeOffset(2026, 06, 19, 12, 00, 00, TimeSpan.Zero));
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Implement a complex report", [new TaskSpec(TaskId.New(), "Implement src/App.cs with tests and integration coverage", AgentRole.Developer)]);
@@ -96,7 +96,7 @@ public sealed class GoalObjectivePlannerDurationTests
     public void SimpleGoalPreflightUsesHistoryEstimateWithoutStartingPaidWorker()
     {
         var root = InfrastructureTestSupport.CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var clock = new TestClock(new DateTimeOffset(2026, 06, 19, 12, 00, 00, TimeSpan.Zero));
         var kernel = new AgentOrchestratorKernel(clock);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;

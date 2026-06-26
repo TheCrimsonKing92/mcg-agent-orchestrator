@@ -47,7 +47,11 @@ public sealed record TaskVerificationRecord(
     string? StandardOutputPath = null,
     string? StandardErrorPath = null,
     bool WorkerResultPresent = false,
-    bool HasCommittedChanges = false)
+    bool HasCommittedChanges = false,
+    // Worker-self-reported stdout byte count from the live heartbeat, captured at dispatch-record time.
+    // Reliable even when the out.log file read races the exit flush (the empty-output flake bug): a worker
+    // that streamed bytes per its heartbeat genuinely produced output and must not be re-dispatched as a flake.
+    long? HeartbeatStandardOutputBytes = null)
 {
     public bool Succeeded => ExitCode == 0;
 }

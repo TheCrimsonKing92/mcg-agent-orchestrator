@@ -6,8 +6,16 @@ public sealed class WorkerShellTests
     [Xunit.Fact(DisplayName = "WorkerShell_resolves_a_powershell_host")]
     public void WorkerShellResolvesAPowerShellHost()
     {
-        // Resolves cross-platform pwsh when present, else Windows PowerShell on Windows.
-        Assert.True(WorkerShell.Executable is "pwsh" or "powershell.exe");
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.True(Path.IsPathFullyQualified(WorkerShell.Executable));
+            Assert.True(File.Exists(WorkerShell.Executable));
+            Assert.False(WorkerShell.IsWindowsAppsPath(WorkerShell.Executable));
+            return;
+        }
+
+        // Non-Windows resolves cross-platform pwsh when present, else leaves a concrete launch error.
+        Assert.True(WorkerShell.Executable.EndsWith("pwsh", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "WorkerShell_base_arguments_end_with_command")]

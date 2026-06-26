@@ -40,6 +40,24 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_path_removes_windowsapps_and_prepends_shell_dir")]
+    public void LowIntegrityPathRemovesWindowsAppsAndPrependsShellDir()
+    {
+        var shellDir = Path.Combine(Path.GetTempPath(), "real-powershell");
+        var shell = Path.Combine(shellDir, OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh");
+        var windowsApps = Path.Combine(Path.GetTempPath(), "Microsoft", "WindowsApps");
+        var toolDir = Path.Combine(Path.GetTempPath(), "tooling");
+        var originalPath = string.Join(Path.PathSeparator, windowsApps, toolDir, shellDir);
+
+        var result = DispatchProcessHost.BuildLowIntegrityPath(originalPath, shell);
+        var entries = result.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(shellDir, entries[0]);
+        Assert.Contains(toolDir, entries);
+        Assert.DoesNotContain(entries, DispatchProcessHost.IsWindowsAppsPathSegment);
+        Assert.Equal(1, entries.Count(entry => string.Equals(entry, shellDir, StringComparison.OrdinalIgnoreCase)));
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_exit_file_when_grandchild_holds_pipe_after_worker_exits")]
     public void DispatchProcessHostWritesExitFileWhenGrandchildHoldsPipeAfterWorkerExits()
     {
@@ -149,6 +167,81 @@ public sealed class DispatchProcessHostTests
     public void HasProgressedDetectsByteGrowth()
     {
         Assert.True(DispatchProcessHost.HasProgressed(0, 10, 0, 0, 50));
+    }
+
+    [Xunit.Fact(DisplayName = "WaitForIntegrityLabeler_kills_helper_when_timeout_expires")]
+    public void WaitForIntegrityLabelerKillsTimedOutHelper()
+    {
+        using var process = StartLongRunningHelper();
+
+        var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromMilliseconds(100));
+
+        Assert.False(completed);
+        Assert.True(process.HasExited);
+    }
+
+    [Xunit.Fact(DisplayName = "WaitForIntegrityLabeler_returns_true_when_helper_exits_nonzero")]
+    public void WaitForIntegrityLabelerReturnsTrueWhenHelperExitsNonZero()
+    {
+        using var process = StartNonZeroHelper();
+
+        var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromSeconds(5));
+
+        Assert.True(completed);
+        Assert.True(process.HasExited);
+        Assert.NotEqual(0, process.ExitCode);
+    }
+
+    private static Process StartLongRunningHelper()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "ping.exe" : "sleep",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("-n");
+            startInfo.ArgumentList.Add("30");
+            startInfo.ArgumentList.Add("127.0.0.1");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("30");
+        }
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start long-running helper.");
+    }
+
+    private static Process StartNonZeroHelper()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "sh",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add("exit /b 5");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add("exit 5");
+        }
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start nonzero helper.");
     }
 
     private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)

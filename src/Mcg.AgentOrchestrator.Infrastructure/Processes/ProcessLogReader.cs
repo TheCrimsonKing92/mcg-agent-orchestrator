@@ -26,6 +26,7 @@ public sealed record DispatchHeartbeatStatus(
     string? UnavailableReason,
     int ProcessId,
     int? ChildProcessId,
+    IReadOnlyList<int> OwnedProcessIds,
     string State,
     DateTimeOffset? LastObservedAt,
     DateTimeOffset? LastProgressAt,
@@ -75,6 +76,7 @@ public static class ProcessLogReader
                 null,
                 GetInt32(root, "pid"),
                 GetNullableInt32(root, "childPid"),
+                GetInt32Array(root, "ownedPids"),
                 GetString(root, "state"),
                 lastObservedAt,
                 lastProgressAt,
@@ -105,7 +107,7 @@ public static class ProcessLogReader
 
     private static DispatchHeartbeatStatus Unavailable(string path, string reason)
     {
-        return new DispatchHeartbeatStatus(path, false, reason, 0, null, "unknown", null, null, null, null, 0, 0);
+        return new DispatchHeartbeatStatus(path, false, reason, 0, null, [], "unknown", null, null, null, null, 0, 0);
     }
 
     private static bool TryGetDateTimeOffset(JsonElement root, string propertyName, out DateTimeOffset value)
@@ -145,5 +147,24 @@ public static class ProcessLogReader
         return root.TryGetProperty(propertyName, out var property) && property.TryGetInt64(out var value)
             ? value
             : 0;
+    }
+
+    private static IReadOnlyList<int> GetInt32Array(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var values = new List<int>();
+        foreach (var item in property.EnumerateArray())
+        {
+            if (item.TryGetInt32(out var value))
+            {
+                values.Add(value);
+            }
+        }
+
+        return values;
     }
 }

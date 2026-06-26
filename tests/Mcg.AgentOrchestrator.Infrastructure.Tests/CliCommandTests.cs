@@ -14,7 +14,7 @@ public sealed class CliCommandTests
     public void CliRunBlocksSubscriptionCapableAgentsWithoutCallingProvider()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid accidental CLI API spend", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -59,7 +59,7 @@ public sealed class CliCommandTests
     public void CliApiRunExecutesSubscriptionCapableAgentsWhenExplicit()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Allow explicit CLI API execution", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -213,7 +213,7 @@ public sealed class CliCommandTests
     public void CliAutonomyPoliciesListsNamedModes()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -239,7 +239,7 @@ public sealed class CliCommandTests
     public void CliObserveAutonomyBlocksWorkerStart()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Observe only", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -348,7 +348,7 @@ public sealed class CliCommandTests
     public void CliNextPrintsGoalHealthRecommendation()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Expose goal health", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -416,7 +416,7 @@ public sealed class CliCommandTests
 
         Add dashboard subscription-backed operator inbox for failed preflights and acceptance gates. Done when dashboard evidence is visible.
         """);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -458,7 +458,7 @@ public sealed class CliCommandTests
 
         Add deterministic build and test broker for CS2012 and isolated artifacts. Done when focused tests prove isolation.
         """);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -491,7 +491,7 @@ public sealed class CliCommandTests
     {
         var root = CreateTempDirectory();
         WritePlanningBacklog(root);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -526,7 +526,7 @@ public sealed class CliCommandTests
     public void CliGoalPrintsObjectivePlanBeforeTaskCreation()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -558,7 +558,7 @@ public sealed class CliCommandTests
     public void CliGoalRejectsAmbiguousObjectiveWithoutMutatingState()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -603,7 +603,7 @@ public sealed class CliCommandTests
     public void CliIntentTemplatePrintsFeatureObjectiveWithoutMutatingState()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -637,7 +637,7 @@ public sealed class CliCommandTests
     public void CliIntentTemplateCreatesSimpleGoalFromDashboardTemplate()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -727,7 +727,7 @@ public sealed class CliCommandTests
     {
         var root = CreateTempDirectory();
         WritePlanningBacklog(root);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -758,7 +758,7 @@ public sealed class CliCommandTests
     public void CliGoalRecoveryReportsStaleProcessAndResumeCommands()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Run interrupted worker", AgentRole.Developer);
         var goal = kernel.CreateGoal("Recover interrupted goal", [task]);
@@ -796,7 +796,7 @@ public sealed class CliCommandTests
     public void HistoricalDogfoodEvaluationScoresRecordedGoalStateWithoutStartingWorkers()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement without proof", AgentRole.Developer);
         var goal = kernel.CreateGoal("Evaluate historical dogfood scenario", [task]);
@@ -818,7 +818,7 @@ public sealed class CliCommandTests
     public void CliDogfoodEvalPrintsReplayableMetricsWithoutMutatingState()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement without proof", AgentRole.Developer);
         var goal = kernel.CreateGoal("Evaluate historical dogfood scenario", [task]);
@@ -854,7 +854,7 @@ public sealed class CliCommandTests
     public void CliGoalRecoveryReportsCompletedTaskMissingVerification()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Verify me", AgentRole.Tester);
         var goal = kernel.CreateGoal("Recover missing verification", [task]);
@@ -880,7 +880,7 @@ public sealed class CliCommandTests
     public void CliSupervisorDryRunReportsRefreshProposal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Refresh running worker", AgentRole.Planner);
         var goal = kernel.CreateGoal("Supervise running goal", [task]);
@@ -914,7 +914,7 @@ public sealed class CliCommandTests
     public void CliSupervisorApplySafeRefreshesStaleProcess()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Refresh stale worker", AgentRole.Planner);
         var goal = kernel.CreateGoal("Apply supervisor refresh", [task]);
@@ -951,7 +951,7 @@ public sealed class CliCommandTests
     public void CliSupervisorApplySafeRedelegatesRecoverableStall()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Recover stalled worker", AgentRole.Planner);
         var goal = kernel.CreateGoal("Apply supervisor failover", [task]);
@@ -1001,7 +1001,7 @@ public sealed class CliCommandTests
     public void CliDrainGoalsDryRunReportsSubscriptionAndOperatorGates()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var subscriptionGoal = kernel.CreateGoal("Drain subscription work", [new TaskSpec(TaskId.New(), "Inspect docs/feature.md", AgentRole.Planner)]);
         var verificationTask = new TaskSpec(TaskId.New(), "Implement without verification", AgentRole.Developer);
@@ -1053,7 +1053,7 @@ public sealed class CliCommandTests
     public void CliDrainGoalsLoadsPersistedPolicyAndBlocksDisallowedStarts()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
         File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, GoalDrainPolicyStore.FileName), """
         {
@@ -1096,7 +1096,7 @@ public sealed class CliCommandTests
     public void GoalDrainPolicyScheduledWindowsHoldStartsOutsideAllowedTime()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
         File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, GoalDrainPolicyStore.FileName), """
         {
@@ -1163,7 +1163,7 @@ public sealed class CliCommandTests
     public void CliDrainGoalsApplyRequiresExplicitConfirmations()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Drain guarded", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Planner)]);
         IReadOnlyList<AgentDefinition> agents = [SubscriptionPlanner("planner", "Planner")];
@@ -1189,7 +1189,7 @@ public sealed class CliCommandTests
     public void CliDrainGoalsApplyRunsSafeSupervisorActionsWithoutCrossingGates()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Refresh stale worker", AgentRole.Planner);
         var goal = kernel.CreateGoal("Drain safe supervisor", [task]);
@@ -1224,7 +1224,7 @@ public sealed class CliCommandTests
     public void CliFailureTriageClassifiesCs2012WithAllowedRemediation()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Verify locked build output", AgentRole.Tester);
         var goal = kernel.CreateGoal("Triage CS2012", [task]);
@@ -1264,7 +1264,7 @@ public sealed class CliCommandTests
     public void CliFailureTriageClassifiesProviderConnectivityWithFailover()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Recover provider connection failure", AgentRole.Planner);
         var goal = kernel.CreateGoal("Triage provider failover", [task]);
@@ -1307,7 +1307,7 @@ public sealed class CliCommandTests
     public void CliFailureTriageClassifiesProviderModelRejectionWithFailover()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Recover unsupported provider model", AgentRole.Planner);
         var goal = kernel.CreateGoal("Triage provider model rejection", [task]);
@@ -1350,7 +1350,7 @@ public sealed class CliCommandTests
     public void CliRetentionPlanKeepsActiveGoalArtifactsAsDryRun()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement active work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Retention active", [task]);
@@ -1384,7 +1384,7 @@ public sealed class CliCommandTests
     public void CliRetentionPlanArchivesAbandonedGoalEvidenceAndDeletesOrphanedBuildLease()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Fail work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Retention abandoned", [task]);
@@ -1428,7 +1428,7 @@ public sealed class CliCommandTests
     public void CliOperatorInboxReportsAndAcknowledgesItems()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement inbox smoke", AgentRole.Developer);
         var goal = kernel.CreateGoal("Operator inbox smoke", [task]);
@@ -1560,7 +1560,7 @@ public sealed class CliCommandTests
             RunGit(root, "add", "-A");
             RunGit(root, "commit", "-m", "Seed");
 
-            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var workspace = CreateRefinedWorkspace(root);
             var kernel = new AgentOrchestratorKernel();
             var existing = kernel.CreateGoal(
                 "Existing active change src/Conflict.cs",
@@ -1620,7 +1620,7 @@ public sealed class CliCommandTests
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
 
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Change shared infrastructure", AgentRole.Developer);
         var goal = kernel.CreateGoal("Recover classified diff", [task]);
@@ -1685,7 +1685,7 @@ public sealed class CliCommandTests
     public void CliGoalRecoveryReportsInterruptedOperationJournal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Recover interrupted operation", [
             new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)
@@ -1715,7 +1715,7 @@ public sealed class CliCommandTests
     public void CliGoalRecoveryReportsOrphanedBuildLeaseCleanup()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Recover orphaned build lease", [
             new TaskSpec(TaskId.New(), "Inspect", AgentRole.Developer)
@@ -1753,7 +1753,7 @@ public sealed class CliCommandTests
     public void CliBuildLeaseCleanupRequiresConfirmationAndDeletesOrphanedLease()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Clean orphaned build lease", [
             new TaskSpec(TaskId.New(), "Inspect", AgentRole.Developer)
@@ -1847,7 +1847,7 @@ public sealed class CliCommandTests
     public void CliRunGoalBlocksFileWorkWithoutWorkspaceBeforeDispatch()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Implement src/Mcg.AgentOrchestrator.App/Feature.cs", [
             new TaskSpec(TaskId.New(), "Implement src/Mcg.AgentOrchestrator.App/Feature.cs", AgentRole.Developer)
@@ -1882,7 +1882,7 @@ public sealed class CliCommandTests
         File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -1930,7 +1930,7 @@ public sealed class CliCommandTests
     public void CliSubscriptionDispatchCanTargetNonLatestGoal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var olderGoal = kernel.CreateGoal(
             "Keep older worker reachable",
@@ -1975,7 +1975,7 @@ public sealed class CliCommandTests
     public void CliSubscriptionDispatchGoalFlagTargetsNamedGoalOverCurrent()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var olderGoal = kernel.CreateGoal(
             "Keep older worker reachable",
@@ -2020,7 +2020,7 @@ public sealed class CliCommandTests
     public void CliSubscriptionDispatchAlreadyVerifiedTaskThrowsWithGoalContext()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Target goal",
@@ -2070,7 +2070,7 @@ public sealed class CliCommandTests
     public void CliLogsStreamArgIsNotMisinterpretedAsGoalPrefix()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Read stdout logs", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = [];
@@ -2143,7 +2143,7 @@ public sealed class CliCommandTests
     public void CliApiRunBlocksPaidProviderWithoutConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid accidental paid API execution", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -2187,7 +2187,7 @@ public sealed class CliCommandTests
     public void CliApiRunExecutesPaidProviderWithConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Allow confirmed paid API execution", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -2223,7 +2223,7 @@ public sealed class CliCommandTests
     public void CliApiRunBlocksPriorOverkillPaidModelWithoutLargePromptConfirm()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var priorTask = new TaskSpec(TaskId.New(), "Update the old label.", AgentRole.Developer);
         var nextTask = new TaskSpec(TaskId.New(), "Update the next label.", AgentRole.Developer);
@@ -2278,7 +2278,7 @@ public sealed class CliCommandTests
     public void CliApiRunBlocksLargePaidPromptWithoutConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Design and implement a production multi-tenant distributed architecture " + new string('o', 5000),
@@ -2333,7 +2333,7 @@ public sealed class CliCommandTests
     public void CliApiRunBlocksComplexPaidModelWithoutConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Plan architecture work",
@@ -2386,7 +2386,7 @@ public sealed class CliCommandTests
     public void CliRunAllowsLocalProviderWithoutPaidConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Allow local API execution", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -2421,7 +2421,7 @@ public sealed class CliCommandTests
     public void CliApiRunBlocksSubscriptionCapableAgentsAfterDispatchEvidence()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid duplicate API execution after subscription work", [task]);
@@ -2470,7 +2470,7 @@ public sealed class CliCommandTests
     public void CliAdvanceSubscriptionRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid accidental subscription handoff", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -2513,7 +2513,7 @@ public sealed class CliCommandTests
     public void CliStartSubscriptionReadyRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid accidental batch subscription start", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -2556,7 +2556,7 @@ public sealed class CliCommandTests
     public void CliRunGoalRequiresConfirmBatchStartFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid accidental sequential subscription start", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Planner)]);
         var agent = new AgentDefinition(
@@ -2599,7 +2599,7 @@ public sealed class CliCommandTests
     public void CliStartDispatchBlocksLargePaidSubscriptionPromptWithoutConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid accidentally starting a large paid prompt", [task]);
@@ -2655,7 +2655,7 @@ public sealed class CliCommandTests
     public void CliProfileDispatchAllowsComplexPaidSubscriptionStartUnderSizeThreshold()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Plan architecture work",
@@ -2703,7 +2703,7 @@ public sealed class CliCommandTests
     public void CliExecuteDispatchBlocksLargePaidSubscriptionPromptWithoutConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid accidentally executing a large paid prompt", [task]);
@@ -2759,7 +2759,7 @@ public sealed class CliCommandTests
     public void CliAdvanceSubscriptionBlocksLargePaidPreparedPromptWithoutConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Run prepared paid work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid advance starting a large paid prompt", [task]);
@@ -2943,7 +2943,7 @@ public sealed class CliCommandTests
     public void CliExecuteDispatchRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid accidental foreground process start", [task]);
@@ -2990,7 +2990,7 @@ public sealed class CliCommandTests
     public void CliStartDispatchRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid accidental background process start", [task]);
@@ -3037,7 +3037,7 @@ public sealed class CliCommandTests
     public void CliStartDispatchesRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Avoid accidental batch process start", [task]);
@@ -3084,7 +3084,7 @@ public sealed class CliCommandTests
     public void CliProviderSmokeAllRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
@@ -3117,7 +3117,7 @@ public sealed class CliCommandTests
     public void CliPaidProviderSmokeRequiresConfirmFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider()]);
@@ -3150,7 +3150,7 @@ public sealed class CliCommandTests
     public void CliWorkerProfileCheckValidatesActiveSubscriptionRoutes()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents =
         [
@@ -3191,7 +3191,7 @@ public sealed class CliCommandTests
     public void CliRetryRequiresMessageWithoutClearingEvidence()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Avoid evidence-free retry", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -3238,7 +3238,7 @@ public sealed class CliCommandTests
     public void CliNotePreservesTaskAndAllowsSubscriptionDispatchAndRetry()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Keep guidance status-neutral", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -3315,7 +3315,7 @@ public sealed class CliCommandTests
         var lettersPrefixId = new GoalId("abcdef12" + new string('0', 24));
 
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var numericGoal = kernel.CreateGoal(numericPrefixId, "All-numeric prefix goal", [new TaskSpec(TaskId.New(), "Do numeric goal work", AgentRole.Developer)]);
         var lettersGoal = kernel.CreateGoal(lettersPrefixId, "Letters prefix goal", [new TaskSpec(TaskId.New(), "Do letters goal work", AgentRole.Developer)]);
@@ -3375,7 +3375,7 @@ public sealed class CliCommandTests
     public void CliReDelegateReassignsOrphanedTaskAndSubscriptionDispatchUsesNewAgent()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Recover orphaned assignment", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var oldAgent = new AgentDefinition(
@@ -3436,7 +3436,7 @@ public sealed class CliCommandTests
     public void CliReDelegateRefusesRunningTaskWithCancelOrRefreshGuidance()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Do not move running work", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -3472,7 +3472,7 @@ public sealed class CliCommandTests
     {
         var root = CreateTempDirectory();
         Directory.CreateDirectory(Path.Combine(root, "repo"));
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Review subscription limits", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -3555,7 +3555,7 @@ public sealed class CliCommandTests
     public void CliAgentCommandCreatesAgentWithComplexModelFromFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3582,7 +3582,7 @@ public sealed class CliCommandTests
     public void CliAgentCommandPinsSubscriptionModelFromFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3607,7 +3607,7 @@ public sealed class CliCommandTests
     public void CliAgentCommandReplacesExistingRole()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3633,7 +3633,7 @@ public sealed class CliCommandTests
     public void CliAgentAddPreservesPrimaryAndAddsSameRoleAlternate()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3779,6 +3779,31 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(["recover", "abc123ef", "reconcile after crash"], multi);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_normalizes_one_shot_subcommands")]
+    public void CliAttentionNormalizesOneShotSubcommands()
+    {
+        var show = CliArgumentParser.NormalizeArgs(["attention", "show", "abc123ef"]);
+        var dismiss = CliArgumentParser.NormalizeArgs(["attention", "dismiss", "abc123ef"]);
+        var answer = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", "abc123ef", "391ce87f", "Use", "a", "static", "helper."]);
+
+        Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
+        Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_splits_interactive_subcommands")]
+    public void CliAttentionSplitsInteractiveSubcommands()
+    {
+        var show = CliArgumentParser.SplitCommand("attention show abc123ef");
+        var dismiss = CliArgumentParser.SplitCommand("attention dismiss abc123ef");
+        var answer = CliArgumentParser.SplitCommand("attention answer abc123ef 391ce87f Use a static helper.");
+
+        Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
+        Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_task_commands_normalize_one_shot_legacy_task_notes")]
     public void CliTaskCommandsNormalizeOneShotLegacyTaskNotes()
     {
@@ -3795,7 +3820,7 @@ public sealed class CliCommandTests
     public void CliSimpleGoalWithAlternateDeveloperUsesFirstPrimary()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3827,7 +3852,7 @@ public sealed class CliCommandTests
     public void CliAgentCommandUsesDefaultComplexModelWhenFlagOmitted()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3854,7 +3879,7 @@ public sealed class CliCommandTests
     public void CliAgentCommandRejectsComplexModelFlagWithoutValue()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -3886,7 +3911,7 @@ public sealed class CliCommandTests
     public void CliCancelGoalRequiresConfirmationForActiveGoalAndRecordsReason()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Stop stale validation", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -3934,7 +3959,7 @@ public sealed class CliCommandTests
     public void CliAbandonGoalPrintsDryRunWithoutMutatingState()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Abandon dry run", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -3968,7 +3993,7 @@ public sealed class CliCommandTests
     public void CliParkGoalRequiresConfirmationAndCreatesResumeGate()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Park interrupted work", [task]);
@@ -4029,7 +4054,7 @@ public sealed class CliCommandTests
         File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Add bad file", AgentRole.Developer);
         var goal = kernel.CreateGoal("Accepted bad goal", [task]);
@@ -4087,7 +4112,7 @@ public sealed class CliCommandTests
         File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Abandon with workspace", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -4125,7 +4150,7 @@ public sealed class CliCommandTests
     public void CliAbandonGoalConfirmedCancelsRunningDispatchRecords()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Abandon blocked", [task]);
@@ -4153,6 +4178,19 @@ public sealed class CliCommandTests
         Xunit.Assert.False(task.LastProcess!.IsRunning);
         Xunit.Assert.Contains("RunningDispatches: Keep", output);
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled);
+    }
+
+    private static OrchestratorWorkspace CreateRefinedWorkspace(string root)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        return workspace;
     }
 
     private static void WritePlanningBacklog(string root)
@@ -4269,7 +4307,7 @@ public sealed class CliCommandTests
     public void CliSubscriptionDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("One-step subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -4314,7 +4352,7 @@ public sealed class CliCommandTests
     public void CliSubscriptionDispatchWithoutConfirmDispatchStartOnlyPrepares()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Prepare-only subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -4355,7 +4393,7 @@ public sealed class CliCommandTests
         // check when no goal worktree has been created yet (EnsureGoalWorkspaceForDispatch is a
         // no-op outside a real git repo, so the working directory falls back to root).
         File.WriteAllText(Path.Combine(root, ".git"), "gitdir: fake");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var agent = new AgentDefinition(
             new AgentId("developer"),
@@ -4402,7 +4440,7 @@ public sealed class CliCommandTests
     public void CliGoalRoleFlagsAssignNamedAgentsAtCreation()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
             .AddOrReplaceById(TestAgent("planner-alt", AgentRole.Planner))
@@ -4451,7 +4489,7 @@ public sealed class CliCommandTests
     public void CliGoalRoleFlagsLeaveOmittedRolesOnDefaults()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
             .AddOrReplaceById(TestAgent("planner-alt", AgentRole.Planner))
@@ -4479,7 +4517,7 @@ public sealed class CliCommandTests
     public void CliGoalRoleFlagUnknownAgentErrorsClearly()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -4503,7 +4541,7 @@ public sealed class CliCommandTests
     public void CliSimpleGoalDeveloperFlagAssignsNamedAgentAtCreation()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
             .AddOrReplaceById(TestAgent("developer-alt", AgentRole.Developer))
@@ -4530,7 +4568,7 @@ public sealed class CliCommandTests
     public void CliGoalSimpleAliasForwardsDeveloperFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
             .AddOrReplaceById(TestAgent("developer-alt", AgentRole.Developer))
@@ -4557,7 +4595,7 @@ public sealed class CliCommandTests
     public void CliSimpleGoalWithoutDispatchOnlyCreatesGoal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -4585,7 +4623,7 @@ public sealed class CliCommandTests
         var briefContent = "Implement src/Mcg.AgentOrchestrator.App/Cli/CliArgumentParser.NormalizeArgs.cs with --brief-file flag support and tests coverage.\n\nMulti-line brief content that would overflow an inline CLI argument.";
         var briefPath = Path.Combine(root, "brief.md");
         File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -4613,7 +4651,7 @@ public sealed class CliCommandTests
         var bodyContent = "Add file-backed backlog body support.\n\nMulti-line item body that would overflow an inline CLI argument.";
         var bodyPath = Path.Combine(root, "body.md");
         File.WriteAllText(bodyPath, bodyContent, System.Text.Encoding.UTF8);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -4639,7 +4677,7 @@ public sealed class CliCommandTests
     public async Task CliBacklogAddBodyFileMissingGivesClearError()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -4669,7 +4707,7 @@ public sealed class CliCommandTests
         var reasonContent = "Resolved by the file-backed backlog close path.\n\nIncludes detail that would overflow inline command text.";
         var reasonPath = Path.Combine(root, "reason.md");
         File.WriteAllText(reasonPath, reasonContent, System.Text.Encoding.UTF8);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var store = new BacklogStore(workspace.BacklogStorePath);
         var item = await store.AddAsync("Close from file", "Original body");
         var kernel = new AgentOrchestratorKernel();
@@ -4698,7 +4736,7 @@ public sealed class CliCommandTests
     public void CliSimpleGoalBriefFileMissingGivesClearError()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -4724,7 +4762,7 @@ public sealed class CliCommandTests
     public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("One-step profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -4769,7 +4807,7 @@ public sealed class CliCommandTests
     public void CliProfileDispatchWithoutConfirmDispatchStartOnlyPrepares()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Prepare-only profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var agent = new AgentDefinition(
@@ -4837,7 +4875,7 @@ public sealed class CliCommandTests
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             kernel,
-            OrchestratorWorkspace.ForDirectory(root),
+            CreateRefinedWorkspace(root),
             ref agents,
             providers,
             ref profiles,
@@ -4885,7 +4923,7 @@ public sealed class CliCommandTests
         CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             repository,
-            OrchestratorWorkspace.ForDirectory(root),
+            CreateRefinedWorkspace(root),
             ref agents,
             providers,
             ref profiles,
@@ -4922,7 +4960,7 @@ public sealed class CliCommandTests
         var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             repository,
-            OrchestratorWorkspace.ForDirectory(root),
+            CreateRefinedWorkspace(root),
             ref agents,
             providers,
             ref profiles,
@@ -4937,7 +4975,7 @@ public sealed class CliCommandTests
     public void PersistentRunnerRecoverDoesNotImplicitlyReconcileExitFile()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("No implicit reconcile", [task]);
@@ -4972,7 +5010,7 @@ public sealed class CliCommandTests
     public void PersistentRunnerReconcileAppliesExitFileOutsideCommandTransaction()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Explicit reconcile", [task]);
@@ -5008,7 +5046,7 @@ public sealed class CliCommandTests
     public void PersistentRunnerReconcileDiscardsStaleProcessIdentity()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Stale reconcile", [task]);
@@ -5254,7 +5292,7 @@ public sealed class CliCommandTests
     public void CliGoalMarkLandedRetiresCompletedGoalAndWritesCleanupJournalEntry()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
         var goal = kernel.CreateGoal("Force-landed feature", [task]);

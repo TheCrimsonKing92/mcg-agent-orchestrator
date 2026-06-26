@@ -361,33 +361,31 @@ public sealed class BackgroundDispatchRunner
             TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
         {
             hasCommittedChanges = worktreeEvidence.HasRelevantCommitAfterDispatch;
-            // Recovery (exit-code-agnostic): a Developer/Tester that EDITED the worktree and showed
-            // verification evidence but never landed a commit is finished by the orchestrator. This
-            // covers a low-integrity worker — which cannot write the medium-integrity .git (it lives
-            // outside the worktree) and may even exit non-zero attempting to commit — and codex's
-            // Windows sandbox poisoning before commit. The worker only needs to EDIT; the orchestrator
-            // (medium) commits and the acceptance gate re-verifies, so the worker's exit code is not
-            // authoritative here. Dirty-but-UNVERIFIED edits are NOT committed: they fail and surface
-            // for retry/escalation rather than landing unproven work.
-            var recovered = false;
+            // Default path: a Developer/Tester that edited the worktree and showed verification
+            // evidence does not need to self-commit. The orchestrator stages and commits the dirty
+            // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
+            var orchestratorCommitted = false;
             if (!worktreeEvidence.IsClean &&
-                HasClassifiedVerificationEvidence(task, standardOutput, standardError) &&
-                TryCommitWorktreeEdits(processRecord.WorkingDirectory, goalId) &&
+                (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                 worktreeEvidence.HasRelevantCommitAfterDispatch) &&
+                TryCommitWorktreeEdits(
+                    processRecord.WorkingDirectory,
+                    BuildOrchestratorCommitSubject(task, standardOutput, standardError)) &&
                 TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
                 worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
             {
-                recovered = true;
+                orchestratorCommitted = true;
                 hasCommittedChanges = true;
                 exitCode = 0;
                 standardErrorDiagnostic = AppendDiagnostic(
                     standardErrorDiagnostic ?? string.Empty,
-                    "Orchestrator committed the worker's uncommitted worktree edits. " +
+                    "Orchestrator committed the worker's verified worktree edits. " +
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
             }
 
-            if (!recovered && !worktreeEvidence.IsClean && exitCode == 0)
+            if (!orchestratorCommitted && !worktreeEvidence.IsClean && exitCode == 0)
             {
-                // Exited 0 but left uncommitted edits the recovery could not land (no verification
+                // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
@@ -396,7 +394,7 @@ public sealed class BackgroundDispatchRunner
                     $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                     $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
             }
-            else if (!recovered && worktreeEvidence.IsClean)
+            else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
                 var requiresCommitEvidence =
                     RequiresPostDispatchCommitEvidence(task, standardOutput, standardError, workerResultPresent) &&
@@ -460,6 +458,11 @@ public sealed class BackgroundDispatchRunner
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
         var resultCommit = TryGetWorktreeHead(processRecord.WorkingDirectory);
 
+        // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
+        var heartbeatStdoutBytes = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
+            ? completionHeartbeat.StandardOutputBytes
+            : (long?)null;
+
         var verification = new TaskVerificationRecord(
             processRecord.Command,
             processRecord.WorkingDirectory,
@@ -470,7 +473,8 @@ public sealed class BackgroundDispatchRunner
             StandardOutputPath: processRecord.StandardOutputPath,
             StandardErrorPath: processRecord.StandardErrorPath,
             WorkerResultPresent: workerResultPresent,
-            HasCommittedChanges: hasCommittedChanges);
+            HasCommittedChanges: hasCommittedChanges,
+            HeartbeatStandardOutputBytes: heartbeatStdoutBytes);
 
         TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
         return new DispatchRefreshOutcome(completed, verification, resultCommit);
@@ -602,16 +606,14 @@ public sealed class BackgroundDispatchRunner
             HasExplicitNoChangeRationale(standardOutput, standardError);
     }
 
-    // Commits the worker's uncommitted worktree edits from the orchestrator (medium integrity). A
-    // low-integrity worker cannot write the medium .git, and codex's Windows sandbox can poison
-    // before it commits — in both cases the worker EDITS the worktree but never lands a commit. The
-    // orchestrator finishes the job so the dispatch can be verified by the acceptance gate. The
+    // Commits the worker's uncommitted worktree edits from the orchestrator after verification guards
+    // pass. Workers edit the worktree; this path deterministically stages and commits the diff. The
     // sandbox scratch dir (.mcg-sandbox) is kept out of the commit via the worktree's local git
     // exclude (ExcludeSandboxFromGit), so a plain `add -A` honours that exclusion. We must NOT pass an
     // explicit ":(exclude).mcg-sandbox" pathspec here: combined with the ignore entry, git treats the
     // ignored path as explicitly requested and exits non-zero ("paths are ignored ... Use -f") AFTER
     // partially staging the real files — which previously left edits staged-but-uncommitted.
-    private static bool TryCommitWorktreeEdits(string workingDirectory, GoalId goalId)
+    private static bool TryCommitWorktreeEdits(string workingDirectory, string subject)
     {
         try
         {
@@ -629,14 +631,62 @@ public sealed class BackgroundDispatchRunner
                 return false;
             }
 
-            var message = $"Orchestrator-committed worker edits for goal {goalId.Value}";
-            var commit = GitCli.Run(workingDirectory, "commit", "-m", message);
+            var commit = GitCli.Run(workingDirectory, "commit", "-m", subject);
             return commit.Succeeded;
         }
         catch
         {
             return false;
         }
+    }
+
+    private static string BuildOrchestratorCommitSubject(TaskSpec task, string standardOutput, string standardError)
+    {
+        var title = NormalizeCommitSubjectPart(task.Description);
+        var summary = ExtractWorkerSummary(standardOutput, standardError);
+        var subject = string.IsNullOrWhiteSpace(summary)
+            ? title
+            : $"{title}: {summary}";
+        return TruncateCommitSubject(subject);
+    }
+
+    private static string ExtractWorkerSummary(string standardOutput, string standardError)
+    {
+        if (WorkerResultParser.TryParseFields($"{standardOutput}\n{standardError}", out var fields, out _) &&
+            fields.TryGetValue("summary", out var summary))
+        {
+            return NormalizeCommitSubjectPart(summary);
+        }
+
+        foreach (var line in $"{standardOutput}\n{standardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 ||
+                WorkerResultParser.IsOpener(trimmed) ||
+                WorkerResultParser.IsEndMarker(trimmed) ||
+                trimmed.Contains(':', StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return NormalizeCommitSubjectPart(trimmed);
+        }
+
+        return string.Empty;
+    }
+
+    private static string NormalizeCommitSubjectPart(string value)
+    {
+        return Regex.Replace(value.Trim(), @"\s+", " ");
+    }
+
+    private static string TruncateCommitSubject(string subject)
+    {
+        const int MaxSubjectLength = 72;
+        subject = NormalizeCommitSubjectPart(subject);
+        return subject.Length <= MaxSubjectLength
+            ? subject
+            : subject[..MaxSubjectLength].TrimEnd();
     }
 
     private static bool TryInspectGoalWorktree(
@@ -1060,7 +1110,7 @@ public sealed class BackgroundDispatchRunner
     private bool TryDetectHungCodexWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
     {
         diagnostic = string.Empty;
-        if (!IsCodexDispatch(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
+        if (!UsesCodexExitFileBehavior(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
         {
             return false;
         }
@@ -1087,7 +1137,7 @@ public sealed class BackgroundDispatchRunner
     {
         diagnostic = string.Empty;
         // Codex dispatches have their own output-content detector; skip them here.
-        if (IsCodexDispatch(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
+        if (UsesCodexExitFileBehavior(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
         {
             return false;
         }
@@ -1325,17 +1375,8 @@ public sealed class BackgroundDispatchRunner
         return values;
     }
 
-    private static bool IsCodexDispatch(TaskDispatchRecord? dispatch)
-    {
-        if (dispatch is null)
-        {
-            return false;
-        }
-
-        return dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.TrimStart().StartsWith("codex ", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.TrimStart().StartsWith("& codex ", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
+        WorkerProviderResolver.Resolve(dispatch?.WorkerName).UsesCodexExitFileBehavior;
 
     private static bool ContainsCodexFinalOutput(string value)
     {

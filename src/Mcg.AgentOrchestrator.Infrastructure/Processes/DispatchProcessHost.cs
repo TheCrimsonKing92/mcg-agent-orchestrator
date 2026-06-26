@@ -73,7 +73,10 @@ public static class DispatchProcessHost
         // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
-        SetLowIntegrity(parameters.WorkingDirectory);
+        if (!SetLowIntegrity(parameters.WorkingDirectory, recursive: true))
+        {
+            throw new InvalidOperationException($"Failed to apply Low integrity label to worktree '{parameters.WorkingDirectory}'.");
+        }
 
         // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
         // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
@@ -82,8 +85,12 @@ public static class DispatchProcessHost
         var tempDir = Path.Combine(sandboxRoot, "temp");
         Directory.CreateDirectory(codexHome);
         Directory.CreateDirectory(tempDir);
+        if (!SetLowIntegrity(sandboxRoot, recursive: true))
+        {
+            throw new InvalidOperationException($"Failed to apply Low integrity label to sandbox root '{sandboxRoot}'.");
+        }
+
         SeedCodexAuth(codexHome);
-        SetLowIntegrity(sandboxRoot);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
@@ -92,6 +99,7 @@ public static class DispatchProcessHost
         startInfo.Environment["CODEX_HOME"] = codexHome;
         startInfo.Environment["TEMP"] = tempDir;
         startInfo.Environment["TMP"] = tempDir;
+        startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable);
 
         // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
         // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
@@ -102,6 +110,62 @@ public static class DispatchProcessHost
         {
             startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+    }
+
+    internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable)
+    {
+        var entries = new List<string>();
+        var shellDirectory = Path.GetDirectoryName(shellExecutable);
+        if (!string.IsNullOrWhiteSpace(shellDirectory))
+        {
+            entries.Add(shellDirectory);
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentPath))
+        {
+            foreach (var rawEntry in currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (IsWindowsAppsPathSegment(rawEntry) ||
+                    entries.Any(existing => PathsEqual(existing, rawEntry)))
+                {
+                    continue;
+                }
+
+                entries.Add(rawEntry);
+            }
+        }
+
+        return string.Join(Path.PathSeparator, entries);
+    }
+
+    internal static bool IsWindowsAppsPathSegment(string path)
+    {
+        var normalized = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .TrimEnd(Path.DirectorySeparatorChar);
+        return normalized.EndsWith(
+            $"{Path.DirectorySeparatorChar}Microsoft{Path.DirectorySeparatorChar}WindowsApps",
+            StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains(
+                $"{Path.DirectorySeparatorChar}WindowsApps",
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        try
+        {
+            left = Path.GetFullPath(left);
+            right = Path.GetFullPath(right);
+        }
+        catch
+        {
+            // Compare the original strings when either path is malformed.
+        }
+
+        return string.Equals(
+            left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            right.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     // Appends ".mcg-sandbox/" to the worktree's local git exclude (.git/info/exclude, resolved via
@@ -159,7 +223,7 @@ public static void DropToLow() {
 [P.N]::DropToLow()
 ";
 
-    private static void SetLowIntegrity(string path)
+    private static bool SetLowIntegrity(string path, bool recursive)
     {
         try
         {
@@ -174,11 +238,39 @@ public static void DropToLow() {
             psi.ArgumentList.Add(path);
             psi.ArgumentList.Add("/setintegritylevel");
             psi.ArgumentList.Add("(OI)(CI)L");
-            psi.ArgumentList.Add("/T");
+            if (recursive)
+            {
+                psi.ArgumentList.Add("/T");
+            }
+
             using var process = Process.Start(psi);
-            process?.WaitForExit(120000);
+            if (process is null)
+            {
+                return false;
+            }
+
+            var copyOut = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+            var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            var completed = WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
+            try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
+            return completed;
         }
-        catch { /* best-effort */ }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool WaitForIntegrityLabeler(Process process, TimeSpan timeout)
+    {
+        if (process.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            return true;
+        }
+
+        try { process.Kill(entireProcessTree: true); } catch { }
+        try { process.WaitForExit(5000); } catch { }
+        return false;
     }
 
     private static void SeedCodexAuth(string codexHome)
@@ -307,6 +399,7 @@ public static void DropToLow() {
                 startInfo.Environment["UseSharedCompilation"] = "false";
             }
 
+            WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             ApplyWorkerSandbox(startInfo, parameters);
 
             WriteHeartbeat("starting");

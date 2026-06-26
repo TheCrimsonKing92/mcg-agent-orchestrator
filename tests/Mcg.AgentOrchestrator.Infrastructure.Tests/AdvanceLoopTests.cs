@@ -12,6 +12,7 @@ public sealed class AdvanceLoopTests
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
+    SeedSpecRefinerBinding(workspace);
     var kernel = new AgentOrchestratorKernel();
     var agents = AgentCatalog.Default().Agents;
     var profiles = new WorkerProfileCatalog(
@@ -60,7 +61,7 @@ public sealed class AdvanceLoopTests
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Implement API-backed task", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Advance until blocked", [task]);
+    var goal = CreateRefinedGoal(kernel, "Advance until blocked", [task]);
     var agent = new AgentDefinition(
         new AgentId("api-developer"),
         "API developer",
@@ -94,7 +95,7 @@ public sealed class AdvanceLoopTests
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Implement API-backed task", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Advance should not spend API tokens", [task]);
+    var goal = CreateRefinedGoal(kernel, "Advance should not spend API tokens", [task]);
     var agent = new AgentDefinition(
         new AgentId("api-developer"),
         "API developer",
@@ -126,7 +127,7 @@ public sealed class AdvanceLoopTests
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Run prepared subscription work", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Advance should not start worker processes", [task]);
+    var goal = CreateRefinedGoal(kernel, "Advance should not start worker processes", [task]);
     var agent = new AgentDefinition(
         new AgentId("subscription-developer"),
         "Subscription developer",
@@ -163,7 +164,7 @@ public sealed class AdvanceLoopTests
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Run missing subscription profile", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Trim advance automation failure", [task]);
+    var goal = CreateRefinedGoal(kernel, "Trim advance automation failure", [task]);
     var agent = new AgentDefinition(
         new AgentId("subscription-developer"),
         "Subscription developer",
@@ -189,7 +190,7 @@ public sealed class AdvanceLoopTests
 
     var loopKernel = new AgentOrchestratorKernel();
     var loopTask = new TaskSpec(TaskId.New(), "Run missing subscription profile", AgentRole.Developer, "Record explicit verification.");
-    var loopGoal = loopKernel.CreateGoal("Trim advance loop automation failure", [loopTask]);
+    var loopGoal = CreateRefinedGoal(loopKernel, "Trim advance loop automation failure", [loopTask]);
     var loop = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
         loopKernel,
         [agent],
@@ -216,7 +217,7 @@ public sealed class AdvanceLoopTests
         WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Avoid surprise API spend", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Prefer subscription should not fall back automatically", [task]);
+    var goal = CreateRefinedGoal(kernel, "Prefer subscription should not fall back automatically", [task]);
     var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
     Directory.CreateDirectory(worktreePath);
     File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
@@ -258,7 +259,7 @@ public sealed class AdvanceLoopTests
         WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Any available may fall back", [task]);
+    var goal = CreateRefinedGoal(kernel, "Any available may fall back", [task]);
     var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
     Directory.CreateDirectory(worktreePath);
     File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
@@ -302,7 +303,7 @@ public sealed class AdvanceLoopTests
         WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Any available may fall back when run explicitly", [task]);
+    var goal = CreateRefinedGoal(kernel, "Any available may fall back when run explicitly", [task]);
     var agent = new AgentDefinition(
         new AgentId("any-available-developer"),
         "Any Available developer",
@@ -342,7 +343,7 @@ public sealed class AdvanceLoopTests
         WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}")));
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Any available may fall back when API run is explicit", [task]);
+    var goal = CreateRefinedGoal(kernel, "Any available may fall back when API run is explicit", [task]);
     var agent = new AgentDefinition(
         new AgentId("any-available-developer"),
         "Any Available developer",
@@ -375,7 +376,7 @@ public sealed class AdvanceLoopTests
     WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Avoid duplicate fallback", AgentRole.Developer, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Any available should not duplicate active subscription work", [task]);
+    var goal = CreateRefinedGoal(kernel, "Any available should not duplicate active subscription work", [task]);
     var agent = new AgentDefinition(
         new AgentId("any-available-developer"),
         "Any Available developer",
@@ -423,7 +424,7 @@ public sealed class AdvanceLoopTests
     Directory.CreateDirectory(executionRoot);
     var workspace = OrchestratorWorkspace.ForDirectory(stateRoot, executionRoot);
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal(
+    var goal = CreateRefinedGoal(kernel,
         "Dispatch into execution root",
         [new TaskSpec(TaskId.New(), "Inspect command", AgentRole.Planner)]);
     var agents = AgentCatalog.Default().Agents;
@@ -452,7 +453,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var prepared = new TaskSpec(TaskId.New(), "Previously prepared local work", AgentRole.Planner, "Record explicit verification.");
     var subscription = new TaskSpec(TaskId.New(), "Prepare subscription work", AgentRole.Planner, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Start only subscription-ready work", [prepared, subscription]);
+    var goal = CreateRefinedGoal(kernel, "Start only subscription-ready work", [prepared, subscription]);
     var agent = new AgentDefinition(
         new AgentId("subscription-planner"),
         "Subscription planner",
@@ -505,7 +506,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var first = new TaskSpec(TaskId.New(), "Inspect first independent area", AgentRole.Planner, "Record explicit verification.");
     var second = new TaskSpec(TaskId.New(), "Inspect second independent area", AgentRole.Planner, "Record explicit verification.");
-    var goal = kernel.CreateGoal("Start only the first provider-safe subscription batch", [first, second]);
+    var goal = CreateRefinedGoal(kernel, "Start only the first provider-safe subscription batch", [first, second]);
     var agent = new AgentDefinition(
         new AgentId("subscription-planner"),
         "Subscription planner",
@@ -565,7 +566,7 @@ public sealed class AdvanceLoopTests
     var secondDeveloper = new TaskSpec(TaskId.New(), "Implement the second part", AgentRole.Developer);
     var tester = new TaskSpec(TaskId.New(), "Test the work", AgentRole.Tester);
     var reviewer = new TaskSpec(TaskId.New(), "Review the work", AgentRole.Reviewer);
-    var goal = kernel.CreateGoal("Dispatch in SDLC stage order", [planner, researcher, firstDeveloper, secondDeveloper, tester, reviewer]);
+    var goal = CreateRefinedGoal(kernel, "Dispatch in SDLC stage order", [planner, researcher, firstDeveloper, secondDeveloper, tester, reviewer]);
     AgentDefinition[] agents =
     [
         CreateSubscriptionAgent(AgentRole.Planner),
@@ -653,7 +654,7 @@ public sealed class AdvanceLoopTests
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Run once", AgentRole.Developer);
-    var goal = kernel.CreateGoal("Do not double dispatch running task", [task]);
+    var goal = CreateRefinedGoal(kernel, "Do not double dispatch running task", [task]);
     var agents = new[] { CreateSubscriptionAgent(AgentRole.Developer) };
     kernel.ActivateGoal(goal.Id, agents);
     var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
@@ -705,7 +706,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var firstDeveloper = new TaskSpec(TaskId.New(), "Implement the first part", AgentRole.Developer);
     var secondDeveloper = new TaskSpec(TaskId.New(), "Implement the second part", AgentRole.Developer);
-    var goal = kernel.CreateGoal("Plan same-stage parallelism", [firstDeveloper, secondDeveloper]);
+    var goal = CreateRefinedGoal(kernel, "Plan same-stage parallelism", [firstDeveloper, secondDeveloper]);
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
 
@@ -735,7 +736,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Resume after retry window", [new TaskSpec(TaskId.New(), "Run after subscription retry", AgentRole.Developer)]);
+    var goal = CreateRefinedGoal(kernel, "Resume after retry window", [new TaskSpec(TaskId.New(), "Run after subscription retry", AgentRole.Developer)]);
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
@@ -776,7 +777,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         "Build an end-to-end distributed integration with horizontal scaling across API CLI dashboard provider subscription worker persistence state tests docs " + new string('t', 5000),
         AgentRole.Developer,
         "Verify the full integration with build, tests, dashboard smoke, and focused regression evidence. " + new string('v', 5000));
-    var goal = kernel.CreateGoal(objective, [task]);
+    var goal = CreateRefinedGoal(kernel, objective, [task]);
     var agent = new AgentDefinition(
         new AgentId("developer"),
         "Developer",
@@ -823,7 +824,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
 
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Watch process", [new TaskSpec(TaskId.New(), "Run short process", AgentRole.Developer)]);
+    var goal = CreateRefinedGoal(kernel, "Watch process", [new TaskSpec(TaskId.New(), "Run short process", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, agents.Agents);
     var task = goal.Tasks.Single();
     kernel.RecordTaskDispatch(
@@ -891,7 +892,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Recover stalled worker", AgentRole.Planner);
-    var goal = kernel.CreateGoal("Continuation applies supervisor recovery", [task]);
+    var goal = CreateRefinedGoal(kernel, "Continuation applies supervisor recovery", [task]);
     kernel.ActivateGoal(goal.Id, agents.Agents);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, DateTimeOffset.UtcNow));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
@@ -953,7 +954,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
 
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Resume persisted continuation", [new TaskSpec(TaskId.New(), "Wait for retry window", AgentRole.Developer)]);
+    var goal = CreateRefinedGoal(kernel, "Resume persisted continuation", [new TaskSpec(TaskId.New(), "Wait for retry window", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, agents.Agents);
     var task = goal.Tasks.Single();
     var now = DateTimeOffset.UtcNow;
@@ -1015,7 +1016,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Restore bounded continuation text", [new TaskSpec(TaskId.New(), "Wait", AgentRole.Developer)]);
+    var goal = CreateRefinedGoal(kernel, "Restore bounded continuation text", [new TaskSpec(TaskId.New(), "Wait", AgentRole.Developer)]);
     await repository.SaveAsync(kernel);
 
     var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
@@ -1074,7 +1075,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Already done", AgentRole.Developer);
-    var goal = kernel.CreateGoal("Prune stale restored watch", [task]);
+    var goal = CreateRefinedGoal(kernel, "Prune stale restored watch", [task]);
     kernel.ActivateGoal(goal.Id, agents.Agents);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", workspace.ExecutionDirectory, 0, "ok", string.Empty, DateTimeOffset.UtcNow));
@@ -1153,6 +1154,29 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     {
         Assert.Equal("Ollama", agent.ProviderName);
     }
+}
+
+private static Goal CreateRefinedGoal(AgentOrchestratorKernel kernel, string objective, IReadOnlyList<TaskSpec> tasks)
+{
+    var goal = kernel.CreateGoal(objective, tasks);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Advance loop fixture goal is already refined.",
+        ["Advance loop fixture goal is already refined."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    return goal;
+}
+
+private static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)
+{
+    ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+        new ModelFunctionBinding(
+            ModelFunctionPurposes.SpecRefiner,
+            ModelLane.CheapApi,
+            new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            Name: ModelFunctionPurposes.SpecRefiner)
+    ]));
 }
 
 private sealed class FakeHostLifetime : IHostApplicationLifetime, IDisposable

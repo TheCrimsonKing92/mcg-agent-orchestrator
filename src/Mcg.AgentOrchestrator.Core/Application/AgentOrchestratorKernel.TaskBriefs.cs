@@ -326,7 +326,7 @@ public sealed partial class AgentOrchestratorKernel
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
                 "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.",
-                "Git commit all changes in the working directory before reporting results."
+                "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
             };
             simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
             simpleLines.Add(modelFitInstruction);
@@ -341,7 +341,7 @@ public sealed partial class AgentOrchestratorKernel
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
             "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
             "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads.",
-            "Git commit all changes in the working directory before reporting results."
+            "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
         };
         complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
         complexLines.Add(modelFitInstruction);

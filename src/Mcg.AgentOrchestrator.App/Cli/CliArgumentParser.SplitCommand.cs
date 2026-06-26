@@ -72,6 +72,14 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
     }
 
+    if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
+    {
+        var rest = remainder.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
+        return rest.Length >= 4 && rest[0].Equals("answer", StringComparison.OrdinalIgnoreCase)
+            ? [command, rest[0], rest[1], rest[2], rest[3]]
+            : [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+    }
+
     if (command.Equals("verify", StringComparison.OrdinalIgnoreCase))
     {
         return SplitTaskTargetCommand(command, remainder, 1);
