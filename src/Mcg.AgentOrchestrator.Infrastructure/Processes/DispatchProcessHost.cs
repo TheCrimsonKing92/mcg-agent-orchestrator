@@ -251,13 +251,9 @@ public static void DropToLow() {
 
             var copyOut = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
             var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
-            if (!WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2)))
-            {
-                return false;
-            }
-
+            var completed = WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
             try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return process.ExitCode == 0;
+            return completed;
         }
         catch
         {
