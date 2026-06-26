@@ -435,6 +435,40 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Advanced);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_treats_cleaned_up_goal_as_done_despite_prior_verified_acceptance_escalation")]
+    public void BatchLoopTreatsCleanedUpGoalAsDoneDespitePriorVerifiedAcceptanceEscalation()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed");
+
+        var acceptanceAttempts = 0;
+        var ticks = new List<BatchTickSummary>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true),
+            runAcceptance: _ =>
+            {
+                acceptanceAttempts++;
+                return false;
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            maxVerifyRetries: 2,
+            onTick: ticks.Add);
+
+        Assert.Equal(0, acceptanceAttempts);
+        Assert.Equal(0, summary.Retried);
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(0, summary.Advanced);
+        Assert.Single(ticks);
+        Assert.Equal(1, ticks.Single().Done);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_operator_retry_clears_prior_verified_acceptance_escalation")]
     public void BatchLoopOperatorRetryClearsPriorVerifiedAcceptanceEscalation()
     {

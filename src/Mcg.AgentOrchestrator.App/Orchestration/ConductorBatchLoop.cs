@@ -178,7 +178,7 @@ internal sealed class ConductorBatchLoop
                     continue;
                 }
 
-                if (HasPersistedVerifiedAcceptanceEscalation(goal))
+                if (HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver))
                 {
                     var progressLine = $"GOAL goal={label} result=escalated state={GoalLifecycleState.Verified}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
@@ -541,6 +541,23 @@ internal sealed class ConductorBatchLoop
         }
 
         return false;
+    }
+
+    private static bool HasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
+    {
+        if (!HasPersistedVerifiedAcceptanceEscalation(goal))
+        {
+            return false;
+        }
+
+        try
+        {
+            return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)) != GoalLifecycleState.CleanedUp;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private static bool ClearsPersistedVerifiedAcceptanceEscalation(ProgressEvent evt) =>
