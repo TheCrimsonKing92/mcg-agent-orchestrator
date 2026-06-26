@@ -6,6 +6,11 @@ using System.Text.Json;
 
 public sealed class LauncherScriptTests
 {
+    private static readonly string[] JsonLineSeparators = ["\r\n", "\n"];
+    private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "stderrPath", "stdoutPath"];
+    private static readonly string?[] ExpectedGoalsArgument = ["goals"];
+    private static readonly string?[] ExpectedAcceptanceGoalArguments = ["acceptance", "goal"];
+
     [Xunit.Fact(DisplayName = "LandVerifiedGoal_fails_closed_and_propagates_goal_mark_landed_exit_code")]
     public void LandVerifiedGoalFailsClosedAndPropagatesGoalMarkLandedExitCode()
     {
@@ -67,14 +72,27 @@ public sealed class LauncherScriptTests
         Assert.Equal(0, launcher.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
 
-        using var document = JsonDocument.Parse(stdout);
+        var outputLines = stdout.Split(
+            JsonLineSeparators,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(outputLines);
+
+        using var document = JsonDocument.Parse(outputLines[0]);
         var root = document.RootElement;
+        var properties = root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(ExpectedStartCommandJsonProperties, properties);
+
         var pid = root.GetProperty("pid").GetInt32();
-        var logPath = root.GetProperty("logPath").GetString();
+        var stdoutPath = root.GetProperty("stdoutPath").GetString();
+        var stderrPath = root.GetProperty("stderrPath").GetString();
+        var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
 
         Assert.True(pid > 0);
-        Assert.False(string.IsNullOrWhiteSpace(logPath));
-        Assert.True(Path.IsPathFullyQualified(logPath!));
+        Assert.False(string.IsNullOrWhiteSpace(stdoutPath));
+        Assert.False(string.IsNullOrWhiteSpace(stderrPath));
+        Assert.True(Path.IsPathFullyQualified(stdoutPath!));
+        Assert.True(Path.IsPathFullyQualified(stderrPath!));
+        Assert.Equal(ExpectedGoalsArgument, args);
 
         try
         {
@@ -87,12 +105,71 @@ public sealed class LauncherScriptTests
         }
 
         var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-        while (!File.Exists(logPath) && DateTimeOffset.UtcNow < deadline)
+        while (!File.Exists(stdoutPath) && DateTimeOffset.UtcNow < deadline)
         {
             Thread.Sleep(100);
         }
 
-        Assert.True(File.Exists(logPath), $"Expected launcher log path to exist: {logPath}");
+        Assert.True(File.Exists(stdoutPath), $"Expected launcher log path to exist: {stdoutPath}");
+        Assert.True(File.Exists(stderrPath), $"Expected launcher stderr path to exist: {stderrPath}");
+    }
+
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_keeps_AppDll_named_only_and_forwards_remaining_arguments")]
+    public void StartOrchestratorCommandKeepsAppDllNamedOnlyAndForwardsRemainingArguments()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Start-OrchestratorCommand.ps1"));
+
+        Assert.True(script.Contains("[CmdletBinding(PositionalBinding = $false)]", StringComparison.Ordinal));
+        Assert.True(script.Contains("[Parameter(ValueFromRemainingArguments = $true)]", StringComparison.Ordinal));
+        Assert.True(script.Contains("[string[]]$Arguments", StringComparison.Ordinal));
+        Assert.True(script.Contains("$processArguments = @($resolvedAppDll) + $Arguments", StringComparison.Ordinal));
+        Assert.False(script.Contains("Position =", StringComparison.OrdinalIgnoreCase));
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add("""
+            $ErrorActionPreference = 'Stop'
+            function Test-Binding {
+                [CmdletBinding(PositionalBinding = $false)]
+                param(
+                    [string]$Name = 'command',
+                    [string]$AppDll,
+                    [Parameter(ValueFromRemainingArguments = $true)]
+                    [string[]]$Arguments
+                )
+                [pscustomobject]@{
+                    appDll = $AppDll
+                    args = @($Arguments)
+                } | ConvertTo-Json -Compress
+            }
+            Test-Binding -Name smoke acceptance goal
+            """);
+
+        using var bindingProbe = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start PowerShell binding probe.");
+        var stdout = bindingProbe.StandardOutput.ReadToEnd();
+        var stderr = bindingProbe.StandardError.ReadToEnd();
+        Assert.True(bindingProbe.WaitForExit(20000), "PowerShell binding probe did not exit within 20 seconds.");
+        Assert.Equal(0, bindingProbe.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal(string.Empty, root.GetProperty("appDll").GetString());
+        Assert.Equal(
+            ExpectedAcceptanceGoalArguments,
+            root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
     }
 
     private static string FindLauncherSourceRoot([CallerFilePath] string sourceFilePath = "")
