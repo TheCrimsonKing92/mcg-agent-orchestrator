@@ -74,6 +74,11 @@ public sealed class GoalBacklogLinkTests
             cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_goals_source_backlog_item_id'";
             Assert.Equal(1L, (long)(await cmd.ExecuteScalarAsync() ?? 0L));
         }
+
+        var intakeRecord = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Get(seededId);
+        Assert.NotNull(intakeRecord);
+        Assert.Equal("GoalCreated", intakeRecord!.Status);
+        Assert.Equal(currentGoal.Id.Value, intakeRecord.GoalId);
     }
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_duplicate_source_backlog_id_returns_existing_goal_without_new_goal")]
@@ -106,6 +111,72 @@ public sealed class GoalBacklogLinkTests
         Assert.Equal(firstGoal.Id, currentGoal!.Id);
         Assert.Contains($"already has goal {firstGoal.Id.Value[..8]}", output);
         Assert.Contains("no new goal created", output);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_persistent_duplicate_returns_existing_goal_without_new_goal_row")]
+    public void PersistentDuplicateReturnsExistingGoalWithoutNewGoalRow()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Persistent Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var firstChanged = CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        var firstGoalId = currentGoal!.Id.Value;
+
+        var secondOutput = CaptureConsole(() =>
+        {
+            var secondChanged = CliPersistentStateRunner.ExecuteCommand(
+                ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(secondChanged);
+        });
+
+        var restored = repository.LoadAsync().GetAwaiter().GetResult();
+        Assert.True(firstChanged);
+        Assert.Single(restored.Goals);
+        Assert.Equal(firstGoalId, restored.Goals.Single().Id.Value);
+        Assert.Equal(firstGoalId, currentGoal!.Id.Value);
+        Assert.Contains($"already has goal {firstGoalId[..8]}", secondOutput);
+        Assert.Contains("no new goal created", secondOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_in_progress_intake_retry_reports_record_without_new_goal")]
+    public void InProgressIntakeRetryReportsRecordWithoutNewGoal()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Active Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var item = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Active Retry Feature", StringComparison.Ordinal));
+        new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(item.Id, item.Title);
+
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Active Retry Feature", "--create-simple-goal"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(changed);
+        });
+
+        Assert.Empty(kernel.Goals);
+        Assert.Null(currentGoal);
+        Assert.Contains("is InProgress", output);
+        Assert.Contains("no new goal created", output);
+        Assert.Contains("--force-reclaim", output);
     }
 
     // ── Intake: batch (multiple filters -> one goal each) ─────────────────────

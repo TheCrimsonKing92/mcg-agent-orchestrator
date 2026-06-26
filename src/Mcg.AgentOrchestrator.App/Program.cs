@@ -193,7 +193,7 @@ Console.WriteLine("  simple-hosted-dashboard [port|url] [--refresh seconds] [--o
 Console.WriteLine("  open-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  transcript [path]");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals]");
-Console.WriteLine("  backlog-intake [heading-filter] [--create-goal|--create-simple-goal]");
+Console.WriteLine("  backlog-intake [heading-filter] [--create-goal|--create-simple-goal] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
 Console.WriteLine("  goals, agents, autonomy-policies");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");
