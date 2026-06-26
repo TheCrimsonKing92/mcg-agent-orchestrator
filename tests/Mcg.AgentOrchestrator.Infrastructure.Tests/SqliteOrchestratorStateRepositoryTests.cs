@@ -66,6 +66,35 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_acceptance_retry_context")]
+    public async Task AcceptanceRetryContextRoundtripsThroughSqlite()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var agent = new AgentDefinition(
+            AgentId.New(), "Developer", AgentRole.Developer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var goal = kernel.CreateGoal("Retry acceptance failure");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        var failingCheck = "SqliteOrchestratorStateRepositoryTests.Acceptance_retry_check_failed";
+        var operatorFeedback = "Operator rejection: fix the SQLite acceptance retry context before reporting complete.";
+        kernel.RecordAcceptanceFailure(goal.Id, [failingCheck]);
+        kernel.RetryTask(goal.Id, task.Id, operatorFeedback);
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        var restoredGoal = restored.Goals.Single();
+        Assert.NotNull(restoredGoal.LatestAcceptanceFailure);
+        Assert.Contains(failingCheck, restoredGoal.LatestAcceptanceFailure.FailedChecks);
+        var restoredBrief = restored.BuildTaskBrief(goal.Id, task.Id).Content;
+        Assert.Contains(failingCheck, restoredBrief);
+        Assert.Contains(operatorFeedback, restoredBrief);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_per_goal_upsert_preserves_unmodified_goal")]
     public async Task PerGoalUpsertPreservesUnmodifiedGoal()
     {
