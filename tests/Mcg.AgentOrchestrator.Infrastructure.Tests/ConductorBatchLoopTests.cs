@@ -917,6 +917,162 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_max_iterations_detaches_live_dispatch_without_reaping")]
+    public void BatchLoopMaxIterationsDetachesLiveDispatchWithoutReaping()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "bounded goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("test-worker", "worker.exe", "C:\\goal", now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(444, "worker.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [444]));
+
+        var killed = new List<int>();
+        var detachedGoals = new List<string>();
+        var reapedGoals = new List<string>();
+        var runner = new BackgroundDispatchRunner(tryKillOwnedProcess: pid =>
+        {
+            killed.Add(pid);
+            return true;
+        });
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                reapedGoals.Add(loopGoal.Id.Value);
+                runner.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id);
+            },
+            detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                detachedGoals.Add(loopGoal.Id.Value);
+                runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id);
+            }).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 0,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(0, summary.Ticks);
+        Assert.Empty(reapedGoals);
+        Assert.Empty(killed);
+        Xunit.Assert.Equal([goal.Id.Value], detachedGoals);
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_max_duration_detaches_live_dispatch_without_reaping")]
+    public void BatchLoopMaxDurationDetachesLiveDispatchWithoutReaping()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "duration bounded goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("test-worker", "worker.exe", "C:\\goal", now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(555, "worker.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [555]));
+
+        var killed = new List<int>();
+        var detachedGoals = new List<string>();
+        var reapedGoals = new List<string>();
+        var runner = new BackgroundDispatchRunner(tryKillOwnedProcess: pid =>
+        {
+            killed.Add(pid);
+            return true;
+        });
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                reapedGoals.Add(loopGoal.Id.Value);
+                runner.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id);
+            },
+            detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                detachedGoals.Add(loopGoal.Id.Value);
+                runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id);
+            }).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxDuration: TimeSpan.Zero,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(0, summary.Ticks);
+        Assert.Empty(reapedGoals);
+        Assert.Empty(killed);
+        Xunit.Assert.Equal([goal.Id.Value], detachedGoals);
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_bounded_exit_detached_orphan_running_task_is_requeued_and_dispatched")]
+    public void BatchLoopBoundedExitDetachedOrphanRunningTaskIsRequeuedAndDispatched()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "bounded interrupted goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("test-worker", "first.exe", "C:\\goal", now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(444, "first.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [444]));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        new ConductorBatchLoop(
+            detachGoalRunningDispatches: (loopKernel, loopGoal) => runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 0,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var ready = g.Tasks.Single(t => t.Status == WorkTaskStatus.Assigned);
+                kernel.RecordTaskDispatch(g.Id, ready.Id,
+                    new TaskDispatchRecord("test-worker", "second.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, ready.Id,
+                    new TaskProcessRecord(777, "second.exe", "C:\\goal", "out2.log", "err2.log", "exit2.txt",
+                        DateTimeOffset.UtcNow, null, null, OwnedProcessIds: [777]));
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop(
+            recoverInterruptedDispatches: loopKernel => runner.RequeueInterruptedDispatches(loopKernel)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, dispatches);
+        var recoveredTask = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Running, recoveredTask.Status);
+        Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_prior_cancelled_sdlc_task_is_requeued_before_ready_batch")]
     public void BatchLoopPriorCancelledSdlcTaskIsRequeuedBeforeReadyBatch()
     {
@@ -1643,34 +1799,50 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Ticks);
     }
 
-    // ── Terminal-goal skip: Cancelled/Superseded goals not in eligible set ─
+    // ── Terminal-goal skip: terminal historical goals not in eligible set ─
 
-    [Xunit.Fact(DisplayName = "BatchLoop_TerminalGoals_CancelledExcludedFromEligible")]
-    public void BatchLoop_TerminalGoals_CancelledExcludedFromEligible()
+    [Xunit.Fact(DisplayName = "BatchLoop_terminal_historical_goals_are_excluded_from_eligible_set")]
+    public void BatchLoopTerminalHistoricalGoalsAreExcludedFromEligibleSet()
     {
         var kernel = new AgentOrchestratorKernel();
+        var completedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "completed goal");
+        var cleanedUpGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cleaned-up goal");
         var cancelledGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cancelled goal");
-        var activeGoal    = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active goal");
+        var supersededGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "superseded goal");
 
+        PassVerification(kernel, completedGoal, completedGoal.Tasks.Single());
+        PassVerification(kernel, cleanedUpGoal, cleanedUpGoal.Tasks.Single());
         kernel.CancelGoal(cancelledGoal.Id, "test cancel");
+        kernel.SupersedeGoal(supersededGoal.Id, "test supersede");
 
-        var advancedGoalIds = new List<string>();
+        var terminalGoalIds = new HashSet<GoalId>
+        {
+            completedGoal.Id,
+            cleanedUpGoal.Id,
+            cancelledGoal.Id,
+            supersededGoal.Id
+        };
+        var driverCalls = new List<GoalId>();
         var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            dispatchAndStart: g =>
+            getFacts: goal =>
             {
-                advancedGoalIds.Add(g.Id.Value);
-                return DispatchStartOutcome.Started();
+                driverCalls.Add(goal.Id);
+                return goal.Id == cleanedUpGoal.Id
+                    ? new GoalLifecycleFacts(IsCleanedUp: true)
+                    : GoalLifecycleFacts.None;
             });
 
-        var stopFile = NoStopPath();
-        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile, maxIterations: 1);
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3);
 
-        // Cancelled goal must not appear in the advanced set and must not generate escalations
-        Assert.False(advancedGoalIds.Contains(cancelledGoal.Id.Value));
+        Assert.Equal(0, summary.Ticks);
+        Assert.Equal(0, summary.Advanced);
         Assert.Equal(0, summary.Escalated);
-        // Active goal must have been advanced
-        Assert.True(advancedGoalIds.Contains(activeGoal.Id.Value));
+        Assert.Empty(driverCalls.Where(terminalGoalIds.Contains));
     }
 
     // ── Duration cap: loop exits when max-duration is reached ────────────

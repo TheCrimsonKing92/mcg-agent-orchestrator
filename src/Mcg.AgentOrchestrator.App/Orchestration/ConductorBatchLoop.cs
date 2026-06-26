@@ -81,7 +81,7 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
-                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 persistTick?.Invoke(kernel);
                 break;
             }
@@ -90,7 +90,7 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
-                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 persistTick?.Invoke(kernel);
                 break;
             }
@@ -103,8 +103,7 @@ internal sealed class ConductorBatchLoop
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !excludedGoals.Contains(g.Id.Value)
                     && !setAsideGoals.ContainsKey(g.Id.Value)
-                    && g.Status is not GoalStatus.Cancelled
-                    && g.Status is not GoalStatus.Superseded)
+                    && !IsTerminalGoal(g))
                 .ToArray();
 
             if (eligible.Length == 0)
