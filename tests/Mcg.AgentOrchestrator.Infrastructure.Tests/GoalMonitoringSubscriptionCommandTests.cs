@@ -1,3 +1,4 @@
+using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -194,10 +195,117 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Contains("\"Code\": \"goal_not_found\"", text);
     }
 
+    [Xunit.Fact(DisplayName = "Goal_monitoring_stream_continuous_emits_initial_snapshot_before_poll_interval")]
+    public async Task GoalMonitoringStreamContinuousEmitsInitialSnapshotBeforePollInterval()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Monitor stream promptly", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        await using var stream = new RecordingStream();
+        using var cts = new CancellationTokenSource();
+        var pollInterval = TimeSpan.FromSeconds(30);
+
+        var streamTask = GoalMonitoringStream.StreamAsync(
+            stream,
+            goal.Id.Value[..8],
+            _ => Task.FromResult(kernel),
+            (current, resolvedGoal, since) => DashboardMonitoringEvents.BuildBatch(current, resolvedGoal, since),
+            EmptyRunEventStore.Instance,
+            sinceEventId: 0,
+            once: false,
+            pollInterval,
+            cts.Token);
+
+        var completed = await Task.WhenAny(stream.FirstWrite, Task.Delay(TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Same(stream.FirstWrite, completed);
+        Assert.Contains("event: goal.snapshot", stream.Text);
+        cts.Cancel();
+        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => streamTask);
+    }
+
+    [Xunit.Fact(DisplayName = "Goal_monitoring_stream_emits_monitor_error_when_goal_disappears_during_repoll")]
+    public async Task GoalMonitoringStreamEmitsMonitorErrorWhenGoalDisappearsDuringRepoll()
+    {
+        var initialKernel = new AgentOrchestratorKernel();
+        var goal = initialKernel.CreateGoal("Monitor disappearing goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var missingKernel = new AgentOrchestratorKernel();
+        var loadCount = 0;
+        await using var stream = new RecordingStream();
+
+        await GoalMonitoringStream.StreamAsync(
+            stream,
+            goal.Id.Value[..8],
+            _ =>
+            {
+                loadCount++;
+                return Task.FromResult(loadCount == 1 ? initialKernel : missingKernel);
+            },
+            (current, resolvedGoal, since) => DashboardMonitoringEvents.BuildBatch(current, resolvedGoal, since),
+            EmptyRunEventStore.Instance,
+            sinceEventId: 0,
+            once: false,
+            pollInterval: TimeSpan.Zero,
+            CancellationToken.None);
+
+        var text = stream.Text;
+        Assert.Contains("event: goal.snapshot", text);
+        Assert.Contains("event: monitor.error", text);
+        Assert.Contains("\"GoalId\": \"" + goal.Id.Value[..8] + "\"", text);
+        Assert.Contains("\"Code\": \"goal_not_found\"", text);
+        Assert.Equal(1, CountOccurrences(text, "event: monitor.error"));
+    }
+
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "mcg-monitor-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
+    private sealed class RecordingStream : MemoryStream
+    {
+        private readonly TaskCompletionSource _firstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task FirstWrite => _firstWrite.Task;
+
+        public string Text => Encoding.UTF8.GetString(ToArray());
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await base.WriteAsync(buffer, cancellationToken);
+            _firstWrite.TrySetResult();
+        }
+    }
+
+    private sealed class EmptyRunEventStore : IRunEventStore
+    {
+        public static readonly EmptyRunEventStore Instance = new();
+
+        public Task<RunEventRecord> AppendAsync(RunEventAppend evt, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<IReadOnlyList<RunEventRecord>> ReadSinceAsync(
+            long afterSequence = 0,
+            string? goalId = null,
+            int maxCount = 500,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<RunEventRecord>>([]);
+        }
     }
 }
