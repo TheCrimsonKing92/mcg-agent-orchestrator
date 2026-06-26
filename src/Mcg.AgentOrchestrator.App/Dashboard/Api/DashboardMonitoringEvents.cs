@@ -10,7 +10,9 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 internal static class DashboardMonitoringEvents
 {
     public const string SnapshotEventName = "goal.snapshot";
+    public const string MonitorErrorEventName = "monitor.error";
     public const string KeepAliveEventName = "monitor.keepalive";
+    public const string TaskStatusEventName = "task.status";
     public const string ConductorTickEventName = "conductor.tick";
     public const string ConductorProgressEventName = "conductor.progress";
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
@@ -85,6 +87,21 @@ internal static class DashboardMonitoringEvents
             .Select(ToConductorTickEvent)
             .Where(evt => evt is not null)
             .Select(evt => evt!)
+            .ToList();
+    }
+
+    public static IReadOnlyList<TaskStatusMonitoringEventDto> BuildTaskStatusEvents(GoalMonitoringBatchDto batch)
+    {
+        return batch.Events
+            .Where(evt => evt.TaskId is not null && evt.TaskNumber is not null && evt.Role is not null && evt.TaskStatus is not null)
+            .Select(evt => new TaskStatusMonitoringEventDto(
+                batch.GoalId,
+                evt.TaskId!,
+                evt.TaskNumber!.Value,
+                evt.Role!.Value,
+                evt.TaskStatus!.Value,
+                evt.Id,
+                evt.OccurredAt))
             .ToList();
     }
 

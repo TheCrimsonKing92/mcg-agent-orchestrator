@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Net.Http.Json;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -14,15 +15,33 @@ internal static class GoalMonitoringSubscriptionCommand
 
     public static GoalMonitoringSubscriptionOptions Parse(IReadOnlyList<string> parts)
     {
-        if (parts.Count < 3)
+        if (parts.Count < 2)
         {
-            throw new ArgumentException("Usage: monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
+            throw new ArgumentException(Usage);
         }
 
         var sinceEventId = 0L;
         var once = false;
+        Uri? dashboardUri = null;
+        string goalId;
+        var optionStart = 2;
+        if (IsDashboardUri(parts[1]))
+        {
+            if (parts.Count < 3)
+            {
+                throw new ArgumentException(Usage);
+            }
 
-        for (var index = 3; index < parts.Count; index++)
+            dashboardUri = CreateDashboardUri(parts[1]);
+            goalId = parts[2];
+            optionStart = 3;
+        }
+        else
+        {
+            goalId = parts[1];
+        }
+
+        for (var index = optionStart; index < parts.Count; index++)
         {
             var part = parts[index];
             if (part.Equals(OnceFlag, StringComparison.OrdinalIgnoreCase))
@@ -35,7 +54,7 @@ internal static class GoalMonitoringSubscriptionCommand
             {
                 if (index + 1 >= parts.Count || !long.TryParse(parts[index + 1], out sinceEventId) || sinceEventId < 0)
                 {
-                    throw new ArgumentException("Usage: monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
+                    throw new ArgumentException(Usage);
                 }
 
                 index++;
@@ -46,8 +65,8 @@ internal static class GoalMonitoringSubscriptionCommand
         }
 
         return new GoalMonitoringSubscriptionOptions(
-            CreateDashboardUri(parts[1]),
-            parts[2],
+            dashboardUri,
+            goalId,
             sinceEventId,
             once);
     }
@@ -65,6 +84,11 @@ internal static class GoalMonitoringSubscriptionCommand
     public static async Task RunAsync(IReadOnlyList<string> parts, TextWriter output, CancellationToken cancellationToken = default)
     {
         var options = Parse(parts);
+        if (options.IsLocal)
+        {
+            throw new ArgumentException("Local monitor-goal requires orchestrator state. Use: monitor-goal <goal-id> [--since <event-id>] [--once]");
+        }
+
         using var client = new HttpClient();
 
         if (options.Once)
@@ -87,6 +111,37 @@ internal static class GoalMonitoringSubscriptionCommand
         {
             PrintServerSentEvent(serverEvent, output);
         }
+    }
+
+    public static async Task RunAsync(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog workerProfiles,
+        Func<AgentOrchestratorKernel>? reloadKernel = null,
+        CancellationToken cancellationToken = default)
+    {
+        var options = Parse(parts);
+        if (!options.IsLocal)
+        {
+            await RunAsync(parts, output, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await using var stream = new TextWriterStream(output);
+        var runEvents = new SqliteRunEventStore(workspace.RunEventStorePath);
+        await GoalMonitoringStream.StreamAsync(
+            stream,
+            options.GoalId,
+            _ => Task.FromResult(reloadKernel?.Invoke() ?? kernel),
+            (current, goal, since) => GoalMonitoringStream.BuildBatch(current, goal, since, agents, workerProfiles, workspace),
+            runEvents,
+            options.SinceEventId,
+            options.Once,
+            TimeSpan.FromSeconds(1),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public static void PrintBatch(GoalMonitoringBatchDto batch, TextWriter output)
@@ -204,6 +259,11 @@ internal static class GoalMonitoringSubscriptionCommand
 
     private static Uri BuildUri(GoalMonitoringSubscriptionOptions options, bool stream)
     {
+        if (options.DashboardUri is null)
+        {
+            throw new InvalidOperationException("Dashboard URI is not available for local monitor-goal mode.");
+        }
+
         var goalId = Uri.EscapeDataString(options.GoalId);
         var path = stream ? $"api/goals/{goalId}/events/stream" : $"api/goals/{goalId}/events";
         var builder = new UriBuilder(new Uri(options.DashboardUri, path));
@@ -213,6 +273,12 @@ internal static class GoalMonitoringSubscriptionCommand
         }
 
         return builder.Uri;
+    }
+
+    private static bool IsDashboardUri(string value)
+    {
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
     }
 
     private static Uri CreateDashboardUri(string value)
@@ -225,8 +291,32 @@ internal static class GoalMonitoringSubscriptionCommand
 
         return value.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(value + "/");
     }
+
+    private const string Usage = "Usage: monitor-goal <goal-id> [--since <event-id>] [--once], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]";
+
+    private sealed class TextWriterStream(TextWriter writer) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => writer.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => writer.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => writer.Write(Encoding.UTF8.GetString(buffer, offset, count));
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await writer.WriteAsync(Encoding.UTF8.GetString(buffer.Span)).ConfigureAwait(false);
+        }
+    }
 }
 
-internal sealed record GoalMonitoringSubscriptionOptions(Uri DashboardUri, string GoalId, long SinceEventId, bool Once);
+internal sealed record GoalMonitoringSubscriptionOptions(Uri? DashboardUri, string GoalId, long SinceEventId, bool Once)
+{
+    public bool IsLocal => DashboardUri is null;
+}
 
 internal sealed record ServerSentEvent(string? Id, string Event, string Data);

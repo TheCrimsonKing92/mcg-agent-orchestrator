@@ -322,6 +322,15 @@ internal sealed record TaskMonitoringSnapshotDto(
     ProcessDto? LastProcess,
     DateTimeOffset? SubscriptionRetryAfter);
 
+internal sealed record TaskStatusMonitoringEventDto(
+    string GoalId,
+    string TaskId,
+    int TaskNumber,
+    AgentRole Role,
+    WorkTaskStatus Status,
+    long TimelineEventId,
+    DateTimeOffset OccurredAt);
+
 internal sealed record GoalMonitoringEventDto(
     long Id,
     string Event,
@@ -335,6 +344,10 @@ internal sealed record GoalMonitoringEventDto(
     bool MessageTruncated,
     int MessageLength,
     DateTimeOffset OccurredAt);
+
+internal sealed record MonitorErrorEventDto(string GoalId, string Code, string Message);
+
+internal sealed record ConductorProgressLineEventDto(string Line);
 
 internal sealed record TaskWorkContextDto(
     string GoalId,

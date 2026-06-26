@@ -47,11 +47,19 @@ public sealed class DashboardRenderingTests
         tick,
         $"run-{tick.Seq}",
         CancellationToken.None);
+    await DashboardMonitoringEvents.WriteServerSentEventAsync(
+        stream,
+        DashboardMonitoringEvents.ConductorProgressEventName,
+        new ConductorProgressLineEventDto("GOAL goal=abc12345 result=done state=Complete"),
+        id: null,
+        CancellationToken.None);
     var sse = Encoding.UTF8.GetString(stream.ToArray());
 
     Assert.True(sse.Contains("id: run-", StringComparison.Ordinal));
     Assert.True(sse.Contains("event: conductor.tick", StringComparison.Ordinal));
     Assert.True(sse.Contains("\"Tick\": 4", StringComparison.Ordinal));
+    Assert.True(sse.Contains("event: conductor.progress", StringComparison.Ordinal));
+    Assert.True(sse.Contains("\"Line\": \"GOAL goal=abc12345 result=done state=Complete\"", StringComparison.Ordinal));
     Assert.True(sse.Contains("GOAL goal=abc12345 result=done state=Complete", StringComparison.Ordinal));
 }
 
@@ -663,6 +671,26 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains("event: timeline", text);
     Xunit.Assert.Contains("data:", text);
     Xunit.Assert.Contains("Started monitoring work.", text);
+
+    var taskStatusEvents = DashboardMonitoringEvents.BuildTaskStatusEvents(batch);
+    Assert.True(taskStatusEvents.Count >= 2);
+    var taskStatus = taskStatusEvents.First(evt => evt.TaskId == task.Id.Value);
+    var sourceEvent = batch.Events.First(evt => evt.TaskId == task.Id.Value);
+    Assert.Equal(goal.Id.Value, taskStatus.GoalId);
+    Assert.Equal(task.Id.Value, taskStatus.TaskId);
+    Assert.Equal(sourceEvent.TaskNumber, taskStatus.TaskNumber);
+    Assert.Equal(AgentRole.Developer, taskStatus.Role);
+    Assert.Equal(WorkTaskStatus.Completed, taskStatus.Status);
+    using var taskStatusStream = new MemoryStream();
+    await DashboardMonitoringEvents.WriteServerSentEventAsync(
+        taskStatusStream,
+        DashboardMonitoringEvents.TaskStatusEventName,
+        taskStatus,
+        $"task-{taskStatus.TimelineEventId}",
+        CancellationToken.None);
+    var taskStatusText = Encoding.UTF8.GetString(taskStatusStream.ToArray());
+    Xunit.Assert.Contains("event: task.status", taskStatusText);
+    Xunit.Assert.Contains("\"Status\": \"Completed\"", taskStatusText);
 
     using var snapshotStream = new MemoryStream();
     await DashboardMonitoringEvents.WriteServerSentEventAsync(

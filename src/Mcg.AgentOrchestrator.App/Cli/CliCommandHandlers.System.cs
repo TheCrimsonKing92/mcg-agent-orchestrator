@@ -309,7 +309,14 @@ internal static partial class CliCommandHandlers
             }
 
             case "monitor-goal":
-                GoalMonitoringSubscriptionCommand.RunAsync(parts, Console.Out).GetAwaiter().GetResult();
+                GoalMonitoringSubscriptionCommand.RunAsync(
+                    parts,
+                    Console.Out,
+                    context.Kernel,
+                    context.Workspace,
+                    context.Agents,
+                    context.WorkerProfiles,
+                    context.ReloadKernel).GetAwaiter().GetResult();
                 return false;
 
             case "dashboard":
