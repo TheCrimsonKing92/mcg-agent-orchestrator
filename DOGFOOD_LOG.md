@@ -1955,3 +1955,17 @@ Goal a5449acf: # GOAL: Align CLI acceptance with conductor pre-landing rebase or
 
 - Operator gate: Planner: not-run; planner task only, source/test paths inspected (exit 0); Researcher: not-run; read-only research task (exit 0); Developer: pass - GoalWorktreeTests 68 passed, 0 failed (exit 0); Tester: pass - GoalWorktreeTests 68 passed, 0 failed after build-server shutdown; git diff --check passed (exit 0); Reviewer: pass - prior isolated GoalWorktreeTests 68 passed, 0 failed; reviewer git diff --check main...HEAD passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused code review - repository context and diff inspection were sufficient.
+
+## 2026-06-26 - # GOAL: Fix Start-OrchestratorCommand argument binding and JSON output  Sourc...
+
+Goal cd9063bf: # GOAL: Fix Start-OrchestratorCommand argument binding and JSON output  Source backlog: 52653162f6ce40169d56608c742b9.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit bb133c9). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit bb133c9). Acceptance passed.
+
+- Operator gate: Planner: not-run; planning task only, source/readbook/test conventions inspected (exit 0); Researcher: not-run; research-only task, but binding probes passed and reproduced/fixed contract in memory (exit 0); Developer: pass - LauncherScriptTests 4/4; smoke JSON lineCount=1 pidPositive=true stdoutExists=true stderrExists=true args=goals (exit 0); Tester: pass; LauncherScriptTests 4/4, smoke JSON/log validation passed (exit 0); Reviewer: pass evidence reviewed; not rerun due read-only sandbox (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer verification - small diff and prior evidence review fit the model.
+
+## 2026-06-26 - # GOAL: Fix CLI REPL parsing for multi-flag task and goal commands  Source ba...
+
+Goal 7b141b6c: # GOAL: Fix CLI REPL parsing for multi-flag task and goal commands  Source backlog: a4f065ad7e0043cc94c3bbc179ec5144 .... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit b5e38b8). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit b5e38b8). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner task only, no repository edits (exit 0); Researcher: not-run; read-only research task (exit 0); Developer: pass - focused 8-test parser/handler filter passed; broader CliCommandTests had unrelated git ref lock permission failure (exit 0); Tester: pass for scoped behavior: focused isolated run passed 13/13, including multi-flag `goal-mark-landed`, `start-dispatch`, `abandon-goal` free-form reason, backlog body text, objective/backlog flag parsing, and real dispatcher `goal-mark-landed --confirm-goal-mark-landed --force`; broader `CliCommandTests` retry ran 146 tests: 145 passed, 1 failed from unrelated git ref lock permission in `Cli_profile_dispatch_allows_complex_paid_subscription_start_under_size_threshold` (exit 0); Reviewer: pass by prior evidence: focused 13/13 passed; broader 145/146 with unrelated git ref lock failure (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer code/evidence inspection - concise diff plus prior verification review was sufficient.
