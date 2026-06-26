@@ -8,7 +8,90 @@ public sealed record WorkerSubscriptionPreflightResult(
     bool Allowed,
     string ProfileName,
     string CapabilityStatus,
-    IReadOnlyList<string> Findings);
+    IReadOnlyList<string> Findings,
+    string? ErrorCode = null);
+
+public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
+{
+    public WorkerSubscriptionPreflightException(string message, string? errorCode, IReadOnlyList<string> findings)
+        : base(message)
+    {
+        ErrorCode = errorCode;
+        Findings = findings;
+    }
+
+    public string? ErrorCode { get; }
+
+    public IReadOnlyList<string> Findings { get; }
+}
+
+public sealed record ClaudeCliAuthState(
+    bool HasAnthropicApiKey,
+    bool HasCliCredentialArtifact,
+    string? CredentialArtifactPath);
+
+public static class ClaudeCliAuthProbe
+{
+    public const string AuthUnavailableErrorCode = "ERR_CLAUDE_AUTH_UNAVAILABLE";
+
+    public static ClaudeCliAuthState FromEnvironment()
+    {
+        var hasApiKey = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
+        var artifactPath = FindCredentialArtifactPath();
+        return new ClaudeCliAuthState(hasApiKey, artifactPath is not null, artifactPath);
+    }
+
+    private static string? FindCredentialArtifactPath()
+    {
+        foreach (var path in EnumerateCandidateCredentialPaths())
+        {
+            if (File.Exists(path))
+            {
+                return path;
+            }
+
+            if (Directory.Exists(path) &&
+                Directory.EnumerateFileSystemEntries(path).Any(IsClaudeCredentialArtifact))
+            {
+                return path;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateCandidateCredentialPaths()
+    {
+        var configured = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            yield return configured;
+        }
+
+        var userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            yield return Path.Combine(userProfile, ".claude.json");
+            yield return Path.Combine(userProfile, ".claude");
+        }
+
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (!string.IsNullOrWhiteSpace(home))
+        {
+            yield return Path.Combine(home, ".claude.json");
+            yield return Path.Combine(home, ".claude");
+        }
+    }
+
+    private static bool IsClaudeCredentialArtifact(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        return fileName.Equals(".credentials.json", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("credentials.json", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("config.json", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("settings.json", StringComparison.OrdinalIgnoreCase);
+    }
+}
 
 public sealed record DispatchModelOverride(string? ProfileName, string? ModelName, string? ReasoningEffort);
 
@@ -92,7 +175,9 @@ public static class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset dispatchedAt,
         DispatchModelOverride? modelOverride = null,
-        bool allowGitReference = false)
+        bool allowGitReference = false,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -113,7 +198,17 @@ public static class WorkerProfileDispatcher
             variables["subscriptionModelName"] = resolvedModelName;
         if (modelOverride?.ReasoningEffort is not null)
             variables["subscriptionReasoningEffort"] = resolvedReasoning;
-        var preflight = PreflightSubscriptionTask(goal, task, agents, profiles, workingDirectory, dispatchedAt, modelOverride, allowGitReference);
+        var preflight = PreflightSubscriptionTask(
+            goal,
+            task,
+            agents,
+            profiles,
+            workingDirectory,
+            dispatchedAt,
+            modelOverride,
+            allowGitReference,
+            claudeAuthProbe,
+            sandboxOptions);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -140,7 +235,9 @@ public static class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset now,
         DispatchModelOverride? modelOverride = null,
-        bool allowGitReference = false)
+        bool allowGitReference = false,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var findings = new List<string>();
         string profileName;
@@ -154,6 +251,8 @@ public static class WorkerProfileDispatcher
                 : ResolveSubscriptionProfileName(agent, selection.Model);
             var profile = profiles.GetRequired(profileName);
             findings.Add($"profile: {profile.Name}");
+            var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
+            AddClaudeLowIntegrityAuthFinding(findings, profile.Name, sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
                 : ResolveEffectiveSubscriptionModelName(agent, selection);
@@ -220,7 +319,7 @@ public static class WorkerProfileDispatcher
                 findings.Add("ready: profile, sandbox, worktree, and retry state passed deterministic preflight");
             }
 
-            return new WorkerSubscriptionPreflightResult(!blocked, profileName, capability.Status, findings);
+            return new WorkerSubscriptionPreflightResult(!blocked, profileName, capability.Status, findings, ResolvePreflightErrorCode(findings));
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
@@ -228,6 +327,54 @@ public static class WorkerProfileDispatcher
             findings.Add($"blocked: {ex.Message}");
             return new WorkerSubscriptionPreflightResult(false, profileName, "blocked", findings);
         }
+    }
+
+    private static void AddClaudeLowIntegrityAuthFinding(
+        List<string> findings,
+        string profileName,
+        WorkerSandboxOptions sandbox,
+        Func<ClaudeCliAuthState>? claudeAuthProbe)
+    {
+        if (!profileName.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+        {
+            findings.Add("auth: Claude CLI Low-IL auth preflight not applicable for this worker profile");
+            return;
+        }
+
+        if (!sandbox.Enabled)
+        {
+            findings.Add("auth: Claude CLI Low-IL auth preflight not required because worker sandbox is disabled");
+            return;
+        }
+
+        var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
+        if (authState.HasAnthropicApiKey)
+        {
+            findings.Add("ok: Claude CLI Low-IL auth preflight found ANTHROPIC_API_KEY");
+            return;
+        }
+
+        if (!authState.HasCliCredentialArtifact)
+        {
+            findings.Add("auth: Claude CLI Low-IL auth preflight found no API key and no CLI credential artifact");
+            return;
+        }
+
+        var artifact = string.IsNullOrWhiteSpace(authState.CredentialArtifactPath)
+            ? "canonical Claude CLI credential path"
+            : authState.CredentialArtifactPath;
+        findings.Add(
+            $"blocked: {ClaudeCliAuthProbe.AuthUnavailableErrorCode}: Claude CLI credentials exist at {artifact}, but ANTHROPIC_API_KEY is not set; Low-IL Claude subscription dispatch is refused before worker start because persisted CLI login/trust is not available inside the sandbox");
+    }
+
+    private static string? ResolvePreflightErrorCode(IReadOnlyList<string> findings)
+    {
+        if (findings.Any(finding => finding.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal)))
+        {
+            return ClaudeCliAuthProbe.AuthUnavailableErrorCode;
+        }
+
+        return null;
     }
 
     private static void AddGitMetadataAccessFinding(List<string> findings, TaskSpec task, string workingDirectory)
@@ -340,7 +487,13 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        throw new InvalidOperationException("Subscription preflight failed: " + string.Join("; ", preflight.Findings));
+        var codePrefix = string.IsNullOrWhiteSpace(preflight.ErrorCode)
+            ? string.Empty
+            : $"{preflight.ErrorCode}: ";
+        throw new WorkerSubscriptionPreflightException(
+            "Subscription preflight failed: " + codePrefix + string.Join("; ", preflight.Findings),
+            preflight.ErrorCode,
+            preflight.Findings);
     }
 
     public static int EstimateSubscriptionPromptCharacters(
