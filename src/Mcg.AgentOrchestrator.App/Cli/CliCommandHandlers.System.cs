@@ -68,6 +68,11 @@ internal static partial class CliCommandHandlers
         return lastSegment.Length <= 8 ? lastSegment : lastSegment[..8];
     }
 
+    private static bool LooksLikeClarificationShortId(string value)
+    {
+        return value.Length > 0 && value.Length <= 8 && value.All(Uri.IsHexDigit);
+    }
+
     private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
         switch (command)
@@ -138,7 +143,7 @@ internal static partial class CliCommandHandlers
                         throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
                     var globalClarifications = OpenClarifications(store);
-                    var scoped = parts.Count >= 5;
+                    var scoped = parts.Count >= 5 && LooksLikeClarificationShortId(parts[3]);
                     var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
                     var id = scoped ? parts[3] : parts[2];
