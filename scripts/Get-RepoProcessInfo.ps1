@@ -9,13 +9,20 @@
 param(
     [int[]]$Id = @(),
     [int[]]$ParentId = @(),
+    [string[]]$Name = @(),
+    [string[]]$CommandContains = @(),
+    [int]$Newest = 25,
     [switch]$IncludeChildren
 )
 
 $ErrorActionPreference = 'Stop'
 
-if ($Id.Count -eq 0 -and $ParentId.Count -eq 0) {
-    throw 'Specify -Id or -ParentId.'
+if ($Id.Count -eq 0 -and $ParentId.Count -eq 0 -and $Name.Count -eq 0 -and $CommandContains.Count -eq 0) {
+    throw 'Specify -Id, -ParentId, -Name, or -CommandContains.'
+}
+
+if ($Newest -lt 1) {
+    throw '-Newest must be at least 1.'
 }
 
 $seen = [System.Collections.Generic.HashSet[int]]::new()
@@ -53,6 +60,18 @@ function Write-ProcessInfo {
     }
 }
 
+function Add-UniqueProcess {
+    param($Process)
+
+    if ($null -eq $Process) {
+        return
+    }
+
+    if ($querySeen.Add([int]$Process.ProcessId)) {
+        $queryResults.Add($Process)
+    }
+}
+
 function Format-CimDate {
     param($Value)
 
@@ -72,6 +91,23 @@ function Format-CimDate {
     }
 }
 
+function MatchesCommandFilter {
+    param($Process)
+
+    if ($CommandContains.Count -eq 0) {
+        return $true
+    }
+
+    $command = [string]$Process.CommandLine
+    foreach ($needle in $CommandContains) {
+        if ($command.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 foreach ($processId in $Id) {
     Write-ProcessInfo -ProcessId $processId
 }
@@ -79,5 +115,28 @@ foreach ($processId in $Id) {
 foreach ($parentProcessId in $ParentId) {
     Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentProcessId" |
         Sort-Object ProcessId |
+        ForEach-Object { Write-ProcessInfo -ProcessId ([int]$_.ProcessId) }
+}
+
+if ($Name.Count -gt 0 -or $CommandContains.Count -gt 0) {
+    $querySeen = [System.Collections.Generic.HashSet[int]]::new()
+    $queryResults = [System.Collections.Generic.List[object]]::new()
+
+    if ($Name.Count -gt 0) {
+        foreach ($processName in $Name) {
+            $escapedName = $processName.Replace("'", "''")
+            Get-CimInstance Win32_Process -Filter "Name='$escapedName'" |
+                ForEach-Object { Add-UniqueProcess -Process $_ }
+        }
+    }
+    else {
+        Get-CimInstance Win32_Process |
+            ForEach-Object { Add-UniqueProcess -Process $_ }
+    }
+
+    $queryResults |
+        Where-Object { MatchesCommandFilter -Process $_ } |
+        Sort-Object CreationDate -Descending |
+        Select-Object -First $Newest |
         ForEach-Object { Write-ProcessInfo -ProcessId ([int]$_.ProcessId) }
 }
