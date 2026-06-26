@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 public sealed class LauncherScriptTests
@@ -94,18 +95,25 @@ public sealed class LauncherScriptTests
         Assert.True(File.Exists(logPath), $"Expected launcher log path to exist: {logPath}");
     }
 
-    private static string FindLauncherSourceRoot()
+    private static string FindLauncherSourceRoot([CallerFilePath] string sourceFilePath = "")
     {
-        var repoRoot = FindRepositoryRoot();
-        var launcherPath = Path.Combine(repoRoot, "mcg-orchestrator.cmd");
-        var landVerifiedGoalPath = Path.Combine(repoRoot, "scripts", "Land-VerifiedGoal.ps1");
-
-        if (File.Exists(launcherPath) && File.Exists(landVerifiedGoalPath))
+        var directory = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath))
+            ?? throw new DirectoryNotFoundException($"Could not resolve source directory from '{sourceFilePath}'."));
+        while (directory is not null)
         {
-            return repoRoot;
+            var launcherPath = Path.Combine(directory.FullName, "mcg-orchestrator.cmd");
+            var landVerifiedGoalPath = Path.Combine(directory.FullName, "scripts", "Land-VerifiedGoal.ps1");
+
+            if (File.Exists(launcherPath) && File.Exists(landVerifiedGoalPath))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException($"Could not locate launcher source files under repository root '{repoRoot}'.");
+        throw new DirectoryNotFoundException(
+            $"Could not locate launcher source files from source file path '{sourceFilePath}'.");
     }
 
     private static string FindRepositoryRoot()
