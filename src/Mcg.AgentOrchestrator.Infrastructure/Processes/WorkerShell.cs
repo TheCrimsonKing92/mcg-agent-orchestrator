@@ -3,10 +3,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>
 /// Resolves the PowerShell host used to run dispatch wrappers and worker command templates.
 /// Worker commands are PowerShell-dialect (e.g. <c>claude ... -p (Get-Content -Raw 'prompt.md')</c>),
-/// so a PowerShell host is required. Prefers cross-platform PowerShell (<c>pwsh</c>) when it is on
-/// PATH; falls back to Windows PowerShell (<c>powershell.exe</c>) on Windows. This keeps existing
-/// Windows behavior identical (where <c>pwsh</c> is usually absent) while making the runtime
-/// portable to Linux/macOS once <c>pwsh</c> is installed.
+/// so a PowerShell host is required. On Windows, prefer a real filesystem executable and avoid the
+/// WindowsApps package/alias path: Low-IL dispatches can be denied by package activation even when
+/// ordinary file reads would be allowed. Non-Windows hosts still resolve <c>pwsh</c> from PATH.
 /// </summary>
 public static class WorkerShell
 {
@@ -15,14 +14,51 @@ public static class WorkerShell
 
     private static string ResolveExecutable()
     {
-        if (IsOnPath("pwsh"))
+        if (OperatingSystem.IsWindows())
         {
-            return "pwsh";
+            foreach (var candidate in WindowsPowerShellCandidates())
+            {
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            var pathCandidate = FindOnPath("pwsh", skipWindowsApps: true) ??
+                FindOnPath("powershell.exe", skipWindowsApps: true);
+            if (!string.IsNullOrWhiteSpace(pathCandidate))
+            {
+                return pathCandidate;
+            }
+
+            // Last resort: keep the launch failure concrete if the Windows install is unusual.
+            return "powershell.exe";
         }
 
         // Non-Windows without pwsh surfaces a clear "pwsh not found" failure at launch, which is the
         // correct signal (the worker command templates need a PowerShell host).
-        return OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+        return FindOnPath("pwsh", skipWindowsApps: false) ?? "pwsh";
+    }
+
+    private static IEnumerable<string> WindowsPowerShellCandidates()
+    {
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        if (!string.IsNullOrWhiteSpace(programFiles))
+        {
+            yield return Path.Combine(programFiles, "PowerShell", "7", "pwsh.exe");
+        }
+
+        var programW6432 = Environment.GetEnvironmentVariable("ProgramW6432");
+        if (!string.IsNullOrWhiteSpace(programW6432))
+        {
+            yield return Path.Combine(programW6432, "PowerShell", "7", "pwsh.exe");
+        }
+
+        var systemRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if (!string.IsNullOrWhiteSpace(systemRoot))
+        {
+            yield return Path.Combine(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        }
     }
 
     /// <summary>
@@ -40,12 +76,12 @@ public static class WorkerShell
             ? ["-NoProfile", "-NonInteractive", "-InputFormat", "None", "-ExecutionPolicy", "Bypass", "-Command"]
             : ["-NoProfile", "-NonInteractive", "-InputFormat", "None", "-Command"];
 
-    private static bool IsOnPath(string executable)
+    private static string? FindOnPath(string executable, bool skipWindowsApps)
     {
         var pathVariable = Environment.GetEnvironmentVariable("PATH");
         if (string.IsNullOrEmpty(pathVariable))
         {
-            return false;
+            return null;
         }
 
         var candidates = OperatingSystem.IsWindows()
@@ -58,9 +94,11 @@ public static class WorkerShell
             {
                 try
                 {
-                    if (File.Exists(Path.Combine(directory, candidate)))
+                    var path = Path.Combine(directory, candidate);
+                    if (File.Exists(path) &&
+                        (!skipWindowsApps || !IsWindowsAppsPath(path)))
                     {
-                        return true;
+                        return path;
                     }
                 }
                 catch
@@ -70,6 +108,17 @@ public static class WorkerShell
             }
         }
 
-        return false;
+        return null;
+    }
+
+    internal static bool IsWindowsAppsPath(string path)
+    {
+        var normalized = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        return normalized.Contains(
+            $"{Path.DirectorySeparatorChar}WindowsApps{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(
+                $"{Path.DirectorySeparatorChar}Microsoft{Path.DirectorySeparatorChar}WindowsApps",
+                StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -40,6 +40,24 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_path_removes_windowsapps_and_prepends_shell_dir")]
+    public void LowIntegrityPathRemovesWindowsAppsAndPrependsShellDir()
+    {
+        var shellDir = Path.Combine(Path.GetTempPath(), "real-powershell");
+        var shell = Path.Combine(shellDir, OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh");
+        var windowsApps = Path.Combine(Path.GetTempPath(), "Microsoft", "WindowsApps");
+        var toolDir = Path.Combine(Path.GetTempPath(), "tooling");
+        var originalPath = string.Join(Path.PathSeparator, windowsApps, toolDir, shellDir);
+
+        var result = DispatchProcessHost.BuildLowIntegrityPath(originalPath, shell);
+        var entries = result.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(shellDir, entries[0]);
+        Assert.Contains(toolDir, entries);
+        Assert.DoesNotContain(entries, DispatchProcessHost.IsWindowsAppsPathSegment);
+        Assert.Equal(1, entries.Count(entry => string.Equals(entry, shellDir, StringComparison.OrdinalIgnoreCase)));
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_exit_file_when_grandchild_holds_pipe_after_worker_exits")]
     public void DispatchProcessHostWritesExitFileWhenGrandchildHoldsPipeAfterWorkerExits()
     {

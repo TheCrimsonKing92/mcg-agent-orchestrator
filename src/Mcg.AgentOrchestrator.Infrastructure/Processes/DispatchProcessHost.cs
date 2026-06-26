@@ -92,6 +92,7 @@ public static class DispatchProcessHost
         startInfo.Environment["CODEX_HOME"] = codexHome;
         startInfo.Environment["TEMP"] = tempDir;
         startInfo.Environment["TMP"] = tempDir;
+        startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable);
 
         // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
         // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
@@ -102,6 +103,62 @@ public static class DispatchProcessHost
         {
             startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+    }
+
+    internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable)
+    {
+        var entries = new List<string>();
+        var shellDirectory = Path.GetDirectoryName(shellExecutable);
+        if (!string.IsNullOrWhiteSpace(shellDirectory))
+        {
+            entries.Add(shellDirectory);
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentPath))
+        {
+            foreach (var rawEntry in currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (IsWindowsAppsPathSegment(rawEntry) ||
+                    entries.Any(existing => PathsEqual(existing, rawEntry)))
+                {
+                    continue;
+                }
+
+                entries.Add(rawEntry);
+            }
+        }
+
+        return string.Join(Path.PathSeparator, entries);
+    }
+
+    internal static bool IsWindowsAppsPathSegment(string path)
+    {
+        var normalized = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .TrimEnd(Path.DirectorySeparatorChar);
+        return normalized.EndsWith(
+            $"{Path.DirectorySeparatorChar}Microsoft{Path.DirectorySeparatorChar}WindowsApps",
+            StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains(
+                $"{Path.DirectorySeparatorChar}WindowsApps",
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        try
+        {
+            left = Path.GetFullPath(left);
+            right = Path.GetFullPath(right);
+        }
+        catch
+        {
+            // Compare the original strings when either path is malformed.
+        }
+
+        return string.Equals(
+            left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            right.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     // Appends ".mcg-sandbox/" to the worktree's local git exclude (.git/info/exclude, resolved via
