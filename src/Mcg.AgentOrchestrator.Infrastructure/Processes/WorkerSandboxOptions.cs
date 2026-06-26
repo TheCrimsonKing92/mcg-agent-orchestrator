@@ -2,10 +2,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>
 /// Configuration for the OS-level worker sandbox: when enabled (and on Windows), write-capable
-/// worker dispatches (Developer/Tester) run AS a dedicated low-privilege local account whose NTFS
-/// ACLs confine writes to the per-run worktree + git common dir, with codex's own sandbox set to
-/// danger-full-access (so it uses ordinary CreateProcess and never hits the CreateProcessAsUserW
-/// poisoning). Gated by environment so it is off by default and a no-op on non-Windows hosts.
+/// worker dispatches (Developer/Tester) run at Low integrity as the operator account. Mandatory
+/// Integrity Control confines writes to the Low-labeled goal worktree and sandbox scratch; linked
+/// worktree git metadata under the shared repository .git stays medium integrity and is committed
+/// by the orchestrator after verified edits. Gated by environment so it is off by default and a
+/// no-op on non-Windows hosts.
 /// </summary>
 public sealed record WorkerSandboxOptions(bool Enabled, string Account, string CredentialTarget)
 {

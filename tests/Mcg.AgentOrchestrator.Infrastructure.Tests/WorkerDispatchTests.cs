@@ -303,6 +303,53 @@ public sealed class WorkerDispatchTests
     Assert.Contains(File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), text => text.Contains("deterministic profile, sandbox, worktree", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_reports_goal_worktree_git_metadata_access_without_worker_start")]
+    public void WorkerProfileDispatcherPreflightReportsGoalWorktreeGitMetadataAccessWithoutWorkerStart()
+{
+    var previousSandbox = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+    var root = CreateSeededDispatchRepository();
+    try
+    {
+        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, "1");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Inspect worker git metadata permissions", [new TaskSpec(TaskId.New(), "Inspect worker git metadata permissions.", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            task,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            worktree,
+            DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+            allowGitReference: true);
+
+        var findings = string.Join("\n", preflight.Findings);
+        Assert.True(preflight.Allowed, findings);
+        Assert.Null(task.LastDispatch);
+        Assert.Contains("git metadata index_lock=", findings);
+        Assert.Contains(Path.Combine(".git", "worktrees", goal.Id.Value[..8], "index.lock"), findings.Replace('/', Path.DirectorySeparatorChar));
+        Assert.Contains("current_process_can_write=True", findings);
+        Assert.Contains(
+            OperatingSystem.IsWindows() ? "worker_git_write=blocked-by-low-integrity" : "worker_git_write=same-as-orchestrator",
+            findings);
+        Assert.Contains("commit_contract=workers edit worktree files; orchestrator commits verified dirty edits on behalf", findings);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previousSandbox);
+    }
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_repo_scoped_skill_targets")]
     public void WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets()
 {
