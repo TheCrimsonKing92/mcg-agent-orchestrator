@@ -1829,3 +1829,94 @@ Goal 6993fadb: The acceptance/landing path holds the state.db single-writer lock
 
 - Operator gate: Researcher: not-run evidence (research phase only) (exit 0); Developer: not-run; current-task.md says do not run dotnet build/test locally (exit 0); Tester: Cli_acceptance_releases_state_write_lock_during_verification PASS, Cli_acceptance_rejects_stale_goal_state_before_merge_commit PASS, Cli_acceptance_rejects_stale_worktree_head_before_merge_commit PASS (3/3 tests pass, 0 failures) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review identifying cross-path integration bugs in a C# concurrency refactor - reasoning about in-memory vs SQLite kernel divergence required careful multi-file tracing; well within this model's capabilities.
+
+## 2026-06-23 - Backlog slice: Acceptance gate: run incremental, multi-core, and change-scope...
+
+Goal fa5d104b: Backlog slice: Acceptance gate: run incremental, multi-core, and change-scoped instead of cold, single-core, full-sol.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit edab3d0). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 39c59a3 (test fixes), f5313e5 (implementation)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: not-run; isolated dotnet wrapper failed to launch with sandbox error `CreateProcessAsUserW failed: 1312` (exit 0); Tester: Infrastructure acceptance gate tests compile and run; key changes verified via code review; test assertion overloads fixed and committed (exit 0); Reviewer: not-run; code-level review substitutes for both blocked verification runs (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped repo infrastructure change - handled code/test edit, but verification was blocked by sandbox process launch.
+
+## 2026-06-23 - Backlog slice: Per-command in-transaction reconcile sweep wedges ALL state
+
+Goal 6fbf4367: Backlog slice: Per-command in-transaction reconcile sweep wedges ALL state.db writes after a crashed loop; move recon.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit 907ad7d). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 907ad7d). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run (exit 0); Developer: not-run - process launch blocked by Windows sandbox CreateProcessAsUserW failed: 1312 (exit 0); Tester: unit-tests-present-no-explicit-run (isolated-slot build lock contention prevented dotnet test execution; tests verified by code inspection and syntax validation) (exit 0); Reviewer: not-run (Developer sandbox blocked; Tester code-review only; no dotnet execution confirmed) (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped .NET state/CLI refactor - handled implementation, but verification was environment-blocked.
+
+## 2026-06-23 - Backlog slice: Worker/build isolation: non-inheritable state
+
+Goal 90442a2d: Backlog slice: Worker/build isolation: non-inheritable state.db handles (root of recurring database-locked wedges) + .... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit (no receipt)). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 7664acc11a96bed5f78539b443c78fce3ed36699 (latest; ac5f9bc is the implementation commit)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Developer: not-run; process spawning unavailable (exit 0); Tester: not-run (environmental constraint: NuGet/slot cache conflicts prevent test compilation in this environment; code review confirms implementation structure matches acceptance criteria) (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped infrastructure/dashboard isolation work - good fit for code changes, but local runner failure prevented completion evidence.
+
+## 2026-06-23 - Backlog slice: Fix the semantic-judge request shape (codex xhigh found these ...
+
+Goal 2ba70fe1: Backlog slice: Fix the semantic-judge request shape (codex xhigh found these code bugs): (1) ModelOptions.ReasoningEf.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit beedd33). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit beedd33). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit beedd33 (no Reviewer commit)). Acceptance passed.
+
+- Operator gate: Researcher: not-run (exit 0); Developer: 1057/1057 passed (ALL GREEN), including 7 new focused unit tests (exit 0); Tester: 1057/1057 passed (all green), including 6 focused unit tests for semantic-judge behavior (exit 0); Reviewer: 1057/1057 (Developer + Tester independent runs) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - targeted multi-file code review - four well-specified, independent fixes verified by code reading and test inspection.
+
+## 2026-06-24 - Backlog slice: First-class dispatch diagnostic record: make the proven ad-hoc...
+
+Goal dfd7bb54: Backlog slice: First-class dispatch diagnostic record: make the proven ad-hoc reconcile/classify instrumentation a pe.... Planner task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Researcher task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit (no receipt)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit c3e5bd6). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run (exit 0); Researcher: not-run (exit 0); Tester: 1080/1080 Infrastructure.Tests green (developer task verified) (exit 0); Reviewer: 1080/1080 (prior Tester evidence; no re-run by Reviewer) (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - reviewer/code-review shape - sufficient to read implementation, map against spec, and identify low-severity gaps without executing tests.
+
+## 2026-06-24 - # GOAL: goal-mark-landed - record out-of-band landing so force-landed goals r...
+
+Goal e3a0b5ca: # GOAL: goal-mark-landed - record out-of-band landing so force-landed goals retire cleanly (backlog aece0419)  ## The.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 172a1a912d4aa05fd0a59c6c197b9a13e450f368). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 172a1a912d4aa05fd0a59c6c197b9a13e450f368). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner read-only task, produced implementation/verification plan from source inspection (exit 0); Researcher: not-run; research-only task and local shell runner failed with CreateProcessAsUserW 1312 (exit 0); Developer: Infrastructure.Tests 1083/1083 passed (was 1082; +1 new test Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry) (exit 0); Tester: Infrastructure.Tests 1083/1083 passed (was 1082; +1 new test Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry) (exit 0); Reviewer: not-run; reviewed prior evidence reporting Infrastructure.Tests 1083/1083 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer code/evidence inspection - enough context to identify contract mismatches.
+
+## 2026-06-24 - # GOAL: Goal-scoped transactions (architecture roadmap 16ea5b17 step A) - the...
+
+Goal d5aed2cd: # GOAL: Goal-scoped transactions (architecture roadmap 16ea5b17 step A) - the highest-leverage, lowest-risk first red.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit 2124895). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 2124895 (latest fix)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run - planner task only; source/context verification performed; `git status --short` clean; `git diff --stat` failed before launch with Windows sandbox runner error 1312 (exit 0); Researcher: not-run - Researcher task; repository-local source inspection completed; git status clean (exit 0); Developer: pass - Infrastructure 1090/1090, Core 382/382 (1472 total) (exit 0); Tester: Infrastructure.Tests compiled; 1084 passed; 5 new goal-scoped tests present (exit 0); Reviewer: not-run - reviewer read-only source/evidence review; prior Developer evidence claims Infrastructure 1090/1090 and Core 382/382 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - source/evidence comparison was enough to identify acceptance blockers.
+
+## 2026-06-24 - # GOAL: CPU-tree liveness signal in the dispatch heartbeat (backlog b13ea260,...
+
+Goal cf59ce9e: # GOAL: CPU-tree liveness signal in the dispatch heartbeat (backlog b13ea260, FIRST increment)  ## Current state (gro.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Low-IL process cannot write to Medium-IL .git metadata; orchestrator commits via TryCommitWorktreeEdits)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 8eee83a67084dea33239b24aad189f4c360c8628 (Orchestrator-committed worker edits for goal cf59ce9ebe03490e9df7adbb3e2940af)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner task only, source/context inspection completed (exit 0); Researcher: not-run - research-only source/API inspection (exit 0); Developer: Passed! - Failed: 0, Passed: 7, Skipped: 0, Total: 7 (3 pre-existing + 4 new HasProgressed tests) (exit 0); Tester: Passed! - Failed: 0, Passed: 7 (focused DispatchProcessHostTests), Total: 7, Duration: 12 s | Full suite: 1089/1095 passed (6 pre-existing failures in GoalWorktreeTests, unrelated to CPU changes) (exit 0); Reviewer: not-run by reviewer; prior evidence says focused 7/7 passed, but review found untested process-tree gap (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - enough context to catch the process-tree mismatch.
+
+## 2026-06-24 - # GOAL: Fast startup-hang detection via a CPU-idle-since-start fast-path (bac...
+
+Goal febedb66: # GOAL: Fast startup-hang detection via a CPU-idle-since-start fast-path (backlog b13ea260, SECOND increment)  ## Cur.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Low-IL sandbox blocks .git writes; orchestrator commits)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 6c10a52e0b7d2f6fe94597269d3dffc75d6b2a02). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, no repository edits (exit 0); Researcher: not-run - research-only task, no files modified (exit 0); Developer: Passed: 4 — BackgroundDispatchRunner_startup_hang_fast_path_fires_when_cpu_idle_and_no_output [5 s], BackgroundDispatchRunner_startup_hang_suppressed_when_cpu_above_epsilon [23 ms], BackgroundDispatchRunner_startup_hang_suppressed_when_ownedCpuMs_absent [1 ms], BackgroundDispatchRunner_startup_hang_suppressed_when_output_bytes_nonzero [2 ms] (exit 0); Tester: PASS — 4/4 focused tests green: fast_path_fires, cpu_above_epsilon_suppressed, ownedCpuMs_absent_suppressed, output_bytes_nonzero_suppressed (exit 0); Reviewer: not-run - sandbox process creation failed with CreateProcessAsUserW failed: 1312 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - tool failure, not model capability, blocked completion.
+
+## 2026-06-24 - # GOAL: Document the autonomous conductor-loop operation + recovery playbook ...
+
+Goal f3c0e7cd: # GOAL: Document the autonomous conductor-loop operation + recovery playbook in docs/operator-runbook.md  ## Context .... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (ACL restricts git writes to mcg-worker; orchestrator commits on behalf per the mechanism documented in §6.2)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 8fc86ad (worker-committed via orchestrator on behalf of prior Developer task)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner docs-only decomposition, no repository files modified (exit 0); Researcher: not-run; Researcher docs-only/source-verification task, no repository edits (exit 0); Developer: not-run (docs-only change; no test command applies) (exit 0); Tester: not-run; docs-only change with markdown validation (exit 0); Reviewer: not-run; docs-only review blocked before final independent diff/source verification (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer/source-verification task - task shape was suitable, but environment prevented completion.
+
+## 2026-06-24 - # GOAL: Unify the fragmented dispatch-readiness predicates into one canonical...
+
+Goal c6aba689: # GOAL: Unify the fragmented dispatch-readiness predicates into one canonical decision (roadmap 16ea5b17 step C)  ## .... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Low-IL worktree; orchestrator commits)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 1fbd852 (orchestrator-committed; working tree clean)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner task only, no code changes (exit 0); Researcher: not-run; read-only research task, no code changes (exit 0); Developer: 9/9 new DispatchReadinessEvaluator tests passed; 52/52 ConductorDriver+GoalReadinessPreflight tests passed; 13/13 CrossGoal+GoalReadiness tests passed; 0 build errors (exit 0); Tester: 9/9 DispatchReadinessEvaluator PASS; 3/3 GoalReadinessPreflight PASS; 2/2 CrossGoalSubscriptionStartPlanner PASS; 42/42 ConductorDriver PASS; 74/74 Conductor full suite PASS (exit 0); Reviewer: not-run; review found acceptance-blocking coverage/behavior gaps despite prior focused test claims (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer code/evidence audit - precise enough for cross-file readiness contract review.
+
+## 2026-06-25 - # GOAL: Stop discarding a successful-but-buffered worker as an empty-output f...
+
+Goal 4b04e5e6: # GOAL: Stop discarding a successful-but-buffered worker as an empty-output flake (backlog 0d5a51b7)  ## Current stat.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 0845e74 (Orchestrator-committed worker edits for goal 4b04e5e69c224311809241fb10475b5c)). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none (Reviewer role; changes committed by orchestrator at 0845e74)). Acceptance passed.
+
+- Operator gate: Planner: not-run - Planner task only; verified clean worktree and produced falsifiable downstream plan (exit 0); Researcher: not-run; research-only inspection, no repository edits (exit 0); Developer: pass - Core 395/395, focused BackgroundDispatchRunner 44/44 (exit 0); Tester: Core.Tests DispatchOutcomeClassifyTests: 13/13 PASSED (39 ms); Infrastructure.Tests WorkerDispatch: 135/135 PASSED (1 m 5 s); all acceptance criteria verified (exit 0); Reviewer: 44/44 BackgroundDispatchRunner (Infra, Developer task); all 4 acceptance-criteria unit tests in DispatchOutcomeClassifyTests pass per tester summary (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - focused .NET code review, no implementation required, diff + test trace fit well within context window.
+
+## 2026-06-26 - Implement a small typed worker-provider identity helper for mcg-agent-orchest...
+
+Goal 58714413: Implement a small typed worker-provider identity helper for mcg-agent-orchestrator.  Problem: `BackgroundDispatchRunn.... Developer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: (no receipt)
+- (no receipt)
