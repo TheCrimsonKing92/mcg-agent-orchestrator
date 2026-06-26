@@ -947,6 +947,108 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_rebases_before_verification_and_lands_verified_head")]
+    public void CliAcceptanceRebasesBeforeVerificationAndLandsVerifiedHead()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance rebase ordering test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var staleGoalHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main work");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main work");
+
+            string? verifierHead = null;
+            var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
+            {
+                verifierHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+            });
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+            var landedHead = RunGitOutput(repo, "rev-parse", "HEAD");
+
+            Assert.True(output.Contains("Workspace rebase: Rebased", StringComparison.Ordinal));
+            Assert.Equal(1, fakeVerifier.RunCount);
+            Assert.False(string.IsNullOrWhiteSpace(verifierHead));
+            Assert.NotEqual(staleGoalHead, verifierHead);
+            Assert.Equal(verifierHead, landedHead);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.True(File.Exists(Path.Combine(repo, "main-advanced.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_rebase_conflict_blocks_before_verification_and_restores_worktree")]
+    public void CliAcceptanceRebaseConflictBlocksBeforeVerificationAndRestoresWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance rebase conflict test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "seed.txt"), "goal edit");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal edit");
+            var originalGoalHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "main edit");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main edit");
+            var mainHeadBeforeAcceptance = RunGitOutput(repo, "rev-parse", "HEAD");
+
+            var fakeVerifier = FakeAcceptanceVerifier.Passed();
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("Workspace rebase: Rebase", StringComparison.Ordinal));
+            Assert.True(output.Contains("Conflict files:", StringComparison.Ordinal));
+            Assert.True(output.Contains("Acceptance evidence: blocked; merge blocked", StringComparison.Ordinal));
+            Assert.Equal(0, fakeVerifier.RunCount);
+            Assert.Equal(mainHeadBeforeAcceptance, RunGitOutput(repo, "rev-parse", "HEAD"));
+            Assert.Equal(originalGoalHead, RunGitOutput(worktreePath, "rev-parse", "HEAD"));
+            Assert.Equal("goal edit", File.ReadAllText(Path.Combine(worktreePath, "seed.txt")));
+            Assert.Equal("main edit", File.ReadAllText(Path.Combine(repo, "seed.txt")));
+            Assert.Equal(string.Empty, RunGitOutput(worktreePath, "status", "--short"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_lands_when_discord_token_is_invalid")]
     public void CliAcceptanceLandsWhenDiscordTokenIsInvalid()
     {
@@ -2678,6 +2780,35 @@ public sealed class GoalWorktreeTests
         {
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
         }
+    }
+
+    private static string RunGitOutput(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)!;
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit(60000);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        }
+
+        return output.Trim();
     }
 
     private static int RunGitExitCode(string workingDirectory, params string[] arguments)

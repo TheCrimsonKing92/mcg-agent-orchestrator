@@ -2153,9 +2153,27 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
     var worktreePath = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
-    var testedWorktreeHead = worktreePath is null ? null : ResolveWorktreeHead(worktreePath);
+    string? testedWorktreeHead = null;
     if (worktreePath is not null)
     {
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var needsRebase = GitCli.Run(context.Workspace.ExecutionDirectory, "merge-base", "--is-ancestor", "HEAD", branch).ExitCode != 0;
+        if (needsRebase)
+        {
+            var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+            Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
+
+            if (!rebase.UpdatedBranch)
+            {
+                var failedChecks = new[] { $"workspace rebase: {rebase.Status.ToString().ToLowerInvariant()}" };
+                context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+                context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
+                Console.WriteLine("Acceptance evidence: blocked; merge blocked");
+                return false;
+            }
+        }
+
+        testedWorktreeHead = ResolveWorktreeHead(worktreePath);
         var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
         if (skipVerify)
         {
@@ -2227,18 +2245,6 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
             var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-            if (merge is { FastForwarded: false })
-            {
-                // Deterministic: the goal branch is behind main, so a plain ff is impossible. Rebase it
-                // onto main and retry the ff instead of punting the merge to the operator. A rebase
-                // conflict leaves the branch un-updated, so the merge stays blocked and escalates.
-                var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
-                Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
-                if (rebase.UpdatedBranch)
-                {
-                    merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-                }
-            }
 
             if (merge is null)
             {
