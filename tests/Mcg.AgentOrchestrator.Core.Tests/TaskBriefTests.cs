@@ -763,8 +763,8 @@ public sealed class TaskBriefTests
     Assert.True(!developerBrief.Contains("Do not modify repository files", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_worker_result_block_fields_and_commit_instruction")]
-    public void BuildTaskBriefIncludesWorkerResultBlockFieldsAndCommitInstruction()
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_worker_result_block_fields_and_no_self_commit_instruction")]
+    public void BuildTaskBriefIncludesWorkerResultBlockFieldsAndNoSelfCommitInstruction()
 {
     var kernel = new AgentOrchestratorKernel(new FakeClock());
     var goal = kernel.CreateGoal("Ship a feature", [new TaskSpec(TaskId.New(), "Implement the feature and write tests.", AgentRole.Developer)]);
@@ -777,7 +777,8 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("commit:", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("model_fit:", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("END_WORKER_RESULT", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Git commit all changes in the working directory before reporting results.", StringComparison.Ordinal));
+    Assert.Contains(brief, text => text.Contains("Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs.", StringComparison.Ordinal));
+    Assert.True(!brief.Contains("Git commit all changes in the working directory before reporting results.", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Final: WORKER_RESULT.", StringComparison.Ordinal));
 }
 
