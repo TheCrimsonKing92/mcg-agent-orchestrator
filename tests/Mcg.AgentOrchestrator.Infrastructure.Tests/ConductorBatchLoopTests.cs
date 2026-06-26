@@ -182,6 +182,42 @@ public sealed class ConductorBatchLoopTests
         Assert.False(summary.StopRequested);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_active_goal_advances_alongside_many_completed_goals")]
+    public void BatchLoopActiveGoalAdvancesAlongsideManyCompletedGoals()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var completedGoalIds = new HashSet<GoalId>();
+        for (var i = 0; i < 100; i++)
+        {
+            var completed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), $"completed goal {i}");
+            PassVerification(kernel, completed, completed.Tasks.Single());
+            completedGoalIds.Add(completed.Id);
+        }
+
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active conductor goal");
+        var createdWorkspaces = new List<GoalId>();
+        var driver = MakeDriver(
+            getFacts: goal => completedGoalIds.Contains(goal.Id)
+                ? new GoalLifecycleFacts(IsCleanedUp: true)
+                : GoalLifecycleFacts.None,
+            createWorkspace: goal =>
+            {
+                createdWorkspaces.Add(goal.Id);
+                return "/tmp/workspace";
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, summary.Advanced);
+        Assert.Contains(active.Id, createdWorkspaces);
+        Assert.DoesNotContain(createdWorkspaces, completedGoalIds.Contains);
+    }
+
     // ── Dynamic goal pickup: a goal ingested mid-run via the sweep is driven ──
 
     [Xunit.Fact(DisplayName = "BatchLoop_picks_up_a_goal_ingested_mid_run_via_the_sweep")]
