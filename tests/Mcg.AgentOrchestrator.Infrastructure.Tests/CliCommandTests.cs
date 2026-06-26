@@ -3870,6 +3870,119 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_show_goal_prefix_filters_unrelated_items")]
+    public async Task CliAttentionShowGoalPrefixFiltersUnrelatedItems()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("aaaaaaaa111111111111111111111111"), "Target goal");
+        var other = kernel.CreateGoal(new GoalId("bbbbbbbb222222222222222222222222"), "Other goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, target.Id.Value, "Target clarification", "Target body", $"spec-clarification:{target.Id.Value}:scope:11111111");
+        for (var index = 0; index < 12; index++)
+        {
+            _ = await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, $"Other clarification {index}", "Other body", $"spec-clarification:{other.Id.Value}:scope:{index:00000000}");
+        }
+
+        var output = ExecuteCliAndCapture(["attention", "show", "aaaaaaaa"], kernel, workspace);
+
+        Xunit.Assert.Contains("[11111111] Target clarification", output);
+        Xunit.Assert.Contains("Target body", output);
+        Xunit.Assert.DoesNotContain("Other clarification", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_show_goal_prefix_prints_empty_state")]
+    public async Task CliAttentionShowGoalPrefixPrintsEmptyState()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var empty = kernel.CreateGoal(new GoalId("cccccccc333333333333333333333333"), "Empty goal");
+        var other = kernel.CreateGoal(new GoalId("dddddddd444444444444444444444444"), "Other goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, "Other clarification", "Other body", $"spec-clarification:{other.Id.Value}:scope:22222222");
+
+        var output = ExecuteCliAndCapture(["attention", "show", "cccccccc"], kernel, workspace);
+
+        Xunit.Assert.Contains($"No open attention items for goal {empty.Id.Value}.", output);
+        Xunit.Assert.DoesNotContain("Other clarification", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_goal_prefix_confirms_single_item")]
+    public async Task CliAttentionAnswerGoalPrefixConfirmsSingleItem()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("eeeeeeee555555555555555555555555"), "Target goal");
+        var other = kernel.CreateGoal(new GoalId("ffffffff666666666666666666666666"), "Other goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, target.Id.Value, "Target clarification", "Target body", $"spec-clarification:{target.Id.Value}:scope:33333333");
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, "Other clarification", "Other body", $"spec-clarification:{other.Id.Value}:scope:44444444");
+
+        var output = ExecuteCliAndCapture(["attention", "answer", "eeeeeeee", "33333333", "Use the target answer."], kernel, workspace);
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Equal($"Answered clarification '33333333' for goal '{target.Id.Value[..8]}'.{Environment.NewLine}", output);
+        Xunit.Assert.DoesNotContain("Other clarification", output);
+        Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{target.Id.Value}:scope:33333333");
+        Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{other.Id.Value}:scope:44444444");
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_goal_prefix_rejects_wrong_clarification_id")]
+    public async Task CliAttentionAnswerGoalPrefixRejectsWrongClarificationId()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("12345678aaaaaaaaaaaaaaaaaaaaaaaa"), "Target goal");
+        var other = kernel.CreateGoal(new GoalId("87654321bbbbbbbbbbbbbbbbbbbbbbbb"), "Other goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, "Other clarification", "Other body", $"spec-clarification:{other.Id.Value}:scope:55555555");
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() =>
+            ExecuteCliAndCapture(["attention", "answer", "12345678", "55555555", "Do not cross streams."], kernel, workspace));
+
+        Xunit.Assert.Contains($"does not belong to goal '{target.Id.Value}'", ex.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_show_global_lists_full_queue")]
+    public async Task CliAttentionShowGlobalListsFullQueue()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal(new GoalId("abc00000111111111111111111111111"), "A");
+        var goalB = kernel.CreateGoal(new GoalId("def00000222222222222222222222222"), "B");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        for (var index = 0; index < 10; index++)
+        {
+            var goal = index % 2 == 0 ? goalA : goalB;
+            _ = await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, $"Global clarification {index}", "Body", $"spec-clarification:{goal.Id.Value}:global:{index:00000000}");
+        }
+
+        var output = ExecuteCliAndCapture(["attention", "show"], kernel, workspace);
+
+        Xunit.Assert.Contains("Attention queue: 10 open reach-up item(s)", output);
+        Xunit.Assert.Contains("Global clarification 0", output);
+        Xunit.Assert.Contains("Global clarification 9", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_show_unknown_goal_prefix_errors")]
+    public void CliAttentionShowUnknownGoalPrefixErrors()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        _ = kernel.CreateGoal(new GoalId("11111111aaaaaaaaaaaaaaaaaaaaaaaa"), "Known goal");
+
+        var ex = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+            ExecuteCliAndCapture(["attention", "show", "99999999"], kernel, workspace));
+
+        Xunit.Assert.Contains("No goal found matching prefix '99999999'", ex.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_task_commands_normalize_one_shot_legacy_task_notes")]
     public void CliTaskCommandsNormalizeOneShotLegacyTaskNotes()
     {
@@ -4257,6 +4370,26 @@ public sealed class CliCommandTests
                 Name: ModelFunctionPurposes.SpecRefiner)
         ]));
         return workspace;
+    }
+
+    private static string ExecuteCliAndCapture(
+        IReadOnlyList<string> parts,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        return CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
     }
 
     private static void WritePlanningBacklog(string root)
