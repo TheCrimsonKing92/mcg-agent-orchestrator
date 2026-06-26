@@ -33,6 +33,81 @@ public sealed class GoalBacklogLinkTests
         Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
     }
 
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_new_source_backlog_id_creates_goal_and_persists_indexed_record")]
+    public async Task NewSourceBacklogIdCreatesGoalAndPersistsIndexedRecord()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Indexed Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Indexed Feature", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.True(changed);
+        Assert.NotNull(currentGoal);
+        var seededId = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Indexed Feature", StringComparison.Ordinal))
+            .Id;
+        Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
+
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath}");
+        await conn.OpenAsync();
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT source_backlog_item_id FROM goals WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", currentGoal.Id.Value);
+            Assert.Equal(seededId, (string?)await cmd.ExecuteScalarAsync());
+        }
+
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_goals_source_backlog_item_id'";
+            Assert.Equal(1L, (long)(await cmd.ExecuteScalarAsync() ?? 0L));
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_duplicate_source_backlog_id_returns_existing_goal_without_new_goal")]
+    public void DuplicateSourceBacklogIdReturnsExistingGoalWithoutNewGoal()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var firstChanged = CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Retry Feature", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        var firstGoal = currentGoal!;
+
+        var output = CaptureConsole(() =>
+        {
+            var secondChanged = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Retry Feature", "--create-simple-goal"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(secondChanged);
+        });
+
+        Assert.True(firstChanged);
+        Assert.Single(kernel.Goals);
+        Assert.Equal(firstGoal.Id, currentGoal!.Id);
+        Assert.Contains($"already has goal {firstGoal.Id.Value[..8]}", output);
+        Assert.Contains("no new goal created", output);
+    }
+
     // ── Intake: batch (multiple filters -> one goal each) ─────────────────────
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_batch_intake_creates_one_linked_goal_per_filter")]

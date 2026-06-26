@@ -1,5 +1,6 @@
 param(
     [string]$Name = "command",
+    [string]$AppDll,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -13,9 +14,13 @@ if ($Arguments.Count -eq 0) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$appDll = Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
-if (-not (Test-Path -LiteralPath $appDll)) {
-    throw "App DLL not found. Build the app first: $appDll"
+$resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
+    Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+} else {
+    [System.IO.Path]::GetFullPath($AppDll)
+}
+if (-not (Test-Path -LiteralPath $resolvedAppDll)) {
+    throw "App DLL not found. Build the app first: $resolvedAppDll"
 }
 
 $logsRoot = Join-Path $repoRoot ".orchestrator\logs"
@@ -36,9 +41,9 @@ function ConvertTo-SafeName {
 
 $stamp = Get-Date -Format "yyyyMMddHHmmss"
 $safeName = ConvertTo-SafeName $Name
-$stdoutPath = Join-Path $logsRoot "operator-$safeName-$stamp.out.log"
-$stderrPath = Join-Path $logsRoot "operator-$safeName-$stamp.err.log"
-$processArguments = @($appDll) + $Arguments
+$stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
+$stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
+$processArguments = @($resolvedAppDll) + $Arguments
 
 $process = Start-Process `
     -WindowStyle Hidden `
@@ -49,7 +54,10 @@ $process = Start-Process `
     -RedirectStandardOutput $stdoutPath `
     -RedirectStandardError $stderrPath
 
-Write-Output "pid=$($process.Id)"
-Write-Output "stdout=$stdoutPath"
-Write-Output "stderr=$stderrPath"
-Write-Output "args=$($Arguments -join ' ')"
+[pscustomobject]@{
+    pid = [int]$process.Id
+    logPath = $stdoutPath
+    stdoutPath = $stdoutPath
+    stderrPath = $stderrPath
+    args = @($Arguments)
+} | ConvertTo-Json -Compress

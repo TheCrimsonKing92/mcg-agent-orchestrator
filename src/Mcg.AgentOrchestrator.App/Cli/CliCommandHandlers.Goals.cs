@@ -1386,6 +1386,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
     {
         var created = 0;
+        var matched = 0;
         foreach (var filter in batchFilters)
         {
             var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 1);
@@ -1396,6 +1397,14 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             }
 
             var batchItem = itemPlan.Items.Single();
+            matched++;
+            if (TryReuseBacklogIntakeGoal(context, batchItem, out var reusedBatchGoal))
+            {
+                context.CurrentGoal = reusedBatchGoal;
+                Console.WriteLine($"Backlog slice '{batchItem.Heading}' already has goal {reusedBatchGoal.Id.Value[..8]}; no new goal created.");
+                continue;
+            }
+
             var batchGoal = createSimpleGoal
                 ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
                 : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter);
@@ -1412,13 +1421,13 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
                 : $"Created five-role goal from backlog slice '{batchItem.Heading}'.");
         }
 
-        if (created == 0)
+        if (matched == 0)
         {
             throw new InvalidOperationException("No backlog items matched the requested filters.");
         }
 
         Console.WriteLine($"Created {created} goal(s) from {batchFilters.Count} requested backlog slice(s).");
-        return true;
+        return created > 0;
     }
 
     var headingFilter = parts
@@ -1452,6 +1461,13 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     var item = plan.Items.Single();
     var backlogItemId = item.Id;
+    if (TryReuseBacklogIntakeGoal(context, item, out var existingGoal))
+    {
+        context.CurrentGoal = existingGoal;
+        Console.WriteLine($"Backlog slice already has goal {existingGoal.Id.Value[..8]}; no new goal created.");
+        ConsoleViews.PrintGoal(existingGoal);
+        return false;
+    }
 
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
@@ -1465,6 +1481,17 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
+}
+
+private static bool TryReuseBacklogIntakeGoal(
+    CliExecutionContext context,
+    BacklogIntakeItem item,
+    [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Goal? existingGoal)
+{
+    existingGoal = string.IsNullOrWhiteSpace(item.Id)
+        ? null
+        : context.Kernel.FindGoalBySourceBacklogItemId(item.Id);
+    return existingGoal is not null;
 }
 
 private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IReadOnlyList<string> parts)

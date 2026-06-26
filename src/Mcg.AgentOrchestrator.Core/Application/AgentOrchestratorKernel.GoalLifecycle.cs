@@ -406,6 +406,15 @@ public sealed partial class AgentOrchestratorKernel
             : throw new KeyNotFoundException($"Goal '{goalId}' was not found.");
     }
 
+    public Goal? FindGoalBySourceBacklogItemId(string backlogItemId)
+    {
+        if (string.IsNullOrWhiteSpace(backlogItemId))
+            return null;
+
+        return _goals.Values.FirstOrDefault(goal =>
+            string.Equals(goal.SourceBacklogItemId, backlogItemId, StringComparison.Ordinal));
+    }
+
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;
 
     public void RecordGoalPolicyDecision(GoalId goalId, string message)
