@@ -1934,3 +1934,10 @@ Goal 5a21ec13: Backlog slice: Fix goal-mark-landed launcher and Land-VerifiedGoa
 
 - Operator gate: Researcher: not-run; research-only inspection with repository-local evidence (exit 0); Tester: pass; 4 focused tests passed (Passed! - Failed: 0, Passed: 4, Skipped: 0, Total: 4, Duration: 1 s). Launcher smoke test with invalid goal exits 1 with "Error: Goal 'unknown-goal' was not found." (exit 0); Reviewer: not-run (review-only task; developer reported 4 focused tests passed; tester confirmed exit 0) (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - static code review task - file reading + control-flow tracing across 5 changed files; no execution or broad codebase traversal required.
+
+## 2026-06-26 - Backlog slice: Fix retry task briefs so acceptance-failure feedback cannot be...
+
+Goal 0a26ab08: Backlog slice: Fix retry task briefs so acceptance-failure feedback cannot be lost  Observed on goal f0e13c8c on 2026.... Planner task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via (no receipt) (exit 0, commit (no receipt)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit c70339c). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run; research-only inspection, no repository changes (exit 0); Tester: pass; regression tests 2/2, TaskBriefTests 36/36, ConductorDriverTests 44/44 (exit 0); Reviewer: pass — Developer 2/2 regression + 36/36 TaskBriefTests + 44/44 ConductorDriverTests; Tester exit 0 confirmed (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review with multi-file diff inspection and acceptance-criteria verification - no implementation required, diff reading and correctness tracing within capability.
