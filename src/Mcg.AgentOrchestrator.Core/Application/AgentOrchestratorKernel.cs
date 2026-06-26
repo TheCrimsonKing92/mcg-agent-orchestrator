@@ -4,6 +4,7 @@ public sealed partial class AgentOrchestratorKernel
 {
     private readonly Dictionary<GoalId, Goal> _goals = [];
     private readonly Dictionary<HumanInputRequestId, HumanInputRequest> _humanInputRequests = [];
+    private readonly HashSet<GoalId> _knownCompletedDependencyGoals = [];
     private readonly IClock _clock;
     private IGoalLifecycleEventWriter _eventWriter = NullGoalLifecycleEventWriter.Instance;
 
@@ -20,6 +21,19 @@ public sealed partial class AgentOrchestratorKernel
     public IReadOnlyCollection<Goal> Goals => _goals.Values;
 
     public IReadOnlyCollection<HumanInputRequest> HumanInputRequests => _humanInputRequests.Values;
+
+    public IReadOnlyCollection<GoalId> KnownCompletedDependencyGoals => _knownCompletedDependencyGoals;
+
+    public void MarkKnownCompletedDependencyGoals(IEnumerable<GoalId> goalIds)
+    {
+        foreach (var goalId in goalIds)
+        {
+            _knownCompletedDependencyGoals.Add(goalId);
+        }
+    }
+
+    public bool IsKnownCompletedDependencyGoal(GoalId goalId) =>
+        _knownCompletedDependencyGoals.Contains(goalId);
 
     public OrchestratorSnapshot ExportSnapshot()
     {
@@ -49,6 +63,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         _goals.Clear();
         _humanInputRequests.Clear();
+        _knownCompletedDependencyGoals.Clear();
 
         foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
         {

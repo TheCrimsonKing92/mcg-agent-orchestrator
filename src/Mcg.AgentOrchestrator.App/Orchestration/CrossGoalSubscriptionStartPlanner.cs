@@ -25,6 +25,7 @@ internal sealed record CrossGoalSubscriptionStartCandidate(
     IReadOnlyList<string> TaskIds,
     IReadOnlyList<string> TargetPaths,
     IReadOnlyList<string> RequiredResources,
+    IReadOnlyList<string> DependsOn,
     string? ProviderKey,
     bool RequiresCostConfirmation,
     string Detail);
@@ -53,14 +54,20 @@ internal static class CrossGoalSubscriptionStartPlanner
             TargetPaths: candidate.TargetPaths,
             RequiredResources: candidate.RequiredResources,
             RequiresOperatorApproval: candidate.RequiresCostConfirmation && !costRiskConfirmed,
-            ProviderKey: candidate.ProviderKey)).ToList();
+            ProviderKey: candidate.ProviderKey,
+            DependsOn: candidate.DependsOn)).ToList();
         var providerQuotas = intents
             .Where(intent => !string.IsNullOrWhiteSpace(intent.ProviderKey))
             .Select(intent => intent.ProviderKey!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(provider => new ParallelExecutionProviderQuota(provider, 1))
             .ToList();
-        return new CrossGoalSubscriptionStartPlan(candidates, ParallelExecutionPlanner.Build(intents, providerQuotas));
+        return new CrossGoalSubscriptionStartPlan(
+            candidates,
+            ParallelExecutionPlanner.Build(
+                intents,
+                providerQuotas,
+                alreadySatisfiedDependencies: kernel.KnownCompletedDependencyGoals.Select(id => id.Value).ToArray()));
     }
 
     private static CrossGoalSubscriptionStartCandidate? BuildCandidate(
@@ -116,6 +123,7 @@ internal static class CrossGoalSubscriptionStartPlanner
             readyItems.Select(item => item.TaskId).ToList(),
             targetPaths,
             resources,
+            goal.DependsOn.Select(id => id.Value).ToArray(),
             providerKey,
             subscriptionPlan.ReadyStartCostRisk is not null,
             detail);

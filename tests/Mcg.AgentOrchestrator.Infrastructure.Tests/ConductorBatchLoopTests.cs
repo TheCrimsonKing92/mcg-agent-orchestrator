@@ -218,6 +218,41 @@ public sealed class ConductorBatchLoopTests
         Assert.DoesNotContain(createdWorkspaces, completedGoalIds.Contains);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_advances_when_completed_dependency_is_metadata_only")]
+    public void BatchLoopDependentGoalAdvancesWhenCompletedDependencyIsMetadataOnly()
+    {
+        var completedDependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active dependent goal");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [completedDependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownCompletedDependencyGoals([completedDependencyId]);
+
+        var createdWorkspaces = new List<GoalId>();
+        var driver = MakeDriver(createWorkspace: goal =>
+        {
+            createdWorkspaces.Add(goal.Id);
+            return "/tmp/workspace";
+        });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, summary.Advanced);
+        Assert.Contains(active.Id, createdWorkspaces);
+        Assert.Equal(0, summary.Held);
+    }
+
     // ── Dynamic goal pickup: a goal ingested mid-run via the sweep is driven ──
 
     [Xunit.Fact(DisplayName = "BatchLoop_picks_up_a_goal_ingested_mid_run_via_the_sweep")]

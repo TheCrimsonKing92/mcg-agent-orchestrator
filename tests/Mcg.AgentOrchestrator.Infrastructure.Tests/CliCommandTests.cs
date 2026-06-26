@@ -5206,6 +5206,35 @@ public sealed class CliCommandTests
                 batch.OrderBy(id => id, StringComparer.Ordinal).ToArray()));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_preserves_terminal_dependency_readiness_without_loading_dependency")]
+    public void PersistentRunnerConductLoopPreservesTerminalDependencyReadinessWithoutLoadingDependency()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var completed = kernel.CreateGoal("Completed dependency", [new TaskSpec(TaskId.New(), "Done", AgentRole.Planner)]);
+        var active = kernel.CreateGoal("Ready dependent goal", [new TaskSpec(TaskId.New(), "Plan src/Ready.cs", AgentRole.Planner)]);
+        var agents = new[] { SubscriptionPlanner("codex-cli", "Planner Codex") };
+        kernel.ActivateGoal(completed.Id, agents);
+        kernel.ActivateGoal(active.Id, agents);
+        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel.SetGoalDependency(active.Id, completed.Id);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+        var plan = CrossGoalSubscriptionStartPlanner.Build(loaded, agents, WorkerProfileCatalog.Default());
+
+        Xunit.Assert.DoesNotContain(completed.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains(completed.Id, loaded.KnownCompletedDependencyGoals);
+        Xunit.Assert.Single(loaded.Goals);
+        Xunit.Assert.Equal(active.Id, loaded.Goals.Single().Id);
+        Xunit.Assert.Single(plan.Candidates);
+        Xunit.Assert.Contains(active.Id.Value, plan.FirstBatchCandidates.Select(candidate => candidate.GoalId));
+        Xunit.Assert.DoesNotContain(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
+            reason => reason.Equals("dependency could not be scheduled", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static AgentDefinition SubscriptionPlanner(string id, string name) => new(
         new AgentId(id),
         name,
