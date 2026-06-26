@@ -8,14 +8,55 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
-    private static List<CollaborationItem> OpenClarificationsForGoal(CollaborationItemStore store, string goalPrefix)
+    private static List<CollaborationItem> OpenClarificationsForGoal(CollaborationItemStore store, Goal goal)
     {
         return store.GetAttentionQueueAsync().GetAwaiter().GetResult()
             .Where(item =>
                 !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
                 item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal) &&
-                (item.GoalId?.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase) ?? false))
+                string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
             .ToList();
+    }
+
+    private static List<CollaborationItem> OpenClarifications(CollaborationItemStore store)
+    {
+        return store.GetAttentionQueueAsync().GetAwaiter().GetResult()
+            .Where(item =>
+                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal))
+            .ToList();
+    }
+
+    private static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix)
+    {
+        var matches = kernel.Goals
+            .Where(goal => goal.Id.Value.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return matches.Count switch
+        {
+            1 => matches[0],
+            0 => throw new KeyNotFoundException($"No goal found matching prefix '{goalPrefix}'."),
+            _ => throw new InvalidOperationException($"Goal prefix '{goalPrefix}' is ambiguous ({matches.Count} matches).")
+        };
+    }
+
+    private static CollaborationItem ResolveClarificationByShortId(
+        IReadOnlyList<CollaborationItem> clarifications,
+        string id,
+        string notFoundMessage,
+        string ambiguousMessage)
+    {
+        var matches = clarifications
+            .Where(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 0)
+            throw new ArgumentException(notFoundMessage);
+        if (matches.Count > 1)
+            throw new ArgumentException(string.Format(ambiguousMessage, matches.Count));
+
+        return matches[0];
     }
 
     // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
@@ -25,6 +66,11 @@ internal static partial class CliCommandHandlers
     {
         var lastSegment = correlationKey[(correlationKey.LastIndexOf(':') + 1)..];
         return lastSegment.Length <= 8 ? lastSegment : lastSegment[..8];
+    }
+
+    private static bool LooksLikeClarificationShortId(string value)
+    {
+        return value.Length > 0 && value.Length <= 8 && value.All(Uri.IsHexDigit);
     }
 
     private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
@@ -61,12 +107,17 @@ internal static partial class CliCommandHandlers
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
                     if (parts.Count < 3)
-                        throw new ArgumentException("Usage: attention show <goal-id-prefix>");
+                    {
+                        var globalQueue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
+                        ConsoleViews.PrintAttentionQueue(globalQueue);
+                        return false;
+                    }
 
-                    var clarifications = OpenClarificationsForGoal(store, parts[2]);
+                    var goal = ResolveAttentionGoal(context.Kernel, parts[2]);
+                    var clarifications = OpenClarificationsForGoal(store, goal);
                     if (clarifications.Count == 0)
                     {
-                        Console.WriteLine($"No open clarifications for goal '{parts[2]}'.");
+                        Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
                         return false;
                     }
 
@@ -77,7 +128,7 @@ internal static partial class CliCommandHandlers
                             Console.WriteLine($"    {clarification.Body}");
                     }
 
-                    Console.WriteLine($"Answer with: attention answer {parts[2]} <id> <answer> (ids are stable; answering one does not renumber the rest)");
+                    Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> (ids are stable; answering one does not renumber the rest)");
                     return false;
                 }
 
@@ -88,23 +139,35 @@ internal static partial class CliCommandHandlers
                 // refinement pass (SyncAnsweredClarifications).
                 if (parts.Count > 1 && parts[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (parts.Count < 5)
-                        throw new ArgumentException("Usage: attention answer <goal-id-prefix> <id> <answer> (run `attention show <goal>` first for ids)");
+                    if (parts.Count < 4)
+                        throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
-                    var id = parts[3];
-                    var matches = OpenClarificationsForGoal(store, parts[2])
-                        .Where(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    if (matches.Count == 0)
-                        throw new ArgumentException($"No open clarification for goal '{parts[2]}' matches id '{id}'; run `attention show {parts[2]}`.");
-                    if (matches.Count > 1)
-                        throw new ArgumentException($"Id '{id}' is ambiguous ({matches.Count} matches); use more characters from `attention show {parts[2]}`.");
+                    var globalClarifications = OpenClarifications(store);
+                    var scoped = parts.Count >= 5 && LooksLikeClarificationShortId(parts[3]);
+                    var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
-                    var answer = string.Join(' ', parts.Skip(4));
-                    var resolved = store.TryResolveAsync(matches[0].CorrelationKey!, answer).GetAwaiter().GetResult();
+                    var id = scoped ? parts[3] : parts[2];
+                    var answer = string.Join(' ', parts.Skip(scoped ? 4 : 3));
+                    var clarification = scoped
+                        ? ResolveClarificationByShortId(
+                            OpenClarificationsForGoal(store, goal!),
+                            id,
+                            $"Clarification id '{id}' does not belong to goal '{goal!.Id.Value}'.",
+                            $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show {goal!.Id.Value[..8]}`.")
+                        : ResolveClarificationByShortId(
+                            globalClarifications,
+                            id,
+                            $"No open clarification matches id '{id}'; run `attention show`.",
+                            $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show`.");
+
+                    var resolved = store.TryResolveAsync(clarification.CorrelationKey!, answer).GetAwaiter().GetResult();
                     Console.WriteLine(resolved
-                        ? $"Answered clarification '{id}' for goal '{parts[2]}'."
-                        : $"Failed to resolve clarification '{id}' for goal '{parts[2]}'.");
+                        ? goal is null
+                            ? $"Answered clarification '{id}'."
+                            : $"Answered clarification '{id}' for goal '{goal.Id.Value[..8]}'."
+                        : goal is null
+                            ? $"Failed to resolve clarification '{id}'."
+                            : $"Failed to resolve clarification '{id}' for goal '{goal.Id.Value[..8]}'.");
                     return false;
                 }
 

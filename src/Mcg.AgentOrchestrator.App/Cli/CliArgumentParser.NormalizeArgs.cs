@@ -58,9 +58,16 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
     {
-        if (args.Length >= 5 && args[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
+        if (args.Length >= 5 &&
+            args[1].Equals("answer", StringComparison.OrdinalIgnoreCase) &&
+            LooksLikeAttentionClarificationId(args[3]))
         {
             return [command, args[1], args[2], args[3], string.Join(' ', args.Skip(4))];
+        }
+
+        if (args.Length >= 4 && args[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
+        {
+            return [command, args[1], args[2], string.Join(' ', args.Skip(3))];
         }
 
         return args;
@@ -232,5 +239,10 @@ private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[]
 
     var objective = string.Join(' ', args.Skip(1).Take(flagIndex - 1));
     return [args[0], objective, .. args.Skip(flagIndex)];
+}
+
+private static bool LooksLikeAttentionClarificationId(string value)
+{
+    return value.Length > 0 && value.Length <= 8 && value.All(Uri.IsHexDigit);
 }
 }

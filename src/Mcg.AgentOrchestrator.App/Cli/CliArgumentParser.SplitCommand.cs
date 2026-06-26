@@ -75,7 +75,9 @@ public static IReadOnlyList<string> SplitCommand(string line)
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
     {
         var rest = remainder.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length >= 4 && rest[0].Equals("answer", StringComparison.OrdinalIgnoreCase)
+        return rest.Length >= 4 &&
+            rest[0].Equals("answer", StringComparison.OrdinalIgnoreCase) &&
+            LooksLikeAttentionClarificationId(rest[2])
             ? [command, rest[0], rest[1], rest[2], rest[3]]
             : [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
     }
