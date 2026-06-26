@@ -197,7 +197,7 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var kernel = LoadConductLoopKernel(stateRepository);
         new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -224,7 +224,7 @@ internal static class CliPersistentStateRunner
             ref workerProfiles,
             ref currentGoal,
             channel,
-            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            () => LoadConductLoopKernel(stateRepository),
             Persist,
             persistGoalKernel: PersistGoal);
 
@@ -232,6 +232,40 @@ internal static class CliPersistentStateRunner
         Persist(kernel);
         return shouldSave;
     }
+
+    internal static AgentOrchestratorKernel LoadConductLoopKernel(
+        ITransactionalOrchestratorStateRepository stateRepository)
+    {
+        var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
+        var eligibleIds = summaries
+            .Select(summary => new GoalId(summary.Id))
+            .ToArray();
+        var kernel = stateRepository.LoadGoalsAsync(eligibleIds).GetAwaiter().GetResult();
+
+        var loadedIds = eligibleIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var missingDependencyIds = kernel.Goals
+            .SelectMany(goal => goal.DependsOn)
+            .Select(id => id.Value)
+            .Where(id => !loadedIds.Contains(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (missingDependencyIds.Length == 0)
+        {
+            return kernel;
+        }
+
+        var missingDependencySet = missingDependencyIds.ToHashSet(StringComparer.Ordinal);
+        var completedDependencyIds = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(summary => missingDependencySet.Contains(summary.Id) && IsConductLoopTerminalStatus(summary.Status))
+            .Select(summary => new GoalId(summary.Id))
+            .ToArray();
+        kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
+        return kernel;
+    }
+
+    private static bool IsConductLoopTerminalStatus(string status) =>
+        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
 
     private static bool ExecuteCommandWithoutTransaction(
         IReadOnlyList<string> args,

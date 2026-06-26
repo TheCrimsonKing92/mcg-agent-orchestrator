@@ -395,7 +395,7 @@ internal sealed class ConductorBatchLoop
             if (escalatedGoals.Contains(depId.Value))
                 return $"dependency escalated: {depId.Value[..8]}";
 
-            if (!completedGoals.Contains(depId.Value))
+            if (!completedGoals.Contains(depId.Value) && !kernel.IsKnownCompletedDependencyGoal(depId))
             {
                 var depPrefix = kernel.Goals.FirstOrDefault(g => g.Id == depId)?.Id.Value[..8] ?? depId.Value[..8];
                 return $"waiting on dependency {depPrefix}";

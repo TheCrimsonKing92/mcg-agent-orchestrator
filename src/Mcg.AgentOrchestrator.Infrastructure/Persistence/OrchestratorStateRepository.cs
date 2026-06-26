@@ -6,9 +6,15 @@ public interface IOrchestratorStateRepository
 {
     Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
 
+    Task<AgentOrchestratorKernel> LoadGoalsAsync(
+        IReadOnlyCollection<GoalId> goalIds,
+        CancellationToken cancellationToken = default);
+
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
 
