@@ -191,6 +191,7 @@ public static class WorkerProfileDispatcher
             AddSkillAvailabilityFindings(findings, goal, task, workingDirectory);
             AddBuildEnvironmentFinding(findings, goal, task);
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
+            AddGitMetadataAccessFinding(findings, task, workingDirectory);
 
             if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
             {
@@ -226,6 +227,34 @@ public static class WorkerProfileDispatcher
             profileName = "unknown";
             findings.Add($"blocked: {ex.Message}");
             return new WorkerSubscriptionPreflightResult(false, profileName, "blocked", findings);
+        }
+    }
+
+    private static void AddGitMetadataAccessFinding(List<string> findings, TaskSpec task, string workingDirectory)
+    {
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
+        {
+            findings.Add("git metadata: write check not required for read-only role");
+            return;
+        }
+
+        if (!File.Exists(Path.Combine(workingDirectory, ".git")))
+        {
+            findings.Add("git metadata: unavailable before dispatch; goal workspace is not a linked worktree");
+            return;
+        }
+
+        var access = GoalWorktrees.InspectGitMetadataAccess(workingDirectory);
+        var status = access.Error is null ? "ok" : "warn";
+        findings.Add(
+            $"{status}: git metadata index_lock={access.IndexLockPath}; " +
+            $"current_identity={access.CurrentIdentity}; " +
+            $"current_process_can_write={access.CurrentProcessCanWriteIndexLock}; " +
+            $"worker_git_write={access.WorkerWriteDisposition}; " +
+            $"commit_contract={access.CommitContract}");
+        if (access.Error is not null)
+        {
+            findings.Add($"git metadata warning: {access.Error}");
         }
     }
 
