@@ -198,10 +198,32 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
     }
 
-    var simple = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
     return IsSimpleCommand(command)
-        ? [command, .. simple]
+        ? SplitSimpleCommandWithFlags(command, remainder)
         : [command, remainder];
+}
+
+private static IReadOnlyList<string> SplitSimpleCommandWithFlags(string command, string remainder)
+{
+    var flagIndex = remainder.IndexOf(" --", StringComparison.Ordinal);
+    if (flagIndex < 0 && remainder.StartsWith("--", StringComparison.Ordinal))
+    {
+        flagIndex = 0;
+    }
+
+    if (flagIndex < 0)
+    {
+        return [command, .. remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)];
+    }
+
+    var beforeFlags = remainder[..flagIndex].Trim();
+    var flags = remainder[flagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    if (string.IsNullOrWhiteSpace(beforeFlags))
+    {
+        return [command, .. flags];
+    }
+
+    return [command, .. beforeFlags.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries), .. flags];
 }
 
 private static IReadOnlyList<string> SplitTaskTargetCommand(string command, string remainder, int trailingArgumentCount)

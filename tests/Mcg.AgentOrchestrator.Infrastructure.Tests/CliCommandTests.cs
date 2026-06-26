@@ -10,13 +10,69 @@ using System.Text.Json;
 
 public sealed class CliCommandTests
 {
-    [Xunit.Fact(DisplayName = "Cli_command_catalog_includes_goal_mark_landed")]
-    public void CliCommandCatalogIncludesGoalMarkLanded()
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_splits_confirmation_and_force_flags")]
+    public void CliGoalMarkLandedSplitsConfirmationAndForceFlags()
     {
         var parts = CliArgumentParser.SplitCommand("goal-mark-landed abcdef12 --confirm-goal-mark-landed --force");
 
         Xunit.Assert.Equal(
-            ["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed --force"],
+            ["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed", "--force"],
+            parts);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_splits_single_confirmation_flag")]
+    public void CliGoalMarkLandedSplitsSingleConfirmationFlag()
+    {
+        var parts = CliArgumentParser.SplitCommand("goal-mark-landed abcdef12 --confirm-goal-mark-landed");
+
+        Xunit.Assert.Equal(
+            ["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed"],
+            parts);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_interactive_and_one_shot_args_match")]
+    public void CliGoalMarkLandedInteractiveAndOneShotArgsMatch()
+    {
+        var interactive = CliArgumentParser.SplitCommand("goal-mark-landed abcdef12 --confirm-goal-mark-landed --force");
+        var oneShot = CliArgumentParser.NormalizeArgs(
+            ["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed", "--force"]);
+
+        Xunit.Assert.Equal(oneShot, interactive);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_start_dispatch_interactive_and_one_shot_multi_flags_match")]
+    public void CliStartDispatchInteractiveAndOneShotMultiFlagsMatch()
+    {
+        var interactive = CliArgumentParser.SplitCommand(
+            "start-dispatch abcdef12 1 --confirm-dispatch-start --confirm-large-paid-subscription-start");
+        var oneShot = CliArgumentParser.NormalizeArgs(
+            ["start-dispatch", "abcdef12", "1", "--confirm-dispatch-start", "--confirm-large-paid-subscription-start"]);
+
+        Xunit.Assert.Equal(oneShot, interactive);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_abandon_goal_keeps_reason_text_grouped_before_confirmation")]
+    public void CliAbandonGoalKeepsReasonTextGroupedBeforeConfirmation()
+    {
+        var interactive = CliArgumentParser.SplitCommand(
+            "abandon-goal abcdef12 Operator chose a different route. --confirm-goal-abandon");
+        var oneShot = CliArgumentParser.NormalizeArgs(
+            ["abandon-goal", "abcdef12", "Operator", "chose", "a", "different", "route.", "--confirm-goal-abandon"]);
+
+        Xunit.Assert.Equal(
+            ["abandon-goal", "abcdef12", "Operator chose a different route. --confirm-goal-abandon"],
+            interactive);
+        Xunit.Assert.Equal(oneShot, interactive);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_keeps_body_text_grouped_before_file_flag")]
+    public void CliBacklogAddKeepsBodyTextGroupedBeforeFileFlag()
+    {
+        var parts = CliArgumentParser.SplitCommand(
+            "backlog-add Parser regression Keep multi word backlog body text --body-file body.md");
+
+        Xunit.Assert.Equal(
+            ["backlog-add", "Parser", "regression Keep multi word backlog body text", "--body-file", "body.md"],
             parts);
     }
 
