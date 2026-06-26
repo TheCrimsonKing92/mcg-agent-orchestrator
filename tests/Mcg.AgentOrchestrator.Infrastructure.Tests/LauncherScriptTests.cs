@@ -96,11 +96,37 @@ public sealed class LauncherScriptTests
 
     private static string FindLauncherSourceRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        var repoRoot = FindRepositoryRoot();
+        var launcherPath = Path.Combine(repoRoot, "mcg-orchestrator.cmd");
+        var landVerifiedGoalPath = Path.Combine(repoRoot, "scripts", "Land-VerifiedGoal.ps1");
+
+        if (File.Exists(launcherPath) && File.Exists(landVerifiedGoalPath))
+        {
+            return repoRoot;
+        }
+
+        throw new DirectoryNotFoundException($"Could not locate launcher source files under repository root '{repoRoot}'.");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        return TryFindRepositoryRoot(Environment.CurrentDirectory)
+            ?? TryFindRepositoryRoot(AppContext.BaseDirectory)
+            ?? InfrastructureTestSupport.FindRepositoryRoot();
+    }
+
+    private static string? TryFindRepositoryRoot(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        var directory = new DirectoryInfo(Path.GetFullPath(candidate));
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "mcg-orchestrator.cmd")) &&
-                File.Exists(Path.Combine(directory.FullName, "scripts", "Land-VerifiedGoal.ps1")))
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
             {
                 return directory.FullName;
             }
@@ -108,6 +134,6 @@ public sealed class LauncherScriptTests
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate launcher source root.");
+        return null;
     }
 }
