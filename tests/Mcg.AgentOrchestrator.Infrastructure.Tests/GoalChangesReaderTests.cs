@@ -126,6 +126,35 @@ public sealed class GoalChangesReaderTests
             });
     }
 
+    [Xunit.Fact(DisplayName = "BuildLiveDispatchSnapshot_combines_base_to_head_diff_and_working_files")]
+    public void BuildLiveDispatchSnapshotCombinesCommittedAndWorkingFiles()
+    {
+        var captured = new List<string[]>();
+        WithFakeGit(
+            (_, args) =>
+            {
+                captured.Add(args);
+                if (args.Contains("diff"))
+                    return new GitCli.GitResult(0, "src/Committed.cs\nsrc/Shared.cs\n", string.Empty);
+                if (args.Contains("status"))
+                    return new GitCli.GitResult(0, "M  src/Working.cs\n?? src/Shared.cs\n", string.Empty);
+                return new GitCli.GitResult(1, string.Empty, "unexpected");
+            },
+            () =>
+            {
+                var snapshot = GoalChangesReader.BuildLiveDispatchSnapshot("/fake/worktree", "abc123", displayLimit: 3);
+
+                Assert.Equal(3, snapshot.Files.Count);
+                Assert.Contains("src/Committed.cs", snapshot.Files);
+                Assert.Contains("src/Shared.cs", snapshot.Files);
+                Assert.Contains("src/Working.cs", snapshot.Files);
+                Assert.Equal(3, snapshot.DisplayFiles.Count);
+                Assert.Equal(0, snapshot.RemainingFileCount);
+                Xunit.Assert.Contains(captured, args => args.Contains("abc123..HEAD"));
+                Xunit.Assert.Contains(captured, args => args.Contains("status"));
+            });
+    }
+
     [Xunit.Fact(DisplayName = "Build_returns_no_working_entries_when_showWorking_false")]
     public void BuildReturnsNoWorkingEntriesWhenShowWorkingFalse()
     {

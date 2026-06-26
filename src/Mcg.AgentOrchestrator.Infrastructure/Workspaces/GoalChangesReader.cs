@@ -25,6 +25,11 @@ public sealed record GoalChangesReport(
     string GoalStatus,
     IReadOnlyList<GoalChangesTaskEntry> Entries);
 
+public sealed record DispatchLiveChangeSnapshot(
+    IReadOnlyList<string> Files,
+    IReadOnlyList<string> DisplayFiles,
+    int RemainingFileCount);
+
 public static class GoalChangesReader
 {
     internal static Func<string, string[], GitCli.GitResult> RunGit { get; set; } =
@@ -108,6 +113,35 @@ public static class GoalChangesReader
             goal.Objective,
             goal.Status.ToString(),
             entries);
+    }
+
+    public static DispatchLiveChangeSnapshot BuildLiveDispatchSnapshot(
+        string? worktreePath,
+        string? baseCommit,
+        int displayLimit = 3)
+    {
+        if (worktreePath is null)
+        {
+            return new DispatchLiveChangeSnapshot([], [], 0);
+        }
+
+        var files = new List<string>();
+        if (!string.IsNullOrWhiteSpace(baseCommit))
+        {
+            files.AddRange(GetDiffFiles(worktreePath, baseCommit, "HEAD"));
+        }
+
+        files.AddRange(GetStatusFiles(worktreePath));
+        var distinct = files
+            .Where(file => !string.IsNullOrWhiteSpace(file))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var display = distinct.Take(Math.Max(0, displayLimit)).ToArray();
+        return new DispatchLiveChangeSnapshot(
+            distinct,
+            display,
+            Math.Max(0, distinct.Length - display.Length));
     }
 
     private static IReadOnlyList<string> GetDiffFiles(string worktreePath, string baseCommit, string resultCommit)

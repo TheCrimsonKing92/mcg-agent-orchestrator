@@ -179,6 +179,7 @@ private static DispatchHeartbeatDto ToDispatchHeartbeatDto(DispatchHeartbeatStat
         heartbeat.UnavailableReason,
         heartbeat.ProcessId,
         heartbeat.ChildProcessId,
+        heartbeat.OwnedProcessIds,
         heartbeat.State,
         heartbeat.LastObservedAt,
         heartbeat.LastProgressAt,

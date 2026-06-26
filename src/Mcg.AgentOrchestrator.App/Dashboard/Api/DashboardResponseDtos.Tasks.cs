@@ -96,6 +96,7 @@ internal sealed record DispatchHeartbeatDto(
     string? UnavailableReason,
     int ProcessId,
     int? ChildProcessId,
+    IReadOnlyList<int> OwnedProcessIds,
     string State,
     DateTimeOffset? LastObservedAt,
     DateTimeOffset? LastProgressAt,

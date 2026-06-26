@@ -62,7 +62,7 @@ public sealed class VerificationAndProcessLogTests
     var process = CreateProcessRecord(root, exit);
     var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
     File.WriteAllText(heartbeatPath, """
-{"pid":123,"childPid":456,"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7}
+{"pid":123,"childPid":456,"ownedPids":[123,789],"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7}
 """);
 
     var heartbeat = ProcessLogReader.ReadHeartbeat(process, DateTimeOffset.Parse("2026-06-12T20:00:30Z"));
@@ -72,6 +72,7 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(heartbeat.UnavailableReason is null);
     Assert.Equal(123, heartbeat.ProcessId);
     Assert.Equal(456, heartbeat.ChildProcessId);
+    Assert.Equal<int>([123, 789], heartbeat.OwnedProcessIds);
     Assert.Equal("running", heartbeat.State);
     Assert.Equal(TimeSpan.FromSeconds(20), heartbeat.HeartbeatAge);
     Assert.Equal(TimeSpan.FromSeconds(30), heartbeat.IdleDuration);

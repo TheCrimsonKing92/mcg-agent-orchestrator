@@ -2543,7 +2543,7 @@ public sealed class DashboardRenderingTests
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
     File.WriteAllText(heartbeatPath, """
-{"pid":321,"childPid":654,"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":99,"stderrBytes":11}
+{"pid":321,"childPid":654,"ownedPids":[321,987],"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":99,"stderrBytes":11}
 """);
 
     var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
@@ -2556,15 +2556,17 @@ public sealed class DashboardRenderingTests
     Assert.Equal(heartbeatPath, detail.LastProcess.Heartbeat.Path);
     Assert.Equal("running", detail.LastProcess.Heartbeat.State);
     Assert.Equal(654, detail.LastProcess.Heartbeat.ChildProcessId);
+    Assert.Equal<int>([321, 987], detail.LastProcess.Heartbeat.OwnedProcessIds);
     Assert.Equal(99, detail.LastProcess.Heartbeat.StandardOutputBytes);
     Assert.Equal(11, detail.LastProcess.Heartbeat.StandardErrorBytes);
     Assert.True(logs.Heartbeat.IsAvailable);
     Assert.Equal(heartbeatPath, logs.Heartbeat.Path);
     Assert.Equal(heartbeatPath, workSummary.Tasks.Single().LastProcess!.Heartbeat.Path);
     Assert.Contains(html, text => text.Contains("heartbeat running", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("owned_pids=321,987", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("stdout_bytes=99", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains(heartbeatPath, StringComparison.Ordinal));
-    Assert.Contains(transcript, text => text.Contains("heartbeat: available state=running pid=321 child_pid=654", StringComparison.Ordinal));
+    Assert.Contains(transcript, text => text.Contains("heartbeat: available state=running pid=321 child_pid=654 owned_pids=321,987", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("log bytes: stdout=99 stderr=11", StringComparison.Ordinal));
 }
 

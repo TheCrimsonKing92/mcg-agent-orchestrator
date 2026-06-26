@@ -15,17 +15,20 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
+    private readonly ConductorWatchProgressReporter _watchProgressReporter;
 
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
         Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel, Goal>? detachGoalRunningDispatches = null,
-        Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null)
+        Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null,
+        ConductorWatchProgressReporter? watchProgressReporter = null)
     {
         _sweep = sweep ?? (_ => { });
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
+        _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
     }
 
     public BatchLoopSummary Run(
@@ -43,7 +46,9 @@ internal sealed class ConductorBatchLoop
         string? onlyGoalId = null,
         Action<AgentOrchestratorKernel>? persistTick = null,
         bool keepAliveWhenIdle = false,
-        Action<AgentOrchestratorKernel, GoalId>? persistGoalTick = null)
+        Action<AgentOrchestratorKernel, GoalId>? persistGoalTick = null,
+        bool quiet = false,
+        TimeSpan? stallWarningThreshold = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
@@ -250,6 +255,17 @@ internal sealed class ConductorBatchLoop
 
             var emitTickSummary = changedGoalLines.Count > 0 || totalTicks % QuietSummaryEveryTicks == 0;
             var tickLines = new List<string>();
+            if (watchInterval is not null)
+            {
+                foreach (var goal in eligible)
+                {
+                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, stallWarningThreshold))
+                    {
+                        EmitProgress(line, tickLines);
+                    }
+                }
+            }
+
             if (emitTickSummary)
             {
                 EmitProgress($"TICK tick={totalTicks} eligible={eligible.Length}", tickLines);
