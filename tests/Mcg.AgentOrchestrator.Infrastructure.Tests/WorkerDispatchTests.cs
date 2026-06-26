@@ -443,6 +443,42 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_diagnostic")]
+    public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthDiagnostic()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+        var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome, stderrPath);
+
+        using (var stderr = DispatchProcessHost.OpenWorkerStderrStream(stderrPath))
+        using (var writer = new StreamWriter(stderr))
+        {
+            writer.WriteLine("worker stderr");
+        }
+
+        var text = File.ReadAllText(stderrPath);
+        Assert.Contains("ANTHROPIC_API_KEY is not set", text);
+        Assert.Contains("worker stderr", text);
+        Assert.True(
+            text.IndexOf("ANTHROPIC_API_KEY is not set", StringComparison.Ordinal) <
+            text.IndexOf("worker stderr", StringComparison.Ordinal),
+            text);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_does_not_inject_claude_environment_for_codex_worker_sandbox")]
     public void DispatchProcessHostDoesNotInjectClaudeEnvironmentForCodexWorkerSandbox()
 {
