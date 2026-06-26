@@ -32,8 +32,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["goals", "human_input_requests", "meta", "model_fit_history"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["ix_model_fit_history_model", "ix_model_fit_history_role"],
-            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix_model_fit_history_%' ORDER BY name"));
+            ["ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_role"],
+            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND (name = 'ix_goals_status' OR name LIKE 'ix_model_fit_history_%') ORDER BY name"));
         Xunit.Assert.Equal(
             ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
@@ -238,6 +238,39 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Status)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Objective)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.UpdatedAt)));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_load_goals_filters_before_snapshot_deserialization")]
+    public async Task LoadGoalsFiltersBeforeSnapshotDeserialization()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var completed = kernel.CreateGoal("Completed audit goal", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        var active = kernel.CreateGoal("Active conductor goal");
+        var failed = kernel.CreateGoal("Failed goal still needs operator/conductor attention", [new TaskSpec(TaskId.New(), "Failed", AgentRole.Developer)]);
+        kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(active.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(failed.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", "C:\\tmp", 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "failed");
+        await repo.SaveAsync(kernel);
+
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE goals SET snapshot_json = '{not valid json' WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", completed.Id.Value);
+            cmd.ExecuteNonQuery();
+        }
+
+        var nonTerminal = await repo.LoadGoalsAsync([active.Id, failed.Id]);
+
+        Assert.DoesNotContain(nonTerminal.Goals, goal => goal.Id == completed.Id);
+        Assert.Contains(nonTerminal.Goals, goal => goal.Id == active.Id);
+        Assert.Contains(nonTerminal.Goals, goal => goal.Id == failed.Id);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_requests_roundtrip")]

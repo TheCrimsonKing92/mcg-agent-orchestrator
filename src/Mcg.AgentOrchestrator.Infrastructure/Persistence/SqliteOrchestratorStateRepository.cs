@@ -154,6 +154,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_role ON model_fit_history(role)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_model ON model_fit_history(provider_name, model_name)");
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
     }
@@ -174,6 +175,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         if (!IndexExists(conn, "ix_goals_source_backlog_item_id"))
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
+
+        if (!IndexExists(conn, "ix_goals_status"))
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
     }
 
     private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
@@ -205,7 +209,19 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            return await LoadFromConnectionAsync(conn, cancellationToken);
+            return await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
+        }, cancellationToken);
+    }
+
+    public async Task<AgentOrchestratorKernel> LoadGoalsAsync(
+        IReadOnlyCollection<GoalId> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goalIds);
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            return await LoadFromConnectionAsync(conn, goalIds, cancellationToken);
         }, cancellationToken);
     }
 
@@ -240,7 +256,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         await using var conn = await BeginWriteAsync(cancellationToken);
         try
         {
-            var kernel = await LoadFromConnectionAsync(conn, cancellationToken);
+            var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
 
             async Task CheckpointAsync()
             {
@@ -335,14 +351,31 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
     private static async Task<AgentOrchestratorKernel> LoadFromConnectionAsync(
         SqliteConnection conn,
+        IReadOnlyCollection<GoalId>? goalIds,
         CancellationToken cancellationToken)
     {
         var goalSnapshots = new List<GoalSnapshot>();
         var humanInputSnapshots = new List<HumanInputRequestSnapshot>();
 
-        await using (var cmd = conn.CreateCommand())
+        if (goalIds is null || goalIds.Count > 0)
         {
-            cmd.CommandText = "SELECT snapshot_json FROM goals";
+            await using var cmd = conn.CreateCommand();
+            if (goalIds is null)
+            {
+                cmd.CommandText = "SELECT snapshot_json FROM goals";
+            }
+            else
+            {
+                var parameterNames = goalIds.Select((_, index) => $"$id{index}").ToArray();
+                cmd.CommandText = $"SELECT snapshot_json FROM goals WHERE id IN ({string.Join(", ", parameterNames)})";
+                var index = 0;
+                foreach (var goalId in goalIds)
+                {
+                    cmd.Parameters.AddWithValue(parameterNames[index], goalId.Value);
+                    index++;
+                }
+            }
+
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
