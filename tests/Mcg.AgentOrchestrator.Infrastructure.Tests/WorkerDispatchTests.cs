@@ -4822,6 +4822,67 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(currentTask, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_latest_acceptance_failure_before_context_digest_on_retry")]
+    public void BuildTaskBriefPutsLatestAcceptanceFailureBeforeContextDigestOnRetry()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    var contextDirectory = Path.Combine(root, "context");
+    Directory.CreateDirectory(workingDirectory);
+    Directory.CreateDirectory(contextDirectory);
+    var clock = new MutableClock(DateTimeOffset.Parse("2026-06-26T12:00:00Z"));
+    var kernel = new AgentOrchestratorKernel(clock);
+    var task = new TaskSpec(TaskId.New(), "Fix acceptance-failed schema assertions.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Retry after acceptance failure", [task]);
+    kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+
+    var firstAttempt = kernel.BuildTaskBrief(
+        goal.Id,
+        task.Id,
+        workingDirectory: workingDirectory,
+        contextDirectory: contextDirectory).Content;
+    Assert.DoesNotContain("ACCEPTANCE FAILURE", firstAttempt, StringComparison.Ordinal);
+
+    kernel.RecordAcceptanceFailure(goal.Id, [
+        "OldSchemaTests.OldFailure"
+    ]);
+    clock.Advance();
+    kernel.RetryTask(goal.Id, task.Id, "old operator feedback");
+    clock.Advance();
+    kernel.RecordAcceptanceFailure(goal.Id, [
+        "SqliteOrchestratorStateRepositoryTests.Loads_existing_goal_schema",
+        "SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"
+    ]);
+    clock.Advance();
+    var operatorFeedback = "Operator rejection: acceptance failed on sqlite schema assertions; fix the schema mapping before reporting complete.";
+    kernel.RetryTask(goal.Id, task.Id, operatorFeedback);
+
+    var retryPrompt = kernel.BuildTaskBrief(
+        goal.Id,
+        task.Id,
+        workingDirectory: workingDirectory,
+        contextDirectory: contextDirectory).Content;
+
+    var failureStart = retryPrompt.IndexOf("<!-- ACCEPTANCE_FAILURE_START -->", StringComparison.Ordinal);
+    var instructions = retryPrompt.IndexOf("## Instructions", StringComparison.Ordinal);
+    var contextPointer = retryPrompt.IndexOf("Context files:", StringComparison.Ordinal);
+    Assert.True(failureStart >= 0, retryPrompt);
+    Assert.True(failureStart < contextPointer, retryPrompt);
+    Assert.True(failureStart < instructions, retryPrompt);
+    Assert.True(retryPrompt.Contains("<!-- ACCEPTANCE_FAILURE_END -->", StringComparison.Ordinal), retryPrompt);
+    Assert.True(retryPrompt.Contains(operatorFeedback, StringComparison.Ordinal), retryPrompt);
+    Assert.True(retryPrompt.Contains("SqliteOrchestratorStateRepositoryTests.Loads_existing_goal_schema", StringComparison.Ordinal), retryPrompt);
+    Assert.True(retryPrompt.Contains("SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns", StringComparison.Ordinal), retryPrompt);
+    var failureEnd = retryPrompt.IndexOf("<!-- ACCEPTANCE_FAILURE_END -->", StringComparison.Ordinal);
+    var failureBlock = retryPrompt[failureStart..failureEnd];
+    Assert.DoesNotContain("OldSchemaTests.OldFailure", failureBlock, StringComparison.Ordinal);
+    Assert.DoesNotContain("old operator feedback", failureBlock, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]
     public void WorkerProfileDispatcherLateFileAccessSubscriptionPromptStaysBelowLargePaidThreshold()
 {
@@ -5381,6 +5442,15 @@ private static void WriteSkill(string workingDirectory, string skillName)
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class MutableClock(DateTimeOffset utcNow) : IClock
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public DateTimeOffset UtcNow => _utcNow;
+
+        public void Advance() => _utcNow = _utcNow.AddSeconds(1);
     }
 
     private sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter

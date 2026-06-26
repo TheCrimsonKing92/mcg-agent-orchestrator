@@ -2357,6 +2357,77 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_acceptance_failed_retry_clears_completed_task_evidence_before_redispatch")]
+    public void GoalWorktreesAcceptanceFailedRetryClearsCompletedTaskEvidenceBeforeRedispatch()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Retry after acceptance failure", [task]);
+            kernel.ActivateGoal(goal.Id, EchoAgents());
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            var oldDispatch = new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec old-prompt.md",
+                worktree,
+                DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+                BaseCommit: "old-base",
+                ResultCommit: "old-result");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, oldDispatch);
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    1234,
+                    oldDispatch.Command,
+                    worktree,
+                    "old.out.log",
+                    "old.err.log",
+                    "old.exit.txt",
+                    oldDispatch.DispatchedAt,
+                    oldDispatch.DispatchedAt.AddSeconds(5),
+                    0));
+            kernel.RecordDispatchExecutionResult(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(
+                    oldDispatch.Command,
+                    worktree,
+                    0,
+                    "WORKER_RESULT:\nfiles: src/Old.cs\ncommands: old\nEND_WORKER_RESULT",
+                    string.Empty,
+                    oldDispatch.DispatchedAt.AddSeconds(10)));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+
+            kernel.RecordAcceptanceFailure(goal.Id, ["SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"]);
+            kernel.RetryTask(goal.Id, task.Id, "Operator rejection: fix the failing sqlite schema assertion.");
+            var newDispatch = new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec retry-prompt.md",
+                worktree,
+                DateTimeOffset.Parse("2026-06-26T12:05:00Z"),
+                BaseCommit: "retry-base");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, newDispatch);
+
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            Assert.Equal(WorkTaskStatus.Running, task.Status);
+            Assert.Null(task.LastVerification);
+            Assert.Null(task.LastProcess);
+            Assert.Equal(newDispatch, task.LastDispatch);
+            Assert.Equal("codex exec retry-prompt.md", task.LastDispatch!.Command);
+            Assert.Equal("retry-base", task.LastDispatch.BaseCommit);
+            Assert.Null(task.LastDispatch.ResultCommit);
+            Assert.Equal(worktree, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_skips_protected_recorded_worker_process")]
     public void GoalWorktreesRemoveSkipsProtectedRecordedWorkerProcess()
     {

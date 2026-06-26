@@ -12,7 +12,12 @@ public sealed record GoalSnapshot(
     IReadOnlyList<ProgressEventSnapshot> Timeline,
     IReadOnlyList<string>? DependsOn = null,
     string? SourceBacklogItemId = null,
-    RefinedSpecSnapshot? RefinedSpec = null);
+    RefinedSpecSnapshot? RefinedSpec = null,
+    AcceptanceFailureSnapshot? LatestAcceptanceFailure = null);
+
+public sealed record AcceptanceFailureSnapshot(
+    DateTimeOffset OccurredAt,
+    IReadOnlyList<string> FailedChecks);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,

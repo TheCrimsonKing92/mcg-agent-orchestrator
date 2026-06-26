@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record AcceptanceVerificationSummary(
     bool Passed,
     IReadOnlyList<AcceptanceCheckResult> UnmetCriteria,
-    string? FailureDetail = null)
+    string? FailureDetail = null,
+    IReadOnlyList<string>? FailedChecks = null)
 {
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

@@ -2196,6 +2196,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             .Where(c => !c.Passed && !c.Advisory)
             .Select(c => c.Name)
             .ToList() ?? ["acceptance evidence blocked"];
+        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         return false;
     }
@@ -2256,10 +2257,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     {
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
+        {
+            context.Kernel.ClearAcceptanceFailure(goal.Id);
             context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+        }
         return mergeCommit.FastForwarded;
     }
 
+    context.Kernel.ClearAcceptanceFailure(goal.Id);
     context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
     return true;
 }
