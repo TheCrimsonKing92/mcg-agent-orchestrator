@@ -46,14 +46,25 @@ $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safe
 $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
 $processArguments = @($resolvedAppDll) + $Arguments
 
-$process = Start-Process `
-    -WindowStyle Hidden `
-    -PassThru `
-    -FilePath "dotnet" `
-    -WorkingDirectory $repoRoot `
-    -ArgumentList $processArguments `
-    -RedirectStandardOutput $stdoutPath `
-    -RedirectStandardError $stderrPath
+$previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
+$previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
+try {
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $stdoutPath, "Process")
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $stderrPath, "Process")
+
+    $process = Start-Process `
+        -WindowStyle Hidden `
+        -PassThru `
+        -FilePath "dotnet" `
+        -WorkingDirectory $repoRoot `
+        -ArgumentList $processArguments `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath
+}
+finally {
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $previousStdoutLogPath, "Process")
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $previousStderrLogPath, "Process")
+}
 
 [pscustomobject]@{
     pid = [int]$process.Id

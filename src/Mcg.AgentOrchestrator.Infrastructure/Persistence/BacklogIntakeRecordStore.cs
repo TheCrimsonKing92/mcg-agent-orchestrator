@@ -49,6 +49,8 @@ public sealed class BacklogIntakeRecordStore
             throw new ArgumentException("Value cannot be empty.", nameof(sourceBacklogItemId));
 
         var now = DateTimeOffset.UtcNow;
+        var stdoutPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH");
+        var stderrPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH");
         using var conn = OpenConnection();
         RunNonQuery(conn, "BEGIN IMMEDIATE");
         try
@@ -64,8 +66,8 @@ public sealed class BacklogIntakeRecordStore
                     StartedAt: now,
                     LastHeartbeatAt: now,
                     OwnerProcessId: Environment.ProcessId,
-                    StdoutPath: null,
-                    StderrPath: null);
+                    StdoutPath: NormalizeLogPath(stdoutPath),
+                    StderrPath: NormalizeLogPath(stderrPath));
                 InsertRecord(conn, inserted);
                 RunNonQuery(conn, "COMMIT");
                 return new BacklogIntakeReservation(BacklogIntakeReservationKind.Acquired, inserted);
@@ -85,7 +87,9 @@ public sealed class BacklogIntakeRecordStore
                     Status = "InProgress",
                     StartedAt = now,
                     LastHeartbeatAt = now,
-                    OwnerProcessId = Environment.ProcessId
+                    OwnerProcessId = Environment.ProcessId,
+                    StdoutPath = NormalizeLogPath(stdoutPath) ?? existing.StdoutPath,
+                    StderrPath = NormalizeLogPath(stderrPath) ?? existing.StderrPath
                 };
                 UpdateRecord(conn, reclaimed);
                 RunNonQuery(conn, "COMMIT");
@@ -279,5 +283,13 @@ public sealed class BacklogIntakeRecordStore
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static string? NormalizeLogPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        return Path.GetFullPath(path);
     }
 }

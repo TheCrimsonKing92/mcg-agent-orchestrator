@@ -179,6 +179,50 @@ public sealed class GoalBacklogLinkTests
         Assert.Contains("--force-reclaim", output);
     }
 
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_in_progress_intake_reports_launcher_log_paths")]
+    public void InProgressIntakeReportsLauncherLogPaths()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Logged Retry Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var item = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Logged Retry Feature", StringComparison.Ordinal));
+        var stdoutPath = Path.Combine(root, "logs", "intake.out.log");
+        var stderrPath = Path.Combine(root, "logs", "intake.err.log");
+        var previousStdout = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH");
+        var previousStderr = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", stdoutPath);
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", stderrPath);
+            new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(item.Id, item.Title);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", previousStdout);
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", previousStderr);
+        }
+
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Logged Retry Feature", "--create-simple-goal"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.False(changed);
+        });
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains(Path.GetFullPath(stdoutPath), output);
+        Assert.Contains(Path.GetFullPath(stderrPath), output);
+    }
+
     // ── Intake: batch (multiple filters -> one goal each) ─────────────────────
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_batch_intake_creates_one_linked_goal_per_filter")]
