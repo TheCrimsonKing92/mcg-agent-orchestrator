@@ -107,7 +107,11 @@ try {
 
     Info "recording landing via goal-mark-landed..."
     & $launcher goal-mark-landed $GoalPrefix --confirm-goal-mark-landed
-    if ($LASTEXITCODE -ne 0) { Abort "goal-mark-landed failed (the merge IS in main; reconcile bookkeeping manually)." }
+    $markLandedExitCode = $LASTEXITCODE
+    if ($markLandedExitCode -ne 0) {
+        Write-Host "[land] ABORT: goal-mark-landed failed with exit code $markLandedExitCode (the merge IS in main; reconcile bookkeeping manually)." -ForegroundColor Red
+        exit $markLandedExitCode
+    }
 
     Write-Host "[land] DONE: $GoalPrefix merged to main and recorded as landed." -ForegroundColor Green
 }

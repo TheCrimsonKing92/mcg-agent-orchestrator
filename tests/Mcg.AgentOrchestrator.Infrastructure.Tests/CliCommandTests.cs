@@ -10,6 +10,16 @@ using System.Text.Json;
 
 public sealed class CliCommandTests
 {
+    [Xunit.Fact(DisplayName = "Cli_command_catalog_includes_goal_mark_landed")]
+    public void CliCommandCatalogIncludesGoalMarkLanded()
+    {
+        var parts = CliArgumentParser.SplitCommand("goal-mark-landed abcdef12 --confirm-goal-mark-landed --force");
+
+        Xunit.Assert.Equal(
+            ["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed --force"],
+            parts);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_run_blocks_subscription_capable_agents_without_calling_provider")]
     public void CliRunBlocksSubscriptionCapableAgentsWithoutCallingProvider()
     {

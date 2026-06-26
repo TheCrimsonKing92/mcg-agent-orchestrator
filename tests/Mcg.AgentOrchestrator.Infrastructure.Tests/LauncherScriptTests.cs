@@ -5,6 +5,28 @@ using System.Text.Json;
 
 public sealed class LauncherScriptTests
 {
+    [Xunit.Fact(DisplayName = "LandVerifiedGoal_fails_closed_and_propagates_goal_mark_landed_exit_code")]
+    public void LandVerifiedGoalFailsClosedAndPropagatesGoalMarkLandedExitCode()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Land-VerifiedGoal.ps1"));
+
+        Assert.True(script.Contains("$markLandedExitCode = $LASTEXITCODE", StringComparison.Ordinal));
+        Assert.True(script.Contains("exit $markLandedExitCode", StringComparison.Ordinal));
+        Assert.True(script.Contains("goal-mark-landed failed with exit code $markLandedExitCode", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Launcher_rebuild_freshness_includes_git_head_marker")]
+    public void LauncherRebuildFreshnessIncludesGitHeadMarker()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var launcher = File.ReadAllText(Path.Combine(repoRoot, "mcg-orchestrator.cmd"));
+
+        Assert.True(launcher.Contains("App.dll.git-head", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("rev-parse HEAD", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("Set-Content -LiteralPath '%APP_HEAD%'", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_emits_json_pid_and_log_path_through_repo_script")]
     public void StartOrchestratorCommandEmitsJsonPidAndLogPathThroughRepoScript()
     {
@@ -70,5 +92,22 @@ public sealed class LauncherScriptTests
         }
 
         Assert.True(File.Exists(logPath), $"Expected launcher log path to exist: {logPath}");
+    }
+
+    private static string FindLauncherSourceRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "mcg-orchestrator.cmd")) &&
+                File.Exists(Path.Combine(directory.FullName, "scripts", "Land-VerifiedGoal.ps1")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate launcher source root.");
     }
 }
