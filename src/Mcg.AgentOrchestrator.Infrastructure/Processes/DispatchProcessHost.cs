@@ -46,7 +46,8 @@ public static class DispatchProcessHost
         // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP.
         // The worker can only EDIT the worktree (the shared .git stays medium and out of reach); the
         // orchestrator commits the worker's edits afterwards. Default = run at medium integrity.
-        bool SandboxLowIntegrity = false);
+        bool SandboxLowIntegrity = false,
+        WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -90,7 +91,7 @@ public static class DispatchProcessHost
             throw new InvalidOperationException($"Failed to apply Low integrity label to sandbox root '{sandboxRoot}'.");
         }
 
-        SeedCodexAuth(codexHome);
+        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
@@ -110,6 +111,40 @@ public static class DispatchProcessHost
         {
             startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+    }
+
+    internal static void SeedProviderEnvironment(
+        ProcessStartInfo startInfo,
+        WorkerSandboxProvider provider,
+        string sandboxRoot,
+        string codexHome)
+    {
+        if (provider == WorkerSandboxProvider.Claude)
+        {
+            SeedClaudeEnvironment(startInfo, sandboxRoot);
+            return;
+        }
+
+        SeedCodexAuth(codexHome);
+    }
+
+    private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot)
+    {
+        var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
+        Directory.CreateDirectory(claudeConfigDir);
+        var settingsPath = Path.Combine(claudeConfigDir, "settings.json");
+        if (!File.Exists(settingsPath))
+        {
+            File.WriteAllText(settingsPath, "{}\n");
+        }
+
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
+        }
+
+        startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
     }
 
     internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable)

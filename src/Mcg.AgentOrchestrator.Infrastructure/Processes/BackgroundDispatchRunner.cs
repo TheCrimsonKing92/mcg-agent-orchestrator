@@ -117,7 +117,8 @@ public sealed class BackgroundDispatchRunner
             heartbeatPath,
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
-            SandboxLowIntegrity: useSandbox));
+            SandboxLowIntegrity: useSandbox,
+            Provider: ResolveSandboxProvider(dispatch)));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
@@ -179,6 +180,32 @@ public sealed class BackgroundDispatchRunner
             // Best-effort: if the gate cannot be written, the dispatch host fails closed rather than
             // launching a worker outside the supervisor job.
         }
+    }
+
+    private static WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
+    {
+        if (dispatch.ProviderName?.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) == true ||
+            dispatch.WorkerName.Contains("claude", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.Contains("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerSandboxProvider.Claude;
+        }
+
+        if (dispatch.ProviderName?.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) == true ||
+            dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.Contains("codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerSandboxProvider.Codex;
+        }
+
+        if (dispatch.ProviderName?.Equals("Ollama", StringComparison.OrdinalIgnoreCase) == true ||
+            dispatch.WorkerName.Contains("qwen", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.Command.Contains("qwen", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerSandboxProvider.Ollama;
+        }
+
+        return WorkerSandboxProvider.Unknown;
     }
 
     /// <summary>

@@ -382,6 +382,75 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_claude_auth_environment_for_claude_worker_sandbox")]
+    public void DispatchProcessHostSeedsClaudeAuthEnvironmentForClaudeWorkerSandbox()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome);
+
+        Assert.Equal("test-claude-key", startInfo.Environment["ANTHROPIC_API_KEY"]);
+        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
+        Assert.True(Directory.Exists(claudeConfigDir));
+        Assert.Equal("{}\n", File.ReadAllText(Path.Combine(claudeConfigDir!, "settings.json")));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_does_not_inject_claude_environment_for_codex_worker_sandbox")]
+    public void DispatchProcessHostDoesNotInjectClaudeEnvironmentForCodexWorkerSandbox()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var codexHome = Path.Combine(sandboxRoot, "codex-home");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Codex, sandboxRoot, codexHome);
+
+        Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchFailureClassifier_classifies_claude_401_as_provider_authentication_failure")]
+    public void DispatchFailureClassifierClassifiesClaude401AsProviderAuthenticationFailure()
+{
+    var task = new TaskSpec(TaskId.New(), "Implement with Claude.", AgentRole.Developer);
+    var verification = new TaskVerificationRecord(
+        "claude --model claude-haiku-4-5 -p prompt",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: Failed to authenticate: API Error 401 Unauthorized",
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"));
+
+    var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+    Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
+    Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    Assert.True(outcome.EvidenceSummary.Contains("401", StringComparison.OrdinalIgnoreCase), outcome.EvidenceSummary);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_repo_scoped_skill_targets")]
     public void WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets()
 {
@@ -5161,6 +5230,19 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         AgentRole.Developer,
         "Developer: budget",
         string.Join(Environment.NewLine, lines));
+}
+
+    private static ProcessStartInfo CreateSandboxStartInfo(string workingDirectory)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = WorkerShell.Executable,
+        WorkingDirectory = workingDirectory,
+        UseShellExecute = false
+    };
+    startInfo.Environment.Remove("ANTHROPIC_API_KEY");
+    startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+    return startInfo;
 }
 
     private static TaskDispatchRecord ReopenTaskWithRecoverableDispatchLimit(
