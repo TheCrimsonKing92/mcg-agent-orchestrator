@@ -9,6 +9,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$Arguments = @($Arguments)
 if ($Arguments.Count -eq 0) {
     throw "Usage: .\scripts\Start-OrchestratorCommand.ps1 [-Name <name>] <orchestrator-args...>"
 }
