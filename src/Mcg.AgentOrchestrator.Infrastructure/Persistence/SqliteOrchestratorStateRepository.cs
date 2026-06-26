@@ -172,7 +172,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         if (Convert.ToInt32(sourceCheck.ExecuteScalar()) == 0)
             RunNonQuery(conn, "ALTER TABLE goals ADD COLUMN source_backlog_item_id TEXT NULL");
 
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
+        if (!IndexExists(conn, "ix_goals_source_backlog_item_id"))
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
     }
 
     private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
@@ -189,6 +190,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$human_input_requests", "human_input_requests");
         cmd.Parameters.AddWithValue("$model_fit_history", "model_fit_history");
         return Convert.ToInt32(cmd.ExecuteScalar()) == SchemaTableNames.Length;
+    }
+
+    private static bool IndexExists(SqliteConnection conn, string indexName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = $name";
+        cmd.Parameters.AddWithValue("$name", indexName);
+        return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
 
     public async Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
