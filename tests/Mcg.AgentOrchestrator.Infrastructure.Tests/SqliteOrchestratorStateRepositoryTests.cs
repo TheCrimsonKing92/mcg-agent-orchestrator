@@ -35,7 +35,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["ix_model_fit_history_model", "ix_model_fit_history_role"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix_model_fit_history_%' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
+            ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
     }
 
@@ -379,9 +379,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         static void Exec(SqliteConnection c, string sql) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
         Exec(setupConn, "PRAGMA journal_mode=WAL");
         Exec(setupConn, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-        Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
+        Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, source_backlog_item_id TEXT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE human_input_requests (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE model_fit_history (goal_id TEXT NOT NULL, task_id TEXT NOT NULL, role TEXT NOT NULL, provider_name TEXT NOT NULL, model_name TEXT NOT NULL, complexity TEXT NULL, task_shape TEXT NULL, outcome TEXT NOT NULL, self_rating TEXT NOT NULL, timestamp TEXT NOT NULL, PRIMARY KEY (goal_id, task_id, timestamp))");
+        Exec(setupConn, "CREATE INDEX ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
         setupConn.Close();
 
