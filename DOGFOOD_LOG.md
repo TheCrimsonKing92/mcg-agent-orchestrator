@@ -1941,3 +1941,10 @@ Goal 0a26ab08: Backlog slice: Fix retry task briefs so acceptance-failure feedba
 
 - Operator gate: Researcher: not-run; research-only inspection, no repository changes (exit 0); Tester: pass; regression tests 2/2, TaskBriefTests 36/36, ConductorDriverTests 44/44 (exit 0); Reviewer: pass — Developer 2/2 regression + 36/36 TaskBriefTests + 44/44 ConductorDriverTests; Tester exit 0 confirmed (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code-review with multi-file diff inspection and acceptance-criteria verification - no implementation required, diff reading and correctness tracing within capability.
+
+## 2026-06-26 - Backlog slice: Fix Claude CLI authentication under the Low-IL worker sandbox ...
+
+Goal aeddde7f: Backlog slice: Fix Claude CLI authentication under the Low-IL worker sandbox  Direct normal-shell smoke succeeds: cla.... Planner task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via (no receipt) (exit 0, commit (no receipt)). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit none). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Researcher: not-run; research-only task, no repository changes (exit 0); Tester: pass; 159 passed, 0 failed; targeted new tests (DispatchProcessHostInjectsClaudeEnvironmentForClaudeWorkerSandbox, DispatchProcessHostDoesNotInjectClaudeEnvironmentForCodexWorkerSandbox, DispatchFailureClassifierClassifiesClaude401AsProviderAuthenticationFailure) individually verified with exit 0 (exit 0); Reviewer: pass — Tester reported 159/159; Developer slot-routed run exit 0 (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - structured code review across 5 changed files against spec acceptance criteria - sufficient context and reasoning depth for diff analysis without requiring Opus.
