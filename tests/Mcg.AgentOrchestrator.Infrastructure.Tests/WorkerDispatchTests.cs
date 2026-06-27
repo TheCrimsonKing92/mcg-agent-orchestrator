@@ -1239,7 +1239,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-27T12:00:00Z")));
     var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
     var tester = new TaskSpec(TaskId.New(), "Test retry prompt regeneration.", AgentRole.Tester);
-    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester]);
+    var reviewer = new TaskSpec(TaskId.New(), "Review retry prompt regeneration.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester, reviewer]);
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var branch = ReadGit(worktree, ["branch", "--show-current"]);
@@ -1261,6 +1262,21 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains(prompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
+
+    var reviewerDispatch = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        reviewer,
+        profile,
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-27T12:01:30Z"));
+
+    var reviewerPrompt = File.ReadAllText(reviewerDispatch.PromptPath);
+    Assert.Contains(reviewerPrompt, text => text.Contains("Current target context:", StringComparison.Ordinal));
+    Assert.Contains(reviewerPrompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
+    Assert.Contains(reviewerPrompt, text => text.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
+    Assert.Contains(reviewerPrompt, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
 
     kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
         "dotnet test",
