@@ -209,15 +209,16 @@ public sealed class BackgroundDispatchRunner
     }
 
     /// <summary>
-    /// Scans all tasks across all goals for an exit file and auto-reconciles any
-    /// whose dispatched process has written its exit code. Idempotent: a task whose
-    /// process completion has already been applied as verification is skipped on repeat calls.
-    /// Returns the number of tasks reconciled.
+    /// Scans tasks for an exit file and auto-reconciles any whose dispatched process
+    /// has written its exit code. When <paramref name="onlyGoalId"/> is supplied, the
+    /// sweep is limited to that goal; otherwise all goals are swept. Idempotent: a task
+    /// whose process completion has already been applied as verification is skipped on
+    /// repeat calls. Returns the number of tasks reconciled.
     /// </summary>
-    public int SweepExitedProcesses(AgentOrchestratorKernel kernel)
+    public int SweepExitedProcesses(AgentOrchestratorKernel kernel, GoalId? onlyGoalId = null)
     {
         var reconciled = 0;
-        foreach (var goal in kernel.Goals)
+        foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId))
         {
             foreach (var task in goal.Tasks)
             {

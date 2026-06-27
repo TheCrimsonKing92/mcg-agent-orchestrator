@@ -755,14 +755,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     out var wps) && wps > 0 ? wps : ConductorBatchLoop.DefaultWatchIntervalSeconds;
                 TimeSpan? watchMax = int.TryParse(GetFlagValue(parts, "--max-duration"), out var wmd)
                     ? TimeSpan.FromSeconds(wmd) : null;
+                var watchReaper = new BackgroundDispatchRunner();
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
+                    watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }
                 };
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
-                var watchReaper = new BackgroundDispatchRunner();
                 using var watchWakeSignal = new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory);
                 var watchSummary = new ConductorBatchLoop(
                     watchSweep,
