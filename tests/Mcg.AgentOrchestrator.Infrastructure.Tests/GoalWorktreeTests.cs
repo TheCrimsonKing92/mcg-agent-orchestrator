@@ -947,6 +947,194 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_accepted_routes_stop_host_merge_mark_landed_remove_worktree")]
+    public void CliAcceptanceAcceptedRoutesStopHostMergeMarkLandedRemoveWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance lifecycle ordering test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var order = new List<string>();
+            var writer = new RecordingGoalLifecycleEventWriter(order);
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal,
+                finalizeAcceptanceMerge: request =>
+                {
+                    order.Add("merge");
+                    return request.Merge();
+                },
+                stopAcceptanceHosts: request =>
+                {
+                    Assert.Equal(worktreePath, request.WorktreePath);
+                    Assert.Equal(TimeSpan.FromSeconds(30), request.Timeout);
+                    order.Add("stop-host");
+                    return AcceptanceHostStopResult.Success("Stop-host: test stopped host.");
+                })
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                EventWriter = writer
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("Stop-host: test stopped host.", StringComparison.Ordinal));
+            Assert.Equal(["stop-host", "merge", "mark-landed", "remove-worktree"], order);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_stop_host_timeout_blocks_before_merge")]
+    public void CliAcceptanceStopHostTimeoutBlocksBeforeMerge()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance stop-host blocker test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var mergeCalled = false;
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal,
+                finalizeAcceptanceMerge: request =>
+                {
+                    mergeCalled = true;
+                    return request.Merge();
+                },
+                stopAcceptanceHosts: _ => new AcceptanceHostStopResult(
+                    false,
+                    "BLOCKER step=stop-host reason=timeout hosts=pid=123 name=Mcg.AgentOrchestrator.App log=host.log action=\"Stop exact PID(s), inspect log path(s), then rerun acceptance.\"",
+                    [new AcceptanceHostProcess(123, "Mcg.AgentOrchestrator.App", "host command", "host.log")]))
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.False(mergeCalled);
+            Assert.True(output.Contains("BLOCKER step=stop-host", StringComparison.Ordinal));
+            Assert.True(output.Contains("pid=123", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_merge_conflict_blocks_and_leaves_worktree")]
+    public void CliAcceptanceMergeConflictBlocksAndLeavesWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance merge blocker test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal,
+                finalizeAcceptanceMerge: _ => new AcceptanceMergeCommitResult(false, "conflicting files: feature.txt"),
+                stopAcceptanceHosts: _ => AcceptanceHostStopResult.Success("Stop-host: none."))
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("BLOCKER step=merge", StringComparison.Ordinal));
+            Assert.True(output.Contains("feature.txt", StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_non_accepted_verdict_does_not_stop_host_or_merge")]
+    public void CliAcceptanceNonAcceptedVerdictDoesNotStopHostOrMerge()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance non-accepted test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var stopCalled = false;
+            var mergeCalled = false;
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal,
+                finalizeAcceptanceMerge: request =>
+                {
+                    mergeCalled = true;
+                    return request.Merge();
+                },
+                stopAcceptanceHosts: _ =>
+                {
+                    stopCalled = true;
+                    return AcceptanceHostStopResult.Success("Stop-host: should not run.");
+                })
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Failed("Focused tests failed")
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
+            Assert.False(stopCalled);
+            Assert.False(mergeCalled);
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_rebases_before_verification_and_lands_verified_head")]
     public void CliAcceptanceRebasesBeforeVerificationAndLandsVerifiedHead()
     {
@@ -2700,6 +2888,24 @@ public sealed class GoalWorktreeTests
             goalId,
             taskId,
             new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, DateTimeOffset.UtcNow, null, WasCancelled: true));
+    }
+
+    private sealed class RecordingGoalLifecycleEventWriter(List<string> order) : IGoalLifecycleEventWriter
+    {
+        public void AppendGoalCreated(GoalId goalId, string objective) { }
+        public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
+        public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
+        public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
+
+        public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures)
+        {
+            if (pass)
+            {
+                order.Add("mark-landed");
+            }
+        }
+
+        public void AppendCleanedUp(GoalId goalId) => order.Add("remove-worktree");
     }
 
     private sealed class FakeAcceptanceVerifier(

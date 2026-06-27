@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -14,7 +15,8 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
-    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null)
+    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null,
+    Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -51,6 +53,9 @@ public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleE
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
 
+public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
+    stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);
+
 public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
 }
 
@@ -63,3 +68,247 @@ internal sealed record AcceptanceMergeCommitRequest(
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message);
+
+internal sealed record AcceptanceHostStopRequest(
+    GoalId GoalId,
+    string? WorktreePath,
+    TimeSpan Timeout);
+
+internal sealed record AcceptanceHostProcess(
+    int ProcessId,
+    string ProcessName,
+    string? CommandLine,
+    string? LogPath);
+
+internal sealed record AcceptanceHostStopResult(
+    bool Succeeded,
+    string Message,
+    IReadOnlyList<AcceptanceHostProcess> RemainingHosts)
+{
+    public static AcceptanceHostStopResult Success(string message) => new(true, message, []);
+}
+
+internal static class AcceptanceHostStopper
+{
+    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(100);
+
+    public static AcceptanceHostStopResult Stop(AcceptanceHostStopRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.WorktreePath))
+        {
+            return AcceptanceHostStopResult.Success("Stop-host: no goal worktree registered.");
+        }
+
+        if (TryGetCurrentGoalAppHost(request.WorktreePath, out var currentHost))
+        {
+            return new AcceptanceHostStopResult(
+                false,
+                $"BLOCKER step=stop-host reason=current-process-bound-to-worktree hosts={FormatHost(currentHost)} action=\"Run acceptance from a root-hosted CLI, or stop this exact app-host PID after this response and rerun acceptance.\"",
+                [currentHost]);
+        }
+
+        var hosts = FindGoalAppHosts(request.WorktreePath).ToList();
+        if (hosts.Count == 0)
+        {
+            return AcceptanceHostStopResult.Success("Stop-host: no goal app-host process detected.");
+        }
+
+        foreach (var host in hosts)
+        {
+            TryKillProcessTree(host.ProcessId);
+        }
+
+        var deadline = DateTimeOffset.UtcNow.Add(request.Timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var remaining = hosts.Where(host => IsRunning(host.ProcessId)).ToList();
+            if (remaining.Count == 0)
+            {
+                return AcceptanceHostStopResult.Success($"Stop-host: stopped {hosts.Count} goal app-host process(es).");
+            }
+
+            Thread.Sleep(DefaultPollInterval);
+        }
+
+        var survivors = hosts.Where(host => IsRunning(host.ProcessId)).ToList();
+        if (survivors.Count == 0)
+        {
+            return AcceptanceHostStopResult.Success($"Stop-host: stopped {hosts.Count} goal app-host process(es).");
+        }
+
+        var hostDetails = string.Join("; ", survivors.Select(FormatHost));
+        return new AcceptanceHostStopResult(
+            false,
+            $"BLOCKER step=stop-host reason=timeout timeout={request.Timeout.TotalSeconds:0}s hosts={hostDetails} action=\"Stop exact PID(s), inspect log path(s), then rerun acceptance.\"",
+            survivors);
+    }
+
+    private static IEnumerable<AcceptanceHostProcess> FindGoalAppHosts(string worktreePath)
+    {
+        var candidates = EnumerateCandidateProcesses();
+        var commandLines = ProcessCommandLines.Read(candidates.Select(process => process.ProcessId));
+        var normalizedWorktree = NormalizePath(worktreePath);
+        foreach (var candidate in candidates)
+        {
+            commandLines.TryGetValue(candidate.ProcessId, out var commandLine);
+            var haystacks = new[] { candidate.ExecutablePath, commandLine };
+            if (!haystacks.Any(value => ReferencesPath(value, normalizedWorktree)))
+            {
+                continue;
+            }
+
+            if (!IsAppHost(candidate.ProcessName, candidate.ExecutablePath, commandLine))
+            {
+                continue;
+            }
+
+            yield return new AcceptanceHostProcess(
+                candidate.ProcessId,
+                candidate.ProcessName,
+                commandLine,
+                TryExtractLogPath(commandLine));
+        }
+    }
+
+    private static bool TryGetCurrentGoalAppHost(string worktreePath, out AcceptanceHostProcess host)
+    {
+        using var current = Process.GetCurrentProcess();
+        var commandLines = ProcessCommandLines.Read([Environment.ProcessId]);
+        commandLines.TryGetValue(Environment.ProcessId, out var commandLine);
+        var executablePath = TryGetExecutablePath(current);
+        var normalizedWorktree = NormalizePath(worktreePath);
+        if (IsAppHost(current.ProcessName, executablePath, commandLine) &&
+            (ReferencesPath(executablePath, normalizedWorktree) || ReferencesPath(commandLine, normalizedWorktree)))
+        {
+            host = new AcceptanceHostProcess(
+                Environment.ProcessId,
+                current.ProcessName,
+                commandLine,
+                TryExtractLogPath(commandLine));
+            return true;
+        }
+
+        host = new AcceptanceHostProcess(0, string.Empty, null, null);
+        return false;
+    }
+
+    private static List<(int ProcessId, string ProcessName, string? ExecutablePath)> EnumerateCandidateProcesses()
+    {
+        var result = new Dictionary<int, (int ProcessId, string ProcessName, string? ExecutablePath)>();
+        foreach (var processName in new[] { "Mcg.AgentOrchestrator.App", "dotnet" })
+        {
+            try
+            {
+                foreach (var process in Process.GetProcessesByName(processName))
+                {
+                    using (process)
+                    {
+                        if (process.Id == Environment.ProcessId)
+                        {
+                            continue;
+                        }
+
+                        result[process.Id] = (process.Id, process.ProcessName, TryGetExecutablePath(process));
+                    }
+                }
+            }
+            catch
+            {
+                // Best-effort process discovery; unreadable process groups are skipped.
+            }
+        }
+
+        return result.Values.ToList();
+    }
+
+    private static bool IsAppHost(string processName, string? executablePath, string? commandLine)
+    {
+        return processName.Equals("Mcg.AgentOrchestrator.App", StringComparison.OrdinalIgnoreCase) ||
+            Contains(commandLine, "Mcg.AgentOrchestrator.App") ||
+            Contains(commandLine, "App.dll") ||
+            Contains(executablePath, "Mcg.AgentOrchestrator.App");
+    }
+
+    private static bool ReferencesPath(string? value, string normalizedPath)
+    {
+        return value is not null &&
+            NormalizePath(value).Contains(normalizedPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool Contains(string? value, string needle) =>
+        value?.Contains(needle, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string NormalizePath(string value) =>
+        value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar);
+
+    private static string? TryGetExecutablePath(Process process)
+    {
+        try
+        {
+            return process.MainModule?.FileName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryExtractLogPath(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return null;
+        }
+
+        var markerIndex = commandLine.IndexOf(".log", StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+        {
+            return null;
+        }
+
+        var start = commandLine.LastIndexOfAny(['"', ' '], markerIndex);
+        var end = commandLine.IndexOfAny(['"', ' '], markerIndex);
+        start = start < 0 ? 0 : start + 1;
+        end = end < 0 ? commandLine.Length : end;
+        return commandLine[start..end];
+    }
+
+    private static void TryKillProcessTree(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // The timeout check below reports survivors; exited or inaccessible processes need no action here.
+        }
+    }
+
+    private static bool IsRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static string FormatHost(AcceptanceHostProcess host)
+    {
+        var log = string.IsNullOrWhiteSpace(host.LogPath) ? "unknown" : host.LogPath;
+        return $"pid={host.ProcessId} name={host.ProcessName} log={log}";
+    }
+}

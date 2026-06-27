@@ -84,6 +84,7 @@ public sealed class ConductorDriverTests
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
+        Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null)
     {
         return new ConductorDriver(
@@ -110,6 +111,7 @@ public sealed class ConductorDriverTests
             writeEscalation ?? ((_, _, _) => { }),
             classifyRisk ?? (_ => null),
             emptyOutputBackoffDelay,
+            evaluateReadiness,
             normalizeLifecycleState: normalizeLifecycleState);
     }
 
@@ -1232,8 +1234,44 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Held); // assigned tasks exist → Held, not Escalated
         Assert.Null(escalationReason); // writeEscalation not called for Held
         var heldReason = ((ConductorAdvanceOutcome.Held)result.Outcome).Reason;
-        Assert.True(heldReason.Contains("batch", StringComparison.OrdinalIgnoreCase));
+        Assert.True(heldReason.Contains(goal.Id.Value, StringComparison.Ordinal));
+        Assert.True(heldReason.Contains(goal.Tasks.Single().Id.Value, StringComparison.Ordinal));
         Assert.True(heldReason.Contains(emptyBatchReason, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_reason_names_each_assigned_task_blocker")]
+    public void ConductorDriverEmptyBatchReasonNamesEachAssignedTaskBlocker()
+    {
+        var developerId = TaskId.New().Value;
+        var testerId = TaskId.New().Value;
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-blocked-batch",
+                    "Explain blocked batch",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(developerId, "Developer still running.", AgentRole.Developer, WorkTaskStatus.Running, null, null, null, [], null, null),
+                        new TaskSnapshot(testerId, "Tester waits.", AgentRole.Tester, WorkTaskStatus.Assigned, null, null, null, [], null, null)
+                    ],
+                    [])
+            ],
+            []));
+        var goal = kernel.Goals.Single();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch("No tasks in ready batch; goal may have no assigned or ready tasks"),
+            evaluateReadiness: _ => new DispatchReadinessReady());
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.True(held.Reason.Contains(goal.Id.Value, StringComparison.Ordinal));
+        Assert.True(held.Reason.Contains(testerId, StringComparison.Ordinal));
+        Assert.True(held.Reason.Contains(developerId, StringComparison.Ordinal));
+        Assert.True(held.Reason.Contains("predecessor", StringComparison.OrdinalIgnoreCase));
+        Assert.True(held.Reason.Contains("Running, not Completed", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_failure_escalation_names_spawn_reason")]
