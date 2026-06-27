@@ -385,6 +385,17 @@ internal sealed class ConductorDriver
         // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
+            var preflightFailedTask = goal.Tasks.FirstOrDefault(t =>
+                t.Status == WorkTaskStatus.Failed &&
+                t.LastVerification is { } latest &&
+                DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.PreflightFailure);
+            if (preflightFailedTask is not null)
+            {
+                var outcome = DispatchFailureClassifier.Classify(preflightFailedTask, preflightFailedTask.LastVerification!);
+                return Escalate(goal, goalPrefix, policy, state,
+                    $"Task {preflightFailedTask.Id.Value[..8]} blocked by {outcome.EvidenceSummary}; operator retry required");
+            }
+
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 t.LastVerification is { } latest && DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.EmptyOutputFlake &&

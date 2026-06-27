@@ -482,6 +482,30 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
     Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_count_sandbox_preflight_failure_as_empty_output_retry")]
+    public void RecordDispatchExecutionResultDoesNotCountSandboxPreflightFailureAsEmptyOutputRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Sandbox preflight dispatch");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "silent-agent run", "C:\\repo", clock.UtcNow));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "silent-agent run",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "Low Integrity sandbox setup failed while applying integrity label",
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(0, task.EmptyOutputRetryCount);
+    Assert.Equal(DispatchOutcomeKind.PreflightFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
+    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_resets_empty_output_retry_on_nonempty_stdout")]
     public void RecordDispatchExecutionResultResetsEmptyOutputRetryOnNonemptyStdout()
 {

@@ -262,7 +262,7 @@ public sealed class TaskSpec
     internal void RecordVerification(TaskVerificationRecord verification)
     {
         SubscriptionRetryAfter = null;
-        EmptyOutputRetryCount = DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification)
+        EmptyOutputRetryCount = DispatchFailureClassifier.Classify(this, verification).Kind == DispatchOutcomeKind.EmptyOutputFlake
             ? EmptyOutputRetryCount + 1
             : 0;
         if (verification.ModelFitNote is null)

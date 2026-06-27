@@ -848,6 +848,41 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_failure_blocks_without_empty_output_retry_or_dispatch")]
+    public void ConductorDriverSandboxPreflightFailureBlocksWithoutEmptyOutputRetryOrDispatch()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord(
+                "test.exe",
+                "C:\\tmp",
+                1,
+                "",
+                "CreateProcessAsUser failed during Low Integrity preflight",
+                DateTimeOffset.UtcNow));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(0, task.EmptyOutputRetryCount);
+
+        var retried = false;
+        var dispatched = false;
+        string? escalationMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, message) => { escalationMessage = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.False(dispatched);
+        Assert.Equal(0, task.EmptyOutputRetryCount);
+        Assert.Contains("sandbox-preflight-failure", escalationMessage);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_nonempty_stdout_failure_resets_empty_output_count_and_escalates")]
     public void ConductorDriverNonemptyStdoutFailureResetsEmptyOutputCountAndEscalates()
     {

@@ -122,6 +122,54 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Theory(DisplayName = "Classify_returns_PreflightFailure_for_zero_stdout_sandbox_preflight_evidence")]
+    [Xunit.InlineData("Low Integrity sandbox setup failed while applying label")]
+    [Xunit.InlineData("failed to apply integrity label to worktree")]
+    [Xunit.InlineData("icacls returned exit code 5")]
+    [Xunit.InlineData("CreateProcessAsUser failed before worker startup")]
+    [Xunit.InlineData("worker preflight failed before model startup")]
+    public void Classify_PreflightFailureForSandboxPreflightEvidence(string stderr)
+    {
+        var task = SimpleTask();
+        var verification = Verification(1, "", stderr);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.PreflightFailure, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("sandbox-preflight-failure", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_returns_PreflightFailure_for_zero_stdout_sandbox_preflight_artifact_evidence")]
+    public void Classify_PreflightFailureForSandboxPreflightArtifactEvidence()
+    {
+        var errLog = Path.Combine(Path.GetTempPath(), $"mcg-preflight-{Guid.NewGuid():N}.err.log");
+        File.WriteAllText(errLog, "Low Integrity setup artifact: icacls failed");
+        try
+        {
+            var task = SimpleTask();
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                "C:\\repo",
+                1,
+                "",
+                "",
+                DateTimeOffset.UtcNow,
+                StandardErrorPath: errLog);
+
+            var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.PreflightFailure, outcome.Kind);
+            Xunit.Assert.NotEqual(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+            Xunit.Assert.Contains("sandbox-preflight-failure", outcome.EvidenceSummary);
+        }
+        finally
+        {
+            File.Delete(errLog);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Classify_returns_EmptyOutputFlake_for_exit_zero_with_no_output_or_artifacts")]
     public void Classify_ExitZeroEmptyOutputNoArtifactsIsFlake()
     {
