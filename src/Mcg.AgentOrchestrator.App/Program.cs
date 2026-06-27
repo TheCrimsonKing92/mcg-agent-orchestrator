@@ -125,16 +125,16 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     try
     {
         CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
-        return 0;
+        return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
     {
-        return ex.ExitCode;
+        return ExitCompletedStartupCommand(ex.ExitCode);
     }
     catch (Exception ex)
     {
         Console.Error.WriteLine($"Error: {ex.Message}");
-        return 1;
+        return ExitCompletedStartupCommand(1);
     }
 }
 
@@ -147,16 +147,16 @@ if (startupArgs.Count > 0)
     try
     {
         CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
-        return 0;
+        return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
     {
-        return ex.ExitCode;
+        return ExitCompletedStartupCommand(ex.ExitCode);
     }
     catch (Exception ex)
     {
         Console.Error.WriteLine($"Error: {ex.Message}");
-        return 1;
+        return ExitCompletedStartupCommand(1);
     }
 }
 
@@ -286,4 +286,12 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
+}
+
+static int ExitCompletedStartupCommand(int exitCode)
+{
+    Console.Out.Flush();
+    Console.Error.Flush();
+    Environment.Exit(exitCode);
+    return exitCode;
 }
