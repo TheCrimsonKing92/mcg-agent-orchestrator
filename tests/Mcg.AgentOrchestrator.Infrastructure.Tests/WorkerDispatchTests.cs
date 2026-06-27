@@ -1247,7 +1247,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     kernel.RetryTask(goal.Id, developer.Id, "latest developer retry feedback");
     var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
 
-    var result = WorkerProfileDispatcher.PrepareTask(
+    var firstDispatch = WorkerProfileDispatcher.PrepareTask(
         kernel,
         goal,
         tester,
@@ -1256,11 +1256,40 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         worktree,
         DateTimeOffset.Parse("2026-06-27T12:01:00Z"));
 
-    var prompt = File.ReadAllText(result.PromptPath);
+    var prompt = File.ReadAllText(firstDispatch.PromptPath);
     Assert.Contains(prompt, text => text.Contains("Current target context:", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
     Assert.Contains(prompt, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
+
+    kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+        "dotnet test",
+        worktree,
+        1,
+        string.Empty,
+        "failed before redispatch",
+        DateTimeOffset.Parse("2026-06-27T12:02:00Z")));
+    kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Failed, "Tester dispatch failed before redispatch.");
+    File.WriteAllText(Path.Combine(worktree, "redispatch.txt"), "redispatch head");
+    RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-27T12:03:00Z"));
+    RunGit(worktree, ["commit", "-m", "Advance redispatch head"], DateTimeOffset.Parse("2026-06-27T12:03:00Z"));
+    var redispatchHead = ReadGit(worktree, ["rev-parse", "HEAD"]);
+    Assert.NotEqual(head, redispatchHead);
+    kernel.RetryTask(goal.Id, tester.Id, "tester redispatch should use current head");
+
+    var redispatch = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        tester,
+        profile,
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-27T12:04:00Z"));
+
+    var redispatchPrompt = File.ReadAllText(redispatch.PromptPath);
+    Assert.Contains(redispatchPrompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
+    Assert.Contains(redispatchPrompt, text => text.Contains($"- HEAD commit: {redispatchHead}", StringComparison.Ordinal));
+    Assert.True(!redispatchPrompt.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_assigned_agent_when_catalog_still_contains_it")]
     public void WorkerProfileDispatcherKeepsAssignedAgentWhenCatalogStillContainsIt()

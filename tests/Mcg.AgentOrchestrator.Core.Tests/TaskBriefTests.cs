@@ -510,15 +510,14 @@ public sealed class TaskBriefTests
     Assert.Contains(brief, text => text.Contains("complex-brief-note-01", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("complex-brief-note-10", StringComparison.Ordinal));
 }
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_tester_and_reviewer")]
-    public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForTesterAndReviewer()
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_tester")]
+    public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForTester()
 {
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
     var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
     var tester = new TaskSpec(TaskId.New(), "Test retry prompt regeneration.", AgentRole.Tester);
-    var reviewer = new TaskSpec(TaskId.New(), "Review retry prompt regeneration.", AgentRole.Reviewer);
-    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester, reviewer]);
+    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
 
     kernel.RetryTask(goal.Id, developer.Id, "stale duplicate retry feedback");
@@ -531,7 +530,6 @@ public sealed class TaskBriefTests
     kernel.RecordTaskNote(goal.Id, developer.Id, "operator recovery note for redispatch");
 
     var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
-    var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
     var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
     Assert.Contains(testerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
@@ -543,13 +541,36 @@ public sealed class TaskBriefTests
     Assert.Equal(1, CountOccurrences(testerBrief, "## Recent retry/recovery feedback"));
     Assert.True(!testerBrief.Contains("stale duplicate retry feedback", StringComparison.Ordinal));
 
-    Assert.Contains(reviewerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("Most recent retry: Retry 3 of 3", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("operator recovery note for redispatch", StringComparison.Ordinal));
-    Assert.Equal(1, CountOccurrences(reviewerBrief, "## Recent retry/recovery feedback"));
-    Assert.True(!reviewerBrief.Contains("stale duplicate retry feedback", StringComparison.Ordinal));
+    Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
+}
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_reviewer")]
+    public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForReviewer()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var reviewer = new TaskSpec(TaskId.New(), "Review retry prompt regeneration.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
 
+    kernel.RetryTask(goal.Id, developer.Id, "first stale retry feedback");
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "latest developer retry feedback for review");
+    var latestRetryAt = clock.UtcNow;
+    clock.Advance();
+    kernel.RecordTaskNote(goal.Id, developer.Id, "operator recovery note for reviewer redispatch");
+
+    var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+    var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+    Assert.Contains(reviewerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains("Most recent retry: Retry 2 of 2", StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains("latest developer retry feedback for review", StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains("operator recovery note for reviewer redispatch", StringComparison.Ordinal));
+    Assert.Equal(1, CountOccurrences(reviewerBrief, "## Recent retry/recovery feedback"));
+    Assert.True(!reviewerBrief.Contains("first stale retry feedback", StringComparison.Ordinal));
     Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_verification_plan")]
