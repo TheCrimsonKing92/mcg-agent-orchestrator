@@ -10,14 +10,16 @@ public static BatchActionResultDto ToBatchActionResultDto(
     Goal goal,
     string action,
     IReadOnlyList<TaskSpec> tasks,
-    IReadOnlyList<WorkerProfileDispatchResult>? dispatches = null)
+    IReadOnlyList<WorkerProfileDispatchResult>? dispatches = null,
+    IReadOnlyList<ReadyBlockedDiagnostic>? readyBlocked = null)
 {
     return new BatchActionResultDto(
         goal.Id.Value,
         action,
         tasks.Count,
         tasks.Select(task => ToTaskDetailDto(goal, task)).ToList(),
-        dispatches?.Select(result => ToProfileDispatchDto(goal, result)).ToList());
+        dispatches?.Select(result => ToProfileDispatchDto(goal, result)).ToList(),
+        ReadyBlocked: readyBlocked?.Select(ToReadyBlockedDiagnosticDto).ToList());
 }
 
 public static BatchActionResultDto ToProcessBatchActionResultDto(Goal goal, string action, ProcessBatchExecutionResult result)
@@ -54,8 +56,18 @@ public static BatchActionResultDto ToSubscriptionStartActionResultDto(Goal goal,
             ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
             task.Id.Value,
             ToProcessDto(task.LastProcess))).ToList(),
-        ToParallelExecutionPlanDto(result.ParallelPlan));
+        ToParallelExecutionPlanDto(result.ParallelPlan),
+        result.BlockedDiagnostics.Select(ToReadyBlockedDiagnosticDto).ToList());
 }
+
+private static ReadyBlockedDiagnosticDto ToReadyBlockedDiagnosticDto(ReadyBlockedDiagnostic diagnostic) =>
+    new(
+        diagnostic.GoalPrefix,
+        diagnostic.TaskNumber,
+        diagnostic.TaskId,
+        diagnostic.Provider,
+        diagnostic.Reason,
+        diagnostic.ToLine());
 
 public static ParallelExecutionPlanDto ToParallelExecutionPlanDto(ParallelExecutionPlan plan)
 {

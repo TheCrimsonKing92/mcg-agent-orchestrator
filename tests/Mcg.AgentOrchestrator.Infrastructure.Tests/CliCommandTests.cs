@@ -2618,6 +2618,163 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_ready_writes_ready_blocked_lines_to_stderr_in_task_order")]
+    public void CliSubscriptionDispatchReadyWritesReadyBlockedLinesToStderrInTaskOrder()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var first = new TaskSpec(TaskId.New(), "Inspect docs/one.md", AgentRole.Planner);
+        var second = new TaskSpec(TaskId.New(), "Inspect docs/two.md", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Report blocked ready tasks", [first, second]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("planner"),
+                "Planner",
+                AgentRole.Planner,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli")),
+            new AgentDefinition(
+                new AgentId("researcher"),
+                "Researcher",
+                AgentRole.Researcher,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        EnsureGitRepository(root);
+        GoalWorktrees.Ensure(root, goal.Id);
+
+        string stdout = string.Empty;
+        var stderr = CaptureConsoleError(() =>
+        {
+            stdout = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["subscription-dispatch-ready"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.False(changed);
+            });
+        });
+
+        Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
+        var lines = ReadyBlockedLines(stderr);
+        Xunit.Assert.Equal(2, lines.Length);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=worker-profile", lines[0]);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=2 provider=codex-cli reason=worker-profile", lines[1]);
+        Xunit.Assert.Null(first.LastDispatch);
+        Xunit.Assert.Null(second.LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_writes_ready_blocked_lines_to_stderr")]
+    public void CliStartSubscriptionReadyWritesReadyBlockedLinesToStderr()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Report blocked start tasks", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        DirtyGoalWorktree(root, goal);
+
+        string stdout = string.Empty;
+        var stderr = CaptureConsoleError(() =>
+        {
+            stdout = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["start-subscription-ready", "--confirm-batch-start"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.False(changed);
+            });
+        });
+
+        Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
+        var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree", line);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Dashboard_subscription_dispatch_ready_result_exposes_ready_blocked_diagnostics")]
+    public void DashboardSubscriptionDispatchReadyResultExposesReadyBlockedDiagnostics()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Expose blocked ready tasks", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        kernel.ActivateGoal(goal.Id, agents);
+        WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
+        DirtyGoalWorktree(root, goal);
+
+        var result = GoalManagementCommandService.ApplySubscriptionDispatchReady(
+            kernel,
+            workspace,
+            agents,
+            goal,
+            new InMemoryModelProviderRegistry([]));
+
+        Xunit.Assert.Equal(0, result.Count);
+        var diagnostic = Xunit.Assert.Single(result.ReadyBlocked!);
+        Xunit.Assert.Equal(goal.Id.Value[..8], diagnostic.Goal);
+        Xunit.Assert.Equal(1, diagnostic.Task);
+        Xunit.Assert.Equal("codex-cli", diagnostic.Provider);
+        Xunit.Assert.Equal("dirty-worktree", diagnostic.Reason);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree", diagnostic.Line);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_policy_gate_writes_distinct_ready_blocked_reason")]
+    public void CliStartSubscriptionReadyPolicyGateWritesDistinctReadyBlockedReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Observe only", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var stderr = CaptureConsoleError(() =>
+        {
+            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+                ["start-subscription-ready", "--confirm-batch-start", "--autonomy", "observe"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Xunit.Assert.Contains("policy 'observe' blocks start-subscription-ready", ex.Message);
+        });
+
+        var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=autonomy-policy", line);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_run_goal_requires_confirm_batch_start_flag")]
     public void CliRunGoalRequiresConfirmBatchStartFlag()
     {
@@ -5543,6 +5700,37 @@ public sealed class CliCommandTests
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile(id));
+
+    private static AgentDefinition SubscriptionDeveloper() => new(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+
+    private static void DirtyGoalWorktree(string root, Goal goal)
+    {
+        EnsureGitRepository(root);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        Directory.CreateDirectory(Path.Combine(worktree, "src"));
+        File.WriteAllText(Path.Combine(worktree, "src", "dirty.txt"), "dirty");
+    }
+
+    private static void EnsureGitRepository(string root)
+    {
+        RunGit(root, "init");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "README.md"), "test repo");
+        RunGit(root, "add", "README.md");
+        RunGit(root, "commit", "-m", "init");
+    }
+
+    private static string[] ReadyBlockedLines(string text) =>
+        text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("READY_BLOCKED ", StringComparison.Ordinal))
+            .ToArray();
 
     private static AgentDefinition TestAgent(string id, AgentRole role) => new(
         new AgentId(id),

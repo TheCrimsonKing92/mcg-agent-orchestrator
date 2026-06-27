@@ -11,6 +11,8 @@ internal static class InfrastructureTestSupport
 {
 public static string CaptureConsole(Action action) => AsyncLocalConsoleRouter.Capture(action);
 
+public static string CaptureConsoleError(Action action) => AsyncLocalConsoleRouter.CaptureError(action);
+
 public static ModelRequest TestRequest(ModelOptions? options = null)
 {
     return new ModelRequest(

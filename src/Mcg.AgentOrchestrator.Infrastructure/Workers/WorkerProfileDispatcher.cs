@@ -4,6 +4,21 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record WorkerProfileDispatchResult(TaskSpec Task, string PromptPath);
 
+public sealed record ReadyBlockedDiagnostic(
+    string GoalPrefix,
+    int TaskNumber,
+    string TaskId,
+    string Provider,
+    string Reason)
+{
+    public string ToLine() =>
+        $"READY_BLOCKED goal={GoalPrefix} task={TaskNumber} provider={Provider} reason={Reason}";
+}
+
+public sealed record WorkerProfileReadyBatchResult(
+    IReadOnlyList<WorkerProfileDispatchResult> Dispatches,
+    IReadOnlyList<ReadyBlockedDiagnostic> Blocked);
+
 public sealed record WorkerSubscriptionPreflightResult(
     bool Allowed,
     string ProfileName,
@@ -525,9 +540,29 @@ public static class WorkerProfileDispatcher
         DateTimeOffset dispatchedAt,
         IReadOnlySet<TaskId>? taskIdsToPrepare = null)
     {
+        return PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            profiles,
+            promptRoot,
+            workingDirectory,
+            dispatchedAt,
+            taskIdsToPrepare).Dispatches;
+    }
+
+    public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles,
+        string promptRoot,
+        string workingDirectory,
+        DateTimeOffset dispatchedAt,
+        IReadOnlySet<TaskId>? taskIdsToPrepare = null)
+    {
         var selections = goal.Tasks
-            .Where(task => task.Status == WorkTaskStatus.Assigned &&
-                (taskIdsToPrepare is null || taskIdsToPrepare.Contains(task.Id)))
+            .Where(task => task.Status == WorkTaskStatus.Assigned)
             .Select(task => new
             {
                 Task = task,
@@ -544,6 +579,7 @@ public static class WorkerProfileDispatcher
         var sandboxConfinesWrites = WorkerSandboxOptions.FromEnvironment().Enabled;
 
         var results = new List<WorkerProfileDispatchResult>();
+        var blocked = new List<ReadyBlockedDiagnostic>();
         foreach (var selection in selections)
         {
             var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
@@ -553,6 +589,12 @@ public static class WorkerProfileDispatcher
                 goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
                 allowGitReference: sandboxConfinesWrites);
             if (!preflight.Allowed)
+            {
+                blocked.Add(BuildReadyBlockedDiagnostic(goal, selection.Task, preflight));
+                continue;
+            }
+
+            if (taskIdsToPrepare is not null && !taskIdsToPrepare.Contains(selection.Task.Id))
             {
                 continue;
             }
@@ -576,7 +618,42 @@ public static class WorkerProfileDispatcher
                 preflight.Findings));
         }
 
-        return results;
+        return new WorkerProfileReadyBatchResult(results, blocked);
+    }
+
+    public static ReadyBlockedDiagnostic BuildReadyBlockedDiagnostic(
+        Goal goal,
+        TaskSpec task,
+        WorkerSubscriptionPreflightResult preflight)
+    {
+        return new ReadyBlockedDiagnostic(
+            goal.Id.Value[..8],
+            TaskDisplayNumber.Resolve(goal, task.Id),
+            task.Id.Value,
+            string.IsNullOrWhiteSpace(preflight.ProfileName) ? "unknown" : preflight.ProfileName,
+            ResolveReadyBlockedReason(preflight.Findings));
+    }
+
+    private static string ResolveReadyBlockedReason(IReadOnlyList<string> findings)
+    {
+        var blockedFindings = findings
+            .Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (blockedFindings.Any(finding => finding.Contains("uncommitted change", StringComparison.OrdinalIgnoreCase)))
+            return "dirty-worktree";
+        if (blockedFindings.Any(finding => finding.Contains("worker profile", StringComparison.OrdinalIgnoreCase)))
+            return "worker-profile";
+        if (blockedFindings.Any(finding => finding.Contains("capability", StringComparison.OrdinalIgnoreCase) ||
+                finding.Contains(".git", StringComparison.OrdinalIgnoreCase)))
+            return "start-gate";
+        if (blockedFindings.Any(finding => finding.Contains("subscription retry", StringComparison.OrdinalIgnoreCase) ||
+                finding.Contains("cooling down", StringComparison.OrdinalIgnoreCase) ||
+                finding.Contains("subscription limits", StringComparison.OrdinalIgnoreCase)))
+            return "subscription-preflight";
+        if (blockedFindings.Any(finding => finding.Contains("missing required local skill", StringComparison.OrdinalIgnoreCase)))
+            return "missing-skill";
+
+        return "preflight-blocked";
     }
 
     private static void EnsureWorktreeForFileRole(AgentRole role, string workingDirectory)
