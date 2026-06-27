@@ -695,11 +695,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 Action<AgentOrchestratorKernel> reconcileSweep = loopKernel =>
                 {
-                    // Dynamic goal pickup: ingest goals submitted (via a separate `goal` command, backlog
-                    // promotion, or a future API) AFTER this loop loaded, so a long-running batch loop
-                    // drives them without a restart. Additive merge only — never clobbers the in-flight
-                    // goals this loop is already driving. Best-effort: a reload hiccup must not kill a tick.
-                    try { loopKernel.IngestNewGoals(context.ReloadKernel().ExportSnapshot()); }
+                    // Refresh tracked goals from persisted state before every tick, then ingest newly
+                    // submitted goals. This keeps role handoff decisions tied to durable task status
+                    // instead of stale loop-local objects.
+                    try
+                    {
+                        var snapshot = context.ReloadKernel().ExportSnapshot();
+                        loopKernel.RefreshTrackedGoals(snapshot);
+                        loopKernel.IngestNewGoals(snapshot);
+                    }
                     catch { /* dynamic pickup is best-effort */ }
 
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
