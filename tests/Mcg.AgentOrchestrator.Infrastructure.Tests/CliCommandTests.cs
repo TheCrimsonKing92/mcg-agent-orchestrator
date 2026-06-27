@@ -5674,6 +5674,39 @@ public sealed class CliCommandTests
         Xunit.Assert.Empty(second.Goals);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_next_persists_terminal_sweep_repairs")]
+    public void PersistentRunnerNextPersistsTerminalSweepRepairs()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Premature completion", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+        currentGoal = kernel.GetGoal(goal.Id);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["next", goal.Id.Value[..8]],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restored = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(GoalStatus.Active, restored.Status);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_running_task_with_exit_file_reconciles_and_is_idempotent")]
     public void TerminalGoalSweepCompletedRunningTaskWithExitFileReconcilesAndIsIdempotent()
     {

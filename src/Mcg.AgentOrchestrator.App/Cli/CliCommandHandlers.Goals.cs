@@ -323,10 +323,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "goal-recovery":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintTerminalGoalSweep(TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id));
+            var recoverySweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
-            return false;
+            return recoverySweep.Changed;
 
         case "dogfood-eval":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
@@ -519,7 +520,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var isFull = HasCliConfirmation(parts, "--full");
             var nextGoalPrefix = GetOptionalArgument(parts, "--full");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, nextGoalPrefix);
-            ConsoleViews.PrintTerminalGoalSweep(TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id));
+            var nextSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            ConsoleViews.PrintTerminalGoalSweep(nextSweep);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             var nextPolicy = ResolveCliAutonomyPolicy(parts);
             var nextHealth = GoalHealthEvaluator.Build(
@@ -534,7 +536,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 PrintNextFullDetail(context, nextPolicy);
             }
-            return false;
+            return nextSweep.Changed;
         }
 
         case "subscription-plan":
