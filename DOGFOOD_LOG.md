@@ -2018,3 +2018,10 @@ Goal ddae01e6: # GOAL: Fix retry-state lifecycle desync and downstream stale ver
 
 - Operator gate: Planner: not-run; Planner produced concrete module plan and falsifiable proof only (exit 0); Researcher: not-run; read-only sandbox prevents dotnet build/test output writes (exit 0); Developer: pass (exit 0); Tester: pass - 42 core lifecycle tests and 105 infrastructure conductor/run-goal tests passed (exit 0); Reviewer: not-run locally; review found blocking behavioral bugs, prior Tester reported focused tests passing but coverage gap remains (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - reviewer task over lifecycle/conductor diff - enough context to identify blocking state-machine regressions.
+
+## 2026-06-27 - # GOAL: Handle command-specific CLI help before state startup  Context: - Thi...
+
+Goal f36b1677: # GOAL: Handle command-specific CLI help before state startup  Context: - This replaces abandoned attempt `90445242`,.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 0e81739881a5cf409d37647392eb3369e9e8721a). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 0e81739881a5cf409d37647392eb3369e9e8721a). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner task produced source-backed plan only (exit 0); Researcher: not-run; research-only task with no repository modifications (exit 0); Developer: pass; 13 passed, 0 failed. Nonfatal existing NuGet vulnerability-cache access warnings. (exit 0); Tester: pass; focused xUnit exit 0, 13 passed/0 failed; manual smoke confirmed all six help commands exit 0, print command-specific `Usage:`, and leave `.orchestrator/state.db` absent (exit 0); Reviewer: not-run by reviewer; prior focused xUnit evidence passed 13/13 and manual six-command smoke passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - review of focused CLI startup/help behavior - sufficient for code/evidence comparison without broader orchestration.
