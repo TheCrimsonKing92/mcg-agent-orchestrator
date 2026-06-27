@@ -521,7 +521,7 @@ internal sealed class ConductorDriver
             {
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Held(fromState,
-                        $"Assigned tasks exist but no ready batch formed; will retry next tick. {outcome.Reason}"));
+                        FormatAssignedTasksBlockedReason(goal, readiness, outcome.Reason)));
             }
         }
 
@@ -556,6 +556,52 @@ internal sealed class ConductorDriver
                 + "auto-approves high-risk ownership, or approve manually): "
                 + string.Join("; ", approvalReasons)
             : "No tasks in ready batch; goal may have no assigned or ready tasks";
+    }
+
+    private static string FormatAssignedTasksBlockedReason(
+        Goal goal,
+        DispatchReadinessVerdict readiness,
+        string? emptyBatchReason)
+    {
+        var taskReasons = goal.Tasks
+            .Where(task => task.Status == WorkTaskStatus.Assigned)
+            .Select(task => FormatAssignedTaskBlocker(goal, task, readiness, emptyBatchReason))
+            .ToArray();
+        var blockers = taskReasons.Length == 0
+            ? "no Assigned tasks remained when the batch was evaluated"
+            : string.Join("; ", taskReasons);
+        return $"Assigned tasks exist but no ready batch formed for goal {goal.Id.Value}; will retry next tick. Blockers: {blockers}.";
+    }
+
+    private static string FormatAssignedTaskBlocker(
+        Goal goal,
+        TaskSpec task,
+        DispatchReadinessVerdict readiness,
+        string? emptyBatchReason)
+    {
+        if (task.LastProcess is { IsRunning: true })
+        {
+            return $"task {task.Id.Value} ({task.RequiredRole}) blocked: task already has a running process";
+        }
+
+        var predecessor = goal.Tasks.FirstOrDefault(candidate =>
+            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            candidate.Status != WorkTaskStatus.Completed);
+        if (predecessor is not null)
+        {
+            return $"task {task.Id.Value} ({task.RequiredRole}) blocked: predecessor {predecessor.Id.Value} is {predecessor.Status}, not Completed";
+        }
+
+        var readinessReason = readiness switch
+        {
+            DispatchReadinessDeferred deferred => $"readiness gate returned false: {deferred.Reason}",
+            DispatchReadinessBlocked blocked => $"readiness gate returned false: {blocked.Reason}",
+            DispatchReadinessReady => string.IsNullOrWhiteSpace(emptyBatchReason)
+                ? "batch formation returned no dispatch"
+                : $"batch formation returned no dispatch: {emptyBatchReason}",
+            _ => "batch formation returned no dispatch"
+        };
+        return $"task {task.Id.Value} ({task.RequiredRole}) blocked: {readinessReason}";
     }
 
     private static TimeSpan ComputeEmptyOutputBackoff(ConductorAutonomyPolicy policy, int retryCount)

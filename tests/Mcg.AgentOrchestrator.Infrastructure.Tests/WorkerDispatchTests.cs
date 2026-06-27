@@ -1482,6 +1482,58 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_dispatches_Tester_after_persisted_Developer_completion_without_process_start")]
+    public void WorkerProfileDispatcherReadyBatchDispatchesTesterAfterPersistedDeveloperCompletionWithoutProcessStart()
+{
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
+    var root = CreateTempDirectory();
+    File.WriteAllText(Path.Combine(root, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Dispatch Tester after Developer completion");
+    var agents = new[]
+    {
+        TestSubscriptionAgent("planner", "Planner", AgentRole.Planner),
+        TestSubscriptionAgent("researcher", "Researcher", AgentRole.Researcher),
+        TestSubscriptionAgent("developer", "Developer", AgentRole.Developer),
+        TestSubscriptionAgent("tester", "Tester", AgentRole.Tester)
+    };
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("test-subscription", "worker --model {subscriptionModelName} --reasoning {subscriptionReasoningEffort} --prompt {promptPath} --cd {workingDirectory}")
+    ]);
+    kernel.ActivateGoal(goal.Id, agents);
+    foreach (var task in goal.Tasks.Where(task =>
+        task.RequiredRole is AgentRole.Planner or AgentRole.Researcher or AgentRole.Developer))
+    {
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} completed in persisted state.");
+    }
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+    var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
+    var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+        kernel,
+        CreateRefinedWorkspace(root),
+        goal,
+        agents,
+        profiles);
+
+    Assert.IsType<DispatchReadinessReady>(readiness);
+    Assert.Single(batch.Dispatches);
+    var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+    Assert.Equal(tester.Id, batch.Dispatches.Single().Task.Id);
+    Assert.Equal(WorkTaskStatus.Running, tester.Status);
+    Assert.Null(tester.LastProcess);
+}
+
+private static AgentDefinition TestSubscriptionAgent(string id, string name, AgentRole role) =>
+    new(
+        new AgentId(id),
+        name,
+        role,
+        new ModelProfile("Test", "test-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("test-subscription", "test-model", "low"));
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_records_provider_from_claude_launcher")]
     public void WorkerProfileDispatcherReadyBatchRecordsProviderFromClaudeLauncher()
 {

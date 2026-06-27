@@ -41,4 +41,44 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Equal(0, live.IngestNewGoals(store.ExportSnapshot()));
         Xunit.Assert.Single(live.Goals);
     }
+
+    [Xunit.Fact(DisplayName = "RefreshTrackedGoals_replaces_existing_goal_from_persisted_snapshot")]
+    public void RefreshTrackedGoalsReplacesExistingGoalFromPersistedSnapshot()
+    {
+        var developerId = TaskId.New().Value;
+        var testerId = TaskId.New().Value;
+        var live = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-refresh",
+                    "Refresh role handoff",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(developerId, "Implement.", AgentRole.Developer, WorkTaskStatus.Assigned, null, null, null, [], null, null),
+                        new TaskSnapshot(testerId, "Test.", AgentRole.Tester, WorkTaskStatus.Assigned, null, null, null, [], null, null)
+                    ],
+                    [])
+            ],
+            []));
+        var store = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-refresh",
+                    "Refresh role handoff",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(developerId, "Implement.", AgentRole.Developer, WorkTaskStatus.Completed, null, null, null, [], null, null),
+                        new TaskSnapshot(testerId, "Test.", AgentRole.Tester, WorkTaskStatus.Assigned, null, null, null, [], null, null)
+                    ],
+                    [])
+            ],
+            []));
+
+        var refreshed = live.RefreshTrackedGoals(store.ExportSnapshot());
+
+        var goal = live.Goals.Single();
+        Xunit.Assert.Equal(1, refreshed);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, goal.Tasks.Single(task => task.Id.Value == developerId).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single(task => task.Id.Value == testerId).Status);
+    }
 }

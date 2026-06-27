@@ -292,6 +292,61 @@ public sealed class ConductorBatchLoopTests
         Assert.True(dispatchedIds.Contains(goalB.Id.Value)); // B was picked up mid-run and driven
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_refreshes_persisted_completion_and_dispatches_next_assigned_role")]
+    public void BatchLoopRefreshesPersistedCompletionAndDispatchesNextAssignedRole()
+    {
+        var developerId = TaskId.New().Value;
+        var testerId = TaskId.New().Value;
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-role-handoff",
+                    "Dispatch next role after persisted completion",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(developerId, "Implement.", AgentRole.Developer, WorkTaskStatus.Assigned, null, null, null, [], null, null),
+                        new TaskSnapshot(testerId, "Test.", AgentRole.Tester, WorkTaskStatus.Assigned, null, null, null, [], null, null)
+                    ],
+                    [])
+            ],
+            []));
+        var store = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-role-handoff",
+                    "Dispatch next role after persisted completion",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(developerId, "Implement.", AgentRole.Developer, WorkTaskStatus.Completed, null, null, null, [], null, null),
+                        new TaskSnapshot(testerId, "Test.", AgentRole.Tester, WorkTaskStatus.Assigned, null, null, null, [], null, null)
+                    ],
+                    [])
+            ],
+            []));
+        AgentRole? dispatchedRole = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: goal =>
+            {
+                var task = goal.Tasks.First(task => task.Status == WorkTaskStatus.Assigned);
+                dispatchedRole = task.RequiredRole;
+                kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("stub-worker", "stub", "C:\\tmp", DateTimeOffset.UtcNow));
+                return DispatchStartOutcome.Started();
+            });
+
+        new ConductorBatchLoop(loopKernel => loopKernel.RefreshTrackedGoals(store.ExportSnapshot())).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        var goal = kernel.Goals.Single();
+        Assert.Equal(AgentRole.Tester, dispatchedRole);
+        Assert.Equal(WorkTaskStatus.Completed, goal.Tasks.Single(task => task.Id.Value == developerId).Status);
+        Assert.Equal(WorkTaskStatus.Running, goal.Tasks.Single(task => task.Id.Value == testerId).Status);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_keepAliveWhenIdle_stays_running_and_drives_a_goal_that_arrives_later")]
     public void BatchLoop_KeepAliveStaysRunningAndDrivesLaterGoal()
     {
