@@ -1,0 +1,105 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal sealed record TerminalGoalSweepRepair(
+    string Kind,
+    string Evidence,
+    string Command);
+
+internal sealed record TerminalGoalSweepBlocker(
+    string Kind,
+    string Evidence,
+    string Command);
+
+internal sealed record TerminalGoalSweepGoalResult(
+    GoalId GoalId,
+    string GoalPrefix,
+    IReadOnlyList<TerminalGoalSweepRepair> Repairs,
+    IReadOnlyList<TerminalGoalSweepBlocker> Blockers)
+{
+    public bool Changed => Repairs.Count > 0;
+}
+
+internal sealed record TerminalGoalSweepResult(IReadOnlyList<TerminalGoalSweepGoalResult> Goals)
+{
+    public bool Changed => Goals.Any(goal => goal.Changed);
+    public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
+}
+
+internal static class TerminalGoalSweep
+{
+    public static TerminalGoalSweepResult Run(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalId? onlyGoalId = null)
+    {
+        var dispatchRunner = new BackgroundDispatchRunner();
+        var results = new List<TerminalGoalSweepGoalResult>();
+
+        foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
+        {
+            var repairs = new List<TerminalGoalSweepRepair>();
+            var blockers = new List<TerminalGoalSweepBlocker>();
+            var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
+
+            var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
+            if (reconciled > 0)
+            {
+                repairs.Add(new TerminalGoalSweepRepair(
+                    "dispatch-exit-reconciled",
+                    $"reconciled {reconciled} exited dispatch artifact(s)",
+                    "reconcile"));
+            }
+
+            var goal = kernel.GetGoal(originalGoal.Id);
+            if (kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+            {
+                repairs.Add(new TerminalGoalSweepRepair(
+                    "terminal-task-desync",
+                    "terminal goal had non-terminal task state",
+                    $"conduct {prefix} --loop"));
+                goal = kernel.GetGoal(originalGoal.Id);
+            }
+
+            if (goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory))
+            {
+                var hasBranchDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id) is not null;
+
+                if (hasBranchDiff)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "completed-branch-unmerged",
+                        $"completed goal still has unmerged changes on {GoalWorktrees.BranchName(goal.Id)}",
+                        $"acceptance {prefix}"));
+                }
+                else
+                {
+                    var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
+                    if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
+                    {
+                        blockers.Add(new TerminalGoalSweepBlocker(
+                            "completed-branch-unmerged",
+                            removeResult.Message,
+                            $"acceptance {prefix}"));
+                    }
+                    else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
+                    {
+                        repairs.Add(new TerminalGoalSweepRepair(
+                            "merged-branch-cleanup",
+                            removeResult.Message,
+                            $"workspace remove {prefix}"));
+                    }
+                }
+            }
+
+            if (repairs.Count > 0 || blockers.Count > 0)
+            {
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+            }
+        }
+
+        return new TerminalGoalSweepResult(results);
+    }
+}

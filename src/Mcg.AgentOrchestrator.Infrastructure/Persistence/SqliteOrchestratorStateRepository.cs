@@ -308,10 +308,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.CommandText = """
             SELECT id, status, objective, updated_at
             FROM goals
-            WHERE status NOT IN ($completed, $cleanedUp)
+            WHERE status <> $cleanedUp
             ORDER BY updated_at DESC
             """;
-        cmd.Parameters.AddWithValue("$completed", GoalStatus.Completed.ToString());
         cmd.Parameters.AddWithValue("$cleanedUp", "CleanedUp");
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
