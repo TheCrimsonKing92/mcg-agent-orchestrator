@@ -10,6 +10,20 @@ public sealed class LauncherScriptTests
     private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "stderrPath", "stdoutPath"];
     private static readonly string?[] ExpectedGoalsArgument = ["goals"];
     private static readonly string?[] ExpectedAcceptanceGoalArguments = ["acceptance", "goal"];
+    private static readonly string?[] ExpectedDoubleDashArguments =
+    [
+        "backlog-intake",
+        "Launcher double dash smoke",
+        "--create-goal",
+        "--loop",
+        "--watch",
+        "--policy",
+        "Permissive",
+        "--poll-seconds",
+        "15",
+        "--max-duration",
+        "00:01:00"
+    ];
 
     [Xunit.Fact(DisplayName = "LandVerifiedGoal_unknown_goal_mark_landed_command_exits_nonzero_without_done")]
     public void LandVerifiedGoalUnknownGoalMarkLandedCommandExitsNonzeroWithoutDone()
@@ -163,6 +177,83 @@ public sealed class LauncherScriptTests
         Assert.True(File.Exists(stderrPath), $"Expected launcher stderr path to exist: {stderrPath}");
     }
 
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_forwards_double_dash_arguments_to_background_process")]
+    public void StartOrchestratorCommandForwardsDoubleDashArgumentsToBackgroundProcess()
+    {
+        var repoRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(repoRoot))
+        {
+            repoRoot = FindRepositoryRoot();
+        }
+
+        using var sandbox = CreateDoubleDashLauncherSandbox();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath;
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Start-OrchestratorCommand.ps1");
+        startInfo.ArgumentList.Add("-Name");
+        startInfo.ArgumentList.Add("launcher-double-dash-test");
+        startInfo.ArgumentList.Add("-AppDll");
+        startInfo.ArgumentList.Add(sandbox.EchoScriptPath);
+        foreach (var argument in ExpectedDoubleDashArguments)
+        {
+            startInfo.ArgumentList.Add(argument!);
+        }
+
+        using var launcher = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start launcher script.");
+        var stdout = launcher.StandardOutput.ReadToEnd();
+        var stderr = launcher.StandardError.ReadToEnd();
+        Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        Assert.Equal(0, launcher.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+
+        var outputLines = stdout.Split(
+            JsonLineSeparators,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(outputLines);
+
+        using var launcherDocument = JsonDocument.Parse(outputLines[0]);
+        var launcherRoot = launcherDocument.RootElement;
+        var pid = launcherRoot.GetProperty("pid").GetInt32();
+        var stdoutPath = launcherRoot.GetProperty("stdoutPath").GetString()
+            ?? throw new InvalidOperationException("Launcher did not emit stdoutPath.");
+        var stderrPath = launcherRoot.GetProperty("stderrPath").GetString()
+            ?? throw new InvalidOperationException("Launcher did not emit stderrPath.");
+        var emittedArgs = launcherRoot.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        Assert.Equal(ExpectedDoubleDashArguments, emittedArgs);
+
+        try
+        {
+            using var child = Process.GetProcessById(pid);
+            Assert.True(child.WaitForExit(20000), $"Launched command pid {pid} did not exit within 20 seconds.");
+        }
+        catch (ArgumentException)
+        {
+            // Short commands can exit before the test reopens the emitted PID.
+        }
+
+        WaitForFile(stdoutPath, TimeSpan.FromSeconds(10));
+        WaitForFile(stderrPath, TimeSpan.FromSeconds(10));
+        Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(stderrPath)), File.ReadAllText(stderrPath));
+
+        using var childDocument = JsonDocument.Parse(File.ReadAllText(stdoutPath));
+        var childArgs = childDocument.RootElement.EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        Assert.Equal(ExpectedDoubleDashArguments, childArgs);
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_keeps_AppDll_named_only_and_forwards_remaining_arguments")]
     public void StartOrchestratorCommandKeepsAppDllNamedOnlyAndForwardsRemainingArguments()
     {
@@ -242,6 +333,30 @@ public sealed class LauncherScriptTests
             $"Could not locate launcher source files from source file path '{sourceFilePath}'.");
     }
 
+    private static DoubleDashLauncherSandbox CreateDoubleDashLauncherSandbox()
+    {
+        var sandboxPath = Path.Combine(Path.GetTempPath(), $"launcher-double-dash-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(sandboxPath);
+
+        var hostPath = Path.Combine(sandboxPath, "fake-dotnet.cmd");
+        File.WriteAllText(hostPath, """
+            @echo off
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File %*
+            """);
+
+        var echoScriptPath = Path.Combine(sandboxPath, "echo-args.ps1");
+        File.WriteAllText(echoScriptPath, """
+            param(
+                [Parameter(ValueFromRemainingArguments = $true)]
+                [string[]]$Arguments
+            )
+
+            $Arguments | ConvertTo-Json -Compress
+            """);
+
+        return new DoubleDashLauncherSandbox(sandboxPath, hostPath, echoScriptPath);
+    }
+
     private static LandVerifiedGoalSandbox CreateLandVerifiedGoalSandbox(string launcherBody)
     {
         const string goalPrefix = "abcdef12";
@@ -318,6 +433,40 @@ public sealed class LauncherScriptTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30000), $"{description} did not exit within 30 seconds.");
         return new ProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static void WaitForFile(string path, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (!File.Exists(path) && DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(100);
+        }
+
+        Assert.True(File.Exists(path), $"Expected file to exist: {path}");
+    }
+
+    private sealed class DoubleDashLauncherSandbox(
+        string sandboxPath,
+        string hostPath,
+        string echoScriptPath) : IDisposable
+    {
+        public string HostPath { get; } = hostPath;
+        public string EchoScriptPath { get; } = echoScriptPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(sandboxPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private sealed class LandVerifiedGoalSandbox(string repositoryPath) : IDisposable

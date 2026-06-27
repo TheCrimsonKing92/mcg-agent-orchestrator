@@ -103,6 +103,34 @@ public sealed partial class AgentOrchestratorKernel
         return ingested;
     }
 
+    // Refreshes already-tracked goals from persisted state at a conductor tick boundary. Unlike
+    // IngestNewGoals, this deliberately replaces known goals so externally persisted worker
+    // completion is visible to the next role-handoff decision.
+    public int RefreshTrackedGoals(OrchestratorSnapshot snapshot)
+    {
+        var refreshed = 0;
+        foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
+        {
+            if (!_goals.ContainsKey(goal.Id))
+            {
+                continue;
+            }
+
+            _goals[goal.Id] = goal;
+            refreshed++;
+        }
+
+        foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
+        {
+            if (_humanInputRequests.ContainsKey(request.Id))
+            {
+                _humanInputRequests[request.Id] = request;
+            }
+        }
+
+        return refreshed;
+    }
+
 
 
 

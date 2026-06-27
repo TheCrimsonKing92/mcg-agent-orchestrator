@@ -41,11 +41,59 @@ function ConvertTo-SafeName {
     return $safe
 }
 
+function ConvertTo-CommandLineArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    if ($Value.Length -gt 0 -and $Value.IndexOfAny([char[]]@(' ', "`t", "`n", "`r", '"')) -lt 0) {
+        return $Value
+    }
+
+    $quoted = [System.Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+
+        if ($character -eq '"') {
+            [void]$quoted.Append('\', ($backslashes * 2) + 1)
+            [void]$quoted.Append('"')
+            $backslashes = 0
+            continue
+        }
+
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append('\', $backslashes)
+            $backslashes = 0
+        }
+
+        [void]$quoted.Append($character)
+    }
+
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append('\', $backslashes * 2)
+    }
+
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
 $stamp = Get-Date -Format "yyyyMMddHHmmss"
 $safeName = ConvertTo-SafeName $Name
 $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
 $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
 $processArguments = @($resolvedAppDll) + $Arguments
+$processArgumentLine = ($processArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
+$dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
+    $dotnetPath = "dotnet"
+}
 
 $previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
 $previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
@@ -56,9 +104,9 @@ try {
     $process = Start-Process `
         -WindowStyle Hidden `
         -PassThru `
-        -FilePath "dotnet" `
+        -FilePath $dotnetPath `
         -WorkingDirectory $repoRoot `
-        -ArgumentList $processArguments `
+        -ArgumentList $processArgumentLine `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
 }

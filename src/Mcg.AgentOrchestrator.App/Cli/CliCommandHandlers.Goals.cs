@@ -695,11 +695,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 Action<AgentOrchestratorKernel> reconcileSweep = loopKernel =>
                 {
-                    // Dynamic goal pickup: ingest goals submitted (via a separate `goal` command, backlog
-                    // promotion, or a future API) AFTER this loop loaded, so a long-running batch loop
-                    // drives them without a restart. Additive merge only — never clobbers the in-flight
-                    // goals this loop is already driving. Best-effort: a reload hiccup must not kill a tick.
-                    try { loopKernel.IngestNewGoals(context.ReloadKernel().ExportSnapshot()); }
+                    // Refresh tracked goals from persisted state before every tick, then ingest newly
+                    // submitted goals. This keeps role handoff decisions tied to durable task status
+                    // instead of stale loop-local objects.
+                    try
+                    {
+                        var snapshot = context.ReloadKernel().ExportSnapshot();
+                        loopKernel.RefreshTrackedGoals(snapshot);
+                        loopKernel.IngestNewGoals(snapshot);
+                    }
                     catch { /* dynamic pickup is best-effort */ }
 
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
@@ -2287,6 +2291,18 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         verification,
         Console.WriteLine);
 
+    var hostStop = context.StopAcceptanceHosts(new AcceptanceHostStopRequest(
+        goal.Id,
+        worktreePath,
+        TimeSpan.FromSeconds(30)));
+    Console.WriteLine(hostStop.Message);
+    if (!hostStop.Succeeded)
+    {
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["stop-host"]);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["stop-host"]);
+        return false;
+    }
+
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
         goal.Id,
         expectedGoalFingerprint,
@@ -2316,6 +2332,13 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             context.Kernel.ClearAcceptanceFailure(goal.Id);
             context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+        }
+        else
+        {
+            var failedChecks = new[] { "merge" };
+            context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+            context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
+            Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {GoalWorktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
         }
         return mergeCommit.FastForwarded;
     }
@@ -2603,6 +2626,7 @@ private static void CleanupGoalWorkspaceAfterMerge(
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
         Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
         return;
     }
 
@@ -2610,10 +2634,12 @@ private static void CleanupGoalWorkspaceAfterMerge(
     if (removeResult.IsComplete)
     {
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        context.EventWriter.AppendCleanedUp(goal.Id);
     }
     else
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
     }
 }
 

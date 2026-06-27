@@ -2025,3 +2025,10 @@ Goal f36b1677: # GOAL: Handle command-specific CLI help before state startup  Co
 
 - Operator gate: Planner: not-run; Planner task produced source-backed plan only (exit 0); Researcher: not-run; research-only task with no repository modifications (exit 0); Developer: pass; 13 passed, 0 failed. Nonfatal existing NuGet vulnerability-cache access warnings. (exit 0); Tester: pass; focused xUnit exit 0, 13 passed/0 failed; manual smoke confirmed all six help commands exit 0, print command-specific `Usage:`, and leave `.orchestrator/state.db` absent (exit 0); Reviewer: not-run by reviewer; prior focused xUnit evidence passed 13/13 and manual six-command smoke passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - review of focused CLI startup/help behavior - sufficient for code/evidence comparison without broader orchestration.
+
+## 2026-06-27 - Backlog slice: Reduce low-integrity dispatch startup cost by avoiding recursi...
+
+Goal e290a4e8: Backlog slice: Reduce low-integrity dispatch startup cost by avoiding recursive ACL relabels  Source backlog item: - .... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Tester task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner inspection only (exit 0); Researcher: not-run; research-only source/API inspection (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - repository research task - enough context and source tracing without code edits.

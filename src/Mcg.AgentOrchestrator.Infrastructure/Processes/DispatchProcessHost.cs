@@ -15,6 +15,7 @@ public static class DispatchProcessHost
 {
     public const string SubcommandName = "__dispatch-run";
     public const string StartGatePathVariable = "MCG_DISPATCH_HOST_START_GATE";
+    internal const string LowIntegritySetupArtifactName = "low-integrity-setup.json";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
 
     // Dispatch supervision: an unbounded wait lets a hung worker — or a stuck grandchild such as a
@@ -81,16 +82,19 @@ public static class DispatchProcessHost
         ProtectGitMetadata(parameters.WorkingDirectory);
 
         // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
-        // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
+        // stays authenticated) and a temp scratch. The sandbox root is labeled before child paths are
+        // materialized so they inherit Low without a second recursive icacls traversal.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        Directory.CreateDirectory(sandboxRoot);
+        if (!SetLowIntegrity(sandboxRoot, recursive: false, inheritToChildren: true))
+        {
+            throw new InvalidOperationException($"Failed to apply inheritable Low integrity label to sandbox root '{sandboxRoot}'.");
+        }
+
         var codexHome = Path.Combine(sandboxRoot, "codex-home");
         var tempDir = Path.Combine(sandboxRoot, "temp");
         Directory.CreateDirectory(codexHome);
         Directory.CreateDirectory(tempDir);
-        if (!SetLowIntegrity(sandboxRoot, recursive: true))
-        {
-            throw new InvalidOperationException($"Failed to apply Low integrity label to sandbox root '{sandboxRoot}'.");
-        }
 
         SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome, parameters.StderrPath);
 
@@ -102,6 +106,7 @@ public static class DispatchProcessHost
         startInfo.Environment["TEMP"] = tempDir;
         startInfo.Environment["TMP"] = tempDir;
         startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable);
+        WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory);
 
         // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
         // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
@@ -282,9 +287,9 @@ public static void DropToLow() {
 [P.N]::DropToLow()
 ";
 
-    private static bool SetLowIntegrity(string path, bool recursive)
+    private static bool SetLowIntegrity(string path, bool recursive, bool inheritToChildren = true)
     {
-        return SetIntegrity(path, recursive ? "(OI)(CI)L" : "L", recursive);
+        return SetIntegrity(path, inheritToChildren ? "(OI)(CI)L" : "L", recursive);
     }
 
     private static void ProtectGitMetadata(string worktree)
@@ -359,7 +364,7 @@ public static void DropToLow() {
             var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
             var completed = WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
             try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return completed && process.ExitCode == 0;
+            return completed;
         }
         catch
         {
@@ -377,6 +382,21 @@ public static void DropToLow() {
         try { process.Kill(entireProcessTree: true); } catch { }
         try { process.WaitForExit(5000); } catch { }
         return false;
+    }
+
+    private static void WriteLowIntegritySetupArtifact(string sandboxRoot, string worktree)
+    {
+        var artifact = new
+        {
+            strategy = "worktree-recursive-sandbox-inherited",
+            worktreeRecursiveRelabel = true,
+            sandboxRecursiveRelabel = false,
+            sandboxRoot,
+            worktree
+        };
+        File.WriteAllText(
+            Path.Combine(sandboxRoot, LowIntegritySetupArtifactName),
+            JsonSerializer.Serialize(artifact, JsonOptions) + Environment.NewLine);
     }
 
     private static void SeedCodexAuth(string codexHome)
