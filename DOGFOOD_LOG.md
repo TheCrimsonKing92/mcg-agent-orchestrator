@@ -2011,3 +2011,10 @@ Goal c38f8779: # GOAL: Make backlog-intake use the SQLite backlog as canonical s
 
 - Operator gate: Planner: not-run; Planner inspection only (exit 0); Researcher: not-run; read-only Researcher task, evidence gathered by source inspection (exit 0); Developer: pass - 47 passed, 0 failed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused C# CLI/store change with regression tests - enough context and reasoning for scoped implementation.
+
+## 2026-06-27 - # GOAL: Fix retry-state lifecycle desync and downstream stale verification  S...
+
+Goal ddae01e6: # GOAL: Fix retry-state lifecycle desync and downstream stale verification  Source backlog items: - d7ae85f1f0d74a6c9.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 16882b22311373dbfe2c1f06ab53b8eb79357f3e). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 16882b22311373dbfe2c1f06ab53b8eb79357f3e). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner produced concrete module plan and falsifiable proof only (exit 0); Researcher: not-run; read-only sandbox prevents dotnet build/test output writes (exit 0); Developer: pass (exit 0); Tester: pass - 42 core lifecycle tests and 105 infrastructure conductor/run-goal tests passed (exit 0); Reviewer: not-run locally; review found blocking behavioral bugs, prior Tester reported focused tests passing but coverage gap remains (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer task over lifecycle/conductor diff - enough context to identify blocking state-machine regressions.
