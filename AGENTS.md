@@ -17,6 +17,7 @@ All commands must minimize output by default.
 - For checked-in PowerShell scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts from ad-hoc shell one-liners.
 - For foreground orchestrator CLI commands, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>` over direct `dotnet` or launcher calls; keep free-form arguments shell-plain (avoid `;`, `|`, `&`) so PowerShell does not split the answer into extra command segments.
 - If direct `git` commands prompt, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 <git-args...>`; it runs git from the repository root through the same repo-bounded script prefix.
+- For exact source windows, use `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <start> <count>` instead of `Get-Content | Select-Object`.
 - Avoid `rg -C` until match count is known. Prefer `rg -n --count PATTERN path`, then inspect exact files/symbols.
 - Do not dump full files unless known small. Prefer targeted search or narrow line windows.
 - For `git diff`, use `git diff --stat` first, then inspect one file at a time.
