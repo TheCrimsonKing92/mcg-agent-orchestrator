@@ -31,6 +31,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
+    private readonly Func<Goal, string, bool> _normalizeLifecycleState;
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -200,11 +201,12 @@ internal sealed class ConductorDriver
                 failedChecks);
         };
 
-        _retryTask = kernel.RetryTask;
+        _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
         _recordAcceptanceFailure = (goal, failedChecks) => kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
+        _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
 
         _runAdvisorySemanticAcceptance = (goal, _) =>
         {
@@ -329,7 +331,8 @@ internal sealed class ConductorDriver
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Action<Goal, IReadOnlyList<string>>? recordAcceptanceFailure = null,
-        Action<Goal>? clearAcceptanceFailure = null)
+        Action<Goal>? clearAcceptanceFailure = null,
+        Func<Goal, string, bool>? normalizeLifecycleState = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -358,12 +361,17 @@ internal sealed class ConductorDriver
             GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
+        _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
     }
 
     public ConductorAdvanceResult AdvanceOnce(Goal goal, ConductorAutonomyPolicy policy)
     {
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
+
+        _normalizeLifecycleState(
+            goal,
+            $"Conductor auto-repaired terminal goal with non-terminal task(s) before lifecycle resolution for goal {goalPrefix}.");
 
         var facts = GetFacts(goal);
         var state = GoalLifecycle.ResolveState(goal, facts);

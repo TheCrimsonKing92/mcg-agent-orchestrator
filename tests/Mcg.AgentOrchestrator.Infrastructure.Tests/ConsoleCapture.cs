@@ -6,10 +6,11 @@ using System.Text;
 // for the duration of an action; parallel tests each get their own isolated capture.
 internal sealed class AsyncLocalConsoleRouter : TextWriter
 {
-    private static readonly AsyncLocal<TextWriter?> _current = new();
+    private readonly AsyncLocal<TextWriter?> _current = new();
     private TextWriter _fallback = Null;
 
-    internal static readonly AsyncLocalConsoleRouter Instance = new();
+    internal static readonly AsyncLocalConsoleRouter Out = new();
+    internal static readonly AsyncLocalConsoleRouter Error = new();
 
     internal void SetFallback(TextWriter fallback) => _fallback = fallback;
 
@@ -31,7 +32,7 @@ internal sealed class AsyncLocalConsoleRouter : TextWriter
     public override Task WriteLineAsync(string? value) => Active.WriteLineAsync(value);
     public override Task WriteLineAsync() => Active.WriteLineAsync();
 
-    internal static string Capture(Action action)
+    internal string CaptureLocal(Action action)
     {
         var writer = new StringWriter();
         var previous = _current.Value;
@@ -46,6 +47,10 @@ internal sealed class AsyncLocalConsoleRouter : TextWriter
         }
         return writer.ToString();
     }
+
+    internal static string Capture(Action action) => Out.CaptureLocal(action);
+
+    internal static string CaptureError(Action action) => Error.CaptureLocal(action);
 }
 
 internal static class ConsoleCaptureInitializer
@@ -53,7 +58,9 @@ internal static class ConsoleCaptureInitializer
     [ModuleInitializer]
     internal static void Install()
     {
-        AsyncLocalConsoleRouter.Instance.SetFallback(Console.Out);
-        Console.SetOut(AsyncLocalConsoleRouter.Instance);
+        AsyncLocalConsoleRouter.Out.SetFallback(Console.Out);
+        AsyncLocalConsoleRouter.Error.SetFallback(Console.Error);
+        Console.SetOut(AsyncLocalConsoleRouter.Out);
+        Console.SetError(AsyncLocalConsoleRouter.Error);
     }
 }

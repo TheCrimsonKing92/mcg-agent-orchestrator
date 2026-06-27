@@ -20,6 +20,7 @@ internal sealed record ProcessBatchExecutionResult(ProcessBatchPlan Plan, IReadO
 internal sealed record SubscriptionStartResult(
     IReadOnlyList<WorkerProfileDispatchResult> Dispatches,
     ProcessBatchExecutionResult Processes,
-    ParallelExecutionPlan ParallelPlan);
+    ParallelExecutionPlan ParallelPlan,
+    IReadOnlyList<ReadyBlockedDiagnostic> BlockedDiagnostics);
 
 

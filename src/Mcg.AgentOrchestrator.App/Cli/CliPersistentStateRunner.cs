@@ -117,6 +117,7 @@ internal static class CliPersistentStateRunner
 
         return args[0].ToLowerInvariant() switch
         {
+            _ when CliCommandHelp.IsCommandSpecificHelp(args) => true,
             "operator-listen" or "operator-channel" => true,
             // Backlog commands operate solely on the independent BacklogStore, never the orchestrator
             // kernel/state.db. Running them with an empty kernel — no state load, no write lock, no
@@ -198,7 +199,7 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null)
     {
         var kernel = LoadConductLoopKernel(stateRepository);
-        new BackgroundDispatchRunner().SweepExitedProcesses(kernel);
+        new BackgroundDispatchRunner().SweepExitedProcesses(kernel, ResolveConductWatchGoalId(args, kernel, currentGoal));
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
@@ -619,6 +620,23 @@ internal static class CliPersistentStateRunner
         }
 
         return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, goalPrefix);
+    }
+
+    private static GoalId? ResolveConductWatchGoalId(
+        IReadOnlyList<string> args,
+        AgentOrchestratorKernel kernel,
+        Goal? currentGoal)
+    {
+        if (args.Count < 2 ||
+            !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
+            !args.Any(arg => arg.Equals("--watch", StringComparison.OrdinalIgnoreCase)) ||
+            args.Any(arg => arg.Equals("--loop", StringComparison.OrdinalIgnoreCase)) ||
+            args[1].StartsWith("--", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, args[1]).Id;
     }
 
     private sealed record ProcessRefreshIdentity(

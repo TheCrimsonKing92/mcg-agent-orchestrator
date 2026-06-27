@@ -59,8 +59,13 @@ public static BatchActionResultDto ApplySubscriptionDispatchReady(
     IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var results = SubscriptionDispatchReadyTasks(kernel, workspace, goal, agents, profiles, providers);
-    return DashboardResponseMapper.ToBatchActionResultDto(goal, "subscription-dispatch-ready", results.Select(result => result.Task).ToList(), results);
+    var results = SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers);
+    return DashboardResponseMapper.ToBatchActionResultDto(
+        goal,
+        "subscription-dispatch-ready",
+        results.Dispatches.Select(result => result.Task).ToList(),
+        results.Dispatches,
+        results.Blocked);
 }
 
 public static BatchActionResultDto ApplyStartSubscriptionReady(

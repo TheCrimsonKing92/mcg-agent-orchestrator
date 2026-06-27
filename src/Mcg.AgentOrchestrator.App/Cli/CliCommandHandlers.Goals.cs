@@ -272,8 +272,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
             }
             var agent = CreateCliAgentDefinition(parts);
+            var previousRoleAgent = context.Agents.FirstOrDefault(existing => existing.Role == agent.Role);
             context.Agents = new AgentCatalog(context.Agents).UpsertRole(agent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
+            WarnAboutTasksPinnedToRemovedAgent(context.Kernel, previousRoleAgent, agent);
             ConsoleViews.PrintAgents(context.Agents);
             return false;
 
@@ -753,14 +755,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     out var wps) && wps > 0 ? wps : ConductorBatchLoop.DefaultWatchIntervalSeconds;
                 TimeSpan? watchMax = int.TryParse(GetFlagValue(parts, "--max-duration"), out var wmd)
                     ? TimeSpan.FromSeconds(wmd) : null;
+                var watchReaper = new BackgroundDispatchRunner();
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
+                    watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }
                 };
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
-                var watchReaper = new BackgroundDispatchRunner();
                 using var watchWakeSignal = new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory);
                 var watchSummary = new ConductorBatchLoop(
                     watchSweep,
@@ -1188,7 +1191,7 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
             context.Agents,
             context.WorkerProfiles,
             context.Providers);
-        applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count}");
+        applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count} readyBlocked={result.BlockedDiagnostics.Count}");
     }
 
     var updated = GoalDrainPlanner.Build(
@@ -1336,6 +1339,29 @@ private static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
     return catalog.Agents;
 }
 
+private static void WarnAboutTasksPinnedToRemovedAgent(AgentOrchestratorKernel kernel, AgentDefinition? previousAgent, AgentDefinition replacementAgent)
+{
+    if (previousAgent is null || previousAgent.Id == replacementAgent.Id)
+    {
+        return;
+    }
+
+    var affected = kernel.Goals
+        .Where(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman)
+        .SelectMany(goal => goal.Tasks
+            .Where(task => task.AssignedAgentId == previousAgent.Id &&
+                task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+            .Select(task => $"{goal.Id.Value[..8]}:{task.Id.Value}"))
+        .ToList();
+    if (affected.Count == 0)
+    {
+        return;
+    }
+
+    Console.Error.WriteLine(
+        $"Warning: replaced {previousAgent.Role} agent '{previousAgent.Id.Value}' with '{replacementAgent.Id.Value}', but in-flight task(s) remain pinned to the removed agent: {string.Join(", ", affected)}. Use reassign-agent to update them deliberately.");
+}
+
 private static void AppendGoalAliasFlags(
     IReadOnlyList<string> parts,
     List<string> target,
@@ -1386,11 +1412,18 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         .ToList();
     if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
     {
-        var created = 0;
-        var matched = 0;
+        var batchPlans = new List<(string Filter, BacklogIntakePlan Plan)>();
         foreach (var filter in batchFilters)
         {
-            var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 1);
+            var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 2);
+            ThrowIfAmbiguousBacklogIntakeMatch(filter, itemPlan);
+            batchPlans.Add((filter, itemPlan));
+        }
+
+        var created = 0;
+        var matched = 0;
+        foreach (var (filter, itemPlan) in batchPlans)
+        {
             if (itemPlan.Items.Count == 0)
             {
                 Console.WriteLine($"No backlog item matched '{filter}'; skipping.");
@@ -1449,7 +1482,12 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     var plan = BacklogIntakePlanner.Build(
         context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
-        createGoal || createSimpleGoal ? 1 : 5);
+        createGoal || createSimpleGoal ? 2 : 5);
+    if (createGoal || createSimpleGoal)
+    {
+        ThrowIfAmbiguousBacklogIntakeMatch(headingFilter, plan);
+    }
+
     if (plan.Items.Count == 0)
     {
         if (!string.IsNullOrWhiteSpace(headingFilter))
@@ -1506,6 +1544,18 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
+}
+
+private static void ThrowIfAmbiguousBacklogIntakeMatch(string? filter, BacklogIntakePlan plan)
+{
+    if (plan.Items.Count <= 1)
+    {
+        return;
+    }
+
+    var label = string.IsNullOrWhiteSpace(filter) ? "<empty>" : filter;
+    var matches = string.Join(Environment.NewLine, plan.Items.Select(item => $"  {item.Id} - {item.Heading}"));
+    throw new InvalidOperationException($"Backlog filter '{label}' matched multiple items; narrow the filter or use an exact id:{Environment.NewLine}{matches}");
 }
 
 private static bool TryReuseBacklogIntakeGoal(
@@ -2324,6 +2374,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
 
     var actions = 0;
+    if (context.Kernel.NormalizeGoalLifecycleState(goal.Id, $"recover: normalized terminal goal with non-terminal task(s); {note}"))
+    {
+        Console.WriteLine("recover: normalized terminal goal with non-terminal task(s) to Active.");
+        actions++;
+    }
+
     foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
     {
         context.Kernel.SubmitHumanInput(request.Id, note);
@@ -2353,7 +2409,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, note);
+        context.Kernel.RetryTask(goal.Id, task.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, task));
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;
@@ -2385,7 +2441,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}");
+        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}", invalidateDownstream: !HasRunningDownstreamTask(goal, task));
         Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }
@@ -2398,6 +2454,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     ConsoleViews.PrintGoal(goal);
     return actions > 0;
 }
+
+private static bool HasRunningDownstreamTask(Goal goal, TaskSpec task) =>
+    goal.Tasks.Any(candidate =>
+        GoalManagementCommandService.IsEarlierSdlcStageOf(task.RequiredRole, candidate.RequiredRole) &&
+        candidate.LastProcess is { IsRunning: true });
 
 // Deterministic verification from git ground truth: when a goal still has un-verified work tasks
 // but the goal branch carries committed changes against main on a CLEAN worktree, record the

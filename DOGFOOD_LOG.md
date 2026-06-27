@@ -1997,3 +1997,31 @@ Goal 5d89369e: Source backlog item: 1ab3efa6d60b40fabcc994c9bb16d7f9  Fix the co
 
 - Operator gate: Planner: not-run, planner-only task with no repository edits (exit 0); Researcher: not-run - researcher/read-only source inspection only (exit 0); Developer: pass: GoalDependency_Chain_BHeldUntilADone 1/1; pass: ConductorBatchLoopTests 44/44; fail: full Infrastructure 1209/1213 with unrelated git ref lock/process handle/DashboardHost failures (exit 0); Tester: pass: ConductorBatchLoopTests 44/44 (including 4 new terminal-goal and bounded-exit tests); pass: GoalDependency_Chain_BHeldUntilADone 1/1; Infrastructure suite 1209/1213 pass (4 unrelated failures) (exit 0); Reviewer: pass/44 (ConductorBatchLoopTests per Developer evidence); full Infrastructure 1209/1213 (4 pre-existing unrelated failures per Developer + Tester evidence); Reviewer did not re-run tests (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review task shape - narrow targeted diff with full evidence chain from prior tasks; Sonnet 4.6 has enough context for this scope.
+
+## 2026-06-27 - Source backlog item: 015ed1a4ae0e4b9a852814966174f31b
+
+Goal f7bfc0e5: Source backlog item: 015ed1a4ae0e4b9a852814966174f31b. Fix retry feedback prompt regeneration: when a task is retried.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via Anthropic/claude-haiku-4-5 (exit 0, commit 7a846f0a5ee5c250978f3c584a5ffef1aa8bad11). Reviewer task via Anthropic/claude-sonnet-4-6 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner-only task, no repository edits (exit 0); Researcher: not-run; Researcher task only, repository inspections succeeded and worktree is clean (exit 0); Developer: not-run; current-task.md explicitly says do not run dotnet test/build; diff check passed (exit 0); Tester: pass: Core.Tests 404/404 all TaskBrief filter 41/41 passed; Infrastructure.Tests WorkerDispatch filter 158/158 passed; new test BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForTesterAndReviewer 1/1 passed; new test WorkerProfileDispatcherIncludesCurrentBranchAndHeadInDispatchedPrompt 1/1 passed (exit 0); Reviewer: Tester reported 41/41 Core.Tests pass (exit 0); Infrastructure suite not explicitly re-run post-commit but new dispatch test is deterministic (exit 0)
+- Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review of bounded prompt-generation and dispatch change - scoped to 4 changed files; review findings required close reading but no architectural inference beyond the diff.
+
+## 2026-06-27 - # GOAL: Make backlog-intake use the SQLite backlog as canonical source  Sourc...
+
+Goal c38f8779: # GOAL: Make backlog-intake use the SQLite backlog as canonical source  Source backlog item: - b513caa537fd4308afcc46.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner inspection only (exit 0); Researcher: not-run; read-only Researcher task, evidence gathered by source inspection (exit 0); Developer: pass - 47 passed, 0 failed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused C# CLI/store change with regression tests - enough context and reasoning for scoped implementation.
+
+## 2026-06-27 - # GOAL: Fix retry-state lifecycle desync and downstream stale verification  S...
+
+Goal ddae01e6: # GOAL: Fix retry-state lifecycle desync and downstream stale verification  Source backlog items: - d7ae85f1f0d74a6c9.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 16882b22311373dbfe2c1f06ab53b8eb79357f3e). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 16882b22311373dbfe2c1f06ab53b8eb79357f3e). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner produced concrete module plan and falsifiable proof only (exit 0); Researcher: not-run; read-only sandbox prevents dotnet build/test output writes (exit 0); Developer: pass (exit 0); Tester: pass - 42 core lifecycle tests and 105 infrastructure conductor/run-goal tests passed (exit 0); Reviewer: not-run locally; review found blocking behavioral bugs, prior Tester reported focused tests passing but coverage gap remains (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer task over lifecycle/conductor diff - enough context to identify blocking state-machine regressions.
+
+## 2026-06-27 - # GOAL: Handle command-specific CLI help before state startup  Context: - Thi...
+
+Goal f36b1677: # GOAL: Handle command-specific CLI help before state startup  Context: - This replaces abandoned attempt `90445242`,.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 0e81739881a5cf409d37647392eb3369e9e8721a). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 0e81739881a5cf409d37647392eb3369e9e8721a). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner task produced source-backed plan only (exit 0); Researcher: not-run; research-only task with no repository modifications (exit 0); Developer: pass; 13 passed, 0 failed. Nonfatal existing NuGet vulnerability-cache access warnings. (exit 0); Tester: pass; focused xUnit exit 0, 13 passed/0 failed; manual smoke confirmed all six help commands exit 0, print command-specific `Usage:`, and leave `.orchestrator/state.db` absent (exit 0); Reviewer: not-run by reviewer; prior focused xUnit evidence passed 13/13 and manual six-command smoke passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - review of focused CLI startup/help behavior - sufficient for code/evidence comparison without broader orchestration.

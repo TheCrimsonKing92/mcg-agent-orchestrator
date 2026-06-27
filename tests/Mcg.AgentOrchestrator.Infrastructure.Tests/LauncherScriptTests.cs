@@ -11,15 +11,64 @@ public sealed class LauncherScriptTests
     private static readonly string?[] ExpectedGoalsArgument = ["goals"];
     private static readonly string?[] ExpectedAcceptanceGoalArguments = ["acceptance", "goal"];
 
-    [Xunit.Fact(DisplayName = "LandVerifiedGoal_fails_closed_and_propagates_goal_mark_landed_exit_code")]
-    public void LandVerifiedGoalFailsClosedAndPropagatesGoalMarkLandedExitCode()
+    [Xunit.Fact(DisplayName = "LandVerifiedGoal_unknown_goal_mark_landed_command_exits_nonzero_without_done")]
+    public void LandVerifiedGoalUnknownGoalMarkLandedCommandExitsNonzeroWithoutDone()
     {
-        var repoRoot = FindLauncherSourceRoot();
-        var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Land-VerifiedGoal.ps1"));
+        using var sandbox = CreateLandVerifiedGoalSandbox("""
+            @echo off
+            echo Unknown command.
+            exit /b 0
+            """);
 
-        Assert.True(script.Contains("$markLandedExitCode = $LASTEXITCODE", StringComparison.Ordinal));
-        Assert.True(script.Contains("exit $markLandedExitCode", StringComparison.Ordinal));
-        Assert.True(script.Contains("goal-mark-landed failed with exit code $markLandedExitCode", StringComparison.Ordinal));
+        var result = RunLandVerifiedGoal(sandbox.RepositoryPath);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.DoesNotContain("[land] DONE", result.Stdout);
+        Assert.Contains("goal-mark-landed", result.Stderr);
+        Assert.Contains("Unknown command.", result.Stderr);
+        Assert.False(File.Exists(Path.Combine(sandbox.RepositoryPath, "goal.txt")));
+    }
+
+    [Xunit.Fact(DisplayName = "LandVerifiedGoal_goal_mark_landed_nonzero_exit_exits_nonzero_without_done")]
+    public void LandVerifiedGoalGoalMarkLandedNonzeroExitExitsNonzeroWithoutDone()
+    {
+        using var sandbox = CreateLandVerifiedGoalSandbox("""
+            @echo off
+            if "%2"=="" (
+              echo Usage: goal-mark-landed ^<goal-prefix^> --confirm-goal-mark-landed
+              exit /b 0
+            )
+            echo bookkeeping failed
+            exit /b 7
+            """);
+
+        var result = RunLandVerifiedGoal(sandbox.RepositoryPath);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.DoesNotContain("[land] DONE", result.Stdout);
+        Assert.Contains("goal-mark-landed", result.Stderr);
+        Assert.Contains("Exit code: 7", result.Stderr);
+        Assert.Contains("bookkeeping failed", result.Stderr);
+    }
+
+    [Xunit.Fact(DisplayName = "LandVerifiedGoal_goal_mark_landed_success_exits_zero_and_prints_done")]
+    public void LandVerifiedGoalGoalMarkLandedSuccessExitsZeroAndPrintsDone()
+    {
+        using var sandbox = CreateLandVerifiedGoalSandbox("""
+            @echo off
+            if "%2"=="" (
+              echo Usage: goal-mark-landed ^<goal-prefix^> --confirm-goal-mark-landed
+              exit /b 0
+            )
+            echo marked
+            exit /b 0
+            """);
+
+        var result = RunLandVerifiedGoal(sandbox.RepositoryPath);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Contains("[land] DONE", result.Stdout);
     }
 
     [Xunit.Fact(DisplayName = "Launcher_rebuild_freshness_includes_git_head_marker")]
@@ -192,6 +241,105 @@ public sealed class LauncherScriptTests
         throw new DirectoryNotFoundException(
             $"Could not locate launcher source files from source file path '{sourceFilePath}'.");
     }
+
+    private static LandVerifiedGoalSandbox CreateLandVerifiedGoalSandbox(string launcherBody)
+    {
+        const string goalPrefix = "abcdef12";
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"land-verified-goal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(repositoryPath, "scripts"));
+        File.Copy(
+            Path.Combine(FindLauncherSourceRoot(), "scripts", "Land-VerifiedGoal.ps1"),
+            Path.Combine(repositoryPath, "scripts", "Land-VerifiedGoal.ps1"));
+        File.WriteAllText(Path.Combine(repositoryPath, "mcg-orchestrator.cmd"), launcherBody);
+
+        RunGit(repositoryPath, "init", "--initial-branch=main");
+        RunGit(repositoryPath, "config", "user.email", "test@example.invalid");
+        RunGit(repositoryPath, "config", "user.name", "Launcher Script Test");
+        File.WriteAllText(Path.Combine(repositoryPath, "README.md"), "base");
+        RunGit(repositoryPath, "add", "README.md");
+        RunGit(repositoryPath, "commit", "-m", "base");
+        RunGit(repositoryPath, "checkout", "-b", $"goal/{goalPrefix}");
+        File.WriteAllText(Path.Combine(repositoryPath, "goal.txt"), "goal change");
+        RunGit(repositoryPath, "add", "goal.txt");
+        RunGit(repositoryPath, "commit", "-m", "goal change");
+        RunGit(repositoryPath, "checkout", "main");
+
+        return new LandVerifiedGoalSandbox(repositoryPath);
+    }
+
+    private static ProcessResult RunLandVerifiedGoal(string repositoryPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repositoryPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repositoryPath, "scripts", "Land-VerifiedGoal.ps1"));
+        startInfo.ArgumentList.Add("-GoalPrefix");
+        startInfo.ArgumentList.Add("abcdef12");
+        startInfo.ArgumentList.Add("-SkipAcceptance");
+
+        return RunProcess(startInfo, "Land-VerifiedGoal.ps1");
+    }
+
+    private static void RunGit(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        var result = RunProcess(startInfo, $"git {string.Join(' ', arguments)}");
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    private static ProcessResult RunProcess(ProcessStartInfo startInfo, string description)
+    {
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start {description}.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(30000), $"{description} did not exit within 30 seconds.");
+        return new ProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private sealed class LandVerifiedGoalSandbox(string repositoryPath) : IDisposable
+    {
+        public string RepositoryPath { get; } = repositoryPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 
     private static string FindRepositoryRoot()
     {

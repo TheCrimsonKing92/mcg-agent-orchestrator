@@ -72,6 +72,11 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName);
+if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
+{
+    return 0;
+}
+
 WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
 WorkerProcessJobs.SweepStartupOrphans();
 GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
@@ -198,6 +203,7 @@ Console.WriteLine("  intent-template [template request] [--create-goal|--create-
 Console.WriteLine("  goals, agents, autonomy-policies");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");
 Console.WriteLine("  agent-add <role> <provider> <model> [name] [--complex-model <model>] (add/replace id)");
+Console.WriteLine("  reassign-agent <task-number> <agent-id> (persist exact task agent assignment)");
 Console.WriteLine("  monitor-goal <goal-id> [--since <event-id>] [--once]");
 Console.WriteLine("  monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
 Console.WriteLine("  acceptance [goal-id] [--autonomy <policy>], workspace [create|merge|remove] [goal-id-prefix] [--autonomy <policy>]");

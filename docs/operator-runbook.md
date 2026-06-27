@@ -2,7 +2,7 @@
 
 **If you are a new AI instance about to operate this orchestrator, read this first.** It is the canonical guide for *driving, observing, and recovering* goals. It supersedes the older "Core Loop" in `README.md` (manual verbs) and the manual sequence in `.agents/skills/orchestrator-dogfood/SKILL.md` — those are fallbacks, not the default path.
 
-Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). For checked-in helper scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts. Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
+Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). For Codex/operator foreground CLI calls, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>`; it runs the built app through the repo-bounded helper prefix and avoids repeated permission prompts from ad-hoc `dotnet` commands. For other checked-in helper scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; for source windows, use `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <start> <count>` instead of PowerShell pipelines. For compact monitoring, use `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; for SQLite store reads/repairs, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 ...`. Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
 
 ---
 
@@ -125,6 +125,37 @@ This is the most important section. Match the **observable symptom** to its caus
 | Acceptance build fails with `CS2012` / `MSB3491` — "file is being used by another process" | Roslyn / VBCSCompiler build server holds the output DLL. Transient; not a code defect. | `dotnet build-server shutdown` (releases the file handles), then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
 | `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> <text>` for each; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
 | You want two or more goals to advance concurrently | Goals with overlapping file scopes contend for the same worktree paths — running them together produces merge conflicts. | Verify non-overlapping file scopes first. Then intake all goals **before** starting a single `conduct --loop --watch --policy Permissive` — one loop tick advances every eligible goal; the slot cap (5 under Permissive) limits concurrent workers. |
+
+### WorkspaceReady + no ready batch after Developer
+
+**Symptom.** `conduct --loop` repeatedly holds or escalates a goal at `WorkspaceReady` / "no ready batch" after the Developer task completed, with Tester or Reviewer tasks still `Assigned`. In the 2026-06-27 incident, example goals `6d76b216` and `abf4967a` showed this pattern; future incidents will have different prefixes.
+
+**Diagnosis.** First identify the assigned-but-not-starting verification task:
+
+```
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 status <goal-prefix>
+```
+
+Then run the explicit dispatch preflight for that task. This must fail before any paid worker starts if the pinned `claude-cli` entry cannot authenticate from the Windows Low Integrity Level sandbox:
+
+```
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 subscription-dispatch <goal-prefix> <task-number>
+```
+
+If the output includes `ERR_CLAUDE_AUTH_UNAVAILABLE`, the "no ready batch" is masking a Claude auth preflight failure, not a real scheduling gap. Low IL is the Windows Low Integrity Level sandbox; it can block subprocess credential/OAuth token access needed by `claude-cli`.
+
+**Recovery.** Switch the affected role to any non-`claude-cli` subscription provider, then rebind the stalled tasks to the new catalog entry. `gpt-5.5` was the OpenAI example used in the 2026-06-27 recovery; use the current valid non-Claude subscription model when that rotates.
+
+```
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 agent Tester OpenAI gpt-5.5
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 agent Reviewer OpenAI gpt-5.5
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 agents
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 reassign-agent <goal-prefix> <tester-task-number> <new-tester-agent-id>
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 reassign-agent <goal-prefix> <reviewer-task-number> <new-reviewer-agent-id>
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 conduct <goal-prefix> --policy Permissive
+```
+
+If a `conduct --loop --watch ...` is already running, the reassigned tasks are dispatchable on the next tick; otherwise run `conduct <goal-prefix>` or restart the loop.
 
 Notes that will save you time:
 - `recover <goal> <note>` takes a free-text note; **multi-word notes work**, but avoid `;` and other shell-special characters (the launcher mangles them).

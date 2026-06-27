@@ -31,6 +31,109 @@ public sealed class GoalBacklogLinkTests
             .Single(entry => string.Equals(entry.Title, "My Feature", StringComparison.Ordinal))
             .Id;
         Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
+        Assert.False(File.Exists(Path.Combine(root, "BACKLOG.md")));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_create_goal_from_sqlite_only_backlog_carries_source_backlog_item_id")]
+    public void CreateGoalFromSqliteOnlyBacklogCarriesSourceBacklogItemId()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Five Role Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Five Role Feature", "--create-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        var seededId = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Five Role Feature", StringComparison.Ordinal))
+            .Id;
+        Assert.True(changed);
+        Assert.NotNull(currentGoal);
+        Assert.Equal(5, currentGoal!.Tasks.Count);
+        Assert.Equal(seededId, currentGoal.SourceBacklogItemId);
+        Assert.False(File.Exists(Path.Combine(root, "BACKLOG.md")));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_intake_filter_matches_body_and_exact_id")]
+    public async Task IntakeFilterMatchesBodyAndExactId()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var bodyMatched = await store.AddAsync("Body Search Feature", "Contains a unique sqlite-only phrase.");
+        var idMatched = await store.AddAsync("Exact Id Feature", "Body.");
+
+        var bodyPlan = BacklogIntakePlanner.Build(workspace.BacklogStorePath, "sqlite-only phrase", 5);
+        var idPlan = BacklogIntakePlanner.Build(workspace.BacklogStorePath, idMatched.Id, 5);
+
+        Assert.Equal(bodyMatched.Id, Assert.Single(bodyPlan.Items).Id);
+        Assert.Equal(idMatched.Id, Assert.Single(idPlan.Items).Id);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_intake_ignores_present_backlog_markdown")]
+    public void IntakeIgnoresPresentBacklogMarkdown()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## SQLite Feature\n\nFeature body.\n");
+        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), "# Backlog\n\n## Markdown Only Feature\n\nLegacy body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+
+        var plan = BacklogIntakePlanner.Build(workspace.BacklogStorePath, "Markdown Only Feature", 5);
+
+        Assert.Empty(plan.Items);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_intake_missing_sqlite_backlog_fails_without_backlog_markdown_requirement")]
+    public void IntakeMissingSqliteBacklogFailsWithoutBacklogMarkdownRequirement()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "BACKLOG.md"), "# Backlog\n\n## Legacy Feature\n\nLegacy body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<FileNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Legacy Feature", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Contains("backlog.db", ex.Message);
+        Assert.DoesNotContain("BACKLOG.md", ex.Message);
+        Assert.False(File.Exists(workspace.BacklogStorePath));
+        Assert.Empty(kernel.Goals);
+        Assert.Null(currentGoal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_create_flag_with_multiple_matches_fails_before_creating_goal")]
+    public void CreateFlagWithMultipleMatchesFailsBeforeCreatingGoal()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Ambiguous Alpha\n\nBody.\n\n## Ambiguous Beta\n\nBody.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", "Ambiguous", "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Contains("matched multiple items", ex.Message);
+        Assert.Contains("Ambiguous Alpha", ex.Message);
+        Assert.Contains("Ambiguous Beta", ex.Message);
+        Assert.Empty(kernel.Goals);
+        Assert.Null(currentGoal);
     }
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_new_source_backlog_id_creates_goal_and_persists_indexed_record")]

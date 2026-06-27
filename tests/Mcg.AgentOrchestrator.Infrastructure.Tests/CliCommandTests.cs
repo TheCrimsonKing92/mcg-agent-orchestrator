@@ -1063,6 +1063,106 @@ public sealed class CliCommandTests
             evt.Message.Contains("Alternate Planner", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_reassign_agent_updates_task_to_exact_agent_id")]
+    public void CliReassignAgentUpdatesTaskToExactAgentId()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Reassign exact planner", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Exact agent reassignment", [task]);
+        var primary = SubscriptionPlanner("primary-planner", "Primary Planner");
+        var alternate = SubscriptionPlanner("alternate-planner", "Alternate Planner");
+        IReadOnlyList<AgentDefinition> agents = [primary, alternate];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, [primary]);
+
+        CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["reassign-agent", "1", alternate.Id.Value],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        Xunit.Assert.Equal(alternate.Id, task.AssignedAgentId);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskRedelegated &&
+            evt.Message.Contains("primary-planner", StringComparison.Ordinal) &&
+            evt.Message.Contains("alternate-planner", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_reassign_agent_reports_missing_agent_without_throwing")]
+    public void CliReassignAgentReportsMissingAgentWithoutThrowing()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Reject missing planner", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Missing agent reassignment", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionPlanner("planner", "Planner")];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var stderr = CaptureConsoleError(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["reassign-agent", "1", "missing-agent"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Equal("planner", task.AssignedAgentId!.Value);
+        Xunit.Assert.Contains("ERROR: agent id 'missing-agent' was not found.", stderr);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_replace_warns_about_inflight_tasks_pinned_to_old_agent")]
+    public void CliAgentReplaceWarnsAboutInflightTasksPinnedToOldAgent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Warn about stale planner pin", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Warn on role replacement", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionPlanner("openai-planner", "OpenAI Planner")];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var stderr = CaptureConsoleError(() => CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["agent", "Planner", "Anthropic", "claude-haiku-4-5", "Anthropic Planner"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        }));
+
+        Xunit.Assert.Equal("openai-planner", task.AssignedAgentId!.Value);
+        Xunit.Assert.Contains("Warning: replaced Planner agent 'openai-planner'", stderr);
+        Xunit.Assert.Contains(task.Id.Value, stderr);
+        Xunit.Assert.Contains("reassign-agent", stderr);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_drain_goals_dry_run_reports_subscription_and_operator_gates")]
     public void CliDrainGoalsDryRunReportsSubscriptionAndOperatorGates()
     {
@@ -2616,6 +2716,163 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("--confirm-batch-start", ex!.Message);
         Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
         Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_ready_writes_ready_blocked_lines_to_stderr_in_task_order")]
+    public void CliSubscriptionDispatchReadyWritesReadyBlockedLinesToStderrInTaskOrder()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var first = new TaskSpec(TaskId.New(), "Inspect docs/one.md", AgentRole.Planner);
+        var second = new TaskSpec(TaskId.New(), "Inspect docs/two.md", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Report blocked ready tasks", [first, second]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("planner"),
+                "Planner",
+                AgentRole.Planner,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli")),
+            new AgentDefinition(
+                new AgentId("researcher"),
+                "Researcher",
+                AgentRole.Researcher,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        EnsureGitRepository(root);
+        GoalWorktrees.Ensure(root, goal.Id);
+
+        string stdout = string.Empty;
+        var stderr = CaptureConsoleError(() =>
+        {
+            stdout = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["subscription-dispatch-ready"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.False(changed);
+            });
+        });
+
+        Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
+        var lines = ReadyBlockedLines(stderr);
+        Xunit.Assert.Equal(2, lines.Length);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=worker-profile", lines[0]);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=2 provider=codex-cli reason=worker-profile", lines[1]);
+        Xunit.Assert.Null(first.LastDispatch);
+        Xunit.Assert.Null(second.LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_writes_ready_blocked_lines_to_stderr")]
+    public void CliStartSubscriptionReadyWritesReadyBlockedLinesToStderr()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Report blocked start tasks", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        DirtyGoalWorktree(root, goal);
+
+        string stdout = string.Empty;
+        var stderr = CaptureConsoleError(() =>
+        {
+            stdout = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["start-subscription-ready", "--confirm-batch-start"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.False(changed);
+            });
+        });
+
+        Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
+        var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree", line);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Dashboard_subscription_dispatch_ready_result_exposes_ready_blocked_diagnostics")]
+    public void DashboardSubscriptionDispatchReadyResultExposesReadyBlockedDiagnostics()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Expose blocked ready tasks", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        kernel.ActivateGoal(goal.Id, agents);
+        WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
+        DirtyGoalWorktree(root, goal);
+
+        var result = GoalManagementCommandService.ApplySubscriptionDispatchReady(
+            kernel,
+            workspace,
+            agents,
+            goal,
+            new InMemoryModelProviderRegistry([]));
+
+        Xunit.Assert.Equal(0, result.Count);
+        var diagnostic = Xunit.Assert.Single(result.ReadyBlocked!);
+        Xunit.Assert.Equal(goal.Id.Value[..8], diagnostic.Goal);
+        Xunit.Assert.Equal(1, diagnostic.Task);
+        Xunit.Assert.Equal("codex-cli", diagnostic.Provider);
+        Xunit.Assert.Equal("dirty-worktree", diagnostic.Reason);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree", diagnostic.Line);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_policy_gate_writes_distinct_ready_blocked_reason")]
+    public void CliStartSubscriptionReadyPolicyGateWritesDistinctReadyBlockedReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Observe only", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var stderr = CaptureConsoleError(() =>
+        {
+            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+                ["start-subscription-ready", "--confirm-batch-start", "--autonomy", "observe"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Xunit.Assert.Contains("policy 'observe' blocks start-subscription-ready", ex.Message);
+        });
+
+        var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=autonomy-policy", line);
     }
 
     [Xunit.Fact(DisplayName = "Cli_run_goal_requires_confirm_batch_start_flag")]
@@ -4580,6 +4837,10 @@ public sealed class CliCommandTests
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-close", "abc"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--help"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--loop", "--help"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "--help"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "create", "-h"]));
 
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
@@ -4587,6 +4848,61 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["serve-dashboard"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState([]));
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_dispatcher_help_prints_command_specific_usage")]
+    [Xunit.InlineData(new[] { "conduct", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "-h" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "--loop", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "reassign-agent", "--help" }, CliCommandHelp.ReassignAgentUsage)]
+    [Xunit.InlineData(new[] { "workspace", "--help" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "-h" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "create", "-h" }, CliCommandHelp.WorkspaceCreateUsage)]
+    public void CliDispatcherHelpPrintsCommandSpecificUsage(string[] args, string expectedUsage)
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                args,
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains(expectedUsage, output);
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_startup_help_exits_before_state_repository_creation")]
+    [Xunit.InlineData(new[] { "conduct", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "-h" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "--loop", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "reassign-agent", "--help" }, CliCommandHelp.ReassignAgentUsage)]
+    [Xunit.InlineData(new[] { "workspace", "--help" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "-h" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "create", "-h" }, CliCommandHelp.WorkspaceCreateUsage)]
+    public void CliStartupHelpExitsBeforeStateRepositoryCreation(string[] args, string expectedUsage)
+    {
+        var root = CreateTempDirectory();
+        var result = RunAppCli(root, args);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains(expectedUsage, result.StandardOutput);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
+        Xunit.Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "state.db")));
+        Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
     }
 
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
@@ -5487,6 +5803,37 @@ public sealed class CliCommandTests
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile(id));
 
+    private static AgentDefinition SubscriptionDeveloper() => new(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+
+    private static void DirtyGoalWorktree(string root, Goal goal)
+    {
+        EnsureGitRepository(root);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        Directory.CreateDirectory(Path.Combine(worktree, "src"));
+        File.WriteAllText(Path.Combine(worktree, "src", "dirty.txt"), "dirty");
+    }
+
+    private static void EnsureGitRepository(string root)
+    {
+        RunGit(root, "init");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "README.md"), "test repo");
+        RunGit(root, "add", "README.md");
+        RunGit(root, "commit", "-m", "init");
+    }
+
+    private static string[] ReadyBlockedLines(string text) =>
+        text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("READY_BLOCKED ", StringComparison.Ordinal))
+            .ToArray();
+
     private static AgentDefinition TestAgent(string id, AgentRole role) => new(
         new AgentId(id),
         id,
@@ -5554,6 +5901,41 @@ public sealed class CliCommandTests
         };
 
         return JsonSerializer.Serialize(landingRelevantState);
+    }
+
+    private static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(
+        string workingDirectory,
+        IReadOnlyList<string> args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app CLI.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"CLI did not exit for: {string.Join(' ', args)}");
+        }
+
+        return (process.ExitCode, output, error);
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)

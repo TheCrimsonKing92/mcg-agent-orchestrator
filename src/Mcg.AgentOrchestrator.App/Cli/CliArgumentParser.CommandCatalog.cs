@@ -77,6 +77,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("run", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("api-run", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("reassign-agent", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("re-delegate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("redelegate", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("note", StringComparison.OrdinalIgnoreCase) ||

@@ -126,6 +126,17 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
     WorkerProfileCatalog profiles,
     IModelProviderRegistry? providers = null)
 {
+    return SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers).Dispatches;
+}
+
+public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    IModelProviderRegistry? providers = null)
+{
     GoalRefinementGate.EnsureRefined(
         kernel,
         workspace,
@@ -133,7 +144,7 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
-    return WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -190,7 +201,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
-    var dispatches = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -203,8 +214,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         kernel,
         workspace,
         goal,
-        dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet());
-    return new SubscriptionStartResult(dispatches, processes, safeBatch.Plan);
+        batch.Dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet());
+    return new SubscriptionStartResult(batch.Dispatches, processes, safeBatch.Plan, batch.Blocked);
 }
 
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(

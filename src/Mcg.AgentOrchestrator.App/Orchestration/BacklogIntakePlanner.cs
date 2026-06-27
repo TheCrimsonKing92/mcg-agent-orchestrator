@@ -33,15 +33,31 @@ internal static class BacklogIntakePlanner
             throw new ArgumentException("Value cannot be empty.", nameof(backlogStorePath));
         }
 
+        if (!File.Exists(backlogStorePath))
+        {
+            throw new FileNotFoundException($"SQLite backlog store was not found: {backlogStorePath}", backlogStorePath);
+        }
+
         var items = new BacklogStore(backlogStorePath).ListAsync().GetAwaiter().GetResult()
             .Where(item => !item.Title.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
-            .Where(item => string.IsNullOrWhiteSpace(headingFilter) ||
-                item.Title.Contains(headingFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(item => MatchesFilter(item, headingFilter))
             .Take(maxItems)
             .Select(item => BuildItem(item.Id, item.Title, item.Body))
             .ToList();
 
         return new BacklogIntakePlan("backlog store", items);
+    }
+
+    private static bool MatchesFilter(BacklogItem item, string? headingFilter)
+    {
+        if (string.IsNullOrWhiteSpace(headingFilter))
+        {
+            return true;
+        }
+
+        return item.Id.Equals(headingFilter, StringComparison.OrdinalIgnoreCase) ||
+            item.Title.Contains(headingFilter, StringComparison.OrdinalIgnoreCase) ||
+            item.Body.Contains(headingFilter, StringComparison.OrdinalIgnoreCase);
     }
 
     private static BacklogIntakeItem BuildItem(string id, string heading, string body)
