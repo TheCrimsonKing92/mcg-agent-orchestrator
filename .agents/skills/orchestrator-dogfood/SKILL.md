@@ -14,7 +14,7 @@ Use this skill when the task changes or validates the orchestrator by running wo
 1. Check the backlog with `backlog-list` before choosing or proposing work.
 2. Create the goal: `simple-goal "<objective>"` (one Developer task) or `goal "<objective>"` (five-role pipeline). For long objectives use `--brief-file <path>`, then delete the file.
 3. Drive it with the conductor — it owns workspace creation, dispatch, acceptance, and cleanup: `conduct --loop --watch --policy <Conservative|Permissive> --poll-seconds 15 --max-duration 5400`. Add `--daemon` only for controlled active-goal pickup; keep it bounded with `--max-duration` while the queue is still being proven.
-4. Observe with `next <goal-prefix> --full`. Treat task status as provisional until the acceptance gate passes — verify the diff/commits/tests independently (see the worker-verification skill).
+4. Observe with `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal-prefix>` for compact process/lock/status state, adding more goal prefixes as plain trailing arguments when needed, or `next <goal-prefix> --full` when you need full task detail. Treat task status as provisional until the acceptance gate passes — verify the diff/commits/tests independently (see the worker-verification skill).
 5. When a goal sticks, use the runbook's **stuck-goal playbook**: `readiness <goal>` (start blockers), `recover <goal> "<note>"` (reset stuck/Failed/Cancelled tasks), `attention show <goal>` / `attention answer <goal> <id> "<text>"` or `attention dismiss <goal>` (clarifications).
 6. At goal boundaries, record the `Model fit:` evidence and update the backlog (`backlog-close` / `backlog-add`).
 
@@ -38,7 +38,7 @@ Before accepting a goal:
 - Keep entries short: goal id, objective/result, verification, blocker/friction, and Model fit.
 - Close finished backlog items with `backlog-close` and add newly discovered follow-ups with `backlog-add` (the SQLite store, `.orchestrator/backlog.db`, is canonical).
 - Treat backlog items as candidates. Use filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal` for a small reviewed active set; do not feed a stale backlog wholesale into daemon mode.
-- For long acceptance/conductor runs, prefer `scripts/Start-OrchestratorCommand.ps1` through `scripts/Invoke-RepoScript.ps1`, then poll `next <goal> --full` and bounded log helpers instead of blocking the operator seat.
+- For long acceptance/conductor runs, prefer `scripts/Start-OrchestratorCommand.ps1` through `scripts/Invoke-RepoScript.ps1`, then poll `scripts/Get-OrchestratorSnapshot.ps1`, `next <goal> --full`, and bounded log helpers instead of blocking the operator seat.
 - Do not paste full prompts, full dashboard payloads, or long logs.
 
 ## Safety

@@ -12,13 +12,25 @@ param(
     [string[]]$Name = @(),
     [string[]]$CommandContains = @(),
     [int]$Newest = 25,
+    [switch]$ConductLoop,
+    [switch]$DispatchHost,
     [switch]$IncludeChildren
 )
 
 $ErrorActionPreference = 'Stop'
 
-if ($Id.Count -eq 0 -and $ParentId.Count -eq 0 -and $Name.Count -eq 0 -and $CommandContains.Count -eq 0) {
-    throw 'Specify -Id, -ParentId, -Name, or -CommandContains.'
+$effectiveCommandContains = @($CommandContains)
+if ($ConductLoop) {
+    $effectiveCommandContains += 'conduct'
+    $effectiveCommandContains += '--loop'
+}
+
+if ($DispatchHost) {
+    $effectiveCommandContains += '__dispatch-run'
+}
+
+if ($Id.Count -eq 0 -and $ParentId.Count -eq 0 -and $Name.Count -eq 0 -and $effectiveCommandContains.Count -eq 0) {
+    throw 'Specify -Id, -ParentId, -Name, -CommandContains, -ConductLoop, or -DispatchHost.'
 }
 
 if ($Newest -lt 1) {
@@ -94,12 +106,12 @@ function Format-CimDate {
 function MatchesCommandFilter {
     param($Process)
 
-    if ($CommandContains.Count -eq 0) {
+    if ($effectiveCommandContains.Count -eq 0) {
         return $true
     }
 
     $command = [string]$Process.CommandLine
-    foreach ($needle in $CommandContains) {
+    foreach ($needle in $effectiveCommandContains) {
         if ($command.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
             return $false
         }
@@ -118,7 +130,7 @@ foreach ($parentProcessId in $ParentId) {
         ForEach-Object { Write-ProcessInfo -ProcessId ([int]$_.ProcessId) }
 }
 
-if ($Name.Count -gt 0 -or $CommandContains.Count -gt 0) {
+if ($Name.Count -gt 0 -or $effectiveCommandContains.Count -gt 0) {
     $querySeen = [System.Collections.Generic.HashSet[int]]::new()
     $queryResults = [System.Collections.Generic.List[object]]::new()
 
