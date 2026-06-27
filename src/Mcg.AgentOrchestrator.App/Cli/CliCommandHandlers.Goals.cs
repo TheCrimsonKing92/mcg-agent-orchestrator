@@ -631,6 +631,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return HandleGoalsPrune(context, parts);
 
         case "conduct":
+            if (IsHelpRequested(parts))
+            {
+                PrintConductUsage();
+                return false;
+            }
+
             if (HasCliConfirmation(parts, "--loop"))
             {
                 var loopPolicyName = GetFlagValue(parts, "--policy");
@@ -2198,6 +2204,12 @@ private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<
 
 private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {
+    if (IsHelpRequested(parts))
+    {
+        PrintWorkspaceUsage();
+        return;
+    }
+
     var action = parts.Count > 1 ? parts[1] : null;
     var goalPrefix = GetFirstNonFlagArgument(parts, startIndex: 2);
 
@@ -2244,6 +2256,19 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
         default:
             throw new ArgumentException("Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
     }
+}
+
+private static void PrintConductUsage()
+{
+    Console.WriteLine("Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
+    Console.WriteLine("       conduct --loop [--policy <Conservative|Permissive|Manual>] [--max-iterations <count>] [--watch]");
+    Console.WriteLine("  -h, --help  Show this help.");
+}
+
+private static void PrintWorkspaceUsage()
+{
+    Console.WriteLine("Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+    Console.WriteLine("  -h, --help  Show this help.");
 }
 
 private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)

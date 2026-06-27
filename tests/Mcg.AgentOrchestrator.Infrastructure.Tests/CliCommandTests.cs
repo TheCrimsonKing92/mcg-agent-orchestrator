@@ -76,6 +76,20 @@ public sealed class CliCommandTests
             parts);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_conduct_help_prints_usage_without_resolving_goal")]
+    public void CliConductHelpPrintsUsageWithoutResolvingGoal()
+    {
+        AssertHelpCommandDoesNotResolveGoal(["conduct", "--help"], "Usage: conduct <goal-id-prefix>");
+        AssertHelpCommandDoesNotResolveGoal(["conduct", "-h"], "Usage: conduct <goal-id-prefix>");
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_help_prints_usage_without_resolving_goal")]
+    public void CliWorkspaceHelpPrintsUsageWithoutResolvingGoal()
+    {
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "--help"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+    }
+
     [Xunit.Fact(DisplayName = "Cli_run_blocks_subscription_capable_agents_without_calling_provider")]
     public void CliRunBlocksSubscriptionCapableAgentsWithoutCallingProvider()
     {
@@ -4838,6 +4852,41 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal));
     }
+
+    private static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var beforeFiles = SnapshotFiles(root);
+        var changed = true;
+
+        var output = CaptureConsole(() => changed = CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Contains(expectedUsage, output);
+        Xunit.Assert.Contains("-h, --help", output);
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.Null(currentGoal);
+        Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
+    private static string[] SnapshotFiles(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(root, path))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
 
     private static void WritePlanningBacklog(string root)
     {
