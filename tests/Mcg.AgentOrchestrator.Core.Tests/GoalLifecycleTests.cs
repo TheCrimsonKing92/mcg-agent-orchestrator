@@ -310,6 +310,78 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }
 
+    [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_completed_tasks_and_current_gate_evidence")]
+    public void RetryTaskInvalidatesDownstreamCompletedTasksAndCurrentGateEvidence()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry invalidates stale downstream evidence",
+        [
+            new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester),
+            new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer)
+        ]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+    var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+    var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+    CompleteWithVerification(kernel, goal, developer, "developer passed");
+    CompleteWithVerification(kernel, goal, tester, "tester passed");
+    CompleteWithVerification(kernel, goal, reviewer, "reviewer passed");
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+
+    kernel.RetryTask(goal.Id, developer.Id, "Developer output needs revision.");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+    Assert.Null(developer.LastVerification);
+    Assert.Null(tester.LastVerification);
+    Assert.Null(reviewer.LastVerification);
+    Assert.Single(tester.VerificationHistory);
+    Assert.Single(reviewer.VerificationHistory);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == tester.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("Invalidated Tester task", StringComparison.Ordinal));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == reviewer.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("Invalidated Reviewer task", StringComparison.Ordinal));
+
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    Assert.False(gate.IsSatisfied);
+    Assert.True(gate.Tasks.Any(task => task.TaskId == tester.Id && task.GateStatus == VerificationGateStatus.NotReady));
+    Assert.True(gate.Tasks.Any(task => task.TaskId == reviewer.Id && task.GateStatus == VerificationGateStatus.NotReady));
+}
+
+    [Xunit.Fact(DisplayName = "RetryTask_refuses_running_downstream_before_mutating_upstream_task")]
+    public void RetryTaskRefusesRunningDownstreamBeforeMutatingUpstreamTask()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry with running downstream",
+        [
+            new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+        ]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+    var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+    CompleteWithVerification(kernel, goal, developer, "developer passed");
+    kernel.RecordTaskDispatch(goal.Id, tester.Id, new TaskDispatchRecord("tester", "test.exe", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, tester.Id, new TaskProcessRecord(1234, "test.exe", "C:\\repo", "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+
+    var ex = Assert.Throws<InvalidOperationException>(() =>
+        kernel.RetryTask(goal.Id, developer.Id, "Retry while tester is running."));
+
+    Assert.True(ex.Message.Contains("downstream Tester", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+    Assert.NotNull(developer.LastVerification);
+    Assert.Single(developer.VerificationHistory);
+    Assert.Equal(WorkTaskStatus.Running, tester.Status);
+    Assert.NotNull(tester.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "NormalizeGoalLifecycleState_reopens_terminal_goal_with_nonterminal_task")]
     public void NormalizeGoalLifecycleStateReopensTerminalGoalWithNonterminalTask()
 {
@@ -419,6 +491,12 @@ static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, Agent
 
     Assert.Contains(brief, text => text.Contains(heading, StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains(detail, StringComparison.Ordinal));
+}
+
+static void CompleteWithVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string standardOutput)
+{
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, standardOutput, "", DateTimeOffset.UtcNow));
 }
 
 static AgentDefinition TestAgent(string id, string name, AgentRole role) =>

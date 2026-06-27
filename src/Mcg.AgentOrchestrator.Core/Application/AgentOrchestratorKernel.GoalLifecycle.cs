@@ -153,6 +153,11 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
 
+        if (invalidateDownstream)
+        {
+            EnsureNoRunningDownstreamTasks(goal, task);
+        }
+
         ResetTaskForRetry(task);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
@@ -391,12 +396,6 @@ public sealed partial class AgentOrchestratorKernel
     {
         foreach (var downstream in goal.Tasks.Where(task => IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole)))
         {
-            if (downstream.LastProcess is { IsRunning: true })
-            {
-                throw new InvalidOperationException(
-                    $"Cannot retry {retriedTask.RequiredRole} task '{retriedTask.Id}' while downstream {downstream.RequiredRole} task '{downstream.Id}' has a running process.");
-            }
-
             if (downstream.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned &&
                 downstream.LastVerification is null &&
                 downstream.LastExecution is null &&
@@ -413,6 +412,18 @@ public sealed partial class AgentOrchestratorKernel
                 downstream.Id,
                 ProgressKind.TaskRetried,
                 $"Invalidated {downstream.RequiredRole} task because upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} was retried.");
+        }
+    }
+
+    private static void EnsureNoRunningDownstreamTasks(Goal goal, TaskSpec retriedTask)
+    {
+        var runningDownstream = goal.Tasks.FirstOrDefault(task =>
+            IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole) &&
+            task.LastProcess is { IsRunning: true });
+        if (runningDownstream is not null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot retry {retriedTask.RequiredRole} task '{retriedTask.Id}' while downstream {runningDownstream.RequiredRole} task '{runningDownstream.Id}' has a running process.");
         }
     }
 
