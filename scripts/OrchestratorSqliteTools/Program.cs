@@ -26,9 +26,86 @@ internal static class OrchestratorSqliteTools
 
         return args[0] switch
         {
+            "list-goals" => await ListGoalsAsync(args[1..]),
             "set-goal-status" => await SetGoalStatusAsync(args[1..]),
             _ => Fail($"Unknown command: {args[0]}")
         };
+    }
+
+    private static async Task<int> ListGoalsAsync(string[] args)
+    {
+        var repoRoot = Environment.CurrentDirectory;
+        string? dbPath = null;
+        string? status = null;
+        var limit = 20;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            switch (arg)
+            {
+                case "--repo-root":
+                    repoRoot = RequireValue(args, ref i, arg);
+                    break;
+                case "--db":
+                    dbPath = RequireValue(args, ref i, arg);
+                    break;
+                case "--status":
+                    status = NormalizeStatus(RequireValue(args, ref i, arg));
+                    if (!AllowedGoalStatuses.Contains(status))
+                        return Fail($"Unsupported goal status '{status}'. Expected one of: {string.Join(", ", AllowedGoalStatuses)}.");
+                    break;
+                case "--limit":
+                    if (!int.TryParse(RequireValue(args, ref i, arg), out limit) || limit < 1)
+                        return Fail("--limit must be a positive integer.");
+                    break;
+                case "--help":
+                case "-h":
+                    PrintListGoalsUsage();
+                    return 0;
+                default:
+                    return Fail($"Unknown option: {arg}");
+            }
+        }
+
+        repoRoot = Path.GetFullPath(repoRoot);
+        dbPath = Path.GetFullPath(dbPath ?? Path.Combine(repoRoot, ".orchestrator", "state.db"));
+        if (!File.Exists(dbPath))
+            return Fail($"State database not found: {dbPath}");
+
+        await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False;");
+        await conn.OpenAsync();
+        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = status is null
+            ? """
+              SELECT id, status, snapshot_json
+              FROM goals
+              ORDER BY updated_at DESC, id
+              LIMIT $limit
+              """
+            : """
+              SELECT id, status, snapshot_json
+              FROM goals
+              WHERE status = $status
+              ORDER BY updated_at DESC, id
+              LIMIT $limit
+              """;
+        cmd.Parameters.AddWithValue("$limit", limit);
+        if (status is not null)
+            cmd.Parameters.AddWithValue("$status", status);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var id = reader.GetString(0);
+            var rowStatus = reader.GetString(1);
+            var snapshotJson = reader.GetString(2);
+            Console.WriteLine($"{Short(id)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
+        }
+
+        return 0;
     }
 
     private static async Task<int> SetGoalStatusAsync(string[] args)
@@ -225,7 +302,17 @@ internal static class OrchestratorSqliteTools
     private static void PrintUsage()
     {
         Console.WriteLine("Usage:");
+        Console.WriteLine("  list-goals [--repo-root <path>] [--db <path>] [--status <Status>] [--limit <n>]");
         Console.WriteLine("  set-goal-status [--repo-root <path>] [--db <path>] [--dry-run] --status <Status> <goal-prefix>...");
+    }
+
+    private static void PrintListGoalsUsage()
+    {
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  list-goals [--repo-root <path>] [--db <path>] [--status <Status>] [--limit <n>]");
+        Console.WriteLine();
+        Console.WriteLine("Statuses:");
+        Console.WriteLine($"  {string.Join(", ", AllowedGoalStatuses)}");
     }
 
     private static void PrintSetGoalStatusUsage()
@@ -238,6 +325,25 @@ internal static class OrchestratorSqliteTools
     }
 
     private static string Short(string id) => id.Length <= 8 ? id : id[..8];
+
+    private static string ExtractObjective(string snapshotJson)
+    {
+        try
+        {
+            var snapshot = JsonNode.Parse(snapshotJson);
+            var objective = snapshot?["Objective"]?.GetValue<string>()
+                ?? snapshot?["Title"]?.GetValue<string>()
+                ?? "";
+            objective = objective.ReplaceLineEndings(" ").Trim();
+            if (objective.Length > 140)
+                objective = objective[..137] + "...";
+            return objective;
+        }
+        catch
+        {
+            return "<invalid snapshot>";
+        }
+    }
 
     private sealed record GoalRow(string Id, string Status, string SnapshotJson);
 }
