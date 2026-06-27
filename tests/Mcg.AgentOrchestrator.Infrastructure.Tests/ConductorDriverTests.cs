@@ -83,7 +83,8 @@ public sealed class ConductorDriverTests
         Action<Goal>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
-        Action<TimeSpan>? emptyOutputBackoffDelay = null)
+        Action<TimeSpan>? emptyOutputBackoffDelay = null,
+        Func<Goal, string, bool>? normalizeLifecycleState = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -108,7 +109,8 @@ public sealed class ConductorDriverTests
             cleanup ?? (_ => { }),
             writeEscalation ?? ((_, _, _) => { }),
             classifyRisk ?? (_ => null),
-            emptyOutputBackoffDelay);
+            emptyOutputBackoffDelay,
+            normalizeLifecycleState: normalizeLifecycleState);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -276,6 +278,50 @@ public sealed class ConductorDriverTests
         Assert.True(dispatchCalled);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_repairs_terminal_goal_with_assigned_task_before_acceptance")]
+    public void ConductorDriverRepairsTerminalGoalWithAssignedTaskBeforeAcceptance()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Retry desync");
+        var snapshot = kernel.ExportSnapshot();
+        var badGoalSnapshot = snapshot.Goals.Single() with
+        {
+            Status = GoalStatus.Completed,
+            Tasks = snapshot.Goals.Single().Tasks
+                .Select(task => task with { Status = WorkTaskStatus.Assigned, LastVerification = null })
+                .ToArray()
+        };
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [badGoalSnapshot] });
+        goal = kernel.Goals.Single();
+        var dispatched = false;
+        var acceptanceCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ =>
+            {
+                dispatched = true;
+                return DispatchStartOutcome.Started();
+            },
+            runAcceptance: _ =>
+            {
+                acceptanceCalled = true;
+                return true;
+            },
+            normalizeLifecycleState: (g, reason) => kernel.NormalizeGoalLifecycleState(g.Id, reason));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(dispatched);
+        Assert.False(acceptanceCalled);
+        Assert.Equal(GoalStatus.Active, goal.Status);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Conductor auto-repaired", StringComparison.Ordinal));
     }
 
     // ── Dispatched state ──────────────────────────────────────────────────

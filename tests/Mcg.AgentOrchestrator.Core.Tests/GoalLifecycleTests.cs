@@ -310,6 +310,23 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }
 
+    [Xunit.Fact(DisplayName = "NormalizeGoalLifecycleState_reopens_terminal_goal_with_nonterminal_task")]
+    public void NormalizeGoalLifecycleStateReopensTerminalGoalWithNonterminalTask()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Normalize terminal desync", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.SupersedeGoal(goal.Id, "Temporarily terminal while task remains assigned.");
+
+    var repaired = kernel.NormalizeGoalLifecycleState(goal.Id, "repair terminal/nonterminal desync");
+
+    Assert.True(repaired);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.GoalPolicyDecision &&
+        evt.Message.Contains("repair terminal/nonterminal desync", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "ResolveState_returns_Merged_when_goal_completed_and_merged")]
     public void ResolveStateReturnsMergedWhenGoalCompletedAndMerged()
 {

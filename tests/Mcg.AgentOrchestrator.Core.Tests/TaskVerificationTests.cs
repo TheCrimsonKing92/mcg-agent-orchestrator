@@ -276,5 +276,53 @@ public sealed class TaskVerificationTests
     Assert.Equal("dotnet test", restoredTask.VerificationHistory.Single().Command);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
 }
+
+    [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_verification_current_state_but_preserves_history")]
+    public void RetryTaskInvalidatesDownstreamVerificationCurrentStateButPreservesHistory()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Verify fix", AgentRole.Tester);
+    var reviewer = new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Retry cascades stale evidence", [developer, tester, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    CompleteWithVerification(kernel, goal, developer, "developer ok", clock);
+    CompleteWithVerification(kernel, goal, tester, "tester ok", clock);
+    CompleteWithVerification(kernel, goal, reviewer, "reviewer ok", clock);
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+
+    kernel.RetryTask(goal.Id, developer.Id, "Developer output changed; downstream evidence is stale.");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+    Assert.Null(developer.LastVerification);
+    Assert.Null(tester.LastVerification);
+    Assert.Null(reviewer.LastVerification);
+    Assert.Single(tester.VerificationHistory);
+    Assert.Single(reviewer.VerificationHistory);
+    Assert.Equal(VerificationGateStatus.NotReady, kernel.BuildVerificationGate(goal.Id).Tasks.Single(item => item.TaskId == tester.Id).GateStatus);
+    Assert.Equal(VerificationGateStatus.NotReady, kernel.BuildVerificationGate(goal.Id).Tasks.Single(item => item.TaskId == reviewer.Id).GateStatus);
 }
 
+private static void CompleteWithVerification(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    string stdout,
+    FakeClock clock)
+{
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        $"{task.RequiredRole} verify",
+        "C:\\repo",
+        0,
+        stdout,
+        string.Empty,
+        clock.UtcNow));
+    clock.Advance();
+}
+}

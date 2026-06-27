@@ -2348,6 +2348,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
 
     var actions = 0;
+    if (context.Kernel.NormalizeGoalLifecycleState(goal.Id, $"recover: normalized terminal goal with non-terminal task(s); {note}"))
+    {
+        Console.WriteLine("recover: normalized terminal goal with non-terminal task(s) to Active.");
+        actions++;
+    }
+
     foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
     {
         context.Kernel.SubmitHumanInput(request.Id, note);
@@ -2377,7 +2383,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, note);
+        context.Kernel.RetryTask(goal.Id, task.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, task));
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;
@@ -2409,7 +2415,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}");
+        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}", invalidateDownstream: !HasRunningDownstreamTask(goal, task));
         Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }
@@ -2422,6 +2428,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     ConsoleViews.PrintGoal(goal);
     return actions > 0;
 }
+
+private static bool HasRunningDownstreamTask(Goal goal, TaskSpec task) =>
+    goal.Tasks.Any(candidate =>
+        GoalManagementCommandService.IsEarlierSdlcStageOf(task.RequiredRole, candidate.RequiredRole) &&
+        candidate.LastProcess is { IsRunning: true });
 
 // Deterministic verification from git ground truth: when a goal still has un-verified work tasks
 // but the goal branch carries committed changes against main on a CLEAN worktree, record the

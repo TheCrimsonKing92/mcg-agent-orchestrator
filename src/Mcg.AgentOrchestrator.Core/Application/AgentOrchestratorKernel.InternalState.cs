@@ -25,7 +25,7 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     private static bool IsTerminalGoalStatus(GoalStatus status) =>
-        status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
+        status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
     private static TaskVerificationGate BuildTaskVerificationGate(TaskSpec task)
     {

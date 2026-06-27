@@ -132,7 +132,7 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
-    public TaskSpec RetryTask(GoalId goalId, TaskId taskId, string message)
+    public TaskSpec RetryTask(GoalId goalId, TaskId taskId, string message, bool invalidateDownstream = true)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -153,24 +153,21 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
 
-        task.ClearLatestVerification();
-        task.ClearLastExecution();
-        task.ClearLastDispatch();
-        task.ClearLastProcess();
-        task.ClearSubscriptionRetryAfter();
-        task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+        ResetTaskForRetry(task);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
-        // A retried task is no longer complete, so a Completed goal must drop back to Active for the
-        // conductor to RE-DISPATCH it. RefreshGoalStatus treats Completed as terminal and won't
-        // downgrade on its own, and GoalLifecycle.ResolveState maps a Completed goal to Verified
-        // regardless of task state — so without this the conductor re-runs ACCEPTANCE on the unchanged
-        // worktree and re-escalates instead of re-running the worker with the retry feedback.
-        if (goal.Status == GoalStatus.Completed)
+        if (invalidateDownstream)
         {
-            goal.SetStatus(GoalStatus.Active);
+            InvalidateDownstreamTasks(goal, task);
         }
+        ReopenTerminalGoalWithNonTerminalTasks(goal, $"Retry reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
         return task;
+    }
+
+    public bool NormalizeGoalLifecycleState(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        return ReopenTerminalGoalWithNonTerminalTasks(goal, reason);
     }
 
     public TaskSpec RequeueInterruptedDispatch(GoalId goalId, TaskId taskId, string message)
@@ -196,6 +193,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearSubscriptionRetryAfter();
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        ReopenTerminalGoalWithNonTerminalTasks(goal, $"Interrupted dispatch recovery reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
         return task;
     }
@@ -365,6 +363,72 @@ public sealed partial class AgentOrchestratorKernel
 
         RefreshGoalStatus(goal);
     }
+
+    private static void ResetTaskForRetry(TaskSpec task)
+    {
+        task.ClearLatestVerification();
+        task.ClearLastExecution();
+        task.ClearLastDispatch();
+        task.ClearLastProcess();
+        task.ClearSubscriptionRetryAfter();
+        task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+    }
+
+    private bool ReopenTerminalGoalWithNonTerminalTasks(Goal goal, string reason)
+    {
+        if (!IsTerminalGoalStatus(goal.Status) ||
+            goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Active);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
+    private void InvalidateDownstreamTasks(Goal goal, TaskSpec retriedTask)
+    {
+        foreach (var downstream in goal.Tasks.Where(task => IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole)))
+        {
+            if (downstream.LastProcess is { IsRunning: true })
+            {
+                throw new InvalidOperationException(
+                    $"Cannot retry {retriedTask.RequiredRole} task '{retriedTask.Id}' while downstream {downstream.RequiredRole} task '{downstream.Id}' has a running process.");
+            }
+
+            if (downstream.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned &&
+                downstream.LastVerification is null &&
+                downstream.LastExecution is null &&
+                downstream.LastDispatch is null &&
+                downstream.LastProcess is null &&
+                downstream.SubscriptionRetryAfter is null)
+            {
+                continue;
+            }
+
+            ResetTaskForRetry(downstream);
+            Append(
+                goal,
+                downstream.Id,
+                ProgressKind.TaskRetried,
+                $"Invalidated {downstream.RequiredRole} task because upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} was retried.");
+        }
+    }
+
+    private static bool IsDownstreamRole(AgentRole upstream, AgentRole candidate) =>
+        SdlcRoleOrder(candidate) > SdlcRoleOrder(upstream);
+
+    private static int SdlcRoleOrder(AgentRole role) => role switch
+    {
+        AgentRole.Planner => 0,
+        AgentRole.Ideation => 1,
+        AgentRole.Researcher => 2,
+        AgentRole.Developer => 3,
+        AgentRole.Tester => 4,
+        AgentRole.Reviewer => 5,
+        _ => int.MaxValue
+    };
 
     public HumanInputRequest RequestHumanInput(GoalId goalId, TaskId? taskId, string question)
     {
