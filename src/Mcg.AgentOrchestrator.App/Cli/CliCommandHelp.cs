@@ -5,6 +5,7 @@ internal static class CliCommandHelp
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
+    public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
     {
@@ -33,6 +34,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
         {
             usage = ConductUsage;
+            return true;
+        }
+
+        if (args[0].Equals("reassign-agent", StringComparison.OrdinalIgnoreCase))
+        {
+            usage = ReassignAgentUsage;
             return true;
         }
 
