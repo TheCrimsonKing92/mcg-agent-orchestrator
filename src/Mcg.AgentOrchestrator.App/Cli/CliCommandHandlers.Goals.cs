@@ -2291,6 +2291,18 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         verification,
         Console.WriteLine);
 
+    var hostStop = context.StopAcceptanceHosts(new AcceptanceHostStopRequest(
+        goal.Id,
+        worktreePath,
+        TimeSpan.FromSeconds(30)));
+    Console.WriteLine(hostStop.Message);
+    if (!hostStop.Succeeded)
+    {
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["stop-host"]);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["stop-host"]);
+        return false;
+    }
+
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
         goal.Id,
         expectedGoalFingerprint,
@@ -2320,6 +2332,13 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             context.Kernel.ClearAcceptanceFailure(goal.Id);
             context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+        }
+        else
+        {
+            var failedChecks = new[] { "merge" };
+            context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+            context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
+            Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {GoalWorktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
         }
         return mergeCommit.FastForwarded;
     }
@@ -2607,6 +2626,7 @@ private static void CleanupGoalWorkspaceAfterMerge(
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
         Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
         return;
     }
 
@@ -2614,10 +2634,12 @@ private static void CleanupGoalWorkspaceAfterMerge(
     if (removeResult.IsComplete)
     {
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        context.EventWriter.AppendCleanedUp(goal.Id);
     }
     else
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
     }
 }
 
