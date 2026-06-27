@@ -103,7 +103,7 @@ internal sealed class ConductorBatchLoop
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !excludedGoals.Contains(g.Id.Value)
                     && !setAsideGoals.ContainsKey(g.Id.Value)
-                    && !IsTerminalGoal(g))
+                    && IsLoopEligibleGoal(g, driver))
                 .ToArray();
 
             if (eligible.Length == 0)
@@ -516,6 +516,34 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsTerminalGoal(Goal goal) =>
         goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver)
+    {
+        if (goal.Status is GoalStatus.Cancelled or GoalStatus.Superseded)
+        {
+            return false;
+        }
+
+        if (goal.Status == GoalStatus.Completed)
+        {
+            try
+            {
+                var facts = driver.GetFacts(goal);
+                var state = GoalLifecycle.ResolveState(goal, facts);
+                return state != GoalLifecycleState.CleanedUp
+                    && (facts.WorkspaceExists
+                        || facts.IsMerged
+                        || facts.IsRecorded
+                        || HasPersistedVerifiedAcceptanceEscalation(goal));
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        return true;
+    }
 
     private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Escalated esc

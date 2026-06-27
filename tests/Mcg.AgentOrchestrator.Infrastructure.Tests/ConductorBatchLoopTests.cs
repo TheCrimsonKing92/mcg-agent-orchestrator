@@ -436,7 +436,7 @@ public sealed class ConductorBatchLoopTests
 
         var attempts = 0;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None, // IsMerged=false → Verified state
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true), // IsMerged=false → Verified state
             runAcceptance: _ => { attempts++; return attempts > 1; }, // fail 1st, pass on retry
             writeEscalation: (_, _, _) => { });
 
@@ -461,7 +461,7 @@ public sealed class ConductorBatchLoopTests
         var attempts = 0;
         var escalationWritten = false;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             runAcceptance: _ => { attempts++; return false; }, // always fail
             writeEscalation: (_, _, _) => { escalationWritten = true; });
 
