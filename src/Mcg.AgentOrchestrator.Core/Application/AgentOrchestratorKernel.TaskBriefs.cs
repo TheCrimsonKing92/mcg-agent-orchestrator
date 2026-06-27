@@ -435,6 +435,13 @@ public sealed partial class AgentOrchestratorKernel
 
         var latestRetry = retryEvents[^1];
         var latestRetryOrdinal = retryEvents.Count;
+        var priorOutcomeEvent = goal.Timeline
+            .Where(evt =>
+                evt.TaskId == latestRetry.TaskId &&
+                evt.OccurredAt <= latestRetry.OccurredAt &&
+                IsRetryPriorOutcomeEvent(evt))
+            .OrderByDescending(evt => evt.OccurredAt)
+            .FirstOrDefault();
         var feedbackEvents = goal.Timeline
             .Where(evt =>
                 evt.OccurredAt >= latestRetry.OccurredAt &&
@@ -447,8 +454,13 @@ public sealed partial class AgentOrchestratorKernel
         {
             "## Recent retry/recovery feedback",
             $"Most recent retry: Retry {latestRetryOrdinal} of {retryEvents.Count}; {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}.",
-            "Use this as the current correction context; older duplicate retry/recovery notes are omitted."
         };
+        if (priorOutcomeEvent is not null)
+        {
+            lines.Add($"Prior outcome: {priorOutcomeEvent.OccurredAt:u}; {DescribeTimelineTask(goal, priorOutcomeEvent)}; {priorOutcomeEvent.Kind}: {PromptContextFormatter.TrimPromptBlock(priorOutcomeEvent.Message)}");
+        }
+
+        lines.Add("Use this as the current correction context; older duplicate retry/recovery notes are omitted.");
 
         var emittedMessages = new HashSet<string>(StringComparer.Ordinal);
         var emittedCount = 0;
@@ -483,6 +495,14 @@ public sealed partial class AgentOrchestratorKernel
 
         lines.Add(string.Empty);
         return lines;
+    }
+
+    private static bool IsRetryPriorOutcomeEvent(ProgressEvent evt)
+    {
+        return evt.Kind is
+            ProgressKind.TaskFailed or
+            ProgressKind.TaskCancelled or
+            ProgressKind.TaskVerificationRecorded;
     }
 
     private static int RetryOrdinalAt(IReadOnlyList<ProgressEvent> retryEvents, DateTimeOffset occurredAt)

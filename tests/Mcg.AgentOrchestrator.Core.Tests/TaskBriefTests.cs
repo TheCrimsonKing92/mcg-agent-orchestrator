@@ -524,6 +524,8 @@ public sealed class TaskBriefTests
     clock.Advance();
     kernel.RetryTask(goal.Id, developer.Id, "stale duplicate retry feedback");
     clock.Advance();
+    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "prior developer outcome for tester redispatch");
+    clock.Advance();
     kernel.RetryTask(goal.Id, developer.Id, "latest developer retry feedback");
     var latestRetryAt = clock.UtcNow;
     clock.Advance();
@@ -536,6 +538,8 @@ public sealed class TaskBriefTests
     Assert.Contains(testerBrief, text => text.Contains("Most recent retry: Retry 3 of 3", StringComparison.Ordinal));
     Assert.Contains(testerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
     Assert.Contains(testerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
+    Assert.Contains(testerBrief, text => text.Contains("Prior outcome:", StringComparison.Ordinal));
+    Assert.Contains(testerBrief, text => text.Contains("TaskFailed: prior developer outcome for tester redispatch", StringComparison.Ordinal));
     Assert.Contains(testerBrief, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
     Assert.Contains(testerBrief, text => text.Contains("operator recovery note for redispatch", StringComparison.Ordinal));
     Assert.Equal(1, CountOccurrences(testerBrief, "## Recent retry/recovery feedback"));
@@ -555,6 +559,8 @@ public sealed class TaskBriefTests
 
     kernel.RetryTask(goal.Id, developer.Id, "first stale retry feedback");
     clock.Advance();
+    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "prior developer outcome for reviewer redispatch");
+    clock.Advance();
     kernel.RetryTask(goal.Id, developer.Id, "latest developer retry feedback for review");
     var latestRetryAt = clock.UtcNow;
     clock.Advance();
@@ -567,6 +573,8 @@ public sealed class TaskBriefTests
     Assert.Contains(reviewerBrief, text => text.Contains("Most recent retry: Retry 2 of 2", StringComparison.Ordinal));
     Assert.Contains(reviewerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
     Assert.Contains(reviewerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains("Prior outcome:", StringComparison.Ordinal));
+    Assert.Contains(reviewerBrief, text => text.Contains("TaskFailed: prior developer outcome for reviewer redispatch", StringComparison.Ordinal));
     Assert.Contains(reviewerBrief, text => text.Contains("latest developer retry feedback for review", StringComparison.Ordinal));
     Assert.Contains(reviewerBrief, text => text.Contains("operator recovery note for reviewer redispatch", StringComparison.Ordinal));
     Assert.Equal(1, CountOccurrences(reviewerBrief, "## Recent retry/recovery feedback"));
