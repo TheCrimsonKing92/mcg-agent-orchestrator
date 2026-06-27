@@ -4006,6 +4006,58 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(10, queue.Count);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_global_accepts_hex_like_first_answer_token")]
+    public async Task CliAttentionAnswerGlobalAcceptsHexLikeFirstAnswerToken()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal(new GoalId("c1c1c1c1111111111111111111111111"), "A");
+        var goalB = kernel.CreateGoal(new GoalId("d2d2d2d2222222222222222222222222"), "B");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goalA.Id.Value, "Target global clarification", "Target body", $"spec-clarification:{goalA.Id.Value}:global:66666666");
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goalB.Id.Value, "Unrelated clarification", "Other body", $"spec-clarification:{goalB.Id.Value}:global:deadbeef");
+
+        var output = ExecuteCliAndCapture(
+            ["attention", "answer", "66666666", "deadbeef", "continue"],
+            kernel,
+            workspace);
+        var items = await store.ListAsync();
+        var resolved = items.Single(item => item.CorrelationKey == $"spec-clarification:{goalA.Id.Value}:global:66666666");
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Equal($"Answered clarification '66666666'.{Environment.NewLine}", output);
+        Xunit.Assert.Equal("deadbeef continue", resolved.Resolution);
+        Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{goalA.Id.Value}:global:66666666");
+        Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{goalB.Id.Value}:global:deadbeef");
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_global_id_wins_when_it_matches_goal_prefix")]
+    public async Task CliAttentionAnswerGlobalIdWinsWhenItMatchesGoalPrefix()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var collidingGoal = kernel.CreateGoal(new GoalId("66666666aaaaaaaaaaaaaaaaaaaaaaaa"), "Colliding goal");
+        var owner = kernel.CreateGoal(new GoalId("eeeeeeeebbbbbbbbbbbbbbbbbbbbbbbb"), "Owner goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, owner.Id.Value, "Target global clarification", "Target body", $"spec-clarification:{owner.Id.Value}:global:66666666");
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, collidingGoal.Id.Value, "Scoped clarification", "Scoped body", $"spec-clarification:{collidingGoal.Id.Value}:scope:deadbeef");
+
+        var output = ExecuteCliAndCapture(
+            ["attention", "answer", "66666666", "deadbeef", "continue"],
+            kernel,
+            workspace);
+        var items = await store.ListAsync();
+        var resolved = items.Single(item => item.CorrelationKey == $"spec-clarification:{owner.Id.Value}:global:66666666");
+        var queue = await store.GetAttentionQueueAsync();
+
+        Xunit.Assert.Equal($"Answered clarification '66666666'.{Environment.NewLine}", output);
+        Xunit.Assert.Equal("deadbeef continue", resolved.Resolution);
+        Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{owner.Id.Value}:global:66666666");
+        Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{collidingGoal.Id.Value}:scope:deadbeef");
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_show_global_lists_full_queue")]
     public async Task CliAttentionShowGlobalListsFullQueue()
     {

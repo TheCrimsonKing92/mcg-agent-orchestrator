@@ -81,7 +81,7 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
-                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 persistTick?.Invoke(kernel);
                 break;
             }
@@ -90,7 +90,7 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
-                ReapNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 persistTick?.Invoke(kernel);
                 break;
             }
@@ -98,13 +98,13 @@ internal sealed class ConductorBatchLoop
             _sweep(kernel);
             _recoverInterruptedDispatches(kernel);
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, reapedGoals);
+            MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals);
 
             var eligible = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !excludedGoals.Contains(g.Id.Value)
                     && !setAsideGoals.ContainsKey(g.Id.Value)
-                    && g.Status is not GoalStatus.Cancelled
-                    && g.Status is not GoalStatus.Superseded)
+                    && IsLoopEligibleGoal(g, driver))
                 .ToArray();
 
             if (eligible.Length == 0)
@@ -405,6 +405,44 @@ internal sealed class ConductorBatchLoop
         return null;
     }
 
+    private static void MarkCompletedDependencyGoals(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        string? onlyGoalId,
+        HashSet<string> completedGoals)
+    {
+        foreach (var goal in kernel.Goals)
+        {
+            if (onlyGoalId is not null && goal.Id.Value != onlyGoalId)
+            {
+                continue;
+            }
+
+            if (completedGoals.Contains(goal.Id.Value) || goal.Status != GoalStatus.Completed)
+            {
+                continue;
+            }
+
+            GoalLifecycleFacts facts;
+            try
+            {
+                facts = driver.GetFacts(goal);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (GoalLifecycle.ResolveState(goal, facts) != GoalLifecycleState.CleanedUp)
+            {
+                continue;
+            }
+
+            completedGoals.Add(goal.Id.Value);
+            kernel.MarkKnownCompletedDependencyGoals([goal.Id]);
+        }
+    }
+
     private static void ReadmitResolvedSetAsideGoals(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
@@ -517,6 +555,30 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsTerminalGoal(Goal goal) =>
         goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver)
+    {
+        if (goal.Status is GoalStatus.Cancelled or GoalStatus.Superseded)
+        {
+            return false;
+        }
+
+        if (goal.Status == GoalStatus.Completed)
+        {
+            try
+            {
+                var facts = driver.GetFacts(goal);
+                var state = GoalLifecycle.ResolveState(goal, facts);
+                return state != GoalLifecycleState.CleanedUp;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        return true;
+    }
 
     private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Escalated esc

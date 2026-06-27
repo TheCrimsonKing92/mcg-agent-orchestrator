@@ -31,7 +31,9 @@ public sealed partial class AgentOrchestratorKernel
         TaskId taskId,
         string? modelFitTarget = null,
         string? workingDirectory = null,
-        string? contextDirectory = null)
+        string? contextDirectory = null,
+        string? targetBranchName = null,
+        string? targetHeadCommit = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -70,6 +72,20 @@ public sealed partial class AgentOrchestratorKernel
         if (!string.IsNullOrWhiteSpace(contextDirectory))
         {
             headerLines.Add($"Context files: read {Path.Combine(contextDirectory, "digest.md")} first; use artifact-registry.json for hashes/freshness and manifest.md for role-specific artifact priorities before opening larger evidence.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetBranchName) || !string.IsNullOrWhiteSpace(targetHeadCommit))
+        {
+            headerLines.Add("Current target context:");
+            if (!string.IsNullOrWhiteSpace(targetBranchName))
+            {
+                headerLines.Add($"- Branch: {targetBranchName.Trim()}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(targetHeadCommit))
+            {
+                headerLines.Add($"- HEAD commit: {targetHeadCommit.Trim()}");
+            }
         }
 
         var segments = new List<TaskBriefSegment>
@@ -144,6 +160,12 @@ public sealed partial class AgentOrchestratorKernel
             feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {PromptContextFormatter.TrimPromptBlock(item)}"));
             feedbackLines.Add(string.Empty);
             segments.Add(TaskBriefSegment.Fixed(feedbackLines));
+        }
+
+        var recentRetryFeedback = BuildRecentRetryFeedbackBriefBlock(goal, task);
+        if (recentRetryFeedback.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(recentRetryFeedback));
         }
 
         if (pendingInput.Count > 0)
@@ -393,6 +415,91 @@ public sealed partial class AgentOrchestratorKernel
             ? "<provider>/<model or launcher>"
             : modelFitTarget.Trim();
         return $"Include a final model-selection note: {ModelFitEvidence.BuildNoteTemplate(target)}.";
+    }
+
+    private static IReadOnlyList<string> BuildRecentRetryFeedbackBriefBlock(Goal goal, TaskSpec task)
+    {
+        if (task.RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer))
+        {
+            return [];
+        }
+
+        var retryEvents = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.TaskRetried)
+            .OrderBy(evt => evt.OccurredAt)
+            .ToList();
+        if (retryEvents.Count == 0)
+        {
+            return [];
+        }
+
+        var latestRetry = retryEvents[^1];
+        var latestRetryOrdinal = retryEvents.Count;
+        var feedbackEvents = goal.Timeline
+            .Where(evt =>
+                evt.OccurredAt >= latestRetry.OccurredAt &&
+                evt.Kind is ProgressKind.TaskRetried or ProgressKind.TaskNote or ProgressKind.TaskSubscriptionLimitReviewAcknowledged)
+            .OrderByDescending(evt => evt.OccurredAt)
+            .ThenByDescending(evt => (int)evt.Kind)
+            .ToList();
+
+        var lines = new List<string>
+        {
+            "## Recent retry/recovery feedback",
+            $"Most recent retry: Retry {latestRetryOrdinal} of {retryEvents.Count}; {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}.",
+            "Use this as the current correction context; older duplicate retry/recovery notes are omitted."
+        };
+
+        var emittedMessages = new HashSet<string>(StringComparer.Ordinal);
+        var emittedCount = 0;
+        var omittedCount = 0;
+        var sectionChars = string.Join(Environment.NewLine, lines).Length;
+        foreach (var evt in feedbackEvents)
+        {
+            var message = evt.Message.Trim();
+            if (message.Length == 0 || !emittedMessages.Add(message))
+            {
+                omittedCount++;
+                continue;
+            }
+
+            var retryOrdinal = RetryOrdinalAt(retryEvents, evt.OccurredAt);
+            var line = $"- Retry {retryOrdinal} of {retryEvents.Count}; {evt.OccurredAt:u}; {DescribeTimelineTask(goal, evt)}; {evt.Kind}: {PromptContextFormatter.TrimPromptBlock(message)}";
+            if (emittedCount >= 3 || sectionChars + line.Length + Environment.NewLine.Length > 2500)
+            {
+                omittedCount++;
+                continue;
+            }
+
+            lines.Add(line);
+            sectionChars += line.Length + Environment.NewLine.Length;
+            emittedCount++;
+        }
+
+        if (omittedCount > 0)
+        {
+            lines.Add($"- Omitted {omittedCount} older, duplicate, or over-budget retry/recovery note(s).");
+        }
+
+        lines.Add(string.Empty);
+        return lines;
+    }
+
+    private static int RetryOrdinalAt(IReadOnlyList<ProgressEvent> retryEvents, DateTimeOffset occurredAt)
+    {
+        var ordinal = retryEvents.Count(evt => evt.OccurredAt <= occurredAt);
+        return Math.Max(1, ordinal);
+    }
+
+    private static string DescribeTimelineTask(Goal goal, ProgressEvent evt)
+    {
+        if (evt.TaskId is not { } taskId)
+        {
+            return "Goal-level event";
+        }
+
+        var task = goal.FindTask(taskId);
+        return $"Task {TaskDisplayNumber.Resolve(goal, taskId)} {task.RequiredRole}";
     }
 
     private static bool IsRedundantBriefTimelineEvent(TaskSpec task, ProgressEvent evt)

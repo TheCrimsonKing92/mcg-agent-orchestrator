@@ -121,12 +121,15 @@ public static class WorkerProfileDispatcher
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
+        var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
             task.Id,
             BuildModelFitTarget(providerName, modelName),
             workingDirectory,
-            contextDirectory);
+            contextDirectory,
+            targetContext?.BranchName,
+            targetContext?.HeadCommit);
         var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
         var preparation = WorkerCommandTemplate.Prepare(
             budgetedBrief,
@@ -753,6 +756,32 @@ public static class WorkerProfileDispatcher
             : $"{providerName.Trim()}/{modelName.Trim()}";
     }
 
+    private static TargetContext? TryReadCurrentTargetContext(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+        {
+            return null;
+        }
+
+        var branch = GitCli.Run(workingDirectory, "branch", "--show-current");
+        var head = GitCli.Run(workingDirectory, "rev-parse", "HEAD");
+        if (branch.ExitCode != 0 || head.ExitCode != 0)
+        {
+            return null;
+        }
+
+        var branchName = branch.Output.Trim();
+        var headCommit = head.Output.Trim();
+        if (string.IsNullOrWhiteSpace(branchName) && string.IsNullOrWhiteSpace(headCommit))
+        {
+            return null;
+        }
+
+        return new TargetContext(
+            string.IsNullOrWhiteSpace(branchName) ? null : branchName,
+            string.IsNullOrWhiteSpace(headCommit) ? null : headCommit);
+    }
+
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
     {
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
@@ -773,6 +802,8 @@ public static class WorkerProfileDispatcher
     }
 
     private sealed record SubscriptionModelSelection(TaskComplexity Complexity, ModelProfile Model, bool UsesComplexModel);
+
+    private sealed record TargetContext(string? BranchName, string? HeadCommit);
 
     private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
     {

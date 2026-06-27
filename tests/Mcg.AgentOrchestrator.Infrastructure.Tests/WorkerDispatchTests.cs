@@ -1231,6 +1231,37 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains(prompt, text => text.Contains($"Working directory, use absolute paths: {workingDirectory}", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_includes_current_branch_and_head_in_dispatched_prompt")]
+    public void WorkerProfileDispatcherIncludesCurrentBranchAndHeadInDispatchedPrompt()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-27T12:00:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Test retry prompt regeneration.", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var branch = ReadGit(worktree, ["branch", "--show-current"]);
+    var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
+    kernel.RetryTask(goal.Id, developer.Id, "latest developer retry feedback");
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    var result = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        tester,
+        profile,
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-27T12:01:00Z"));
+
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains(prompt, text => text.Contains("Current target context:", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
+    Assert.Contains(prompt, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_assigned_agent_when_catalog_still_contains_it")]
     public void WorkerProfileDispatcherKeepsAssignedAgentWhenCatalogStillContainsIt()
 {

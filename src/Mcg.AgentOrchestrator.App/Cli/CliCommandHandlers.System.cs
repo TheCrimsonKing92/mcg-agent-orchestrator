@@ -59,6 +59,21 @@ internal static partial class CliCommandHandlers
         return matches[0];
     }
 
+    private static CollaborationItem? ResolveClarificationByExactShortId(
+        IReadOnlyList<CollaborationItem> clarifications,
+        string id,
+        string ambiguousMessage)
+    {
+        var matches = clarifications
+            .Where(c => string.Equals(ShortClarificationId(c.CorrelationKey!), id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count > 1)
+            throw new ArgumentException(string.Format(ambiguousMessage, matches.Count));
+
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
     // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
     // (spec-clarification:<goal>:<fork-kind>:<hash>). Intrinsic to the item, so answering one clarification
     // never renumbers the others — unlike a positional index.
@@ -66,11 +81,6 @@ internal static partial class CliCommandHandlers
     {
         var lastSegment = correlationKey[(correlationKey.LastIndexOf(':') + 1)..];
         return lastSegment.Length <= 8 ? lastSegment : lastSegment[..8];
-    }
-
-    private static bool LooksLikeClarificationShortId(string value)
-    {
-        return value.Length > 0 && value.Length <= 8 && value.All(Uri.IsHexDigit);
     }
 
     private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
@@ -143,8 +153,17 @@ internal static partial class CliCommandHandlers
                         throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
                     var globalClarifications = OpenClarifications(store);
-                    var scoped = parts.Count >= 5 && LooksLikeClarificationShortId(parts[3]);
+                    // Legacy global syntax wins when the first token is an open clarification id, even if
+                    // that token also happens to be a goal prefix.
+                    var globalClarification = ResolveClarificationByExactShortId(
+                        globalClarifications,
+                        parts[2],
+                        $"Id '{parts[2]}' is ambiguous ({{0}} matches); use more characters from `attention show`.");
+                    var scoped = globalClarification is null;
                     var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
+
+                    if (scoped && parts.Count < 5)
+                        throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
 
                     var id = scoped ? parts[3] : parts[2];
                     var answer = string.Join(' ', parts.Skip(scoped ? 4 : 3));
@@ -154,11 +173,7 @@ internal static partial class CliCommandHandlers
                             id,
                             $"Clarification id '{id}' does not belong to goal '{goal!.Id.Value}'.",
                             $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show {goal!.Id.Value[..8]}`.")
-                        : ResolveClarificationByShortId(
-                            globalClarifications,
-                            id,
-                            $"No open clarification matches id '{id}'; run `attention show`.",
-                            $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show`.");
+                        : globalClarification!;
 
                     var resolved = store.TryResolveAsync(clarification.CorrelationKey!, answer).GetAwaiter().GetResult();
                     Console.WriteLine(resolved
