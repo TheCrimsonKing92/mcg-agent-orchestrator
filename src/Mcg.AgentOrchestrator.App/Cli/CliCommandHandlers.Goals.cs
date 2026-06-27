@@ -717,6 +717,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
                         catch { /* per-goal isolation */ }
                     }
+
+                    var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory);
+                    ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
                 };
                 var loopReaper = new BackgroundDispatchRunner();
                 using var loopWakeSignal = watchInterval is not null
