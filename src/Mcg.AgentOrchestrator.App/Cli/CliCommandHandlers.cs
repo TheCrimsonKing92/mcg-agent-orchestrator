@@ -4,6 +4,11 @@ internal static partial class CliCommandHandlers
 {
 public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context)
 {
+    if (CliCommandHelp.TryPrintStartupHelp(parts))
+    {
+        return false;
+    }
+
     var command = parts[0].ToLowerInvariant();
     var handled =
         TryExecuteFundamentalsAlias(command, parts, context) ??

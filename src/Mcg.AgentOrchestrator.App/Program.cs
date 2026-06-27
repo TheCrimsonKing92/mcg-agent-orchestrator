@@ -72,6 +72,11 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName);
+if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
+{
+    return 0;
+}
+
 WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
 WorkerProcessJobs.SweepStartupOrphans();
 GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
