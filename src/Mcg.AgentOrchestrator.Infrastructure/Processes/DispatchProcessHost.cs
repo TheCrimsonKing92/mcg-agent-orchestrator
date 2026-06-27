@@ -78,6 +78,7 @@ public static class DispatchProcessHost
         {
             throw new InvalidOperationException($"Failed to apply Low integrity label to worktree '{parameters.WorkingDirectory}'.");
         }
+        ProtectGitMetadata(parameters.WorkingDirectory);
 
         // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
         // stays authenticated) and a temp scratch. Both inside the worktree so they are already Low.
@@ -283,6 +284,53 @@ public static void DropToLow() {
 
     private static bool SetLowIntegrity(string path, bool recursive)
     {
+        return SetIntegrity(path, recursive ? "(OI)(CI)L" : "L", recursive);
+    }
+
+    private static void ProtectGitMetadata(string worktree)
+    {
+        var checkoutGitFile = Path.Combine(worktree, ".git");
+        if (File.Exists(checkoutGitFile))
+        {
+            if (!SetMediumIntegrity(checkoutGitFile))
+            {
+                throw new InvalidOperationException($"Failed to protect linked worktree git file '{checkoutGitFile}'.");
+            }
+        }
+
+        string? commonDir = null;
+        try
+        {
+            var commonDirResult = GitCli.Run(worktree, "rev-parse", "--git-common-dir");
+            if (!commonDirResult.Succeeded || string.IsNullOrWhiteSpace(commonDirResult.Output))
+            {
+                return;
+            }
+
+            var commonDirRaw = commonDirResult.Output.Trim();
+            commonDir = Path.IsPathRooted(commonDirRaw)
+                ? commonDirRaw
+                : Path.GetFullPath(Path.Combine(worktree, commonDirRaw));
+        }
+        catch
+        {
+            // Git metadata protection is best-effort; the checkout-local .git file is handled directly
+            // above so linked worktrees keep their write confinement even when git probing fails.
+        }
+
+        if (commonDir is not null && Directory.Exists(commonDir) && !SetMediumIntegrity(commonDir))
+        {
+            throw new InvalidOperationException($"Failed to protect git common dir '{commonDir}'.");
+        }
+    }
+
+    private static bool SetMediumIntegrity(string path)
+    {
+        return SetIntegrity(path, Directory.Exists(path) ? "(OI)(CI)M" : "M", recursive: false);
+    }
+
+    private static bool SetIntegrity(string path, string level, bool recursive)
+    {
         try
         {
             var psi = new ProcessStartInfo
@@ -295,7 +343,7 @@ public static void DropToLow() {
             };
             psi.ArgumentList.Add(path);
             psi.ArgumentList.Add("/setintegritylevel");
-            psi.ArgumentList.Add("(OI)(CI)L");
+            psi.ArgumentList.Add(level);
             if (recursive)
             {
                 psi.ArgumentList.Add("/T");
@@ -311,7 +359,7 @@ public static void DropToLow() {
             var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
             var completed = WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
             try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return completed;
+            return completed && process.ExitCode == 0;
         }
         catch
         {

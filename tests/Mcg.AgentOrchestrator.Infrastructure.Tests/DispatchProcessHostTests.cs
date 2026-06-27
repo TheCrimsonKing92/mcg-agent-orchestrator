@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -192,6 +194,64 @@ public sealed class DispatchProcessHostTests
         Assert.NotEqual(0, process.ExitCode);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_setup_keeps_linked_worktree_git_file_medium")]
+    public void LowIntegritySetupKeepsLinkedWorktreeGitFileMedium()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        if (GetCurrentProcessIntegrityRid() < MediumIntegrityRid)
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-acl-test", Guid.NewGuid().ToString("n"));
+        var repo = Path.Combine(root, "repo");
+        var worktree = Path.Combine(root, "linked-worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            CreateLinkedWorktree(repo, worktree);
+            var gitFile = Path.Combine(worktree, ".git");
+            var workerFile = Path.Combine(worktree, "worker.txt");
+            File.WriteAllText(workerFile, "worker editable");
+            var logs = Path.Combine(root, "logs");
+            Directory.CreateDirectory(logs);
+            var parametersPath = Path.Combine(root, "dispatch.json");
+
+            DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output sandbox-ready",
+                worktree,
+                Path.Combine(logs, "out.log"),
+                Path.Combine(logs, "err.log"),
+                Path.Combine(logs, "exit.txt"),
+                Path.Combine(logs, "heartbeat.json"),
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: true,
+                WorkerSandboxProvider.Codex));
+
+            var exitCode = DispatchProcessHost.Run(parametersPath);
+
+            Assert.Equal(0, exitCode);
+            Assert.True(File.Exists(gitFile));
+            Assert.True(GetMandatoryIntegrityRid(gitFile) >= MediumIntegrityRid);
+            Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(workerFile));
+
+            var commonGitDir = RunGit(worktree, "rev-parse", "--git-common-dir");
+            var commonGitDirPath = Path.IsPathRooted(commonGitDir)
+                ? commonGitDir
+                : Path.GetFullPath(Path.Combine(worktree, commonGitDir));
+            Assert.True(GetMandatoryIntegrityRid(commonGitDirPath) >= MediumIntegrityRid);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static Process StartLongRunningHelper()
     {
         var startInfo = new ProcessStartInfo
@@ -244,6 +304,167 @@ public sealed class DispatchProcessHostTests
             ?? throw new InvalidOperationException("Failed to start nonzero helper.");
     }
 
+    private static void CreateLinkedWorktree(string repo, string worktree)
+    {
+        Directory.CreateDirectory(repo);
+        RunGit(repo, "init");
+        RunGit(repo, "config", "user.email", "tests@example.invalid");
+        RunGit(repo, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+        RunGit(repo, "add", "seed.txt");
+        RunGit(repo, "commit", "-m", "seed");
+        RunGit(repo, "worktree", "add", "-b", "linked-test", worktree);
+    }
+
+    private static string RunGit(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start git.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"git {string.Join(' ', arguments)} timed out.");
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {stderr}");
+        }
+
+        return stdout.Trim();
+    }
+
+    private const int LowIntegrityRid = 0x1000;
+    private const int MediumIntegrityRid = 0x2000;
+
+    private static int GetMandatoryIntegrityRid(string path)
+    {
+        var error = GetNamedSecurityInfo(
+            path,
+            1,
+            0x00000010,
+            out _,
+            out _,
+            out _,
+            out _,
+            out var securityDescriptor);
+        if (error != 0)
+        {
+            throw new Win32Exception((int)error);
+        }
+
+        try
+        {
+            if (!GetSecurityDescriptorSacl(securityDescriptor, out var saclPresent, out var sacl, out _) ||
+                !saclPresent ||
+                sacl == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"No mandatory label SACL found for '{path}'.");
+            }
+
+            var aceCount = Marshal.ReadInt16(sacl, 4);
+            for (var i = 0; i < aceCount; i++)
+            {
+                if (!GetAce(sacl, i, out var ace))
+                {
+                    continue;
+                }
+
+                if (Marshal.ReadByte(ace) != 0x11)
+                {
+                    continue;
+                }
+
+                var sid = IntPtr.Add(ace, 8);
+                if (!ConvertSidToStringSid(sid, out var sidStringPtr))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                try
+                {
+                    var sidString = Marshal.PtrToStringUni(sidStringPtr)
+                        ?? throw new InvalidOperationException("Integrity SID was empty.");
+                    var lastDash = sidString.LastIndexOf('-');
+                    return int.Parse(sidString[(lastDash + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+                }
+                finally
+                {
+                    LocalFree(sidStringPtr);
+                }
+            }
+
+            throw new InvalidOperationException($"No mandatory label ACE found for '{path}'.");
+        }
+        finally
+        {
+            LocalFree(securityDescriptor);
+        }
+    }
+
+    private static int GetCurrentProcessIntegrityRid()
+    {
+        if (!OpenProcessToken(GetCurrentProcess(), 0x0008, out var token))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            GetTokenInformation(token, 25, IntPtr.Zero, 0, out var length);
+            var buffer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (!GetTokenInformation(token, 25, buffer, length, out _))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                var sid = Marshal.ReadIntPtr(buffer);
+                if (!ConvertSidToStringSid(sid, out var sidStringPtr))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                try
+                {
+                    var sidString = Marshal.PtrToStringUni(sidStringPtr)
+                        ?? throw new InvalidOperationException("Token integrity SID was empty.");
+                    var lastDash = sidString.LastIndexOf('-');
+                    return int.Parse(sidString[(lastDash + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+                }
+                finally
+                {
+                    LocalFree(sidStringPtr);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+        finally
+        {
+            CloseHandle(token);
+        }
+    }
+
     private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)
     {
         Exception? last = null;
@@ -263,4 +484,48 @@ public sealed class DispatchProcessHostTests
         }
         throw last!;
     }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetNamedSecurityInfo(
+        string pObjectName,
+        int objectType,
+        uint securityInfo,
+        out IntPtr ppsidOwner,
+        out IntPtr ppsidGroup,
+        out IntPtr ppDacl,
+        out IntPtr ppSacl,
+        out IntPtr ppSecurityDescriptor);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetSecurityDescriptorSacl(
+        IntPtr pSecurityDescriptor,
+        out bool lpbSaclPresent,
+        out IntPtr pSacl,
+        out bool lpbSaclDefaulted);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetAce(IntPtr pAcl, int dwAceIndex, out IntPtr pAce);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool ConvertSidToStringSid(IntPtr sid, out IntPtr stringSid);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr hMem);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(
+        IntPtr tokenHandle,
+        int tokenInformationClass,
+        IntPtr tokenInformation,
+        int tokenInformationLength,
+        out int returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 }
