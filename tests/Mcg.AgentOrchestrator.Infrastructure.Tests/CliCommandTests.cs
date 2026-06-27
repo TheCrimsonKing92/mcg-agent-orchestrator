@@ -4580,6 +4580,10 @@ public sealed class CliCommandTests
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-close", "abc"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--help"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--loop", "--help"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "--help"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "create", "-h"]));
 
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
@@ -4587,6 +4591,59 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["serve-dashboard"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState([]));
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_dispatcher_help_prints_command_specific_usage")]
+    [Xunit.InlineData(new[] { "conduct", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "-h" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "--loop", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "workspace", "--help" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "-h" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "create", "-h" }, CliCommandHelp.WorkspaceCreateUsage)]
+    public void CliDispatcherHelpPrintsCommandSpecificUsage(string[] args, string expectedUsage)
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                args,
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains(expectedUsage, output);
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_startup_help_exits_before_state_repository_creation")]
+    [Xunit.InlineData(new[] { "conduct", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "-h" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "conduct", "--loop", "--help" }, CliCommandHelp.ConductUsage)]
+    [Xunit.InlineData(new[] { "workspace", "--help" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "-h" }, CliCommandHelp.WorkspaceUsage)]
+    [Xunit.InlineData(new[] { "workspace", "create", "-h" }, CliCommandHelp.WorkspaceCreateUsage)]
+    public void CliStartupHelpExitsBeforeStateRepositoryCreation(string[] args, string expectedUsage)
+    {
+        var root = CreateTempDirectory();
+        var result = RunAppCli(root, args);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains(expectedUsage, result.StandardOutput);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
+        Xunit.Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "state.db")));
+        Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
     }
 
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
@@ -5554,6 +5611,41 @@ public sealed class CliCommandTests
         };
 
         return JsonSerializer.Serialize(landingRelevantState);
+    }
+
+    private static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(
+        string workingDirectory,
+        IReadOnlyList<string> args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app CLI.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"CLI did not exit for: {string.Join(' ', args)}");
+        }
+
+        return (process.ExitCode, output, error);
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)

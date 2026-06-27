@@ -117,6 +117,7 @@ internal static class CliPersistentStateRunner
 
         return args[0].ToLowerInvariant() switch
         {
+            _ when CliCommandHelp.IsCommandSpecificHelp(args) => true,
             "operator-listen" or "operator-channel" => true,
             // Backlog commands operate solely on the independent BacklogStore, never the orchestrator
             // kernel/state.db. Running them with an empty kernel — no state load, no write lock, no
