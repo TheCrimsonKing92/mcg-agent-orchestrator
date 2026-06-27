@@ -1386,11 +1386,18 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         .ToList();
     if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
     {
-        var created = 0;
-        var matched = 0;
+        var batchPlans = new List<(string Filter, BacklogIntakePlan Plan)>();
         foreach (var filter in batchFilters)
         {
-            var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 1);
+            var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 2);
+            ThrowIfAmbiguousBacklogIntakeMatch(filter, itemPlan);
+            batchPlans.Add((filter, itemPlan));
+        }
+
+        var created = 0;
+        var matched = 0;
+        foreach (var (filter, itemPlan) in batchPlans)
+        {
             if (itemPlan.Items.Count == 0)
             {
                 Console.WriteLine($"No backlog item matched '{filter}'; skipping.");
@@ -1449,7 +1456,12 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     var plan = BacklogIntakePlanner.Build(
         context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
-        createGoal || createSimpleGoal ? 1 : 5);
+        createGoal || createSimpleGoal ? 2 : 5);
+    if (createGoal || createSimpleGoal)
+    {
+        ThrowIfAmbiguousBacklogIntakeMatch(headingFilter, plan);
+    }
+
     if (plan.Items.Count == 0)
     {
         if (!string.IsNullOrWhiteSpace(headingFilter))
@@ -1506,6 +1518,18 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
+}
+
+private static void ThrowIfAmbiguousBacklogIntakeMatch(string? filter, BacklogIntakePlan plan)
+{
+    if (plan.Items.Count <= 1)
+    {
+        return;
+    }
+
+    var label = string.IsNullOrWhiteSpace(filter) ? "<empty>" : filter;
+    var matches = string.Join(Environment.NewLine, plan.Items.Select(item => $"  {item.Id} - {item.Heading}"));
+    throw new InvalidOperationException($"Backlog filter '{label}' matched multiple items; narrow the filter or use an exact id:{Environment.NewLine}{matches}");
 }
 
 private static bool TryReuseBacklogIntakeGoal(
