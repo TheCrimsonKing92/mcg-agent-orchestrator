@@ -218,6 +218,7 @@ public sealed class DispatchProcessHostTests
             var workerFile = Path.Combine(worktree, "worker.txt");
             File.WriteAllText(workerFile, "worker editable");
             var outsideWorkspaceFile = Path.Combine(root, "outside-workspace.txt");
+            File.WriteAllText(outsideWorkspaceFile, "outside-protected");
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             var codexHome = Path.Combine(sandboxRoot, "codex-home");
             var tempDir = Path.Combine(sandboxRoot, "temp");
@@ -246,7 +247,7 @@ public sealed class DispatchProcessHostTests
 
             Assert.Equal(0, exitCode);
             Assert.Contains("outside-write-denied", File.ReadAllText(stdoutPath));
-            Assert.False(File.Exists(outsideWorkspaceFile));
+            Assert.Equal("outside-protected", File.ReadAllText(outsideWorkspaceFile));
             Assert.True(File.Exists(gitFile));
             Assert.True(GetMandatoryIntegrityRid(gitFile) >= MediumIntegrityRid);
             Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(workerFile));
