@@ -2004,3 +2004,10 @@ Goal f7bfc0e5: Source backlog item: 015ed1a4ae0e4b9a852814966174f31b. Fix retry 
 
 - Operator gate: Planner: not-run; Planner-only task, no repository edits (exit 0); Researcher: not-run; Researcher task only, repository inspections succeeded and worktree is clean (exit 0); Developer: not-run; current-task.md explicitly says do not run dotnet test/build; diff check passed (exit 0); Tester: pass: Core.Tests 404/404 all TaskBrief filter 41/41 passed; Infrastructure.Tests WorkerDispatch filter 158/158 passed; new test BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForTesterAndReviewer 1/1 passed; new test WorkerProfileDispatcherIncludesCurrentBranchAndHeadInDispatchedPrompt 1/1 passed (exit 0); Reviewer: Tester reported 41/41 Core.Tests pass (exit 0); Infrastructure suite not explicitly re-run post-commit but new dispatch test is deterministic (exit 0)
 - Model fit: Anthropic/claude-sonnet-4-6 - adequate - code review of bounded prompt-generation and dispatch change - scoped to 4 changed files; review findings required close reading but no architectural inference beyond the diff.
+
+## 2026-06-27 - # GOAL: Make backlog-intake use the SQLite backlog as canonical source  Sourc...
+
+Goal c38f8779: # GOAL: Make backlog-intake use the SQLite backlog as canonical source  Source backlog item: - b513caa537fd4308afcc46.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via (no receipt) (exit 0, commit (no receipt)). Reviewer task via (no receipt) (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner inspection only (exit 0); Researcher: not-run; read-only Researcher task, evidence gathered by source inspection (exit 0); Developer: pass - 47 passed, 0 failed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused C# CLI/store change with regression tests - enough context and reasoning for scoped implementation.
