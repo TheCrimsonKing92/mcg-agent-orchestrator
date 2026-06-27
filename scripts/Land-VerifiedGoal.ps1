@@ -53,6 +53,28 @@ $branch = "goal/$GoalPrefix"
 
 function Abort([string]$m) { Write-Host "[land] ABORT: $m" -ForegroundColor Red; exit 1 }
 function Info([string]$m)  { Write-Host "[land] $m" -ForegroundColor Cyan }
+function IsGoalMarkLandedUnavailable([string]$output) {
+    return $output -match '(?i)\bUnknown command\b' -or
+        $output -match '(?i)goal-mark-landed.*(not found|unavailable|missing)'
+}
+function WriteGoalMarkLandedFailure([string]$detail) {
+    [Console]::Error.WriteLine("[land] ABORT: goal-mark-landed failed. $detail")
+}
+function InvokeGoalMarkLandedPreflight {
+    $output = (& $launcher goal-mark-landed 2>&1 | Out-String)
+    if (IsGoalMarkLandedUnavailable $output) {
+        WriteGoalMarkLandedFailure "Command availability probe reported unavailable command output:`n$output"
+        exit 1
+    }
+}
+function InvokeGoalMarkLanded([string]$prefix) {
+    $output = (& $launcher goal-mark-landed $prefix --confirm-goal-mark-landed 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0 -or (IsGoalMarkLandedUnavailable $output)) {
+        WriteGoalMarkLandedFailure "Exit code: $exitCode. Output:`n$output"
+        exit 1
+    }
+}
 
 Push-Location $repo
 try {
@@ -93,6 +115,9 @@ try {
     }
 
     # --- 2. sanctioned out-of-band landing: merge --no-ff + goal-mark-landed -----------
+    Info "checking goal-mark-landed availability..."
+    InvokeGoalMarkLandedPreflight
+
     $msg = "Integrate $branch`: verified-green (acceptance suite passed), hand-landed past the acceptance fingerprint guard"
     if ($Note) { $msg = "Integrate $branch`: $Note; verified-green, hand-landed past the acceptance fingerprint guard" }
 
@@ -106,12 +131,7 @@ try {
     if ($conflicts) { & git merge --abort 2>$null; Abort "merge produced conflicts - aborted." }
 
     Info "recording landing via goal-mark-landed..."
-    & $launcher goal-mark-landed $GoalPrefix --confirm-goal-mark-landed
-    $markLandedExitCode = $LASTEXITCODE
-    if ($markLandedExitCode -ne 0) {
-        Write-Host "[land] ABORT: goal-mark-landed failed with exit code $markLandedExitCode (the merge IS in main; reconcile bookkeeping manually)." -ForegroundColor Red
-        exit $markLandedExitCode
-    }
+    InvokeGoalMarkLanded $GoalPrefix
 
     Write-Host "[land] DONE: $GoalPrefix merged to main and recorded as landed." -ForegroundColor Green
 }
