@@ -12,7 +12,16 @@ internal sealed record BatchActionResultDto(
     IReadOnlyList<ProfileDispatchDto>? Dispatches = null,
     ProcessBatchPlanDto? ProcessPlan = null,
     IReadOnlyList<ProcessBatchOutcomeDto>? Processes = null,
-    ParallelExecutionPlanDto? ParallelPlan = null);
+    ParallelExecutionPlanDto? ParallelPlan = null,
+    IReadOnlyList<ReadyBlockedDiagnosticDto>? ReadyBlocked = null);
+
+internal sealed record ReadyBlockedDiagnosticDto(
+    string Goal,
+    int Task,
+    string TaskId,
+    string Provider,
+    string Reason,
+    string Line);
 
 internal sealed record ProcessBatchPlanDto(
     ProcessBatchActionKind Action,

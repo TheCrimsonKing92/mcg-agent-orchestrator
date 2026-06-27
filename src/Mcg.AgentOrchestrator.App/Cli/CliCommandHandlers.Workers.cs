@@ -179,14 +179,15 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
         case "subscription-dispatch-ready":
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "subscription-dispatch-ready [goal-prefix|--goal <goal-prefix>]");
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
-            var subscriptionDispatches = GoalManagementCommandService.SubscriptionDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
-            foreach (var dispatchResult in subscriptionDispatches)
+            var subscriptionDispatches = GoalManagementCommandService.SubscriptionDispatchReadyBatch(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
+            EmitReadyBlockedDiagnostics(subscriptionDispatches.Blocked);
+            foreach (var dispatchResult in subscriptionDispatches.Dispatches)
             {
                 Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
             }
 
-            Console.WriteLine($"Subscription dispatches created: {subscriptionDispatches.Count}");
-            return subscriptionDispatches.Count > 0;
+            Console.WriteLine($"Subscription dispatches created: {subscriptionDispatches.Dispatches.Count}");
+            return subscriptionDispatches.Dispatches.Count > 0;
 
         case "cross-goal-start-plan":
             ConsoleViews.PrintCrossGoalSubscriptionStartPlan(CrossGoalSubscriptionStartPlanner.Build(
@@ -237,22 +238,46 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
 
         case "start-subscription-ready":
             var startReadyPolicy = ResolveCliAutonomyPolicy(parts);
+            context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-subscription-ready [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
+            if (!startReadyPolicy.Allows(AutonomyAction.DispatchStart))
+            {
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "autonomy-policy");
+            }
+
             startReadyPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-subscription-ready");
+            if (!HasCliConfirmation(parts, "--confirm-batch-start"))
+            {
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "start-gate");
+            }
+
             EnsureCliConfirmation(
                 parts,
                 "--confirm-batch-start",
                 "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
-            context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-subscription-ready [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
+            var readiness = GoalReadinessPreflight.Build(context.CurrentGoal, context.Agents, context.Workspace.ExecutionDirectory, context.WorkerProfiles);
+            if (!readiness.AllowsStart(HasCliConfirmation(parts, "--confirm-readiness-risk")))
+            {
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "start-gate");
+            }
+
             EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
             RecordPolicyAllowed(context, context.CurrentGoal, startReadyPolicy, AutonomyAction.DispatchStart, "start-subscription-ready");
-            SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
-                SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
+            var startReadyRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
                     context.CurrentGoal,
                     context.Agents,
                     context.WorkerProfiles,
-                    task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents)),
+                    task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents));
+            if (startReadyRisk is { IsAnomalous: true } &&
+                !HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag))
+            {
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "prompt-size-cost");
+            }
+
+            SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+                startReadyRisk,
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
+            EmitReadyBlockedDiagnostics(subscriptionStart.BlockedDiagnostics);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 
@@ -347,6 +372,32 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
         SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, goal, task),
         HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
     new BackgroundDispatchRunner().StartLatestDispatch(context.Kernel, goal.Id, task.Id, context.Workspace.LogDirectory);
+}
+
+private static void EmitReadyBlockedDiagnostics(IReadOnlyList<ReadyBlockedDiagnostic> diagnostics)
+{
+    foreach (var diagnostic in diagnostics.OrderBy(diagnostic => diagnostic.TaskNumber))
+    {
+        Console.Error.WriteLine(diagnostic.ToLine());
+    }
+}
+
+private static void EmitReadyBlockedDiagnosticsForAssigned(
+    Goal goal,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
+    string reason)
+{
+    var planItems = SubscriptionPlanBuilder.Build(goal, agents, profiles)
+        .Items
+        .Where(item => item.TaskStatus == WorkTaskStatus.Assigned)
+        .OrderBy(item => item.TaskNumber);
+    foreach (var item in planItems)
+    {
+        var provider = string.IsNullOrWhiteSpace(item.ProfileName) ? "unknown" : item.ProfileName;
+        Console.Error.WriteLine(
+            $"READY_BLOCKED goal={goal.Id.Value[..8]} task={item.TaskNumber} provider={provider} reason={reason}");
+    }
 }
 
 private static bool IsLogStreamKeyword(string value) =>

@@ -1188,7 +1188,7 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
             context.Agents,
             context.WorkerProfiles,
             context.Providers);
-        applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count}");
+        applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count} readyBlocked={result.BlockedDiagnostics.Count}");
     }
 
     var updated = GoalDrainPlanner.Build(
