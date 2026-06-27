@@ -81,12 +81,14 @@ public sealed class CliCommandTests
     {
         AssertHelpCommandDoesNotResolveGoal(["conduct", "--help"], "Usage: conduct <goal-id-prefix>");
         AssertHelpCommandDoesNotResolveGoal(["conduct", "-h"], "Usage: conduct <goal-id-prefix>");
+        AssertHelpCommandDoesNotResolveGoal(["conduct", "--loop", "--help"], "Usage: conduct <goal-id-prefix>");
     }
 
     [Xunit.Fact(DisplayName = "Cli_workspace_help_prints_usage_without_resolving_goal")]
     public void CliWorkspaceHelpPrintsUsageWithoutResolvingGoal()
     {
         AssertHelpCommandDoesNotResolveGoal(["workspace", "--help"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
         AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
     }
 
