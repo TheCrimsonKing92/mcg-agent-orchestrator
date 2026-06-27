@@ -202,6 +202,7 @@ public sealed class GoalDependencyTests
         // Ticks 1–3: A advances (Executed), B held regardless of ordering.
         Assert.True(summary.Held >= 3);
         Assert.True(bWorkspaceCreated);
+        Assert.True(kernel.IsKnownCompletedDependencyGoal(a.Id));
         Assert.Equal(0, summary.Escalated);
     }
 

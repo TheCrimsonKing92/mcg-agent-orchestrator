@@ -98,6 +98,7 @@ internal sealed class ConductorBatchLoop
             _sweep(kernel);
             _recoverInterruptedDispatches(kernel);
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, reapedGoals);
+            MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals);
 
             var eligible = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
@@ -402,6 +403,44 @@ internal sealed class ConductorBatchLoop
         }
 
         return null;
+    }
+
+    private static void MarkCompletedDependencyGoals(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        string? onlyGoalId,
+        HashSet<string> completedGoals)
+    {
+        foreach (var goal in kernel.Goals)
+        {
+            if (onlyGoalId is not null && goal.Id.Value != onlyGoalId)
+            {
+                continue;
+            }
+
+            if (completedGoals.Contains(goal.Id.Value) || goal.Status != GoalStatus.Completed)
+            {
+                continue;
+            }
+
+            GoalLifecycleFacts facts;
+            try
+            {
+                facts = driver.GetFacts(goal);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (GoalLifecycle.ResolveState(goal, facts) != GoalLifecycleState.CleanedUp)
+            {
+                continue;
+            }
+
+            completedGoals.Add(goal.Id.Value);
+            kernel.MarkKnownCompletedDependencyGoals([goal.Id]);
+        }
     }
 
     private static void ReadmitResolvedSetAsideGoals(
