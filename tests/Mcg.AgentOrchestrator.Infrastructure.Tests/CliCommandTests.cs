@@ -1063,6 +1063,106 @@ public sealed class CliCommandTests
             evt.Message.Contains("Alternate Planner", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_reassign_agent_updates_task_to_exact_agent_id")]
+    public void CliReassignAgentUpdatesTaskToExactAgentId()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Reassign exact planner", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Exact agent reassignment", [task]);
+        var primary = SubscriptionPlanner("primary-planner", "Primary Planner");
+        var alternate = SubscriptionPlanner("alternate-planner", "Alternate Planner");
+        IReadOnlyList<AgentDefinition> agents = [primary, alternate];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, [primary]);
+
+        CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["reassign-agent", "1", alternate.Id.Value],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        Xunit.Assert.Equal(alternate.Id, task.AssignedAgentId);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskRedelegated &&
+            evt.Message.Contains("primary-planner", StringComparison.Ordinal) &&
+            evt.Message.Contains("alternate-planner", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_reassign_agent_reports_missing_agent_without_throwing")]
+    public void CliReassignAgentReportsMissingAgentWithoutThrowing()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Reject missing planner", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Missing agent reassignment", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionPlanner("planner", "Planner")];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var stderr = CaptureConsoleError(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["reassign-agent", "1", "missing-agent"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Equal("planner", task.AssignedAgentId!.Value);
+        Xunit.Assert.Contains("ERROR: agent id 'missing-agent' was not found.", stderr);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_agent_replace_warns_about_inflight_tasks_pinned_to_old_agent")]
+    public void CliAgentReplaceWarnsAboutInflightTasksPinnedToOldAgent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Warn about stale planner pin", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Warn on role replacement", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionPlanner("openai-planner", "OpenAI Planner")];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var stderr = CaptureConsoleError(() => CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["agent", "Planner", "Anthropic", "claude-haiku-4-5", "Anthropic Planner"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        }));
+
+        Xunit.Assert.Equal("openai-planner", task.AssignedAgentId!.Value);
+        Xunit.Assert.Contains("Warning: replaced Planner agent 'openai-planner'", stderr);
+        Xunit.Assert.Contains(task.Id.Value, stderr);
+        Xunit.Assert.Contains("reassign-agent", stderr);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_drain_goals_dry_run_reports_subscription_and_operator_gates")]
     public void CliDrainGoalsDryRunReportsSubscriptionAndOperatorGates()
     {

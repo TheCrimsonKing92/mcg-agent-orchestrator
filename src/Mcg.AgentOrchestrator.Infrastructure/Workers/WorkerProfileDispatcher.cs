@@ -199,7 +199,7 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task);
 
-        var agent = ResolveAssignedAgent(task, agents);
+        var agent = ResolveAssignedAgent(kernel, goal, task, agents);
         var selection = ResolveSubscriptionModel(agent, goal, task);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
@@ -262,7 +262,7 @@ public static class WorkerProfileDispatcher
         try
         {
             EnsureTaskNeedsExecution(task);
-            var agent = ResolveAssignedAgent(task, agents);
+            var agent = ResolveAssignedAgent(null, goal, task, agents);
             var selection = ResolveSubscriptionModel(agent, goal, task);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
@@ -520,7 +520,7 @@ public static class WorkerProfileDispatcher
         TaskSpec task,
         IReadOnlyList<AgentDefinition> agents)
     {
-        var agent = ResolveAssignedAgent(task, agents);
+        var agent = ResolveAssignedAgent(null, null, task, agents);
         var selection = ResolveSubscriptionModel(agent, goal, task);
         var modelName = ResolveEffectiveSubscriptionModelName(agent, selection);
         var brief = kernel.BuildTaskBrief(
@@ -566,7 +566,7 @@ public static class WorkerProfileDispatcher
             .Select(task => new
             {
                 Task = task,
-                Agent = ResolveAssignedAgent(task, agents)
+                Agent = ResolveAssignedAgent(kernel, goal, task, agents)
             })
             .ToList();
 
@@ -687,7 +687,7 @@ public static class WorkerProfileDispatcher
 
     public static WorkerProfile ResolveSubscriptionProfile(TaskSpec task, IReadOnlyList<AgentDefinition> agents, WorkerProfileCatalog profiles)
     {
-        var agent = ResolveAssignedAgent(task, agents);
+        var agent = ResolveAssignedAgent(null, null, task, agents);
         return ResolveSubscriptionProfile(agent, profiles);
     }
 
@@ -882,15 +882,34 @@ public static class WorkerProfileDispatcher
 
     private sealed record TargetContext(string? BranchName, string? HeadCommit);
 
-    private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+    private static AgentDefinition ResolveAssignedAgent(AgentOrchestratorKernel? kernel, Goal? goal, TaskSpec task, IReadOnlyList<AgentDefinition> agents)
     {
         if (task.AssignedAgentId is null)
         {
             throw new InvalidOperationException($"Task '{task.Id}' is not assigned to an agent.");
         }
 
-        return agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId)
-            ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found.");
+        var assignedAgent = agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId);
+        if (assignedAgent is not null)
+        {
+            return assignedAgent;
+        }
+
+        var replacement = agents.FirstOrDefault(agent => agent.Role == task.RequiredRole)
+            ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found and no current {task.RequiredRole} agent is registered.");
+        var staleAgentId = task.AssignedAgentId.Value;
+        var warning = $"Warning: assigned agent '{staleAgentId}' for {task.RequiredRole} task '{task.Id}' was not found; using current role agent '{replacement.Id.Value}'.";
+        Console.Error.WriteLine(warning);
+        if (kernel is not null && goal is not null)
+        {
+            kernel.ReassignTaskAgent(
+                goal.Id,
+                task.Id,
+                replacement,
+                $"Warning: repaired stale {task.RequiredRole} assignment from missing agent '{staleAgentId}' to '{replacement.Id.Value}'.");
+        }
+
+        return replacement;
     }
 
     private static void EnsureRealSubscriptionProfile(WorkerProfile profile)
