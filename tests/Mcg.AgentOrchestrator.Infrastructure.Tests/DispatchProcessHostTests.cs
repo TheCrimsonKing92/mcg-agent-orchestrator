@@ -217,14 +217,23 @@ public sealed class DispatchProcessHostTests
             var gitFile = Path.Combine(worktree, ".git");
             var workerFile = Path.Combine(worktree, "worker.txt");
             File.WriteAllText(workerFile, "worker editable");
+            var outsideWorkspaceFile = Path.Combine(root, "outside-workspace.txt");
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            var codexHome = Path.Combine(sandboxRoot, "codex-home");
+            var tempDir = Path.Combine(sandboxRoot, "temp");
+            var setupArtifact = Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName);
             var logs = Path.Combine(root, "logs");
             Directory.CreateDirectory(logs);
             var parametersPath = Path.Combine(root, "dispatch.json");
+            var stdoutPath = Path.Combine(logs, "out.log");
+            var command =
+                $"try {{ Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(outsideWorkspaceFile)}' -Value 'unexpected'; Write-Output 'outside-write-unexpected'; exit 7 }} " +
+                "catch { Write-Output 'outside-write-denied' }; Write-Output sandbox-ready";
 
             DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
-                "Write-Output sandbox-ready",
+                command,
                 worktree,
-                Path.Combine(logs, "out.log"),
+                stdoutPath,
                 Path.Combine(logs, "err.log"),
                 Path.Combine(logs, "exit.txt"),
                 Path.Combine(logs, "heartbeat.json"),
@@ -236,9 +245,22 @@ public sealed class DispatchProcessHostTests
             var exitCode = DispatchProcessHost.Run(parametersPath);
 
             Assert.Equal(0, exitCode);
+            Assert.Contains("outside-write-denied", File.ReadAllText(stdoutPath));
+            Assert.False(File.Exists(outsideWorkspaceFile));
             Assert.True(File.Exists(gitFile));
             Assert.True(GetMandatoryIntegrityRid(gitFile) >= MediumIntegrityRid);
             Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(workerFile));
+            Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(codexHome));
+            Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(tempDir));
+            Assert.True(File.Exists(setupArtifact));
+
+            using (var setup = JsonDocument.Parse(File.ReadAllText(setupArtifact)))
+            {
+                var rootElement = setup.RootElement;
+                Assert.Equal("worktree-recursive-sandbox-inherited", rootElement.GetProperty("strategy").GetString());
+                Assert.True(rootElement.GetProperty("worktreeRecursiveRelabel").GetBoolean());
+                Assert.False(rootElement.GetProperty("sandboxRecursiveRelabel").GetBoolean());
+            }
 
             var commonGitDir = RunGit(worktree, "rev-parse", "--git-common-dir");
             var commonGitDirPath = Path.IsPathRooted(commonGitDir)
@@ -349,6 +371,9 @@ public sealed class DispatchProcessHostTests
 
         return stdout.Trim();
     }
+
+    private static string EscapePowerShellSingleQuoted(string value)
+        => value.Replace("'", "''", StringComparison.Ordinal);
 
     private const int LowIntegrityRid = 0x1000;
     private const int MediumIntegrityRid = 0x2000;
