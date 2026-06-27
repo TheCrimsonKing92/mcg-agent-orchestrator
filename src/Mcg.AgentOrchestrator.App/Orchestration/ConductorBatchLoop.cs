@@ -530,11 +530,7 @@ internal sealed class ConductorBatchLoop
             {
                 var facts = driver.GetFacts(goal);
                 var state = GoalLifecycle.ResolveState(goal, facts);
-                return state != GoalLifecycleState.CleanedUp
-                    && (facts.WorkspaceExists
-                        || facts.IsMerged
-                        || facts.IsRecorded
-                        || HasPersistedVerifiedAcceptanceEscalation(goal));
+                return state != GoalLifecycleState.CleanedUp;
             }
             catch
             {

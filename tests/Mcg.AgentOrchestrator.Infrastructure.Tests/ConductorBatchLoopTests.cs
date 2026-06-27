@@ -536,8 +536,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Retried);
         Assert.Equal(0, summary.Escalated);
         Assert.Equal(0, summary.Advanced);
-        Assert.Single(ticks);
-        Assert.Equal(1, ticks.Single().Done);
+        Assert.Empty(ticks);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_operator_retry_clears_prior_verified_acceptance_escalation")]
@@ -1805,24 +1804,24 @@ public sealed class ConductorBatchLoopTests
     public void BatchLoopTerminalHistoricalGoalsAreExcludedFromEligibleSet()
     {
         var kernel = new AgentOrchestratorKernel();
-        var completedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "completed goal");
+        var verifiedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "verified goal");
         var cleanedUpGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cleaned-up goal");
         var cancelledGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cancelled goal");
         var supersededGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "superseded goal");
 
-        PassVerification(kernel, completedGoal, completedGoal.Tasks.Single());
+        PassVerification(kernel, verifiedGoal, verifiedGoal.Tasks.Single());
         PassVerification(kernel, cleanedUpGoal, cleanedUpGoal.Tasks.Single());
         kernel.CancelGoal(cancelledGoal.Id, "test cancel");
         kernel.SupersedeGoal(supersededGoal.Id, "test supersede");
 
         var terminalGoalIds = new HashSet<GoalId>
         {
-            completedGoal.Id,
             cleanedUpGoal.Id,
             cancelledGoal.Id,
             supersededGoal.Id
         };
         var driverCalls = new List<GoalId>();
+        var advancedGoalIds = new List<GoalId>();
         var driver = MakeDriver(
             getFacts: goal =>
             {
@@ -1830,7 +1829,14 @@ public sealed class ConductorBatchLoopTests
                 return goal.Id == cleanedUpGoal.Id
                     ? new GoalLifecycleFacts(IsCleanedUp: true)
                     : GoalLifecycleFacts.None;
-            });
+            },
+            land: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
+            },
+            record: goal => advancedGoalIds.Add(goal.Id),
+            cleanup: goal => advancedGoalIds.Add(goal.Id));
 
         var summary = new ConductorBatchLoop().Run(
             kernel,
@@ -1839,10 +1845,11 @@ public sealed class ConductorBatchLoopTests
             NoStopPath(),
             maxIterations: 3);
 
-        Assert.Equal(0, summary.Ticks);
-        Assert.Equal(0, summary.Advanced);
+        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(3, summary.Advanced);
         Assert.Equal(0, summary.Escalated);
-        Assert.Empty(driverCalls.Where(terminalGoalIds.Contains));
+        Assert.Contains(verifiedGoal.Id, driverCalls);
+        Assert.Empty(advancedGoalIds.Where(terminalGoalIds.Contains));
     }
 
     // ── Duration cap: loop exits when max-duration is reached ────────────
