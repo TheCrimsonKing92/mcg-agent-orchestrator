@@ -102,6 +102,22 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintTask(context.CurrentGoal!, retryTask);
             return true;
 
+        case "reassign-agent":
+            var reassignUsage = "reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
+            var reassignTarget = ResolveCommandTaskTarget(parts, context, reassignUsage);
+            RequireRemainingArgument(parts, reassignTarget.NextIndex, reassignUsage);
+            var targetAgentId = parts[reassignTarget.NextIndex];
+            var targetAgent = new AgentCatalog(context.Agents).FindById(targetAgentId);
+            if (targetAgent is null)
+            {
+                Console.Error.WriteLine($"ERROR: agent id '{targetAgentId}' was not found.");
+                return false;
+            }
+
+            context.Kernel.ReassignTaskAgent(context.CurrentGoal!.Id, reassignTarget.Task.Id, targetAgent);
+            ConsoleViews.PrintTask(context.CurrentGoal!, reassignTarget.Task);
+            return true;
+
         case "re-delegate":
         case "redelegate":
             var redelegatePolicy = ResolveCliAutonomyPolicy(parts);

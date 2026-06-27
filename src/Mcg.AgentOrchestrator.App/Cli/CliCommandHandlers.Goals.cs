@@ -272,8 +272,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
             }
             var agent = CreateCliAgentDefinition(parts);
+            var previousRoleAgent = context.Agents.FirstOrDefault(existing => existing.Role == agent.Role);
             context.Agents = new AgentCatalog(context.Agents).UpsertRole(agent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
+            WarnAboutTasksPinnedToRemovedAgent(context.Kernel, previousRoleAgent, agent);
             ConsoleViews.PrintAgents(context.Agents);
             return false;
 
@@ -1334,6 +1336,29 @@ private static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
     }
 
     return catalog.Agents;
+}
+
+private static void WarnAboutTasksPinnedToRemovedAgent(AgentOrchestratorKernel kernel, AgentDefinition? previousAgent, AgentDefinition replacementAgent)
+{
+    if (previousAgent is null || previousAgent.Id == replacementAgent.Id)
+    {
+        return;
+    }
+
+    var affected = kernel.Goals
+        .Where(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman)
+        .SelectMany(goal => goal.Tasks
+            .Where(task => task.AssignedAgentId == previousAgent.Id &&
+                task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+            .Select(task => $"{goal.Id.Value[..8]}:{task.Id.Value}"))
+        .ToList();
+    if (affected.Count == 0)
+    {
+        return;
+    }
+
+    Console.Error.WriteLine(
+        $"Warning: replaced {previousAgent.Role} agent '{previousAgent.Id.Value}' with '{replacementAgent.Id.Value}', but in-flight task(s) remain pinned to the removed agent: {string.Join(", ", affected)}. Use reassign-agent to update them deliberately.");
 }
 
 private static void AppendGoalAliasFlags(

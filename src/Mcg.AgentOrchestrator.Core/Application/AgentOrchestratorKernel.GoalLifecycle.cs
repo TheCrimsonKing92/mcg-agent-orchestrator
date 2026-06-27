@@ -269,6 +269,29 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec ReassignTaskAgent(GoalId goalId, TaskId taskId, AgentDefinition agent, string? reason = null)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+
+        if (agent.Role != task.RequiredRole)
+        {
+            throw new InvalidOperationException($"Agent '{agent.Id.Value}' has role {agent.Role}; task '{taskId}' requires {task.RequiredRole}.");
+        }
+
+        var previousAgentId = task.AssignedAgentId?.Value ?? "none";
+        task.AssignTo(agent.Id);
+        Append(
+            goal,
+            task.Id,
+            ProgressKind.TaskRedelegated,
+            string.IsNullOrWhiteSpace(reason)
+                ? $"Reassigned {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name})."
+                : reason.Trim());
+        RefreshGoalStatus(goal);
+        return task;
+    }
+
     public TaskSpec AcknowledgeSubscriptionLimitReview(GoalId goalId, TaskId taskId, string note)
     {
         var goal = GetGoal(goalId);

@@ -12,6 +12,95 @@ using System.Text.Json;
 
 public sealed class WorkerDispatchTests
 {
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_and_persists_when_assigned_agent_is_missing")]
+    public void WorkerProfileDispatcherFallsBackAndPersistsWhenAssignedAgentIsMissing()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan the fallback repair.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Repair stale agent pin", [task]);
+        var oldAgent = SubscriptionPlannerAgent("old-planner", "Old Planner");
+        var newAgent = SubscriptionPlannerAgent("new-planner", "New Planner");
+        kernel.ActivateGoal(goal.Id, [oldAgent]);
+
+        var stderr = CaptureConsoleError(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [newAgent],
+            DispatchTestProfiles(),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.UtcNow));
+
+        Assert.Equal(newAgent.Id, task.AssignedAgentId);
+        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+        Assert.Contains("Warning: assigned agent 'old-planner'", stderr);
+        Assert.Contains("Planner", stderr);
+        Assert.Contains("new-planner", stderr);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskRedelegated &&
+            evt.Message.Contains("old-planner", StringComparison.Ordinal) &&
+            evt.Message.Contains("new-planner", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_valid_assigned_agent_without_warning")]
+    public void WorkerProfileDispatcherUsesValidAssignedAgentWithoutWarning()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan direct assignment.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep valid agent pin", [task]);
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+
+        var stderr = CaptureConsoleError(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.UtcNow));
+
+        Assert.Equal(agent.Id, task.AssignedAgentId);
+        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+        Assert.DoesNotContain("Warning:", stderr);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskRedelegated);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_replace_midflight_role_agent_dispatches_with_repaired_assignment")]
+    public void WorkerProfileDispatcherReplaceMidflightRoleAgentDispatchesWithRepairedAssignment()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan after provider replacement.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Replace role agent mid-flight", [task]);
+        var oldAgent = SubscriptionPlannerAgent("old-planner", "Old Planner");
+        var agents = new AgentCatalog([oldAgent]).Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        var newAgent = SubscriptionPlannerAgent("new-planner", "New Planner");
+        agents = new AgentCatalog(agents).UpsertRole(newAgent).Agents;
+
+        WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            agents,
+            DispatchTestProfiles(),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(newAgent.Id, task.AssignedAgentId);
+        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    }
+
     [Xunit.Fact(DisplayName = "CliStartup_sets_protected_pid_before_worker_dispatch")]
     public void CliStartupSetsProtectedPidBeforeWorkerDispatch()
     {
@@ -5714,6 +5803,21 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         public void Dispose() =>
             Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
     }
+
+    private static AgentDefinition SubscriptionPlannerAgent(string id, string name) => new(
+        new AgentId(id),
+        name,
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+
+    private static WorkerProfileCatalog DispatchTestProfiles() => new(
+    [
+        new WorkerProfile(
+            "codex-cli",
+            "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}")
+    ]);
 
     private static string CreateSeededDispatchRepository()
 {
