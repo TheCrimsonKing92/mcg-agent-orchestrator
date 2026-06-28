@@ -199,7 +199,8 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null)
     {
         var kernel = LoadConductLoopKernel(stateRepository);
-        new BackgroundDispatchRunner().SweepExitedProcesses(kernel, ResolveConductWatchGoalId(args, kernel, currentGoal));
+        var sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
+        ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: false);
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
@@ -214,6 +215,11 @@ internal static class CliPersistentStateRunner
                 changedGoalId,
                 (_, ct) => Task.FromResult((true, (GoalSnapshot?)snap, true)),
                 CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        if (sweep.Changed)
+        {
+            Persist(kernel);
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -242,6 +248,10 @@ internal static class CliPersistentStateRunner
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(eligibleIds).GetAwaiter().GetResult();
+        kernel.MarkKnownCompletedDependencyGoals(kernel.Goals
+            .Where(goal => goal.Status == GoalStatus.Completed)
+            .Select(goal => goal.Id)
+            .ToArray());
 
         var loadedIds = eligibleIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
         var missingDependencyIds = kernel.Goals

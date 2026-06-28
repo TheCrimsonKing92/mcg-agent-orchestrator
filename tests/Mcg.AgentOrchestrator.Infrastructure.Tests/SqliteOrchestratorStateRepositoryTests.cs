@@ -638,8 +638,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => m.Status == GoalStatus.Draft.ToString()));
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_conduct_loop_metadata_without_terminal_goals")]
-    public async Task SqliteRepositoryListsConductLoopMetadataWithoutTerminalGoals()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_conduct_loop_metadata_with_completed_sweep_candidates")]
+    public async Task SqliteRepositoryListsConductLoopMetadataWithCompletedSweepCandidates()
     {
         var db = TempDb();
         var repo = new SqliteOrchestratorStateRepository(db);
@@ -675,7 +675,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var listing = await repo.ListConductLoopGoalMetadataAsync();
         var ids = listing.Select(goal => goal.Id).ToHashSet(StringComparer.Ordinal);
 
-        Assert.DoesNotContain(completed.Id.Value, ids);
+        Assert.Contains(completed.Id.Value, ids);
         Assert.DoesNotContain(cleanedUp.Id.Value, ids);
         Assert.Contains(active.Id.Value, ids);
         Assert.Contains(failed.Id.Value, ids);

@@ -405,7 +405,7 @@ public sealed partial class AgentOrchestratorKernel
     private bool ReopenTerminalGoalWithNonTerminalTasks(Goal goal, string reason)
     {
         if (!IsTerminalGoalStatus(goal.Status) ||
-            goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed))
+            goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
         {
             return false;
         }

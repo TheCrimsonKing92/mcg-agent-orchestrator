@@ -323,8 +323,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "goal-recovery":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            var recoverySweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
+            context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
-            return false;
+            return recoverySweep.Changed;
 
         case "dogfood-eval":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
@@ -517,6 +520,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var isFull = HasCliConfirmation(parts, "--full");
             var nextGoalPrefix = GetOptionalArgument(parts, "--full");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, nextGoalPrefix);
+            var nextSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            ConsoleViews.PrintTerminalGoalSweep(nextSweep);
+            context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             var nextPolicy = ResolveCliAutonomyPolicy(parts);
             var nextHealth = GoalHealthEvaluator.Build(
                 context.Kernel,
@@ -530,7 +536,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 PrintNextFullDetail(context, nextPolicy);
             }
-            return false;
+            return nextSweep.Changed;
         }
 
         case "subscription-plan":
@@ -716,6 +722,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
                         catch { /* per-goal isolation */ }
                     }
+
+                    var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory);
+                    ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
                 };
                 var loopReaper = new BackgroundDispatchRunner();
                 using var loopWakeSignal = watchInterval is not null
@@ -2406,7 +2415,16 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     var note = parts[2];
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
 
+    var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
+    ConsoleViews.PrintTerminalGoalSweep(sweep);
+    goal = context.Kernel.GetGoal(goal.Id);
+    context.CurrentGoal = goal;
     var actions = 0;
+    if (sweep.Changed)
+    {
+        actions++;
+    }
+
     if (context.Kernel.NormalizeGoalLifecycleState(goal.Id, $"recover: normalized terminal goal with non-terminal task(s); {note}"))
     {
         Console.WriteLine("recover: normalized terminal goal with non-terminal task(s) to Active.");
