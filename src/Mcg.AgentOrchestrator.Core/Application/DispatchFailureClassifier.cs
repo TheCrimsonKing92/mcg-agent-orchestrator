@@ -261,7 +261,8 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
-        if (IsRecoverableSubscriptionLimitFailure(verification))
+        if (IsSubscriptionProviderCliDispatch(task) &&
+            IsRecoverableSubscriptionLimitFailure(verification))
         {
             TimeSpan? retryAfter = null;
             if (TryGetSubscriptionLimitRetryAfter(verification, out var retryAfterAbs))
@@ -892,15 +893,17 @@ public static class DispatchFailureClassifier
     private static bool IsSubscriptionProviderCliDispatch(TaskSpec task)
     {
         var dispatch = task.LastDispatch;
-        return ContainsSubscriptionProviderCliName(dispatch?.WorkerName) ||
-            ContainsSubscriptionProviderCliName(dispatch?.Command) ||
-            ContainsSubscriptionProviderCliName(task.LastVerification?.Command);
-    }
+        if (dispatch is null)
+        {
+            return false;
+        }
 
-    private static bool ContainsSubscriptionProviderCliName(string? text)
-    {
-        return text?.Contains("codex-cli", StringComparison.OrdinalIgnoreCase) == true ||
-            text?.Contains("claude-cli", StringComparison.OrdinalIgnoreCase) == true;
+        return WorkerProviderResolver.Resolve(dispatch.WorkerName).Kind is
+            ProviderKind.OpenAICodexCli or
+            ProviderKind.AnthropicClaudeCli or
+            ProviderKind.OpenAICodexSpark or
+            ProviderKind.OpenAIJudge or
+            ProviderKind.OllamaQwenCodeCli;
     }
 
     private static bool ContainsRecoverableProviderConnectivityText(string text)

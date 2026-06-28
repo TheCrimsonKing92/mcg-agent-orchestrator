@@ -785,6 +785,65 @@ public sealed class WorkerDispatchTests
     Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
 }
 
+    [Xunit.Fact(DisplayName = "DispatchFailureClassifier_identifies_subscription_dispatch_from_typed_provider_identity")]
+    public void DispatchFailureClassifierIdentifiesSubscriptionDispatchFromTypedProviderIdentity()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Exercise typed provider dispatch classification",
+        [new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [SubscriptionDeveloperAgent()]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord(
+            WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
+            "opaque launcher command",
+            "C:\\repo",
+            DateTimeOffset.Parse("2026-06-26T12:00:00Z")));
+    var verification = new TaskVerificationRecord(
+        "opaque launcher command",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Try again later.",
+        DateTimeOffset.Parse("2026-06-26T12:01:00Z"));
+
+    var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+    Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchFailureClassifier_does_not_infer_subscription_dispatch_from_command_text")]
+    public void DispatchFailureClassifierDoesNotInferSubscriptionDispatchFromCommandText()
+{
+    var task = new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer);
+    var verification = new TaskVerificationRecord(
+        "codex-cli simulated command text",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Try again later.",
+        DateTimeOffset.Parse("2026-06-26T12:01:00Z"));
+
+    var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+    Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProviderCatalog_try_resolve_profile_returns_typed_identity")]
+    public void WorkerProviderCatalogTryResolveProfileReturnsTypedIdentity()
+{
+    var catalog = WorkerProviderCatalog.Default();
+
+    var found = catalog.TryResolveProfile(WorkerProfileDispatcher.OpenAiSubscriptionProfileName, out var provider);
+
+    Assert.True(found);
+    Assert.Equal(ProviderKind.OpenAICodexCli, provider.Identity.Kind);
+    Assert.False(provider.Capabilities.CanSelfCommit);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_repo_scoped_skill_targets")]
     public void WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets()
 {
@@ -6151,6 +6210,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         new AgentId(id),
         name,
         AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+
+    private static AgentDefinition SubscriptionDeveloperAgent() => new(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));

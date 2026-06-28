@@ -11,6 +11,20 @@ public sealed class DispatchOutcomeClassifyTests
         return goal.Tasks.First(t => t.RequiredRole == role);
     }
 
+    private static TaskSpec SubscriptionTask(AgentRole role = AgentRole.Developer)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify subscription test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == role);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "opaque command", "C:\\repo", clock.UtcNow));
+        return task;
+    }
+
     private static TaskVerificationRecord Verification(
         int exitCode,
         string stdout,
@@ -31,7 +45,7 @@ public sealed class DispatchOutcomeClassifyTests
     public void ClassifyRecoverableSubscriptionLimit()
     {
         var outcome = DispatchFailureClassifier.Classify(
-            SimpleTask(),
+            SubscriptionTask(),
             Verification(1, "", "Rate limit reached for gpt-5.5. Please try again in 42s."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);

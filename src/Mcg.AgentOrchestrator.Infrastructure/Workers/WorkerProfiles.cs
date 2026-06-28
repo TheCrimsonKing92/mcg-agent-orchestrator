@@ -359,10 +359,15 @@ public static class WorkerProfileStore
     {
         var repaired = catalog;
         var defaults = WorkerProfileCatalog.Default();
-        foreach (var profileName in new[] { "codex-cli", "claude-cli" })
+        var providers = WorkerProviderCatalog.Default();
+        foreach (var profileName in new[]
+                 {
+                     WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
+                     WorkerProfileDispatcher.AnthropicSubscriptionProfileName
+                 })
         {
             var current = repaired.GetRequired(profileName);
-            if (ShouldRepairBuiltInSubscriptionProfile(current))
+            if (ShouldRepairBuiltInSubscriptionProfile(current, providers.ResolveProfile(profileName)))
             {
                 repaired = repaired.Upsert(defaults.GetRequired(profileName));
             }
@@ -371,14 +376,14 @@ public static class WorkerProfileStore
         return repaired;
     }
 
-    private static bool ShouldRepairBuiltInSubscriptionProfile(WorkerProfile profile)
+    private static bool ShouldRepairBuiltInSubscriptionProfile(WorkerProfile profile, IWorkerProvider provider)
     {
         if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
         {
             return true;
         }
 
-        if (profile.Name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli)
         {
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
@@ -386,9 +391,9 @@ public static class WorkerProfileStore
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
         }
 
-        return profile.Name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) &&
+        return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&
             (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("{permissionMode}", StringComparison.OrdinalIgnoreCase) ||
-                !WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate).IsPatchCapable);
+                !WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider).IsPatchCapable);
     }
 }

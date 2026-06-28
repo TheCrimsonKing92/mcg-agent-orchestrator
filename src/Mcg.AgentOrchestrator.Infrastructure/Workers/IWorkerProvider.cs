@@ -105,6 +105,13 @@ public sealed class WorkerProviderCatalog
         _providers.FirstOrDefault(provider => provider.Identity.Kind == kind)
         ?? DefaultUnknownProvider.Instance;
 
+    public bool TryResolve(ProviderKind kind, out IWorkerProvider provider)
+    {
+        provider = _providers.FirstOrDefault(candidate => candidate.Identity.Kind == kind)
+            ?? DefaultUnknownProvider.Instance;
+        return provider.Identity.Kind != ProviderKind.Unknown;
+    }
+
     public IWorkerProvider ResolveProfile(string? profileName)
     {
         if (!string.IsNullOrWhiteSpace(profileName))
@@ -118,6 +125,12 @@ public sealed class WorkerProviderCatalog
         }
 
         return DefaultUnknownProvider.Instance;
+    }
+
+    public bool TryResolveProfile(string? profileName, out IWorkerProvider provider)
+    {
+        provider = ResolveProfile(profileName);
+        return provider.Identity.Kind != ProviderKind.Unknown;
     }
 
     public IWorkerProvider ResolveModelProvider(string providerName) =>
