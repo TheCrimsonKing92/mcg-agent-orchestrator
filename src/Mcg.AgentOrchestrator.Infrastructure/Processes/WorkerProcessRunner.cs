@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -55,32 +56,44 @@ public static class WorkerProcessRunner
         var startInfo = BuildPowerShellStartInfo(request.Command, request.WorkingDirectory);
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start worker process.");
-
-        try { process.StandardInput.Close(); } catch { }
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(linkedCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(linkedCts.Token);
+        OwnedProcessGroup? processGroup = null;
         try
         {
+            processGroup = OwnedProcessGroup.Attach(process);
+        }
+        catch
+        {
+            // Process groups are a cleanup backstop. If assignment is unavailable, keep the
+            // command path alive and fall back to direct tree-kill on cancellation.
+        }
+
+        try
+        {
+            try { process.StandardInput.Close(); } catch { }
+
+            using var stdout = new MemoryStream();
+            using var stderr = new MemoryStream();
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
+            var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(stdout, drainCts.Token);
+            var stderrTask = process.StandardError.BaseStream.CopyToAsync(stderr, drainCts.Token);
+
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            TryKillProcessTree(process);
-            throw;
-        }
 
-        try
-        {
+            await DrainOutputAsync(process, processGroup, drainCts, stdoutTask, stderrTask).ConfigureAwait(false);
+
             return new WorkerProcessRunResult(
                 process.ExitCode,
-                await stdoutTask.ConfigureAwait(false),
-                await stderrTask.ConfigureAwait(false));
+                Encoding.UTF8.GetString(stdout.ToArray()),
+                Encoding.UTF8.GetString(stderr.ToArray()));
         }
         catch (OperationCanceledException)
         {
-            TryKillProcessTree(process);
+            TryKillProcessTree(process, processGroup);
             throw;
+        }
+        finally
+        {
+            processGroup?.Dispose();
         }
     }
 
@@ -112,14 +125,42 @@ public static class WorkerProcessRunner
         }
         catch (OperationCanceledException)
         {
-            TryKillProcessTree(process);
+            TryKillProcessTree(process, null);
             throw;
         }
     }
 
-    private static void TryKillProcessTree(Process process)
+    private static async Task DrainOutputAsync(
+        Process process,
+        OwnedProcessGroup? processGroup,
+        CancellationTokenSource drainCts,
+        Task stdoutTask,
+        Task stderrTask)
     {
-        try { process.Kill(entireProcessTree: true); } catch { }
+        const int DrainTimeoutMs = 12_000;
+        var drainTask = Task.WhenAll(stdoutTask, stderrTask);
+        if (await Task.WhenAny(drainTask, Task.Delay(DrainTimeoutMs)).ConfigureAwait(false) == drainTask)
+        {
+            await drainTask.ConfigureAwait(false);
+            return;
+        }
+
+        drainCts.Cancel();
+        TryKillProcessTree(process, processGroup);
+        try { await Task.WhenAny(drainTask, Task.Delay(2000)).ConfigureAwait(false); } catch { }
+    }
+
+    private static void TryKillProcessTree(Process process, OwnedProcessGroup? processGroup)
+    {
+        try { processGroup?.Kill(); } catch { }
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch { }
         try { process.WaitForExit(5000); } catch { }
     }
 }

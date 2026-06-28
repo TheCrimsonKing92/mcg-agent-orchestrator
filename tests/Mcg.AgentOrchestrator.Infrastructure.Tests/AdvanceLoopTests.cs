@@ -7,6 +7,11 @@ using Microsoft.Extensions.Hosting;
 
 public sealed class AdvanceLoopTests
 {
+    private const string BlockingCodexProfileCommand =
+        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output (Get-Content -Raw {promptPath}); Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
+    private const string BlockingClaudeProfileCommand =
+        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output (Get-Content -Raw {promptPath}); Write-Output '--permission-mode {permissionMode}'";
+
     [Xunit.Fact(DisplayName = "CreateActivateAndHandoffGoal_starts_first_subscription_dispatch")]
     public void CreateActivateAndHandoffGoalStartsFirstSubscriptionDispatch()
 {
@@ -17,7 +22,7 @@ public sealed class AdvanceLoopTests
     var agents = AgentCatalog.Default().Agents;
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}"),
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
         new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output {promptPath}")
     ]);
 
@@ -468,7 +473,7 @@ public sealed class AdvanceLoopTests
         new TaskDispatchRecord("manual", "Start-Sleep -Seconds 30; Write-Output manual", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand)
     ]);
 
     try
@@ -517,7 +522,7 @@ public sealed class AdvanceLoopTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand)
     ]);
 
     try
@@ -581,8 +586,8 @@ public sealed class AdvanceLoopTests
     File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}"),
-        new WorkerProfile("claude-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
+        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand)
     ]);
 
     try
@@ -662,8 +667,8 @@ public sealed class AdvanceLoopTests
     File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}"),
-        new WorkerProfile("claude-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output {promptPath}")
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
+        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand)
     ]);
 
     try

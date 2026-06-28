@@ -31,13 +31,28 @@ public sealed class RunGoalServiceTests
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("local"));
 
-    private static AgentDefinition SubscriptionPlanner(string id, string name, string profileName) => new AgentDefinition(
-        new AgentId(id),
-        name,
-        AgentRole.Planner,
-        new ModelProfile("OpenAI", "gpt-4o-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
-        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile(profileName));
+    private static AgentDefinition SubscriptionPlanner(string id, string name, string profileName)
+    {
+        var providerName = profileName.Contains("claude", StringComparison.OrdinalIgnoreCase)
+            ? "Anthropic"
+            : profileName.Contains("qwen", StringComparison.OrdinalIgnoreCase)
+                ? "Ollama"
+                : "OpenAI";
+        var modelName = providerName switch
+        {
+            "Anthropic" => "claude-haiku-4-5",
+            "Ollama" => "qwen3:8b",
+            _ => "gpt-5.5"
+        };
+
+        return new AgentDefinition(
+            new AgentId(id),
+            name,
+            AgentRole.Planner,
+            new ModelProfile(providerName, modelName, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile(profileName));
+    }
 
     private static WorkerProfileCatalog EchoProfiles() => new WorkerProfileCatalog(
     [
@@ -45,6 +60,15 @@ public sealed class RunGoalServiceTests
     ]);
 
     private static WorkerProfileCatalog Profiles(params WorkerProfile[] profiles) => new WorkerProfileCatalog(profiles);
+
+    private static string DescribeRunGoalStop(RunGoalService.RunGoalResult result, TaskSpec task)
+    {
+        var verification = task.LastVerification ?? task.VerificationHistory.LastOrDefault();
+        var output = verification is null
+            ? "none"
+            : string.Join(" ", verification.StandardOutput, verification.StandardError).Trim();
+        return $"stopReason={result.StopReason}; stopEvidence={result.StopEvidence?.Reason ?? "none"}; status={task.Status}; assigned={task.AssignedAgentId?.Value ?? "none"}; dispatch={task.LastDispatch?.WorkerName ?? "none"}; exit={verification?.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}; output={output}";
+    }
 
     private static Goal CreateRefinedGoal(AgentOrchestratorKernel kernel, string objective, IReadOnlyList<TaskSpec> tasks)
     {
@@ -105,7 +129,13 @@ public sealed class RunGoalServiceTests
         DateTimeOffset completedAt,
         string output)
     {
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerName, command, workspace.ExecutionDirectory, completedAt));
+        var providerKind = WorkerProviderCatalog.Default().ResolveProfile(workerName).Identity.Kind;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            workerName,
+            command,
+            workspace.ExecutionDirectory,
+            completedAt,
+            WorkerProviderKind: providerKind));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             command,
             workspace.ExecutionDirectory,
@@ -337,12 +367,12 @@ public sealed class RunGoalServiceTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var alternate = new AgentDefinition(
-            new AgentId("anthropic-planner-claude-fallback"),
-            "Claude fallback",
+            new AgentId("ollama-planner-qwen-fallback"),
+            "Qwen fallback",
             AgentRole.Planner,
-            new ModelProfile("Anthropic", "claude-haiku-4-5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
+            new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-            Subscription: new SubscriptionLaunchProfile("claude-cli"));
+            Subscription: new SubscriptionLaunchProfile("qwen-code-cli"));
         var agents = AgentCatalog.Default().AddOrReplaceById(alternate).Agents;
         var task = new TaskSpec(TaskId.New(), "Task with catalog failover alternate", AgentRole.Planner);
         var goal = CreateRefinedGoal(kernel, "Goal should fail over to a catalog alternate", [task]);
@@ -361,7 +391,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             agents,
-            Profiles(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output catalog-alternate-ok")),
+            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output {subscriptionModelName}; Write-Output catalog-alternate-ok")),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -370,10 +400,10 @@ public sealed class RunGoalServiceTests
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
-        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.True(task.Status == WorkTaskStatus.Completed, DescribeRunGoalStop(result, task));
         Xunit.Assert.True(result.StopEvidence is null, result.StopEvidence?.Reason ?? result.StopReason);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
-        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
         Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("catalog-alternate-ok", StringComparison.Ordinal));
     }
 
@@ -403,7 +433,7 @@ public sealed class RunGoalServiceTests
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
-        Assert.True(result.StopEvidence is null);
+        Xunit.Assert.True(result.StopEvidence is null, DescribeRunGoalStop(result, task));
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal("alternate", task.LastDispatch!.WorkerName);
@@ -530,7 +560,7 @@ public sealed class RunGoalServiceTests
         var task = new TaskSpec(TaskId.New(), "Task with provider connectivity failover", AgentRole.Planner);
         var goal = CreateRefinedGoal(kernel, "Goal should continue with same-role alternate", [task]);
         var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
-        var alternate = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
+        var alternate = SubscriptionPlanner("qwen-planner", "Qwen Planner", "qwen-code-cli");
         kernel.ActivateGoal(goal.Id, [primary, alternate]);
         RecordProviderConnectivityFailure(
             kernel,
@@ -546,7 +576,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output connectivity-alternate-ok")),
+            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output {subscriptionModelName}; Write-Output connectivity-alternate-ok")),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -555,17 +585,17 @@ public sealed class RunGoalServiceTests
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
-        Assert.True(result.StopEvidence is null);
+        Xunit.Assert.True(result.StopEvidence is null, DescribeRunGoalStop(result, task));
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal(task.RequiredRole, alternate.Role);
-        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
         Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("connectivity-alternate-ok", StringComparison.Ordinal));
         Assert.Equal(2, task.VerificationHistory.Count);
         Assert.Contains(task.VerificationHistory.First().StandardError, text => text.Contains("10013", StringComparison.Ordinal));
         Assert.Equal(1, result.CompletedTasks.Count);
         Assert.True(result.CompletedTasks.Single().Succeeded);
-        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("claude-planner", StringComparison.Ordinal)));
+        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_model_rejection_redelegates")]
@@ -577,7 +607,7 @@ public sealed class RunGoalServiceTests
         var task = new TaskSpec(TaskId.New(), "Task with provider model rejection", AgentRole.Planner);
         var goal = CreateRefinedGoal(kernel, "Goal should fail over unsupported model", [task]);
         var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
-        var alternate = SubscriptionPlanner("claude-planner", "Claude Planner", "claude-cli");
+        var alternate = SubscriptionPlanner("qwen-planner", "Qwen Planner", "qwen-code-cli");
         kernel.ActivateGoal(goal.Id, [primary, alternate]);
         RecordProviderConnectivityFailure(
             kernel,
@@ -593,7 +623,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output model-rejection-alternate-ok")),
+            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output {subscriptionModelName}; Write-Output model-rejection-alternate-ok")),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -602,12 +632,12 @@ public sealed class RunGoalServiceTests
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
-        Assert.True(result.StopEvidence is null);
+        Xunit.Assert.True(result.StopEvidence is null, DescribeRunGoalStop(result, task));
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
-        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
         Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("model-rejection-alternate-ok", StringComparison.Ordinal));
-        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("claude-planner", StringComparison.Ordinal)));
+        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_stops_when_no_alternate_exists")]

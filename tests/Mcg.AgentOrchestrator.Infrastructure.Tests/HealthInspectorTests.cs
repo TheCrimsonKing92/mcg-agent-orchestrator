@@ -367,8 +367,8 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 {
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-ok", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
-        new WorkerProfile("codex-readonly", "codex exec (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("codex-spark", "codex exec (Get-Content -Raw {promptPath})")
     ]);
 
     var report = OrchestratorHealthInspector.Inspect(
@@ -377,8 +377,8 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
         profiles,
         command => command == "codex");
 
-    var ok = report.WorkerProfiles.Single(profile => profile.Name == "codex-ok");
-    var readOnly = report.WorkerProfiles.Single(profile => profile.Name == "codex-readonly");
+    var ok = report.WorkerProfiles.Single(profile => profile.Name == "codex-cli");
+    var readOnly = report.WorkerProfiles.Single(profile => profile.Name == "codex-spark");
     Assert.True(ok.IsPatchCapable);
     Assert.Contains(ok.Detail, text => text.Contains("workspace-write", StringComparison.Ordinal));
     Assert.False(readOnly.IsPatchCapable);

@@ -83,16 +83,18 @@ public sealed class WorkerProfileTests
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_upsert_replaces_existing_profile")]
     public void WorkerProfileCatalogUpsertReplacesExistingProfile()
 {
-    var catalog = WorkerProfileCatalog.Default()
+    var defaults = WorkerProfileCatalog.Default();
+    var catalog = defaults
         .Upsert(new WorkerProfile("local-echo", "Get-Content {promptPath}"));
 
-    Assert.Equal(5, catalog.Profiles.Count);
+    Assert.Equal(defaults.Profiles.Count, catalog.Profiles.Count);
     Assert.Equal("Get-Content {promptPath}", catalog.GetRequired("local-echo").CommandTemplate);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_merge_upserts_imported_profiles")]
     public void WorkerProfileCatalogMergeUpsertsImportedProfiles()
 {
-    var current = WorkerProfileCatalog.Default()
+    var defaults = WorkerProfileCatalog.Default();
+    var current = defaults
         .Upsert(new WorkerProfile("codex", "codex exec {promptPath}"));
     var imported = new WorkerProfileCatalog(
     [
@@ -102,7 +104,7 @@ public sealed class WorkerProfileTests
 
     var merged = current.Merge(imported);
 
-    Assert.Equal(7, merged.Profiles.Count);
+    Assert.Equal(defaults.Profiles.Count + 2, merged.Profiles.Count);
     Assert.Equal("codex exec --full-auto {promptPath}", merged.GetRequired("codex").CommandTemplate);
     Assert.Equal("claude --file {promptPath}", merged.GetRequired("CLAUDE").CommandTemplate);
 }
