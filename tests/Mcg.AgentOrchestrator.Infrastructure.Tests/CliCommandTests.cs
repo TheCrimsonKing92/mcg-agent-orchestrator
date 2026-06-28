@@ -4905,6 +4905,25 @@ public sealed class CliCommandTests
         Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_startup_short_read_command_exits_within_two_seconds_and_releases_state")]
+    public void CliStartupShortReadCommandExitsWithinTwoSecondsAndReleasesState()
+    {
+        var root = CreateTempDirectory();
+
+        var result = RunAppCliWithExitTimeout(root, ["next", "--full"], TimeSpan.FromSeconds(2));
+
+        Xunit.Assert.True(
+            result.ExitedWithinTimeout,
+            $"CLI did not exit within 2 seconds. stdout: {result.StandardOutput} stderr: {result.StandardError}");
+        Xunit.Assert.Equal(1, result.ExitCode);
+        Xunit.Assert.Contains("Create a goal first", result.StandardError);
+
+        var statePath = Path.Combine(root, ".orchestrator", "state.db");
+        Xunit.Assert.True(File.Exists(statePath));
+        using var stateLockProbe = File.Open(statePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Xunit.Assert.True(stateLockProbe.CanWrite);
+    }
+
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoals_renders_metadata_summaries")]
     public void PrintGoalsRendersMetadataSummaries()
     {
@@ -5937,6 +5956,52 @@ public sealed class CliCommandTests
 
         return (process.ExitCode, output, error);
     }
+
+    private static AppCliTimeoutResult RunAppCliWithExitTimeout(
+        string workingDirectory,
+        IReadOnlyList<string> args,
+        TimeSpan timeout)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app CLI.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        var exited = process.WaitForExit((int)timeout.TotalMilliseconds);
+        if (!exited)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+        }
+
+        return new AppCliTimeoutResult(
+            exited,
+            exited ? process.ExitCode : null,
+            output.GetAwaiter().GetResult(),
+            error.GetAwaiter().GetResult());
+    }
+
+    private sealed record AppCliTimeoutResult(
+        bool ExitedWithinTimeout,
+        int? ExitCode,
+        string StandardOutput,
+        string StandardError);
 
     private static void RunGit(string workingDirectory, params string[] arguments)
     {
