@@ -509,8 +509,8 @@ public sealed class DashboardRenderingTests
     var recovery = dto.Items.Single().Recovery;
 
     Assert.NotNull(recovery);
-    Assert.Equal(DispatchRecoveryAction.RetryStale, recovery!.Action);
-    Assert.Equal("retry-stale", recovery.ActionName);
+    Assert.Equal(DispatchRecoveryAction.MarkStale, recovery!.Action);
+    Assert.Equal("mark-stale", recovery.ActionName);
     Assert.Equal("heartbeat-absent", recovery.EvidencePath);
 }
 

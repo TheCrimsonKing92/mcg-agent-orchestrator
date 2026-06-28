@@ -15,7 +15,7 @@ internal static class DispatchRecoveryView
 
         return new DispatchRecoveryPolicy().Evaluate(
             process,
-            IsProcessAlive(process.ProcessId),
+            IsTrackedProcessAlive(process),
             DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task));
     }
 
@@ -28,6 +28,17 @@ internal static class DispatchRecoveryView
 
         var task = goal.Tasks.FirstOrDefault(task => task.Id == item.TaskId);
         return task is null ? null : Evaluate(goal, task);
+    }
+
+    private static bool IsTrackedProcessAlive(TaskProcessRecord process)
+    {
+        if (IsProcessAlive(process.ProcessId))
+        {
+            return true;
+        }
+
+        var heartbeat = ProcessLogReader.ReadHeartbeat(process);
+        return heartbeat.OwnedProcessIds.Any(IsProcessAlive);
     }
 
     private static bool IsProcessAlive(int processId)

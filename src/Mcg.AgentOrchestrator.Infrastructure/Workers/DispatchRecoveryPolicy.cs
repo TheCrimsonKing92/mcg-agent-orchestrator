@@ -68,7 +68,7 @@ public sealed class DispatchRecoveryPolicy
                 if (staleRetryBudgetRemaining > 0 && !hasDirtyWorktreeEvidence)
                 {
                     return Decision(
-                        DispatchRecoveryAction.RetryStale,
+                        DispatchRecoveryAction.MarkStale,
                         heartbeatEvidence,
                         $"no live process, exit-absent, stale retry budget remaining={staleRetryBudgetRemaining}");
                 }
@@ -153,7 +153,10 @@ public sealed class DispatchRecoveryPolicy
     }
 
     public static bool IsStaleDispatchRetryVerification(TaskVerificationRecord verification) =>
-        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal);
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        (verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) &&
+         verification.StandardError.Contains("stale retry budget remaining=", StringComparison.Ordinal) &&
+         !verification.StandardError.Contains("blocker='", StringComparison.Ordinal));
 
     public static bool IsStaleDispatchRecoveryVerification(TaskVerificationRecord verification) =>
         IsStaleDispatchRetryVerification(verification) ||

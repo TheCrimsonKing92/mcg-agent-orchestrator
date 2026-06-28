@@ -26,8 +26,8 @@ public sealed class DispatchRecoveryPolicyTests
 
         var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false, staleRetryBudgetRemaining: 1);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, decision.Action);
-        Xunit.Assert.Equal("retry-stale", decision.ActionName);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, decision.Action);
+        Xunit.Assert.Equal("mark-stale", decision.ActionName);
         Xunit.Assert.Equal(BackgroundDispatchRunner.GetHeartbeatPath(process), decision.EvidencePath);
     }
 
@@ -118,9 +118,9 @@ public sealed class DispatchRecoveryPolicyTests
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
         BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, task.EmptyOutputRetryCount);
-        Xunit.Assert.Contains("action='retry-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action='mark-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
         Xunit.Assert.Contains("stale retry budget remaining=1", task.LastVerification.StandardError, StringComparison.Ordinal);
     }
 
@@ -147,7 +147,7 @@ public sealed class DispatchRecoveryPolicyTests
                 root,
                 1,
                 "",
-                "Dispatch recovery policy action='retry-stale' evidence='heartbeat-absent' reason='previous stale attempt'.",
+                "Dispatch recovery policy action='mark-stale' evidence='heartbeat-absent' reason='previous stale attempt stale retry budget remaining=1'.",
                 Now.AddMinutes(-10)));
         kernel.RetryTask(goal.Id, task.Id, "retry previous stale dispatch");
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, Now.AddMinutes(-5)));
