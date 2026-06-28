@@ -151,6 +151,43 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             GoalMonitoringSubscriptionCommand.GoalStateEventSchemaFields());
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_event_envelope_serializes_versioned_ndjson_contract")]
+    public void MonitorGoalEventEnvelopeSerializesVersionedNdjsonContract()
+    {
+        var evt = new GoalStateSubscriptionEvent(
+            1,
+            12,
+            DateTimeOffset.UnixEpoch,
+            "TaskCompleted",
+            "abc12345",
+            "task1",
+            "Completed",
+            "run-events.db",
+            42,
+            "done")
+        {
+            CursorDomain = GoalStateCursorDomain.RunEvent,
+            CursorToken = "run-event:12"
+        };
+
+        var json = JsonSerializer.Serialize(evt);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("schemaVersion", out _));
+        Assert.True(root.TryGetProperty("cursor", out _));
+        Assert.True(root.TryGetProperty("eventKind", out _));
+        Assert.True(root.TryGetProperty("goalId", out _));
+        Assert.True(root.TryGetProperty("taskId", out _));
+        Assert.True(root.TryGetProperty("currentState", out _));
+        Assert.True(root.TryGetProperty("artifactPath", out _));
+        Assert.True(root.TryGetProperty("processId", out _));
+        Assert.True(root.TryGetProperty("message", out _));
+        Assert.False(root.TryGetProperty("CursorDomain", out _));
+        Assert.False(root.TryGetProperty("CursorSequence", out _));
+        Assert.False(root.TryGetProperty("CursorToken", out _));
+    }
+
     [Xunit.Theory(DisplayName = "Monitor_goal_wait_terminal_treats_operator_action_states_as_terminal")]
     [Xunit.InlineData(GoalLifecycleState.Verified, true)]
     [Xunit.InlineData(GoalLifecycleState.Merged, true)]
