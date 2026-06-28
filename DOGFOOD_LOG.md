@@ -2067,3 +2067,10 @@ Goal 2734af92: Backlog slice: Start-OrchestratorCommand drops double-dash flags 
 
 - Operator gate: Planner: not-run; focused test blocked by missing `project.assets.json` with `--no-restore` (exit 0); Researcher: not-run; focused test blocked by missing `project.assets.json` under `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/obj` (exit 0); Developer: pass; 7 passed, including wrapper double-dash forwarding regression (exit 0); Tester: pass; focused test exit 0, 7 passed; manual smoke confirmed launcher and child args preserved `backlog-intake|Make WaitingForHuman typed and resumable|--create-goal|--dry-run` (exit 0); Reviewer: not-run by Reviewer due read-only sandbox; prior evidence pass: LauncherScriptTests 7 passed plus manual wrapper smoke confirmed trailing double-dash flags reached child process (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused review task - sufficient for targeted diff and evidence validation.
+
+## 2026-06-28 - Backlog slice: Make latest Developer retry feedback first-class in worker pro...
+
+Goal 41c6e2a2: Backlog slice: Make latest Developer retry feedback first-class in worker prompts  Observed 2026-06-28 on goals 3e328.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 95a50f8). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 95a50f8a42d50649e762bd7ba5c2c867602cb93b). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner inspection only, no repo files modified (exit 0); Researcher: not-run; read-only Researcher task, claims verified by repository-local source inspection (exit 0); Developer: pass; 3 passed, 0 failed (exit 0); Tester: pass; Infrastructure 4 passed, Core 2 passed; warnings only (exit 0); Reviewer: pass evidence from prior-task-evidence.md: Infrastructure 4 passed, Core 2 passed; not rerun due read-only filesystem (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer inspection of prompt-construction fix - enough context capacity for targeted review.
