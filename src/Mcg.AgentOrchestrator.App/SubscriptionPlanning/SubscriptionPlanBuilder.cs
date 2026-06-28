@@ -263,7 +263,7 @@ internal static class SubscriptionPlanBuilder
                 ? new WorkerProfilePatchCapability(false, "Worker profile was not found.")
                 : WorkerProfileDiagnostics.EvaluatePatchCapability(
                     profile,
-                    WorkerProviderCatalog.Default().ResolveProfile(profile.Name));
+                    ResolveWorkerProviderForPlan(profile.Name, effectiveProviderName));
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var now = DateTimeOffset.UtcNow;
             var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
@@ -581,6 +581,25 @@ internal static class SubscriptionPlanBuilder
         return agent.ComplexModel is not null &&
             agent.ComplexModel.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
             agent.ComplexModel.ModelName.Equals(modelName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IWorkerProvider ResolveWorkerProviderForPlan(string profileName, string providerName)
+    {
+        var catalog = WorkerProviderCatalog.Default();
+        var provider = catalog.ResolveProfile(profileName);
+        if (provider.Identity.Kind != ProviderKind.Unknown)
+        {
+            return provider;
+        }
+
+        try
+        {
+            return catalog.ResolveModelProvider(providerName);
+        }
+        catch (InvalidOperationException)
+        {
+            return provider;
+        }
     }
 
     private static string? GetTemplateValue(IReadOnlyDictionary<string, string?> variables, string name)

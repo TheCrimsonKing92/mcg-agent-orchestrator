@@ -17,7 +17,8 @@ public static class WorkerProfileDiagnostics
 
     public static bool IsPatchCapableCommand(string commandTemplate)
     {
-        return EvaluatePatchCapability(commandTemplate).IsPatchCapable;
+        var normalized = commandTemplate.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) && !IsEchoOnlyCommand(normalized);
     }
 
     public static bool IsPatchCapableCommand(WorkerProfile profile, IWorkerProvider provider)
@@ -48,49 +49,9 @@ public static class WorkerProfileDiagnostics
             return new WorkerProfilePatchCapability(false, "Command only echoes the prompt path; it cannot patch source.");
         }
 
-        if (IsClaudeCommand(normalized))
-        {
-            return EvaluateClaudePatchCapability(normalized);
-        }
-
-        if (!IsCodexCommand(normalized))
-        {
-            return new WorkerProfilePatchCapability(
-                true,
-                "Command is not a recognized Codex launcher; patch capability cannot be inferred beyond executing the prompt.");
-        }
-
-        var hasWorkspaceWrite = normalized.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("--sandbox {sandboxMode}", StringComparison.OrdinalIgnoreCase);
-        var hasWorkingDirectory = normalized.Contains("--cd {workingDirectory}", StringComparison.OrdinalIgnoreCase);
-        var readsPromptContent = normalized.Contains("Get-Content -Raw {promptPath}", StringComparison.OrdinalIgnoreCase);
-
-        if (hasWorkspaceWrite && hasWorkingDirectory && readsPromptContent)
-        {
-            return new WorkerProfilePatchCapability(
-                true,
-                "Codex launcher is patch-capable: workspace-write sandbox, repository working directory, and prompt content are configured.");
-        }
-
-        var missing = new List<string>();
-        if (!hasWorkspaceWrite)
-        {
-            missing.Add("--sandbox workspace-write");
-        }
-
-        if (!hasWorkingDirectory)
-        {
-            missing.Add("--cd {workingDirectory}");
-        }
-
-        if (!readsPromptContent)
-        {
-            missing.Add("Get-Content -Raw {promptPath}");
-        }
-
         return new WorkerProfilePatchCapability(
-            false,
-            $"Codex launcher is not patch-capable; missing {string.Join(", ", missing)}.");
+            true,
+            "Untyped worker command capability cannot be inferred beyond executing the prompt.");
     }
 
     public static WorkerProfilePatchCapability EvaluatePatchCapability(WorkerProfile profile, IWorkerProvider provider)
@@ -185,33 +146,6 @@ public static class WorkerProfileDiagnostics
             $"Claude launcher is not patch-capable; missing {string.Join(", ", missing)}.");
     }
 
-    private static bool IsCodexCommand(string commandTemplate)
-    {
-        return IsLauncherCommand(commandTemplate, "codex");
-    }
-
-    private static bool IsClaudeCommand(string commandTemplate)
-    {
-        return IsLauncherCommand(commandTemplate, "claude");
-    }
-
-    private static bool IsLauncherCommand(string commandTemplate, string launcher)
-    {
-        var trimmed = commandTemplate.TrimStart();
-        if (trimmed.StartsWith("& ", StringComparison.Ordinal))
-        {
-            trimmed = trimmed[2..].TrimStart();
-        }
-
-        if (trimmed.StartsWith($"\"{launcher}\"", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.StartsWith($"'{launcher}'", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return trimmed.StartsWith($"{launcher} ", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals(launcher, StringComparison.OrdinalIgnoreCase);
-    }
 }
 
 public sealed record WorkerProfilePatchCapability(bool IsPatchCapable, string Detail);

@@ -13,6 +13,7 @@ public sealed class WorkerProfileTests
     var profile = catalog.GetRequired("LOCAL-ECHO");
     var codex = catalog.GetRequired("codex-cli");
     var claude = catalog.GetRequired("claude-cli");
+    var claudeProvider = WorkerProviderCatalog.Default().ResolveProfile(claude.Name);
 
     Assert.Equal("local-echo", profile.Name);
     Assert.Contains(profile.CommandTemplate, text => text.Contains("{promptPath}", StringComparison.Ordinal));
@@ -26,20 +27,23 @@ public sealed class WorkerProfileTests
     Assert.Contains(claude.CommandTemplate, text => text.Contains("claude --model {subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(claude.CommandTemplate, text => text.Contains("--permission-mode {permissionMode} -p", StringComparison.Ordinal));
     Assert.Contains(claude.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
-    Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude.CommandTemplate).IsPatchCapable);
+    Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude, claudeProvider).IsPatchCapable);
 }
 
     [Xunit.Fact(DisplayName = "Claude_launcher_without_permission_mode_is_not_patch_capable")]
     public void ClaudeLauncherWithoutPermissionModeIsNotPatchCapable()
 {
+    var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.AnthropicClaudeCli);
     var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(
-        "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})");
+        new WorkerProfile("test-claude", "claude --model {subscriptionModelName} -p (Get-Content -Raw {promptPath})"),
+        provider);
 
     Assert.False(capability.IsPatchCapable);
     Assert.Contains(capability.Detail, text => text.Contains("--permission-mode", StringComparison.Ordinal));
 
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(
-        "claude --model {subscriptionModelName} --permission-mode acceptEdits -p (Get-Content -Raw {promptPath})").IsPatchCapable);
+        new WorkerProfile("test-claude", "claude --model {subscriptionModelName} --permission-mode acceptEdits -p (Get-Content -Raw {promptPath})"),
+        provider).IsPatchCapable);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_codex_oss_profile_is_patch_capable_local_bridge")]
