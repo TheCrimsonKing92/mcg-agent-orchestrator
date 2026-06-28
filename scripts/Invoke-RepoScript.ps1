@@ -18,16 +18,21 @@
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix abc12345 test Mcg.AgentOrchestrator.sln --verbosity minimal
 #>
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [Parameter(Mandatory = $true, Position = 0)]
+    [string]$ScriptPath,
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [object[]]$ScriptArguments
+)
+
 $ErrorActionPreference = 'Stop'
-if ($args.Count -lt 1) {
+if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Usage: .\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> [script arguments...]"
 }
 
-$ScriptPath = [string]$args[0]
-$ScriptArguments = @()
-if ($args.Count -gt 1) {
-    $ScriptArguments = @($args[1..($args.Count - 1)])
-}
+$ScriptArguments = @($ScriptArguments | ForEach-Object { [string]$_ })
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $candidate = if ([System.IO.Path]::IsPathRooted($ScriptPath)) {
@@ -52,7 +57,8 @@ if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
     throw "Script not found: $resolved"
 }
 
-& $resolved @ScriptArguments
-if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
+$powerShellPath = (Get-Process -Id $PID).Path
+& $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $resolved @ScriptArguments
+if ($LASTEXITCODE -is [int]) {
     exit $LASTEXITCODE
 }
