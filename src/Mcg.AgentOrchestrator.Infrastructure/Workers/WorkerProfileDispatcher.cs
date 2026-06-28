@@ -906,7 +906,9 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
+        var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(
+            profile,
+            DefaultProviders.ResolveProfile(profile.Name));
         if (capability.IsPatchCapable)
         {
             return;

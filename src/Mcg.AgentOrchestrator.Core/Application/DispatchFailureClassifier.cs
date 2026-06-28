@@ -223,6 +223,16 @@ public static class DispatchFailureClassifier
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
     {
+        return Classify(task, verification, ProviderFailureKind.Unknown, workerResultPresent, hasCommittedChanges);
+    }
+
+    public static DispatchOutcome Classify(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        ProviderFailureKind providerFailureKind,
+        bool workerResultPresent = false,
+        bool hasCommittedChanges = false)
+    {
         workerResultPresent = workerResultPresent || verification.WorkerResultPresent;
         hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges;
         var exitCode = verification.ExitCode;
@@ -239,6 +249,15 @@ public static class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.None,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (providerFailureKind != ProviderFailureKind.Unknown)
+        {
+            return ClassifyProviderFailure(
+                providerFailureKind,
+                exitCode,
+                hasZeroByteOutput,
                 BuildEvidenceSummary(verification));
         }
 

@@ -419,7 +419,13 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
-            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(task, processRecord, standardOutput, standardError);
+            var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
+            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
+                task,
+                processRecord,
+                standardOutput,
+                standardError,
+                providerFailureKind);
             var providerCannotSelfCommit = task.LastDispatch is { } dispatch &&
                 !ResolveWorkerProvider(dispatch).Capabilities.CanSelfCommit;
             var shouldCommitDirtyWorktree =
@@ -619,7 +625,8 @@ public sealed class BackgroundDispatchRunner
         TaskSpec task,
         TaskProcessRecord processRecord,
         string standardOutput,
-        string standardError)
+        string standardError,
+        ProviderFailureKind providerFailureKind)
     {
         var verification = new TaskVerificationRecord(
             processRecord.Command,
@@ -628,7 +635,24 @@ public sealed class BackgroundDispatchRunner
             standardOutput,
             standardError,
             DateTimeOffset.UtcNow);
-        return DispatchFailureClassifier.Classify(task, verification).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
+        return DispatchFailureClassifier.Classify(task, verification, providerFailureKind).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
+    }
+
+    private static ProviderFailureKind ParseProviderFailureKind(
+        TaskDispatchRecord? dispatch,
+        int exitCode,
+        string standardOutput,
+        string standardError)
+    {
+        if (dispatch is null)
+        {
+            return ProviderFailureKind.Unknown;
+        }
+
+        return ResolveWorkerProvider(dispatch).ParseOutcome(new WorkerProviderOutcome(
+            exitCode,
+            standardOutput,
+            standardError));
     }
 
     private static string TryResolveIndexLockPath(string workingDirectory)

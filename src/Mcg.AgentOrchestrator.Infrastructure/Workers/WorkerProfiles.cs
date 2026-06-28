@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -17,6 +18,11 @@ public static class WorkerProfileDiagnostics
     public static bool IsPatchCapableCommand(string commandTemplate)
     {
         return EvaluatePatchCapability(commandTemplate).IsPatchCapable;
+    }
+
+    public static bool IsPatchCapableCommand(WorkerProfile profile, IWorkerProvider provider)
+    {
+        return EvaluatePatchCapability(profile, provider).IsPatchCapable;
     }
 
     public static bool UsesSubscriptionModelPlaceholder(string commandTemplate)
@@ -54,6 +60,64 @@ public static class WorkerProfileDiagnostics
                 "Command is not a recognized Codex launcher; patch capability cannot be inferred beyond executing the prompt.");
         }
 
+        var hasWorkspaceWrite = normalized.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("--sandbox {sandboxMode}", StringComparison.OrdinalIgnoreCase);
+        var hasWorkingDirectory = normalized.Contains("--cd {workingDirectory}", StringComparison.OrdinalIgnoreCase);
+        var readsPromptContent = normalized.Contains("Get-Content -Raw {promptPath}", StringComparison.OrdinalIgnoreCase);
+
+        if (hasWorkspaceWrite && hasWorkingDirectory && readsPromptContent)
+        {
+            return new WorkerProfilePatchCapability(
+                true,
+                "Codex launcher is patch-capable: workspace-write sandbox, repository working directory, and prompt content are configured.");
+        }
+
+        var missing = new List<string>();
+        if (!hasWorkspaceWrite)
+        {
+            missing.Add("--sandbox workspace-write");
+        }
+
+        if (!hasWorkingDirectory)
+        {
+            missing.Add("--cd {workingDirectory}");
+        }
+
+        if (!readsPromptContent)
+        {
+            missing.Add("Get-Content -Raw {promptPath}");
+        }
+
+        return new WorkerProfilePatchCapability(
+            false,
+            $"Codex launcher is not patch-capable; missing {string.Join(", ", missing)}.");
+    }
+
+    public static WorkerProfilePatchCapability EvaluatePatchCapability(WorkerProfile profile, IWorkerProvider provider)
+    {
+        var normalized = profile.CommandTemplate.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new WorkerProfilePatchCapability(false, "Command template is empty; it cannot patch source.");
+        }
+
+        if (IsEchoOnlyCommand(normalized))
+        {
+            return new WorkerProfilePatchCapability(false, "Command only echoes the prompt path; it cannot patch source.");
+        }
+
+        return provider.Identity.Kind switch
+        {
+            ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAIJudge => EvaluateCodexPatchCapability(normalized),
+            _ => new WorkerProfilePatchCapability(
+                true,
+                "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")
+        };
+    }
+
+    private static WorkerProfilePatchCapability EvaluateCodexPatchCapability(string normalized)
+    {
         var hasWorkspaceWrite = normalized.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("--sandbox {sandboxMode}", StringComparison.OrdinalIgnoreCase);
         var hasWorkingDirectory = normalized.Contains("--cd {workingDirectory}", StringComparison.OrdinalIgnoreCase);

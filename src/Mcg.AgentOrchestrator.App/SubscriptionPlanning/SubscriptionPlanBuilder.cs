@@ -261,7 +261,9 @@ internal static class SubscriptionPlanBuilder
                 (profile is not null && WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate));
             var patchCapability = profile is null
                 ? new WorkerProfilePatchCapability(false, "Worker profile was not found.")
-                : WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
+                : WorkerProfileDiagnostics.EvaluatePatchCapability(
+                    profile,
+                    WorkerProviderCatalog.Default().ResolveProfile(profile.Name));
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var now = DateTimeOffset.UtcNow;
             var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);

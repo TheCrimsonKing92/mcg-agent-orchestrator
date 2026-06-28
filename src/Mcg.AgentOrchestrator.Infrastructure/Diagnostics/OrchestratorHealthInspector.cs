@@ -390,7 +390,9 @@ public static class OrchestratorHealthInspector
         var exists = commandExists(executable);
         var optional = IsOptionalProfile(profile.Name);
         var echoOnly = WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate);
-        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
+        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(
+            profile,
+            WorkerProviderCatalog.Default().ResolveProfile(profile.Name));
         var diagnosticEcho = IsDiagnosticEchoProfile(profile.Name);
         return new WorkerProfileValidation(
             profile.Name,
