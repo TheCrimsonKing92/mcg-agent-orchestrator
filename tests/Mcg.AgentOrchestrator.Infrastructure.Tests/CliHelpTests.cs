@@ -11,6 +11,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
     [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--reason-file")]
+    [Xunit.InlineData(new[] { "backlog-reopen", "--help" }, "backlog-reopen", "-h")]
     [Xunit.InlineData(new[] { "conduct", "--help" }, "conduct", "--loop")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
