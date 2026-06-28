@@ -9,7 +9,8 @@ public sealed record DispatchRefreshOutcome(
     TaskProcessRecord ProcessRecord,
     TaskVerificationRecord? Verification,
     string? ResultCommit = null,
-    DispatchRecoveryDecision? RecoveryDecision = null);
+    DispatchRecoveryDecision? RecoveryDecision = null,
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
 
 public sealed class BackgroundDispatchRunner
 {
@@ -394,7 +395,7 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         DispatchRefreshOutcome outcome)
     {
-        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification);
+        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification, outcome.ProviderFailureKind);
         if (outcome.ResultCommit is not null)
             kernel.RecordDispatchResultCommit(goalId, taskId, outcome.ResultCommit);
     }
@@ -412,6 +413,7 @@ public sealed class BackgroundDispatchRunner
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         ReleaseTrackedProcessJobs(processRecord);
         var task = kernel.GetTask(goalId, taskId);
+        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
         var hasCommittedChanges = false;
         if (RequiresFileChangeEvidence(task) &&
@@ -422,7 +424,6 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
-            var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
                 task,
                 processRecord,
@@ -552,10 +553,11 @@ public sealed class BackgroundDispatchRunner
             StandardErrorPath: processRecord.StandardErrorPath,
             WorkerResultPresent: workerResultPresent,
             HasCommittedChanges: hasCommittedChanges,
-            HeartbeatStandardOutputBytes: heartbeatStdoutBytes);
+            HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
+            ProviderFailureKind: providerFailureKind);
 
         TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
-        return new DispatchRefreshOutcome(completed, verification, resultCommit, recoveryDecision);
+        return new DispatchRefreshOutcome(completed, verification, resultCommit, recoveryDecision, providerFailureKind);
     }
 
     private static string? TryGetWorktreeHead(string workingDirectory)

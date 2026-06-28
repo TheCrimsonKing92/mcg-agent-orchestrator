@@ -123,6 +123,11 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (verification.ProviderFailureKind == ProviderFailureKind.RateLimit)
+        {
+            return true;
+        }
+
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
@@ -223,7 +228,7 @@ public static class DispatchFailureClassifier
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
     {
-        return Classify(task, verification, ProviderFailureKind.Unknown, workerResultPresent, hasCommittedChanges);
+        return Classify(task, verification, verification.ProviderFailureKind, workerResultPresent, hasCommittedChanges);
     }
 
     public static DispatchOutcome Classify(
@@ -233,6 +238,9 @@ public static class DispatchFailureClassifier
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
     {
+        providerFailureKind = providerFailureKind == ProviderFailureKind.Unknown
+            ? verification.ProviderFailureKind
+            : providerFailureKind;
         workerResultPresent = workerResultPresent || verification.WorkerResultPresent;
         hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges;
         var exitCode = verification.ExitCode;
@@ -644,6 +652,11 @@ public static class DispatchFailureClassifier
         if (verification.Succeeded)
         {
             return false;
+        }
+
+        if (verification.ProviderFailureKind == ProviderFailureKind.Connectivity)
+        {
+            return true;
         }
 
         var output = string.Join(

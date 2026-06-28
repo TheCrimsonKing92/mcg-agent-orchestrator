@@ -14,7 +14,11 @@ public sealed partial class AgentOrchestratorKernel
         RefreshGoalStatus(goal);
     }
 
-    public void RecordDispatchExecutionResult(GoalId goalId, TaskId taskId, TaskVerificationRecord verification)
+    public void RecordDispatchExecutionResult(
+        GoalId goalId,
+        TaskId taskId,
+        TaskVerificationRecord verification,
+        ProviderFailureKind providerFailureKind = ProviderFailureKind.Unknown)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -34,12 +38,22 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException("Dispatch execution evidence working directory does not match the recorded dispatch working directory.");
         }
 
+        if (providerFailureKind != ProviderFailureKind.Unknown &&
+            verification.ProviderFailureKind == ProviderFailureKind.Unknown)
+        {
+            verification = verification with { ProviderFailureKind = providerFailureKind };
+        }
+
         task.RecordVerification(verification);
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
 
-        if (!verification.Succeeded && DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification))
+        var effectiveProviderFailureKind = verification.ProviderFailureKind;
+        var isRecoverableSubscriptionLimit = effectiveProviderFailureKind == ProviderFailureKind.RateLimit ||
+            (effectiveProviderFailureKind == ProviderFailureKind.Unknown &&
+             DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+        if (!verification.Succeeded && isRecoverableSubscriptionLimit)
         {
             if (DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
             {
@@ -65,7 +79,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
         if (outcome.Kind == DispatchOutcomeKind.EmptyOutputFlake &&
             verification.ExitCode == 0 &&
             string.IsNullOrWhiteSpace(verification.StandardOutput) &&
@@ -157,7 +171,12 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
     }
 
-    public void RecordTaskProcessRefreshed(GoalId goalId, TaskId taskId, TaskProcessRecord process, TaskVerificationRecord? verification)
+    public void RecordTaskProcessRefreshed(
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord process,
+        TaskVerificationRecord? verification,
+        ProviderFailureKind providerFailureKind = ProviderFailureKind.Unknown)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -165,7 +184,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (verification is not null)
         {
-            RecordDispatchExecutionResult(goalId, taskId, verification);
+            RecordDispatchExecutionResult(goalId, taskId, verification, providerFailureKind);
         }
     }
 

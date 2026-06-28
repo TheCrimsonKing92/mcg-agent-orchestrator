@@ -51,7 +51,8 @@ public sealed record TaskVerificationRecord(
     // Worker-self-reported stdout byte count from the live heartbeat, captured at dispatch-record time.
     // Reliable even when the out.log file read races the exit flush (the empty-output flake bug): a worker
     // that streamed bytes per its heartbeat genuinely produced output and must not be re-dispatched as a flake.
-    long? HeartbeatStandardOutputBytes = null)
+    long? HeartbeatStandardOutputBytes = null,
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown)
 {
     public bool Succeeded => ExitCode == 0;
 }
