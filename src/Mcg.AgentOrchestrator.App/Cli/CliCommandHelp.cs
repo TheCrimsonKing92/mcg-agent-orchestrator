@@ -98,7 +98,7 @@ internal static class CliCommandHelp
         {
             if (!entry.Flags.Contains(arg))
             {
-                throw new ArgumentException($"Unknown option '{arg}'. {entry.Usage}");
+                throw new ArgumentException($"Unknown option '{arg}'.{Environment.NewLine}{entry.Usage}");
             }
         }
     }

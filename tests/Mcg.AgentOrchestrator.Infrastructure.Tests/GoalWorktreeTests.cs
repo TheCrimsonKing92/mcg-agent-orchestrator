@@ -2327,6 +2327,7 @@ public sealed class GoalWorktreeTests
 
             Assert.Contains("Usage: workspace create", output);
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".orchestrator-worktrees")));
             Assert.Equal(originalStatus, goal.Status);
         }
         finally
