@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -32,13 +33,75 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var options = GoalMonitoringSubscriptionCommand.Parse([
             "monitor-goal",
             "abc123",
-            "--once"
+            "--once",
+            "--format",
+            "ndjson",
+            "--goal-prefix",
+            "abc",
+            "--task",
+            "task1",
+            "--event-kind",
+            "TaskStarted,TaskCompleted",
+            "--from-cursor",
+            "4",
+            "--wait-terminal"
         ]);
 
         Assert.True(options.IsLocal);
         Assert.Null(options.DashboardUri);
         Assert.Equal("abc123", options.GoalId);
         Assert.True(options.Once);
+        Assert.True(options.WaitTerminal);
+        Assert.Equal(GoalMonitoringOutputFormat.Ndjson, options.Format);
+        Assert.Equal("abc", options.GoalPrefix);
+        Assert.Equal("task1", options.TaskId);
+        Assert.Equal(4, options.SinceEventId);
+        Assert.Equal(["TaskStarted", "TaskCompleted"], options.EventKinds);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_filter_predicate_applies_AND_semantics")]
+    public void MonitorGoalFilterPredicateAppliesAndSemantics()
+    {
+        var evt = new GoalStateSubscriptionEvent(
+            1,
+            12,
+            DateTimeOffset.UnixEpoch,
+            "TaskCompleted",
+            "abc12345",
+            "task1",
+            "Completed",
+            "run-events.db",
+            42,
+            "done");
+
+        Assert.True(GoalMonitoringSubscriptionCommand.Matches(
+            evt,
+            new GoalMonitoringSubscriptionOptions(null, "abc12345", 0, false, GoalPrefix: "abc", TaskId: "task1", EventKinds: ["TaskCompleted"])));
+        Assert.False(GoalMonitoringSubscriptionCommand.Matches(
+            evt,
+            new GoalMonitoringSubscriptionOptions(null, "abc12345", 0, false, GoalPrefix: "abc", TaskId: "other", EventKinds: ["TaskCompleted"])));
+        Assert.False(GoalMonitoringSubscriptionCommand.Matches(
+            evt,
+            new GoalMonitoringSubscriptionOptions(null, "abc12345", 0, false, GoalPrefix: "abc", TaskId: "task1", EventKinds: ["TaskStarted"])));
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_event_envelope_schema_is_versioned")]
+    public void MonitorGoalEventEnvelopeSchemaIsVersioned()
+    {
+        Assert.Equal(
+            [
+                "SchemaVersion",
+                "Cursor",
+                "Timestamp",
+                "EventKind",
+                "GoalId",
+                "TaskId",
+                "CurrentState",
+                "ArtifactPath",
+                "ProcessId",
+                "Message"
+            ],
+            GoalMonitoringSubscriptionCommand.GoalStateEventSchemaFields());
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_and_timeline_lines")]
@@ -172,6 +235,92 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.True(timelineIndex > snapshotIndex);
         Assert.Contains("event: task.status", text);
         Assert.Contains("Started local work.", text);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_resumes_from_cursor")]
+    public async Task MonitorGoalLocalNdjsonResumesFromCursor()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement cursor resume", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor cursor", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Finished local work.");
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--once", "--format", "ndjson", "--from-cursor", "1"],
+            output,
+            kernel,
+            workspace,
+            [agent],
+            WorkerProfileCatalog.Default());
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.NotEmpty(lines);
+        Assert.All(lines, line =>
+        {
+            using var doc = JsonDocument.Parse(line);
+            Assert.True(doc.RootElement.GetProperty("Cursor").GetInt64() > 1);
+            Assert.True(doc.RootElement.TryGetProperty("Timestamp", out _));
+            Assert.True(doc.RootElement.TryGetProperty("EventKind", out _));
+            Assert.Equal(goal.Id.Value, doc.RootElement.GetProperty("GoalId").GetString());
+            Assert.True(doc.RootElement.TryGetProperty("CurrentState", out _));
+            Assert.True(doc.RootElement.TryGetProperty("ArtifactPath", out _) || doc.RootElement.TryGetProperty("ProcessId", out _));
+        });
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_exits_zero_for_completed_and_nonzero_for_failed")]
+    public async Task MonitorGoalWaitTerminalExitBehavior()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var completedKernel = new AgentOrchestratorKernel();
+        var completedTask = new TaskSpec(TaskId.New(), "Complete", AgentRole.Developer);
+        var completedGoal = completedKernel.CreateGoal("Wait completed", [completedTask]);
+        completedKernel.ActivateGoal(completedGoal.Id, []);
+        completedKernel.ReportTaskProgress(completedGoal.Id, completedTask.Id, WorkTaskStatus.Completed, "Done.");
+        completedKernel.RecordTaskVerification(completedGoal.Id, completedTask.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        using var completedOutput = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", completedGoal.Id.Value[..8], "--wait-terminal", "--format", "human"],
+            completedOutput,
+            completedKernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        Assert.Contains("-> Verified", completedOutput.ToString());
+
+        var failedKernel = new AgentOrchestratorKernel();
+        var failedTask = new TaskSpec(TaskId.New(), "Fail", AgentRole.Developer);
+        var failedGoal = failedKernel.CreateGoal("Wait failed", [failedTask]);
+        failedKernel.ActivateGoal(failedGoal.Id, []);
+        failedKernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Failed.");
+        using var failedOutput = new StringWriter();
+
+        var ex = await Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", failedGoal.Id.Value[..8], "--wait-terminal", "--format", "human"],
+            failedOutput,
+            failedKernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+        Assert.Equal(1, ex.ExitCode);
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_unknown_goal_emits_structured_error_event")]
