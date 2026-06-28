@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -26,7 +25,8 @@ internal sealed record GoalRecoveryTaskFinding(
     AgentRole Role,
     WorkTaskStatus Status,
     string Finding,
-    string SuggestedCommand);
+    string SuggestedCommand,
+    DispatchRecoveryDecision? RecoveryDecision = null);
 
 internal static class GoalRecoveryPlanner
 {
@@ -92,18 +92,23 @@ internal static class GoalRecoveryPlanner
 
     private static void AddTaskFindings(List<GoalRecoveryTaskFinding> findings, Goal goal, TaskSpec task, int taskNumber)
     {
-        if (task.LastProcess is { IsRunning: true } process)
+        if (task.LastProcess is { CompletedAt: null } process && task.LastVerification is null)
         {
-            var alive = IsProcessAlive(process.ProcessId);
+            var recoveryDecision = DispatchRecoveryView.Evaluate(goal, task)!;
+            var alive = recoveryDecision.Action != DispatchRecoveryAction.MarkStale &&
+                recoveryDecision.Action != DispatchRecoveryAction.RetryStale &&
+                recoveryDecision.Action != DispatchRecoveryAction.BudgetExhausted &&
+                recoveryDecision.Action != DispatchRecoveryAction.ReconcileFromExit;
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,
                 task.RequiredRole,
                 task.Status,
                 alive
-                    ? $"recorded process is still alive pid={process.ProcessId}"
-                    : $"recorded process pid={process.ProcessId} is not alive; refresh should reconcile durable state",
-                alive ? $"refresh-dispatch {taskNumber}" : $"refresh-dispatch {taskNumber}"));
+                    ? $"recorded process is still alive pid={process.ProcessId}; recovery action={recoveryDecision.ActionName} evidence={recoveryDecision.EvidencePath}"
+                    : $"recorded process pid={process.ProcessId} is not alive; recovery action={recoveryDecision.ActionName} evidence={recoveryDecision.EvidencePath}",
+                alive ? $"refresh-dispatch {taskNumber}" : $"refresh-dispatch {taskNumber}",
+                recoveryDecision));
         }
         else if (task.Status == WorkTaskStatus.Running && task.LastDispatch is not null)
         {
@@ -215,23 +220,6 @@ internal static class GoalRecoveryPlanner
 
     private static bool IsTerminal(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
-
-    private static bool IsProcessAlive(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
 
     private static bool? TryIsWorktreeDirty(string worktree)
     {

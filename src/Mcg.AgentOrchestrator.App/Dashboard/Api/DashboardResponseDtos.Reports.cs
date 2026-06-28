@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -490,7 +491,15 @@ internal sealed record NextActionDto(
     string? HumanInputRequestId,
     string Message,
     string SuggestedCommand,
-    NextActionControlDto? Control);
+    NextActionControlDto? Control,
+    DispatchRecoveryDecisionDto? Recovery);
+
+internal sealed record DispatchRecoveryDecisionDto(
+    DispatchRecoveryAction Action,
+    string ActionName,
+    string EvidencePath,
+    string Reason,
+    string? Blocker);
 
 internal sealed record NextActionControlDto(
     string Label,

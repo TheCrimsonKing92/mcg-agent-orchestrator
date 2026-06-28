@@ -80,6 +80,14 @@ public static void PrintNextActions(
     {
         var item = actions.Items[index];
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
+        if (DispatchRecoveryView.Evaluate(goal, item) is { } decision)
+        {
+            var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
+                ? string.Empty
+                : $" blocker='{decision.Blocker}'";
+            Console.WriteLine($"     recovery: action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}");
+        }
+
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
         var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
         if (!string.IsNullOrWhiteSpace(control?.CostRisk))

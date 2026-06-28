@@ -3403,8 +3403,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Contains(nextActions, action => action.TaskId == tester.Id && action.Kind == NextActionKind.RunAssignedTask);
     }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_exit_file_when_child_pid_is_recorded")]
-    public void BackgroundDispatchRunnerReconcileHoldsExitFileWhenChildPidIsRecorded()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_ignores_stale_child_pid_when_exit_file_exists")]
+    public void BackgroundDispatchRunnerReconcileIgnoresStaleChildPidWhenExitFileExists()
 {
     var root = CreateTempDirectory();
     var stdout = Path.Combine(root, "out.log");
@@ -3435,9 +3435,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Null(outcome.Verification);
-    Assert.Null(outcome.ProcessRecord.ExitCode);
-    Assert.Null(outcome.ProcessRecord.CompletedAt);
+    Assert.NotNull(outcome.Verification);
+    Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+    Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 
@@ -3581,10 +3581,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     File.WriteAllText(stdout, string.Empty);
     File.WriteAllText(stderr, string.Empty);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-30)));
-    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-30), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-    WriteHeartbeat(process, now.AddMinutes(-20), now.AddMinutes(-20), "running", 0, 0);
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0);
 
     var completed = new BackgroundDispatchRunner(
             clock,
@@ -3612,13 +3612,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Startup hang with idle cpu and no output");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
     File.WriteAllText(stdout, string.Empty);
     File.WriteAllText(stderr, string.Empty);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
-    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
 
     var completed = new BackgroundDispatchRunner(
             clock,
@@ -3911,12 +3911,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     File.WriteAllText(stderr, string.Empty);
 
     var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-5)));
-    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     // Heartbeat: childPid=null signals the worker has already exited; stalled progress
     // beyond postOutputIdleTimeout of 2 minutes triggers the hung-wrapper detector.
-    WriteHeartbeat(process, now.AddMinutes(-3), now.AddMinutes(-3), "running", 0, 0, childPid: null);
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, childPid: null);
 
     var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -5497,6 +5497,144 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var failureBlock = retryPrompt[failureStart..failureEnd];
     Assert.DoesNotContain("OldSchemaTests.OldFailure", failureBlock, StringComparison.Ordinal);
     Assert.DoesNotContain("old operator feedback", failureBlock, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_latest_developer_retry_blocker_before_prior_branch_and_digest_context")]
+    public void BuildTaskBriefPutsLatestDeveloperRetryBlockerBeforePriorBranchAndDigestContext()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    var contextDirectory = Path.Combine(root, "context");
+    Directory.CreateDirectory(workingDirectory);
+    Directory.CreateDirectory(contextDirectory);
+    var clock = new MutableClock(DateTimeOffset.Parse("2026-06-28T12:00:00Z"));
+    var kernel = new AgentOrchestratorKernel(clock);
+    var planner = new TaskSpec(TaskId.New(), "Plan retry prompt construction.", AgentRole.Planner);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt construction.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Make Developer retry feedback first class", [planner, developer]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    kernel.RecordTaskVerification(goal.Id, planner.Id, new TaskVerificationRecord(
+        "codex exec planner",
+        workingDirectory,
+        0,
+        "prior summary text: existing branch looked clean",
+        string.Empty,
+        clock.UtcNow));
+    kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Planner completed.");
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec old-focused-tests.md",
+        workingDirectory,
+        clock.UtcNow));
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "dotnet test --filter OldFocusedTests",
+        workingDirectory,
+        1,
+        "old focused tests failed",
+        string.Empty,
+        clock.UtcNow));
+    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Developer attempt failed.");
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "Old retry reason for prior history.");
+    clock.Advance();
+    var exactBlocker = "Reviewer blocker: src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs method PrepareSubscriptionTask still buries RetryTask feedback after context digest.";
+    kernel.RetryTask(goal.Id, developer.Id, exactBlocker);
+
+    var prompt = kernel.BuildTaskBrief(
+        goal.Id,
+        developer.Id,
+        workingDirectory: workingDirectory,
+        contextDirectory: contextDirectory,
+        targetBranchName: "goal/41c6e2a2",
+        targetHeadCommit: "abcdef123456").Content;
+
+    var retryStart = prompt.IndexOf("<!-- LATEST_DEVELOPER_RETRY_BLOCKER_START -->", StringComparison.Ordinal);
+    var retryEnd = prompt.IndexOf("<!-- LATEST_DEVELOPER_RETRY_BLOCKER_END -->", StringComparison.Ordinal);
+    Assert.True(retryStart >= 0, prompt);
+    Assert.True(retryEnd > retryStart, prompt);
+    Assert.True(retryStart < prompt.IndexOf("Goal:", StringComparison.Ordinal), prompt);
+    Assert.True(retryStart < prompt.IndexOf("Context files:", StringComparison.Ordinal), prompt);
+    Assert.True(retryStart < prompt.IndexOf("Current target context:", StringComparison.Ordinal), prompt);
+    Assert.True(retryStart < prompt.IndexOf("## Prior Task Evidence", StringComparison.Ordinal), prompt);
+    Assert.True(retryStart < prompt.IndexOf("## Recent Timeline", StringComparison.Ordinal), prompt);
+    Assert.Contains(prompt, text => text.Contains(exactBlocker, StringComparison.Ordinal));
+
+    var retryBlock = prompt[retryStart..retryEnd];
+    Assert.Contains(retryBlock, text => text.Contains(exactBlocker, StringComparison.Ordinal));
+    Assert.Contains(retryBlock, text => text.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", StringComparison.Ordinal));
+    Assert.Contains(retryBlock, text => text.Contains("PrepareSubscriptionTask", StringComparison.Ordinal));
+    Assert.Contains(retryBlock, text => text.Contains("- Branch: goal/41c6e2a2", StringComparison.Ordinal));
+    Assert.Contains(retryBlock, text => text.Contains("- HEAD commit: abcdef123456", StringComparison.Ordinal));
+    Assert.DoesNotContain("Old retry reason for prior history.", retryBlock, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_developer_retry_blocker_on_first_attempt")]
+    public void BuildTaskBriefOmitsDeveloperRetryBlockerOnFirstAttempt()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    var contextDirectory = Path.Combine(root, "context");
+    Directory.CreateDirectory(workingDirectory);
+    Directory.CreateDirectory(contextDirectory);
+    var kernel = new AgentOrchestratorKernel();
+    var developer = new TaskSpec(TaskId.New(), "Implement first attempt prompt construction.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Keep first attempt prompt stable", [developer]);
+
+    var prompt = kernel.BuildTaskBrief(
+        goal.Id,
+        developer.Id,
+        workingDirectory: workingDirectory,
+        contextDirectory: contextDirectory).Content;
+
+    Assert.DoesNotContain("LATEST DEVELOPER RETRY BLOCKER", prompt, StringComparison.Ordinal);
+    Assert.DoesNotContain("LATEST_DEVELOPER_RETRY_BLOCKER_START", prompt, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_developer_retry_blocker_when_dropping_lower_context")]
+    public void WorkerPromptInputBudgetKeepsDeveloperRetryBlockerWhenDroppingLowerContext()
+{
+    var exactBlocker = "Reviewer blocker: src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs method PrepareSubscriptionTask still ignores latest retry feedback.";
+    var content = string.Join(Environment.NewLine, [
+        "# Agent Task Brief",
+        string.Empty,
+        "<!-- LATEST_DEVELOPER_RETRY_BLOCKER_START -->",
+        "## LATEST DEVELOPER RETRY BLOCKER - FIX FIRST",
+        "Retry feedback (verbatim):",
+        exactBlocker,
+        "<!-- LATEST_DEVELOPER_RETRY_BLOCKER_END -->",
+        string.Empty,
+        "## Instructions",
+        "Complete this SDLC task.",
+        string.Empty,
+        "## Prior Task Evidence",
+        new string('p', 400),
+        string.Empty,
+        "## Last Verification",
+        new string('v', 400),
+        string.Empty,
+        "## Context Digest",
+        new string('d', 400)
+    ]);
+    var brief = new TaskBrief(
+        new GoalId("goal123456789"),
+        new TaskId("task123456789"),
+        AgentRole.Developer,
+        "Developer: retry prompt budget",
+        content);
+    var budget = WorkerPromptInputBudget.CountTokens(content.Replace(new string('p', 400), string.Empty, StringComparison.Ordinal)
+        .Replace(new string('v', 400), string.Empty, StringComparison.Ordinal)
+        .Replace(new string('d', 400), string.Empty, StringComparison.Ordinal));
+
+    var result = WorkerPromptInputBudget.Apply(brief, "Ollama", "qwen3:8b", budget);
+
+    Assert.True(result.Trimmed);
+    Assert.Contains(result.DroppedSections, section => section == "evidence");
+    Assert.Contains(result.DroppedSections, section => section == "digest");
+    Assert.Contains(result.Brief.Content, text => text.Contains("LATEST DEVELOPER RETRY BLOCKER", StringComparison.Ordinal));
+    Assert.Contains(result.Brief.Content, text => text.Contains(exactBlocker, StringComparison.Ordinal));
+    Assert.Contains(result.Brief.Content, text => text.Contains("PrepareSubscriptionTask", StringComparison.Ordinal));
+    Assert.DoesNotContain(new string('p', 400), result.Brief.Content, StringComparison.Ordinal);
+    Assert.DoesNotContain(new string('d', 400), result.Brief.Content, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_late_file_access_subscription_prompt_stays_below_large_paid_threshold")]

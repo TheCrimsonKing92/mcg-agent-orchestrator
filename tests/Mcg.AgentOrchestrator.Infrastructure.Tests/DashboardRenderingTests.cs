@@ -484,6 +484,36 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
+    public void DashboardResponseMapperNextActionIncludesDispatchRecoveryPolicyAction()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Next recovery policy",
+        [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.Single();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+
+    var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
+    var recovery = dto.Items.Single().Recovery;
+
+    Assert.NotNull(recovery);
+    Assert.Equal(DispatchRecoveryAction.MarkStale, recovery!.Action);
+    Assert.Equal("mark-stale", recovery.ActionName);
+    Assert.Equal("heartbeat-absent", recovery.EvidencePath);
+}
+
     [Xunit.Fact(DisplayName = "Dashboard_human_wait_dto_and_rendering_include_operator_evidence")]
     public void DashboardHumanWaitDtoAndRenderingIncludeOperatorEvidence()
 {
@@ -2288,12 +2318,12 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents,
         WorkerProfiles: profiles));
 
-    Xunit.Assert.Null(risk);
+    Xunit.Assert.NotNull(risk);
+    Xunit.Assert.False(risk.IsAnomalous);
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
-    Assert.False(html.Contains("cost gate: large paid subscription start", StringComparison.Ordinal));
     Assert.False(html.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
 }

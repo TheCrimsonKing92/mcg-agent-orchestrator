@@ -72,9 +72,19 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName);
-if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
+try
 {
-    return 0;
+    if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
+    {
+        return 0;
+    }
+
+    CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
 }
 
 WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);

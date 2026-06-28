@@ -2441,8 +2441,36 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     var alreadyReset = new HashSet<TaskId>();
     foreach (var task in goal.Tasks)
     {
-        if (task.Status is WorkTaskStatus.Completed || task.LastProcess is { IsRunning: true })
+        if (task.Status is WorkTaskStatus.Completed)
         {
+            continue;
+        }
+
+        if (task.LastProcess is { CompletedAt: null } && task.LastVerification is null &&
+            DispatchRecoveryView.Evaluate(goal, task) is { } recoveryDecision)
+        {
+            PrintRecoverDispatchRecovery(task, goal, recoveryDecision);
+            if (recoveryDecision.Action is DispatchRecoveryAction.Hold or DispatchRecoveryAction.ClassifyBlocker)
+            {
+                continue;
+            }
+
+            var outcome = new BackgroundDispatchRunner().ReconcileLatestProcess(context.Kernel, goal.Id, task.Id);
+            BackgroundDispatchRunner.ApplyRefreshOutcome(context.Kernel, goal.Id, task.Id, outcome);
+            goal = context.Kernel.GetGoal(goal.Id);
+            context.CurrentGoal = goal;
+            var refreshedTask = goal.Tasks.First(candidate => candidate.Id == task.Id);
+            actions++;
+
+            if (recoveryDecision.Action == DispatchRecoveryAction.MarkStale &&
+                DispatchRecoveryPolicy.IsStaleDispatchRetryVerification(refreshedTask.LastVerification!))
+            {
+                context.Kernel.RetryTask(goal.Id, refreshedTask.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask));
+                Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
+                alreadyReset.Add(refreshedTask.Id);
+                actions++;
+            }
+
             continue;
         }
 
@@ -2454,8 +2482,17 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        // RetryTask refuses Running/WaitingForHuman/Cancelled; normalize to Failed first (the dance's middle step).
-        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Cancelled)
+        if (task.Status == WorkTaskStatus.Cancelled)
+        {
+            context.Kernel.RequeueInterruptedDispatch(goal.Id, task.Id, note);
+            Console.WriteLine($"recover: requeued interrupted task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+            alreadyReset.Add(task.Id);
+            actions++;
+            continue;
+        }
+
+        // RetryTask refuses Running/WaitingForHuman; normalize to Failed first (the dance's middle step).
+        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
         {
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
@@ -2504,6 +2541,15 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
     ConsoleViews.PrintGoal(goal);
     return actions > 0;
+}
+
+private static void PrintRecoverDispatchRecovery(TaskSpec task, Goal goal, DispatchRecoveryDecision decision)
+{
+    var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
+        ? string.Empty
+        : $" blocker='{decision.Blocker}'";
+    Console.WriteLine(
+        $"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} recovery action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.");
 }
 
 private static bool HasRunningDownstreamTask(Goal goal, TaskSpec task) =>

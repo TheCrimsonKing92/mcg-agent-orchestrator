@@ -90,6 +90,11 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (IsDispatchRecoveryPolicyDiagnostic(verification))
+        {
+            return false;
+        }
+
         // exit 0 with evidence the worker actually produced output is never a transient empty-output flake.
         // The heartbeat stdout-byte count is the flush-race-proof signal: a worker that streamed bytes per its
         // heartbeat genuinely ran (the out.log file read can race the exit flush and momentarily report empty,
@@ -120,6 +125,11 @@ public static class DispatchFailureClassifier
 
         return true;
     }
+
+    private static bool IsDispatchRecoveryPolicyDiagnostic(TaskVerificationRecord verification) =>
+        verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
     private static bool HasZeroByteStandardOutput(TaskVerificationRecord verification)
     {

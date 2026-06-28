@@ -497,8 +497,19 @@ public static NextActionDto ToNextActionDto(
         item.HumanInputRequestId?.Value,
         TimelineText(item.Message),
         ConsoleViews.BuildSuggestedCommand(goal, item, agents),
-        ToNextActionControlDto(goal, item, agents));
+        ToNextActionControlDto(goal, item, agents),
+        ToDispatchRecoveryDecisionDto(DispatchRecoveryView.Evaluate(goal, item)));
 }
+
+private static DispatchRecoveryDecisionDto? ToDispatchRecoveryDecisionDto(DispatchRecoveryDecision? decision) =>
+    decision is null
+        ? null
+        : new DispatchRecoveryDecisionDto(
+            decision.Action,
+            decision.ActionName,
+            decision.EvidencePath,
+            decision.Reason,
+            decision.Blocker);
 
 public static NextActionControlDto? ToNextActionControlDto(
     Goal goal,

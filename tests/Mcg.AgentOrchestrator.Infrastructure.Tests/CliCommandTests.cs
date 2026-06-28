@@ -834,10 +834,13 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        var stdout = Path.Combine(root, "stale.out.log");
+        var stderr = Path.Combine(root, "stale.err.log");
+        var exit = Path.Combine(root, "stale.exit.txt");
         kernel.RecordTaskProcessStarted(
             goal.Id,
             task.Id,
-            new TaskProcessRecord(999999, "codex exec prompt.md", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+            new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
         bool changed = false;
         var output = CaptureConsole(() =>
         {
@@ -853,9 +856,43 @@ public sealed class CliCommandTests
         Xunit.Assert.False(changed);
         Xunit.Assert.Contains("Goal recovery", output);
         Xunit.Assert.Contains("recorded process pid=999999 is not alive", output);
+        Xunit.Assert.Contains("recovery: action='mark-stale' evidence='heartbeat-absent'", output);
         Xunit.Assert.Contains("command: refresh-dispatch 1", output);
         Xunit.Assert.Contains("workspace create", output);
         Xunit.Assert.Contains($"park-goal {goal.Id.Value[..8]} <reason> --confirm-goal-park", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_next_reports_dispatch_recovery_policy_action_for_refresh")]
+    public void CliNextReportsDispatchRecoveryPolicyActionForRefresh()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Next recovery policy", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["next"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("RefreshRunningProcess", output);
+        Xunit.Assert.Contains("recovery: action='mark-stale' evidence='heartbeat-absent'", output);
+        Xunit.Assert.Contains("command: refresh-dispatch 1", output);
     }
 
     [Xunit.Fact(DisplayName = "HistoricalDogfoodEvaluation_scores_recorded_goal_state_without_starting_workers")]
@@ -6442,13 +6479,14 @@ public sealed class CliCommandTests
             return Task.FromResult<GoalSnapshot?>(snap);
         }
 
-        public Task<T> TransactGoalAsync<T>(
+        public async Task<T> TransactGoalAsync<T>(
             GoalId goalId,
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
             var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
-            return transaction(snap, cancellationToken).ContinueWith(t => t.Result.Result, TaskContinuationOptions.ExecuteSynchronously);
+            var (_, _, result) = await transaction(snap, cancellationToken);
+            return result;
         }
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
