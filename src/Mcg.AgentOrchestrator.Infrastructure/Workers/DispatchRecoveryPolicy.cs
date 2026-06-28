@@ -24,6 +24,7 @@ public sealed class DispatchRecoveryPolicy
 {
     public static readonly TimeSpan DefaultRecentHeartbeatGrace = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan DefaultLiveIdleTimeout = TimeSpan.FromMinutes(30);
+    public const int DefaultStaleDispatchRetries = 1;
 
     private readonly IClock _clock;
     private readonly TimeSpan _recentHeartbeatGrace;

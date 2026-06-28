@@ -260,7 +260,18 @@ public sealed class BackgroundDispatchRunner
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
         var hasLiveProcess = AnyTrackedProcessStillRunning(processRecord);
-        var recoveryDecision = _recoveryPolicy.Evaluate(processRecord, hasLiveProcess);
+        var hasDirtyWorktreeEvidence =
+            !hasLiveProcess &&
+            !File.Exists(processRecord.ExitCodePath) &&
+            task.LastDispatch is not null &&
+            RequiresFileChangeEvidence(task) &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch.DispatchedAt, out var staleWorktreeEvidence) &&
+            !staleWorktreeEvidence.IsClean;
+        var recoveryDecision = _recoveryPolicy.Evaluate(
+            processRecord,
+            hasLiveProcess,
+            GetStaleRetryBudgetRemaining(task),
+            hasDirtyWorktreeEvidence);
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
         if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, recoveryDecision, out var completion))
             return completion;
@@ -1499,6 +1510,17 @@ public sealed class BackgroundDispatchRunner
             : $" blocker='{decision.Blocker}'";
         return $"Dispatch recovery policy action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.";
     }
+
+    private static int GetStaleRetryBudgetRemaining(TaskSpec task)
+    {
+        var consumed = task.VerificationHistory.Count(IsStaleDispatchRecoveryVerification);
+        return Math.Max(0, DispatchRecoveryPolicy.DefaultStaleDispatchRetries - consumed);
+    }
+
+    private static bool IsStaleDispatchRecoveryVerification(TaskVerificationRecord verification) =>
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
     private static DispatchRecoveryDecision WithAction(
         DispatchRecoveryAction action,

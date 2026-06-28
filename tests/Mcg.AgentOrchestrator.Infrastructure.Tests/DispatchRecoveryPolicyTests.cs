@@ -92,6 +92,45 @@ public sealed class DispatchRecoveryPolicyTests
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
         BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
 
+        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(0, task.EmptyOutputRetryCount);
+        Xunit.Assert.Contains("action='retry-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_stale_no_exit_surfaces_budget_exhaustion_after_stale_retry_spent")]
+    public void BackgroundDispatchRunnerStaleNoExitSurfacesBudgetExhaustionAfterStaleRetrySpent()
+    {
+        var root = CreateTempDirectory();
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, string.Empty);
+        File.WriteAllText(stderr, string.Empty);
+        var clock = new TestClock(Now);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Mark stale no exit");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, Now.AddMinutes(-20)));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "codex exec prompt",
+                root,
+                1,
+                "",
+                "Dispatch recovery policy action='retry-stale' evidence='heartbeat-absent' reason='previous stale attempt'.",
+                Now.AddMinutes(-10)));
+        kernel.RetryTask(goal.Id, task.Id, "retry previous stale dispatch");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, Now.AddMinutes(-5)));
+        var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, Now.AddMinutes(-5), null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+
         Xunit.Assert.Equal(DispatchRecoveryAction.BudgetExhausted, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, task.EmptyOutputRetryCount);
         Xunit.Assert.Contains("action='budget-exhausted'", task.LastVerification!.StandardError, StringComparison.Ordinal);

@@ -385,6 +385,26 @@ internal sealed class ConductorDriver
         // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
+            var staleRecoveryTask = goal.Tasks.FirstOrDefault(t =>
+                t.Status == WorkTaskStatus.Failed &&
+                TryGetDispatchRecoveryAction(t.LastVerification, out var action) &&
+                action is DispatchRecoveryAction.RetryStale or DispatchRecoveryAction.BudgetExhausted or DispatchRecoveryAction.MarkStale);
+            if (staleRecoveryTask is not null)
+            {
+                var action = GetDispatchRecoveryAction(staleRecoveryTask.LastVerification!);
+                if (action == DispatchRecoveryAction.RetryStale)
+                {
+                    var note = $"Auto-retry stale dispatch recovery for task {staleRecoveryTask.Id.Value[..8]}; " +
+                        ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!);
+                    _retryTask(goal.Id, staleRecoveryTask.Id, note);
+                    return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+                }
+
+                return Escalate(goal, goalPrefix, policy, state,
+                    $"Task {staleRecoveryTask.Id.Value[..8]} blocked by stale dispatch recovery; " +
+                    ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!));
+            }
+
             var preflightFailedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 t.LastVerification is { } latest &&
@@ -627,6 +647,45 @@ internal sealed class ConductorDriver
         var seconds = policy.EmptyOutputRetryInitialDelaySeconds *
             Math.Pow(policy.EmptyOutputRetryBackoffMultiplier, exponent);
         return TimeSpan.FromSeconds(Math.Min(seconds, policy.EmptyOutputRetryMaxDelaySeconds));
+    }
+
+    private static bool TryGetDispatchRecoveryAction(TaskVerificationRecord? verification, out DispatchRecoveryAction action)
+    {
+        action = default;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        var diagnostic = ExtractDispatchRecoveryDiagnostic(verification);
+        if (diagnostic.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var candidate in Enum.GetValues<DispatchRecoveryAction>())
+        {
+            if (diagnostic.Contains($"action='{DispatchRecoveryPolicy.ToActionName(candidate)}'", StringComparison.Ordinal))
+            {
+                action = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DispatchRecoveryAction GetDispatchRecoveryAction(TaskVerificationRecord verification) =>
+        TryGetDispatchRecoveryAction(verification, out var action)
+            ? action
+            : throw new InvalidOperationException("Verification does not contain a dispatch recovery action.");
+
+    private static string ExtractDispatchRecoveryDiagnostic(TaskVerificationRecord verification)
+    {
+        var lines = verification.StandardError.Split(
+            ["\r\n", "\n"],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.LastOrDefault(line => line.Contains("Dispatch recovery policy action='", StringComparison.Ordinal)) ?? string.Empty;
     }
 
     // Appends a bounded tail of the acceptance build/test output to an escalation/journal line so an
