@@ -4938,11 +4938,11 @@ public sealed class CliCommandTests
     }
 
     [Xunit.Fact(DisplayName = "Cli_startup_short_read_command_exits_within_two_seconds_and_releases_state")]
-    public void CliStartupShortReadCommandExitsWithinTwoSecondsAndReleasesState()
+    public async Task CliStartupShortReadCommandExitsWithinTwoSecondsAndReleasesState()
     {
         var root = CreateTempDirectory();
 
-        var result = RunAppCliWithExitTimeout(root, ["next", "--full"], TimeSpan.FromSeconds(2));
+        var result = await RunAppCliWithExitTimeout(root, ["next", "--full"], TimeSpan.FromSeconds(2));
 
         Xunit.Assert.True(
             result.ExitedWithinTimeout,
@@ -5649,7 +5649,7 @@ public sealed class CliCommandTests
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_recover_reconciles_terminal_running_exit_file")]
-    public void PersistentRunnerRecoverReconcilesTerminalRunningExitFile()
+    public async Task PersistentRunnerRecoverReconcilesTerminalRunningExitFile()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -5679,7 +5679,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal));
 
-        var restoredTask = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, task.Id);
+        var restoredTask = (await repository.LoadAsync()).GetTask(goal.Id, task.Id);
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
         Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
@@ -5707,7 +5707,7 @@ public sealed class CliCommandTests
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_next_persists_terminal_sweep_repairs")]
-    public void PersistentRunnerNextPersistsTerminalSweepRepairs()
+    public async Task PersistentRunnerNextPersistsTerminalSweepRepairs()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -5733,7 +5733,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal));
 
-        var restored = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+        var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(GoalStatus.Active, restored.Status);
         Xunit.Assert.Equal(1, repository.TransactionCount);
@@ -5893,7 +5893,7 @@ public sealed class CliCommandTests
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_applies_exit_file_outside_command_transaction")]
-    public void PersistentRunnerReconcileAppliesExitFileOutsideCommandTransaction()
+    public async Task PersistentRunnerReconcileAppliesExitFileOutsideCommandTransaction()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -5920,7 +5920,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal));
 
-        var restoredTask = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, task.Id);
+        var restoredTask = (await repository.LoadAsync()).GetTask(goal.Id, task.Id);
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
         Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
@@ -5929,7 +5929,7 @@ public sealed class CliCommandTests
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_discards_stale_process_identity")]
-    public void PersistentRunnerReconcileDiscardsStaleProcessIdentity()
+    public async Task PersistentRunnerReconcileDiscardsStaleProcessIdentity()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -5967,7 +5967,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal));
 
-        var restoredTask = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, task.Id);
+        var restoredTask = (await repository.LoadAsync()).GetTask(goal.Id, task.Id);
         Xunit.Assert.False(changed);
         Xunit.Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
         Xunit.Assert.Equal(424242, restoredTask.LastProcess!.ProcessId);
@@ -6244,7 +6244,7 @@ public sealed class CliCommandTests
         return (process.ExitCode, output, error);
     }
 
-    private static AppCliTimeoutResult RunAppCliWithExitTimeout(
+    private static async Task<AppCliTimeoutResult> RunAppCliWithExitTimeout(
         string workingDirectory,
         IReadOnlyList<string> args,
         TimeSpan timeout)
@@ -6280,8 +6280,8 @@ public sealed class CliCommandTests
         return new AppCliTimeoutResult(
             exited,
             exited ? process.ExitCode : null,
-            output.GetAwaiter().GetResult(),
-            error.GetAwaiter().GetResult());
+            await output,
+            await error);
     }
 
     private sealed record AppCliTimeoutResult(
