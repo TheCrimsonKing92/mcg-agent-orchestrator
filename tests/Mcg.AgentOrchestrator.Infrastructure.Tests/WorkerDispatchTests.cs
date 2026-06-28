@@ -313,6 +313,61 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "StartDispatches_fails_closed_when_recorded_worker_profile_is_missing")]
+    public void StartDispatchesFailsClosedWhenRecordedWorkerProfileIsMissing()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:10:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Fix stale retry dispatch prompts",
+        ["Recorded worker starts fail closed when the previous worker profile cannot be resolved."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+
+    try
+    {
+        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            profiles.GetRequired("codex-cli"),
+            [agent]);
+        var missingProfiles = new WorkerProfileCatalog([]);
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], missingProfiles));
+
+        Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
+        Assert.Equal(prepared.PromptPath, developer.LastDispatch!.PromptPath);
+        Xunit.Assert.Null(developer.LastProcess);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
+    }
+}
+
     [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_within_budget_prompt_unchanged")]
     public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
 {

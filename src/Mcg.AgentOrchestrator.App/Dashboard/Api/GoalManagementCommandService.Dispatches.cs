@@ -64,7 +64,7 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         allowPendingRecordedDispatchRefresh: allowPendingRecordedDispatchRefresh);
 }
 
-public static WorkerProfileDispatchResult? RefreshPreparedDispatchBeforeStart(
+public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
     AgentOrchestratorKernel kernel,
     OrchestratorWorkspace workspace,
     Goal goal,
@@ -86,7 +86,8 @@ public static WorkerProfileDispatchResult? RefreshPreparedDispatchBeforeStart(
         candidate.Name.Equals(lastDispatch.WorkerName, StringComparison.OrdinalIgnoreCase));
     if (profile is null)
     {
-        return null;
+        throw new InvalidOperationException(
+            $"Cannot refresh dispatch for task '{task.Id}' before start because worker profile '{lastDispatch.WorkerName}' is not available.");
     }
 
     return ProfileDispatchTask(
@@ -116,17 +117,15 @@ public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatch
     foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
     {
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
-        if (RefreshPreparedDispatchBeforeStart(
+        var dispatch = RefreshPreparedDispatchBeforeStart(
             kernel,
             workspace,
             goal,
             task,
             resolvedAgents,
             resolvedProfiles,
-            providers) is { } dispatch)
-        {
-            refreshed.Add(dispatch);
-        }
+            providers);
+        refreshed.Add(dispatch);
     }
 
     return refreshed;
