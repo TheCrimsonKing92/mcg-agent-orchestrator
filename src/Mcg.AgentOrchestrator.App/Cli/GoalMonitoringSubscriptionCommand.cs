@@ -276,7 +276,8 @@ internal static class GoalMonitoringSubscriptionCommand
             reloadKernel,
             runEvents,
             cancellationToken).ConfigureAwait(false);
-        if (terminal is GoalLifecycleState.Failed or GoalLifecycleState.Blocked or GoalLifecycleState.AwaitingClarification or GoalLifecycleState.AwaitingHumanInput)
+        if (options.WaitTerminal &&
+            terminal is GoalLifecycleState.Failed or GoalLifecycleState.Blocked or GoalLifecycleState.AwaitingClarification or GoalLifecycleState.AwaitingHumanInput)
         {
             throw new CliExitException(1);
         }

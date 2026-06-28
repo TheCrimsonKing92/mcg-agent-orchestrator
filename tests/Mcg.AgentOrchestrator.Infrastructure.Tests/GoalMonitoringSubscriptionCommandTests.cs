@@ -570,14 +570,13 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal(GoalLifecycleState.AwaitingClarification, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
         using var output = new StringWriter();
 
-        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+        await GoalMonitoringSubscriptionCommand.RunAsync(
             ["monitor-goal", goal.Id.Value[..8], "--once", "--format", "ndjson", "--event-kind", "goal.snapshot"],
             output,
             kernel,
             workspace,
             [agent],
-            WorkerProfileCatalog.Default()));
-        Assert.Equal(1, ex.ExitCode);
+            WorkerProfileCatalog.Default());
 
         var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         using var doc = JsonDocument.Parse(line);
@@ -692,7 +691,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         kernel.ActivateGoal(goal.Id, []);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
         using var output = new StringWriter();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
         await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
             ["monitor-goal", goal.Id.Value[..8], "--format", "ndjson"],
