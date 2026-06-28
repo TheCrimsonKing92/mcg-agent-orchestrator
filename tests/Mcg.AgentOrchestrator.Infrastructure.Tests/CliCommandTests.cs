@@ -6442,13 +6442,14 @@ public sealed class CliCommandTests
             return Task.FromResult<GoalSnapshot?>(snap);
         }
 
-        public Task<T> TransactGoalAsync<T>(
+        public async Task<T> TransactGoalAsync<T>(
             GoalId goalId,
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
             var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
-            return transaction(snap, cancellationToken).ContinueWith(t => t.Result.Result, TaskContinuationOptions.ExecuteSynchronously);
+            var (_, _, result) = await transaction(snap, cancellationToken);
+            return result;
         }
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
