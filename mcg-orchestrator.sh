@@ -8,34 +8,36 @@ export MCG_ORCHESTRATOR_REPOSITORY_ROOT="$ROOT/"
 APP_PROJECT="$ROOT/src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"
 APP_DLL="$ROOT/src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 LOCK_DIR="$ROOT/.build-lock"
+LOCK_STALE_SECONDS=60
+
+# Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
+# A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
+# A younger lock is also reclaimed when owner.pid is missing or its owner is gone.
+if [ -d "$LOCK_DIR" ]; then
+    PID_FILE="$LOCK_DIR/owner.pid"
+    reclaim=0
+    lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    if [ $((now - lock_mtime)) -gt "$LOCK_STALE_SECONDS" ]; then
+        reclaim=1
+    fi
+    if [ -f "$PID_FILE" ] && owner_pid=$(cat "$PID_FILE" 2>/dev/null) && [ -n "$owner_pid" ]; then
+        if [ "$reclaim" -eq 0 ] && ! kill -0 "$owner_pid" 2>/dev/null; then
+            reclaim=1
+        fi
+    else
+        reclaim=1
+    fi
+    if [ "$reclaim" -eq 1 ]; then
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+    fi
+fi
 
 # Up-to-date check -- if App.dll exists and is newer than all source files, skip build entirely.
 if [ -f "$APP_DLL" ]; then
     stale=$(find "$ROOT/src" \( -name "*.cs" -o -name "*.csproj" -o -name "*.props" \) -newer "$APP_DLL" -print -quit 2>/dev/null)
     if [ -z "$stale" ]; then
         exec dotnet "$APP_DLL" "$@"
-    fi
-fi
-
-# Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
-# If owner.pid exists and the owner process is alive, do NOT reclaim.
-# If owner.pid is missing or unreadable, fall back to a generous 300-s age threshold.
-if [ -d "$LOCK_DIR" ]; then
-    PID_FILE="$LOCK_DIR/owner.pid"
-    reclaim=0
-    if [ -f "$PID_FILE" ] && owner_pid=$(cat "$PID_FILE" 2>/dev/null) && [ -n "$owner_pid" ]; then
-        if ! kill -0 "$owner_pid" 2>/dev/null; then
-            reclaim=1
-        fi
-    else
-        lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 9999999999)
-        now=$(date +%s)
-        if [ $((now - lock_mtime)) -gt 300 ]; then
-            reclaim=1
-        fi
-    fi
-    if [ "$reclaim" -eq 1 ]; then
-        rm -rf "$LOCK_DIR" 2>/dev/null || true
     fi
 fi
 
@@ -54,7 +56,7 @@ echo $$ > "$LOCK_DIR/owner.pid"
 trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 BUILD_LOG=$(mktemp)
-dotnet build "$APP_PROJECT" --nologo -v q >"$BUILD_LOG" 2>&1 || {
+dotnet build "$APP_PROJECT" --nologo -v quiet -clp:ErrorsOnly >"$BUILD_LOG" 2>&1 || {
     BUILD_EXIT=$?
     rm -rf "$LOCK_DIR" 2>/dev/null || true
     trap - EXIT

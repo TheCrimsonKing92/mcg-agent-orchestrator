@@ -35,7 +35,7 @@ publish/
 **/.scratch/
 .test-results/
 .build.out
-.build-lock
+.build-lock/
 
 # Local agent/tool settings
 .claude/settings.local.json
