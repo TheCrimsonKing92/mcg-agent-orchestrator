@@ -2301,6 +2301,40 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_help_does_not_create_goal_worktree")]
+    public void CliWorkspaceHelpDoesNotCreateGoalWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep workspace clean on help", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            var originalStatus = goal.Status;
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandHandlers.Execute(
+                    ["workspace", "create", goal.Id.Value[..8], "--help"],
+                    context);
+
+                Assert.False(changed);
+            });
+
+            Assert.Contains("Usage: workspace create", output);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Equal(originalStatus, goal.Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_safe_auto_stops_before_acceptance")]
     public void CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance()
     {
