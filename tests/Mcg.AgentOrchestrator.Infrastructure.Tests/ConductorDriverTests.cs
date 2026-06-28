@@ -895,7 +895,7 @@ public sealed class ConductorDriverTests
                 "C:\\tmp",
                 1,
                 "",
-                "Dispatch recovery policy action='retry-stale' evidence='heartbeat-absent' reason='no live process, exit-absent, stale retry budget remaining=1'.",
+                "Dispatch recovery policy action='mark-stale' evidence='heartbeat-absent' reason='no live process, exit-absent, stale retry budget remaining=1'.",
                 DateTimeOffset.UtcNow));
         Assert.Equal(0, task.EmptyOutputRetryCount);
 

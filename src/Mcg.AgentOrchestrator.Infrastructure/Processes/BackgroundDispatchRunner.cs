@@ -1525,7 +1525,8 @@ public sealed class BackgroundDispatchRunner
     private static bool IsAuthoritativeHold(DispatchRecoveryDecision decision) =>
         decision.Action == DispatchRecoveryAction.Hold &&
         (decision.Reason.Contains("recent heartbeat", StringComparison.OrdinalIgnoreCase) ||
-         decision.Reason.Contains("CPU activity", StringComparison.OrdinalIgnoreCase));
+         decision.Reason.Contains("CPU activity", StringComparison.OrdinalIgnoreCase) ||
+         decision.Reason.Contains("output progress", StringComparison.OrdinalIgnoreCase));
 
     private DateTimeOffset GetLastOutputWriteTime(TaskProcessRecord processRecord)
     {

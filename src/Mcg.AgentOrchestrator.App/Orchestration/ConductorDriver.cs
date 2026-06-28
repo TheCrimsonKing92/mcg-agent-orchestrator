@@ -392,7 +392,7 @@ internal sealed class ConductorDriver
             if (staleRecoveryTask is not null)
             {
                 var action = GetDispatchRecoveryAction(staleRecoveryTask.LastVerification!);
-                if (action == DispatchRecoveryAction.RetryStale)
+                if (IsRetryableStaleRecovery(staleRecoveryTask.LastVerification!))
                 {
                     var note = $"Auto-retry stale dispatch recovery for task {staleRecoveryTask.Id.Value[..8]}; " +
                         ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!);
@@ -679,6 +679,20 @@ internal sealed class ConductorDriver
         TryGetDispatchRecoveryAction(verification, out var action)
             ? action
             : throw new InvalidOperationException("Verification does not contain a dispatch recovery action.");
+
+    private static bool IsRetryableStaleRecovery(TaskVerificationRecord verification)
+    {
+        if (!TryGetDispatchRecoveryAction(verification, out var action))
+            return false;
+
+        if (action == DispatchRecoveryAction.RetryStale)
+            return true;
+
+        var diagnostic = ExtractDispatchRecoveryDiagnostic(verification);
+        return action == DispatchRecoveryAction.MarkStale &&
+            diagnostic.Contains("stale retry budget remaining=", StringComparison.Ordinal) &&
+            !diagnostic.Contains("blocker='", StringComparison.Ordinal);
+    }
 
     private static string ExtractDispatchRecoveryDiagnostic(TaskVerificationRecord verification)
     {

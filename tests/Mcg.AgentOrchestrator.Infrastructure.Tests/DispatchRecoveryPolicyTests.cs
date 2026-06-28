@@ -26,8 +26,8 @@ public sealed class DispatchRecoveryPolicyTests
 
         var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false, staleRetryBudgetRemaining: 1);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, decision.Action);
-        Xunit.Assert.Equal("retry-stale", decision.ActionName);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, decision.Action);
+        Xunit.Assert.Equal("mark-stale", decision.ActionName);
         Xunit.Assert.Equal(BackgroundDispatchRunner.GetHeartbeatPath(process), decision.EvidencePath);
     }
 
@@ -105,9 +105,10 @@ public sealed class DispatchRecoveryPolicyTests
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
         BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, task.EmptyOutputRetryCount);
-        Xunit.Assert.Contains("action='retry-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action='mark-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stale retry budget remaining=1", task.LastVerification.StandardError, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_stale_no_exit_surfaces_budget_exhaustion_after_stale_retry_spent")]

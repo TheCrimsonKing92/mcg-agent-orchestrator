@@ -68,7 +68,7 @@ public sealed class DispatchRecoveryPolicy
                 if (staleRetryBudgetRemaining > 0 && !hasDirtyWorktreeEvidence)
                 {
                     return Decision(
-                        DispatchRecoveryAction.RetryStale,
+                        DispatchRecoveryAction.MarkStale,
                         heartbeatEvidence,
                         $"no live process, exit-absent, stale retry budget remaining={staleRetryBudgetRemaining}");
                 }
@@ -110,7 +110,7 @@ public sealed class DispatchRecoveryPolicy
                 return Decision(
                     DispatchRecoveryAction.Hold,
                     heartbeat.Path,
-                    $"live process with recent output/CPU progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
+                    $"live process with CPU activity/output progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
             }
 
             if (heartbeat.IdleDuration >= _liveIdleTimeout &&
