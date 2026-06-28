@@ -38,6 +38,47 @@ public sealed class GoalWorktreeTests
         new WorkerProfile("local", "git add -A; if ((git status --short).Length -gt 0) { git commit -m Lifecycle-work }; Write-Output {subscriptionModelName}")
     ]);
 
+    private static TimeSpan FastLifecyclePollInterval => TimeSpan.FromMilliseconds(1);
+
+    private static Task SkipLifecycleSleep(TimeSpan delay, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private static Func<Goal, Task<RunGoalService.RunGoalResult>> CreateFastLifecycleRunGoal(
+        AgentOrchestratorKernel kernel,
+        string repo)
+    {
+        return goal =>
+        {
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            var sourcePath = Path.Combine(worktreePath, "src", $"lifecycle-{goal.Id.Value[..8]}.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllText(sourcePath, "// fake lifecycle work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Lifecycle-work");
+
+            var completedTasks = new List<RunGoalService.RunGoalTaskSummary>();
+            foreach (var task in goal.Tasks)
+            {
+                kernel.RecordTaskVerification(
+                    goal.Id,
+                    task.Id,
+                    ManualVerificationRecorder.Create(true, "Fake lifecycle run-goal passed.", worktreePath, DateTimeOffset.UtcNow));
+                completedTasks.Add(new RunGoalService.RunGoalTaskSummary(
+                    TaskDisplayNumber.Resolve(goal, task.Id),
+                    task.Id.Value,
+                    task.Description,
+                    Succeeded: true,
+                    OutputTail: null));
+            }
+
+            return Task.FromResult(new RunGoalService.RunGoalResult(
+                Executed: true,
+                StopReason: "Goal completed.",
+                BlockingAction: null,
+                CompletedTasks: completedTasks,
+                StopEvidence: null));
+        };
+    }
+
     private static InMemoryModelProviderRegistry SeedSpecRefiner(OrchestratorWorkspace workspace)
     {
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
@@ -2209,7 +2250,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(
@@ -2254,7 +2298,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(
@@ -2405,7 +2452,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() =>
@@ -2490,7 +2540,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Failed("Focused tests failed");
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() =>
@@ -2527,7 +2580,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Throws(new InvalidOperationException("fake verifier boom"));
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(

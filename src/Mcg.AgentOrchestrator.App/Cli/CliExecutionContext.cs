@@ -50,6 +50,12 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
+public TimeSpan? RunGoalPollInterval { get; init; }
+
+public RunGoalService.SleepFunc? RunGoalSleep { get; init; }
+
+public Func<Goal, Task<RunGoalService.RunGoalResult>>? RunGoalOverride { get; init; }
+
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
 

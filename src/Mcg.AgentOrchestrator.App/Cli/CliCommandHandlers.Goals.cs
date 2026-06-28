@@ -592,15 +592,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 GetOptionalArgument(parts, "--confirm-batch-start", SubscriptionPromptCostGuard.CliConfirmationFlag, "--confirm-readiness-risk"));
             EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
             RecordPolicyAllowed(context, context.CurrentGoal, runGoalPolicy, AutonomyAction.DispatchStart, "run-goal");
-            var runGoalResult = RunGoalService.RunAsync(
-                context.Kernel,
-                context.Agents,
-                context.WorkerProfiles,
-                context.Workspace,
-                context.CurrentGoal,
-                HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag),
-                providers: context.Providers)
-                .GetAwaiter().GetResult();
+            var runGoalResult = RunGoal(context, context.CurrentGoal, HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult);
             return runGoalResult.Executed;
 
@@ -1007,15 +999,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
 
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "run-goal", "Starting subscription-driven goal loop.");
     RecordPolicyAllowed(context, goal, policy, AutonomyAction.DispatchStart, commandName);
-    var runGoalResult = RunGoalService.RunAsync(
-        context.Kernel,
-        context.Agents,
-        context.WorkerProfiles,
-        context.Workspace,
-        goal,
-        allowLargePaidSubscriptionStart: true,
-        providers: context.Providers)
-        .GetAwaiter().GetResult();
+    var runGoalResult = RunGoal(context, goal, allowLargePaidSubscriptionStart: true);
     Console.WriteLine("Stage run-goal:");
     ConsoleViews.PrintRunGoalResult(goal, runGoalResult);
     if (goal.Status != GoalStatus.Completed)
@@ -1082,6 +1066,29 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
     context.EventWriter.AppendCleanedUp(goal.Id);
+}
+
+private static RunGoalService.RunGoalResult RunGoal(
+    CliExecutionContext context,
+    Goal goal,
+    bool allowLargePaidSubscriptionStart)
+{
+    if (context.RunGoalOverride is not null)
+    {
+        return context.RunGoalOverride(goal).GetAwaiter().GetResult();
+    }
+
+    return RunGoalService.RunAsync(
+        context.Kernel,
+        context.Agents,
+        context.WorkerProfiles,
+        context.Workspace,
+        goal,
+        allowLargePaidSubscriptionStart,
+        pollInterval: context.RunGoalPollInterval,
+        sleep: context.RunGoalSleep,
+        providers: context.Providers)
+        .GetAwaiter().GetResult();
 }
 
 private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnlyList<string> parts)
