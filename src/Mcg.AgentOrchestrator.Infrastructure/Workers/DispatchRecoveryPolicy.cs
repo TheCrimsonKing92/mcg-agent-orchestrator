@@ -108,7 +108,7 @@ public sealed class DispatchRecoveryPolicy
                 return Decision(
                     DispatchRecoveryAction.Hold,
                     heartbeat.Path,
-                    $"live process with recent CPU/output/file progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
+                    $"live process with recent CPU activity or output progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
             }
 
             if (heartbeat.IdleDuration >= _liveIdleTimeout &&

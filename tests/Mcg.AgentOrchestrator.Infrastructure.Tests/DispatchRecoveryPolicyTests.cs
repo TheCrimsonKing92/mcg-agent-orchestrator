@@ -57,6 +57,19 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal(BackgroundDispatchRunner.GetHeartbeatPath(process), decision.EvidencePath);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_holds_live_process_with_recent_cpu_or_output_progress")]
+    public void DispatchRecoveryPolicyHoldsLiveProcessWithRecentCpuOrOutputProgress()
+    {
+        var process = CreateProcess();
+        WriteHeartbeat(process, Now.AddMinutes(-10), Now.AddMinutes(-1), 0, 0, 25_000);
+
+        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: true);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, decision.Action);
+        Xunit.Assert.Equal("hold", decision.ActionName);
+        Xunit.Assert.Contains("CPU activity or output progress", decision.Reason, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_classifies_live_idle_past_policy")]
     public void DispatchRecoveryPolicyClassifiesLiveIdlePastPolicy()
     {

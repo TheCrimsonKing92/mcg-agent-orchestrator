@@ -3581,10 +3581,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     File.WriteAllText(stdout, string.Empty);
     File.WriteAllText(stderr, string.Empty);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-30)));
-    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-30), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-    WriteHeartbeat(process, now.AddMinutes(-20), now.AddMinutes(-20), "running", 0, 0);
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0);
 
     var completed = new BackgroundDispatchRunner(
             clock,
@@ -3612,13 +3612,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Startup hang with idle cpu and no output");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
     File.WriteAllText(stdout, string.Empty);
     File.WriteAllText(stderr, string.Empty);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-10)));
-    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-10), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
 
     var completed = new BackgroundDispatchRunner(
             clock,
@@ -3911,12 +3911,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     File.WriteAllText(stderr, string.Empty);
 
     var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-5)));
-    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     // Heartbeat: childPid=null signals the worker has already exited; stalled progress
     // beyond postOutputIdleTimeout of 2 minutes triggers the hung-wrapper detector.
-    WriteHeartbeat(process, now.AddMinutes(-3), now.AddMinutes(-3), "running", 0, 0, childPid: null);
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, childPid: null);
 
     var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
