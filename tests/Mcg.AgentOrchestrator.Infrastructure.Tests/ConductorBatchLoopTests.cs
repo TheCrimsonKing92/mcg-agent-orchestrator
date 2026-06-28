@@ -81,7 +81,7 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
-    private static IReadOnlyList<AgentDefinition> BuildAgents(params AgentRole[] roles)
+    private static AgentDefinition[] BuildAgents(params AgentRole[] roles)
     {
         var capability = ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse;
         return roles

@@ -38,7 +38,7 @@ public sealed class GoalWorktreeTests
         new WorkerProfile("local", "git add -A; if ((git status --short).Length -gt 0) { git commit -m Lifecycle-work }; Write-Output {subscriptionModelName}")
     ]);
 
-    private static IModelProviderRegistry SeedSpecRefiner(OrchestratorWorkspace workspace)
+    private static InMemoryModelProviderRegistry SeedSpecRefiner(OrchestratorWorkspace workspace)
     {
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
             new ModelFunctionBinding(

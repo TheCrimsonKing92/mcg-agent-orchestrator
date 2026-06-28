@@ -5843,7 +5843,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     // are hermetic — WorkerProfileDispatcher reads WorkerSandboxOptions.FromEnvironment(), so a test
     // asserting the default (workspace-write) sandbox mode would otherwise fail when the suite is run
     // under `conduct`/acceptance with MCG_WORKER_SANDBOX=1 set. Restores the prior value on dispose.
-    private static IDisposable ClearWorkerSandboxEnv()
+    private static WorkerSandboxEnvRestore ClearWorkerSandboxEnv()
     {
         var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
         Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, null);
