@@ -98,7 +98,8 @@ internal static class GoalReadinessPreflight
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         string executionDirectory,
-        WorkerProfileCatalog? profiles = null)
+        WorkerProfileCatalog? profiles = null,
+        Func<string, GoalId, string?>? resolveWorktree = null)
     {
         var findings = new List<GoalReadinessFinding>();
         var text = $"{goal.Objective}\n{string.Join('\n', goal.Tasks.Select(task => $"{task.Description}\n{task.VerificationPlan}"))}";
@@ -106,7 +107,7 @@ internal static class GoalReadinessPreflight
         var highRisk = HighRiskSignals.Where(tokens.Contains).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         var external = ExternalSignals.Where(tokens.Contains).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         var requiresWorkspace = goal.Tasks.Any(task => task.RequiredRole is AgentRole.Developer or AgentRole.Tester);
-        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var worktree = (resolveWorktree ?? GoalWorktrees.TryResolve)(executionDirectory, goal.Id);
         var hasWorkspace = !requiresWorkspace || worktree is not null;
         var taskReports = BuildTaskReports(goal, agents);
         var allScopes = taskReports.SelectMany(task => task.FileScopes).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

@@ -48,6 +48,8 @@ public Goal? CurrentGoal { get; set; } = currentGoal;
 
 public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier();
 
+public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
+
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
 public TimeSpan? RunGoalPollInterval { get; init; }
@@ -74,6 +76,91 @@ internal sealed record AcceptanceMergeCommitRequest(
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message);
+
+internal interface ICliGoalWorktreeService
+{
+    string BranchName(GoalId goalId);
+
+    string Ensure(string executionDirectory, GoalId goalId);
+
+    string? TryResolve(string executionDirectory, GoalId goalId);
+
+    GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null);
+
+    bool IsGitWorkTree(string executionDirectory);
+
+    GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId);
+
+    GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId);
+
+    bool NeedsRebaseOntoMain(string executionDirectory, GoalId goalId);
+
+    bool IsWorktreeClean(string executionDirectory, GoalId goalId);
+
+    bool HasChangesAgainstMain(string executionDirectory, GoalId goalId);
+
+    string ResolveHead(string worktreePath);
+
+    IReadOnlyList<string> GetChangedFiles(string worktreePath);
+
+    GoalAcceptanceEvidenceBundle BuildAcceptanceEvidence(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        string? worktreePath,
+        AcceptanceVerificationResult? verification,
+        bool verificationSkipped);
+}
+
+internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
+{
+    public static DefaultCliGoalWorktreeService Instance { get; } = new();
+
+    private DefaultCliGoalWorktreeService() { }
+
+    public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
+
+    public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
+
+    public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
+
+    public GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
+        GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+
+    public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
+
+    public GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.TryFastForwardMerge(executionDirectory, goalId);
+
+    public GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.TryRebaseOntoMain(executionDirectory, goalId);
+
+    public bool NeedsRebaseOntoMain(string executionDirectory, GoalId goalId) =>
+        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", BranchName(goalId)).ExitCode != 0;
+
+    public bool IsWorktreeClean(string executionDirectory, GoalId goalId) => GoalWorktrees.IsWorktreeClean(executionDirectory, goalId);
+
+    public bool HasChangesAgainstMain(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.HasChangesAgainstMain(executionDirectory, goalId);
+
+    public string ResolveHead(string worktreePath)
+    {
+        var result = GitCli.Run(worktreePath, "rev-parse", "HEAD");
+        return result.Succeeded
+            ? result.Output.Trim()
+            : string.Empty;
+    }
+
+    public IReadOnlyList<string> GetChangedFiles(string worktreePath) =>
+        GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+
+    public GoalAcceptanceEvidenceBundle BuildAcceptanceEvidence(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        string? worktreePath,
+        AcceptanceVerificationResult? verification,
+        bool verificationSkipped) =>
+        GoalAcceptanceEvidenceBundleBuilder.Build(kernel, goal, worktreePath, verification, verificationSkipped);
+}
 
 internal sealed record AcceptanceHostStopRequest(
     GoalId GoalId,

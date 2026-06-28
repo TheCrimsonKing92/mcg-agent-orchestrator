@@ -254,7 +254,12 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 parts,
                 "--confirm-batch-start",
                 "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
-            var readiness = GoalReadinessPreflight.Build(context.CurrentGoal, context.Agents, context.Workspace.ExecutionDirectory, context.WorkerProfiles);
+            var readiness = GoalReadinessPreflight.Build(
+                context.CurrentGoal,
+                context.Agents,
+                context.Workspace.ExecutionDirectory,
+                context.WorkerProfiles,
+                context.Worktrees.TryResolve);
             if (!readiness.AllowsStart(HasCliConfirmation(parts, "--confirm-readiness-risk")))
             {
                 EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "start-gate");

@@ -191,7 +191,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     $"goal-mark-landed is only valid for Completed goals; goal {landedGp} is {landedGoal.Status}. " +
                     "Active or InProgress goals self-heal via the conductor; only Completed (force-landed) goals need this command.");
             var landedDir = context.Workspace.ExecutionDirectory;
-            var landedBranch = GoalWorktrees.BranchName(landedId);
+            var landedBranch = context.Worktrees.BranchName(landedId);
             if (!HasCliConfirmation(parts, "--force"))
             {
                 var localExists = GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}").ExitCode == 0;
@@ -208,9 +208,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         "verify the work was merged into main before using this command. Use --force to bypass this check.");
             }
             Console.WriteLine($"Marking goal {landedGp} as landed out-of-band (branch: {landedBranch}).");
-            if (GoalWorktrees.TryResolve(landedDir, landedId) is not null)
+            if (context.Worktrees.TryResolve(landedDir, landedId) is not null)
             {
-                var removeResult = GoalWorktrees.Remove(landedDir, landedId, context.Kernel);
+                var removeResult = context.Worktrees.Remove(landedDir, landedId, context.Kernel);
                 PrintWorkspaceRemoveResult(removeResult);
             }
             else
@@ -318,7 +318,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
-                context.WorkerProfiles));
+                context.WorkerProfiles,
+                context.Worktrees.TryResolve));
             return false;
 
         case "goal-recovery":
@@ -458,7 +459,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var changesFlat = HasCliConfirmation(parts, "--flat");
             var changesJson = HasCliConfirmation(parts, "--json");
             if (!changesCommitted && !changesWorking) { changesCommitted = true; changesWorking = true; }
-            var changesWorktree = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            var changesWorktree = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             var changesReport = GoalChangesReader.Build(context.CurrentGoal, changesWorktree, changesCommitted, changesWorking, changesRoleFilter, changesTaskFilter);
             if (changesJson)
                 ConsoleViews.PrintGoalChangesJson(changesReport);
@@ -971,7 +972,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
         Console.WriteLine(simple ? "Stage simple-goal: reused existing idempotent goal." : "Stage goal: reused existing idempotent goal.");
         var journal = GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
         if (goal.Status == GoalStatus.Completed &&
-            GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is null &&
+            context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is null &&
             journal.LatestByOperation.Any(entry => entry.Operation == "workspace:remove" && entry.Status == GoalOperationStatus.Completed))
         {
             Console.WriteLine("Lifecycle goal already completed and workspace cleanup is recorded.");
@@ -989,9 +990,9 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
         Console.WriteLine(simple ? "Stage simple-goal: created and activated." : "Stage goal: created and activated.");
     }
 
-    var branch = GoalWorktrees.BranchName(goal.Id);
+    var branch = context.Worktrees.BranchName(goal.Id);
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
-    var workspacePath = GoalWorktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
+    var workspacePath = context.Worktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", workspacePath);
     Console.WriteLine($"Stage workspace create: {workspacePath} (branch {branch})");
     EnsureGoalReadinessAllowsStart(context, goal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
@@ -1045,7 +1046,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     try
     {
         GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Removing goal workspace.");
-        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
+        removeResult = context.Worktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
     }
     catch (InvalidOperationException ex)
     {
@@ -1135,7 +1136,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         GoalWorktreeRemoveResult removeResult;
         try
         {
-            removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
+            removeResult = context.Worktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
         }
         catch (InvalidOperationException ex)
         {
@@ -1252,7 +1253,12 @@ private static string BuildLifecycleRunGoalNextCommand(string goalPrefix, RunGoa
 
 internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context, Goal goal, bool confirmed)
 {
-    var readiness = GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory, context.WorkerProfiles);
+    var readiness = GoalReadinessPreflight.Build(
+        goal,
+        context.Agents,
+        context.Workspace.ExecutionDirectory,
+        context.WorkerProfiles,
+        context.Worktrees.TryResolve);
     if (!readiness.AllowsStart(confirmed))
     {
         ConsoleViews.PrintGoalReadinessPreflight(readiness);
@@ -1296,7 +1302,12 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     var goal = context.CurrentGoal!;
     ConsoleViews.PrintGoal(goal);
     ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(goal.Id));
-    ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(goal, context.Agents, context.Workspace.ExecutionDirectory, context.WorkerProfiles));
+    ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
+        goal,
+        context.Agents,
+        context.Workspace.ExecutionDirectory,
+        context.WorkerProfiles,
+        context.Worktrees.TryResolve));
     ConsoleViews.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
     ConsoleViews.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
     ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));
@@ -2157,7 +2168,7 @@ private static string RemoveFlag(string value, string flag) =>
 
 private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<string> parts)
 {
-    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    if (!context.Worktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
     {
         throw new InvalidOperationException(
             "goals-prune requires a git work tree; the execution directory is not inside a git repository.");
@@ -2186,35 +2197,35 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
     var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
     context.CurrentGoal = goal;
     var executionDirectory = context.Workspace.ExecutionDirectory;
-    var branch = GoalWorktrees.BranchName(goal.Id);
+    var branch = context.Worktrees.BranchName(goal.Id);
     switch (normalizedAction)
     {
         case "status":
-            var existing = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+            var existing = context.Worktrees.TryResolve(executionDirectory, goal.Id);
             Console.WriteLine(existing is null
                 ? $"Goal has no workspace. Create one with: workspace create (branch {branch})"
                 : $"Workspace: {existing} (branch {branch})");
             return;
 
         case "create":
-            Console.WriteLine($"Workspace: {GoalWorktrees.Ensure(executionDirectory, goal.Id)} (branch {branch})");
+            Console.WriteLine($"Workspace: {context.Worktrees.Ensure(executionDirectory, goal.Id)} (branch {branch})");
             return;
 
         case "merge":
-            var merge = GoalWorktrees.TryFastForwardMerge(executionDirectory, goal.Id);
+            var merge = context.Worktrees.TryFastForwardMerge(executionDirectory, goal.Id);
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));
             return;
 
         case "rebase":
-            Console.WriteLine(FormatWorkspaceRebase(GoalWorktrees.TryRebaseOntoMain(executionDirectory, goal.Id)));
+            Console.WriteLine(FormatWorkspaceRebase(context.Worktrees.TryRebaseOntoMain(executionDirectory, goal.Id)));
             return;
 
         case "remove":
             var policy = ResolveCliAutonomyPolicy(parts);
             EnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "workspace remove");
-            PrintWorkspaceRemoveResult(GoalWorktrees.Remove(executionDirectory, goal.Id, context.Kernel));
+            PrintWorkspaceRemoveResult(context.Worktrees.Remove(executionDirectory, goal.Id, context.Kernel));
             return;
 
         default:
@@ -2231,16 +2242,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
-    var worktreePath = GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
+    var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
     string? testedWorktreeHead = null;
     if (worktreePath is not null)
     {
-        var branch = GoalWorktrees.BranchName(goal.Id);
-        var needsRebase = GitCli.Run(context.Workspace.ExecutionDirectory, "merge-base", "--is-ancestor", "HEAD", branch).ExitCode != 0;
-        if (needsRebase)
+        if (context.Worktrees.NeedsRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id))
         {
-            var rebase = GoalWorktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+            var rebase = context.Worktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
             Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
 
             if (!rebase.UpdatedBranch)
@@ -2253,8 +2262,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             }
         }
 
-        testedWorktreeHead = ResolveWorktreeHead(worktreePath);
-        var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+        testedWorktreeHead = context.Worktrees.ResolveHead(worktreePath);
+        var changedFiles = context.Worktrees.GetChangedFiles(worktreePath);
         if (skipVerify)
         {
             Console.WriteLine("Verification: skipped (--skip-verify)");
@@ -2271,7 +2280,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         }
     }
 
-    var evidence = GoalAcceptanceEvidenceBundleBuilder.Build(context.Kernel, goal, worktreePath, verification, skipVerify);
+    var evidence = context.Worktrees.BuildAcceptanceEvidence(context.Kernel, goal, worktreePath, verification, skipVerify);
     ConsoleViews.PrintAcceptanceEvidenceBundle(evidence);
 
     if (!evidence.Passed)
@@ -2336,7 +2345,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Merge: () =>
         {
             var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
-            var merge = GoalWorktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+            var merge = context.Worktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
 
             if (merge is null)
             {
@@ -2364,7 +2373,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             var failedChecks = new[] { "merge" };
             context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
             context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
-            Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {GoalWorktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
+            Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {context.Worktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
         }
         return mergeCommit.FastForwarded;
     }
@@ -2578,7 +2587,7 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
     }
 
     var executionDirectory = context.Workspace.ExecutionDirectory;
-    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    var worktree = context.Worktrees.TryResolve(executionDirectory, goal.Id);
     if (worktree is null)
     {
         return;
@@ -2596,7 +2605,7 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
         .Select(t => t.Id)
         .ToHashSet();
 
-    if (sandboxBlockedIds.Count > 0 && !GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id))
+    if (sandboxBlockedIds.Count > 0 && !context.Worktrees.IsWorktreeClean(executionDirectory, goal.Id))
     {
         TryCommitSandboxBlockedEdits(worktree, goal);
     }
@@ -2610,14 +2619,14 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
         return;
     }
 
-    if (!GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
-        !GoalWorktrees.HasChangesAgainstMain(executionDirectory, goal.Id))
+    if (!context.Worktrees.IsWorktreeClean(executionDirectory, goal.Id) ||
+        !context.Worktrees.HasChangesAgainstMain(executionDirectory, goal.Id))
     {
         return;
     }
 
     var note =
-        $"Auto-verified from git ground truth: committed changes on {GoalWorktrees.BranchName(goal.Id)} " +
+        $"Auto-verified from git ground truth: committed changes on {context.Worktrees.BranchName(goal.Id)} " +
         "against main on a clean worktree. The acceptance suite and evidence bundle are the authoritative gates.";
     foreach (var task in pending)
     {
@@ -2656,21 +2665,21 @@ private static void TryCommitSandboxBlockedEdits(string worktreePath, Goal goal)
 // would prepare context artifacts into the main checkout.
 private static void EnsureGoalWorkspaceForDispatch(CliExecutionContext context, Goal goal)
 {
-    if (GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null)
+    if (context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null)
     {
         return;
     }
 
     // Deterministic creation needs a git work tree to host the worktree; outside a git repo,
     // fall back to the existing execution-directory resolution rather than failing the dispatch.
-    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    if (!context.Worktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
     {
         return;
     }
 
-    var branch = GoalWorktrees.BranchName(goal.Id);
+    var branch = context.Worktrees.BranchName(goal.Id);
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
-    var path = GoalWorktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
+    var path = context.Worktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", path);
     Console.WriteLine($"Workspace auto-created: {path} (branch {branch})");
 }
@@ -2701,13 +2710,13 @@ private static void CleanupGoalWorkspaceAfterMerge(
     GoalWorktreeRemoveResult removeResult;
     try
     {
-        removeResult = GoalWorktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
+        removeResult = context.Worktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
     }
     catch (InvalidOperationException ex)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
         Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
-        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
         return;
     }
 
@@ -2720,7 +2729,7 @@ private static void CleanupGoalWorkspaceAfterMerge(
     else
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? GoalWorktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
     }
 }
 

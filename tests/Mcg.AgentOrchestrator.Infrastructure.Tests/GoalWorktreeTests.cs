@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-public sealed class GoalWorktreeTests
+public sealed class GoalWorktreeIntegrationTests
 {
     private static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),
