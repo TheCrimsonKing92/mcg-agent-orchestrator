@@ -898,7 +898,7 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        return WorkerProviderResolver.Resolve(dispatch.WorkerName).Kind is
+        return dispatch.WorkerProviderKind is
             ProviderKind.OpenAICodexCli or
             ProviderKind.AnthropicClaudeCli or
             ProviderKind.OpenAICodexSpark or

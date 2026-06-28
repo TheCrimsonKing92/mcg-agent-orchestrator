@@ -69,7 +69,8 @@ public sealed record TaskDispatchRecord(
     bool UsesComplexModel = false,
     string? BaseCommit = null,
     string? ResultCommit = null,
-    bool SandboxLowIntegrity = false);
+    bool SandboxLowIntegrity = false,
+    ProviderKind WorkerProviderKind = ProviderKind.Unknown);
 
 public sealed record TaskProcessRecord(
     int ProcessId,

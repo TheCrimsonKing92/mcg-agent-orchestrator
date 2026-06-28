@@ -801,7 +801,8 @@ public sealed class WorkerDispatchTests
             WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
             "opaque launcher command",
             "C:\\repo",
-            DateTimeOffset.Parse("2026-06-26T12:00:00Z")));
+            DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     var verification = new TaskVerificationRecord(
         "opaque launcher command",
         "C:\\repo",
@@ -4365,6 +4366,45 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_activates_orchestrator_commit_path")]
+    public void BackgroundDispatchRunnerTypedProviderCanSelfCommitFalseActivatesOrchestratorCommitPath()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var workerProfile = "typed-openai-worker";
+    var providers = new WorkerProviderCatalog([
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexCli, UsesCodexExitFileBehavior: true),
+            workerProfile,
+            "OpenAI",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: true,
+                SupportsPlanMode: true))
+    ]);
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        workerName: workerProfile,
+        command: "opaque worker prompt",
+        workerProviderKind: ProviderKind.OpenAICodexCli);
+
+    new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedIsCommittedByOrchestrator()
 {
@@ -6115,7 +6155,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         string? verificationPlan = null,
         bool sandboxLowIntegrity = false,
         string workerName = "codex-cli",
-        string command = "codex exec prompt")
+        string command = "codex exec prompt",
+        ProviderKind workerProviderKind = ProviderKind.Unknown)
 {
     var kernel = new AgentOrchestratorKernel();
     var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
@@ -6148,7 +6189,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         command,
         worktree,
         clock.UtcNow,
-        SandboxLowIntegrity: sandboxLowIntegrity));
+        SandboxLowIntegrity: sandboxLowIntegrity,
+        WorkerProviderKind: workerProviderKind));
     var process = new TaskProcessRecord(999999, command, worktree, stdout, stderr, exit, clock.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return (kernel, goal, task, process);

@@ -38,6 +38,7 @@ public sealed class BackgroundDispatchRunner
     private readonly Func<int, bool> _tryKillBuildDaemon;
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
     private readonly DispatchRecoveryPolicy _recoveryPolicy;
+    private readonly WorkerProviderCatalog _workerProviders;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -50,7 +51,8 @@ public sealed class BackgroundDispatchRunner
         TimeSpan? progressStallTimeout = null,
         IDispatchDiagnosticWriter? diagnosticWriter = null,
         TimeSpan? startupHangTimeout = null,
-        DispatchRecoveryPolicy? recoveryPolicy = null)
+        DispatchRecoveryPolicy? recoveryPolicy = null,
+        WorkerProviderCatalog? workerProviders = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -63,6 +65,7 @@ public sealed class BackgroundDispatchRunner
         _tryKillBuildDaemon = tryKillBuildDaemon ?? TryKillBuildDaemonProcess;
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
         _recoveryPolicy = recoveryPolicy ?? new DispatchRecoveryPolicy(_clock);
+        _workerProviders = workerProviders ?? WorkerProviderCatalog.Default();
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -190,7 +193,7 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
+    private WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
         var provider = ResolveWorkerProvider(dispatch);
         if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
@@ -638,7 +641,7 @@ public sealed class BackgroundDispatchRunner
         return DispatchFailureClassifier.Classify(task, verification, providerFailureKind).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
     }
 
-    private static ProviderFailureKind ParseProviderFailureKind(
+    private ProviderFailureKind ParseProviderFailureKind(
         TaskDispatchRecord? dispatch,
         int exitCode,
         string standardOutput,
@@ -1496,13 +1499,21 @@ public sealed class BackgroundDispatchRunner
         return values;
     }
 
-    private static bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
+    private bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
         dispatch is not null && ResolveWorkerProvider(dispatch).Identity.UsesCodexExitFileBehavior;
 
-    private static IWorkerProvider ResolveWorkerProvider(TaskDispatchRecord dispatch)
+    private IWorkerProvider ResolveWorkerProvider(TaskDispatchRecord dispatch)
     {
-        var catalog = WorkerProviderCatalog.Default();
-        var provider = catalog.ResolveProfile(dispatch.WorkerName);
+        if (dispatch.WorkerProviderKind != ProviderKind.Unknown)
+        {
+            var typedProvider = _workerProviders.Resolve(dispatch.WorkerProviderKind);
+            if (typedProvider.Identity.Kind != ProviderKind.Unknown)
+            {
+                return typedProvider;
+            }
+        }
+
+        var provider = _workerProviders.ResolveProfile(dispatch.WorkerName);
         if (provider.Identity.Kind != ProviderKind.Unknown)
         {
             return provider;
@@ -1510,7 +1521,7 @@ public sealed class BackgroundDispatchRunner
 
         return string.IsNullOrWhiteSpace(dispatch.ProviderName)
             ? provider
-            : catalog.ResolveProviderName(dispatch.ProviderName);
+            : _workerProviders.ResolveProviderName(dispatch.ProviderName);
     }
 
     private static bool ContainsCodexFinalOutput(string value)
