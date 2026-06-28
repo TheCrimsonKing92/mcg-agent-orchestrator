@@ -5825,6 +5825,40 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_assigned_task_with_merged_branch_cleans_without_reopening")]
+    public void TerminalGoalSweepCompletedAssignedTaskWithMergedBranchCleansWithoutReopening()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Completed assigned but landed", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            Xunit.Assert.True(first.Changed);
+            Xunit.Assert.DoesNotContain(first.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
+            Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "landed-task-desync");
+            Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "merged-branch-cleanup");
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
+            Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.Empty(second.Goals);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_applies_exit_file_outside_command_transaction")]
     public void PersistentRunnerReconcileAppliesExitFileOutsideCommandTransaction()
     {

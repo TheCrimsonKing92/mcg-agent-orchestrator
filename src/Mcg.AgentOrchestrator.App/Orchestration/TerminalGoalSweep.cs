@@ -54,7 +54,35 @@ internal static class TerminalGoalSweep
             }
 
             var goal = kernel.GetGoal(originalGoal.Id);
-            if (kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+            var isCompletedGitGoal = goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory);
+            var hasGoalBranchArtifact = isCompletedGitGoal &&
+                (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
+                 GoalWorktrees.HasBranch(executionDirectory, goal.Id));
+            var branchAlreadyLanded = isCompletedGitGoal &&
+                hasGoalBranchArtifact &&
+                GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
+
+            if (branchAlreadyLanded)
+            {
+                foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
+                {
+                    var staleStatus = task.Status;
+                    kernel.ReportTaskProgress(
+                        goal.Id,
+                        task.Id,
+                        WorkTaskStatus.Cancelled,
+                        "Terminal stale-goal sweep cancelled stale task because the goal branch is already landed.");
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "landed-task-desync",
+                        $"landed goal had stale {staleStatus} task {task.Id.Value[..8]}",
+                        $"workspace remove {prefix}"));
+                }
+
+                goal = kernel.GetGoal(originalGoal.Id);
+            }
+
+            if (!branchAlreadyLanded &&
+                kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",

@@ -479,6 +479,12 @@ public static class GoalWorktrees
             GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", branch, "HEAD").ExitCode == 0;
     }
 
+    public static bool HasBranch(string executionDirectory, GoalId goalId)
+    {
+        RequireGitWorkTree(executionDirectory);
+        return BranchExists(executionDirectory, BranchName(goalId));
+    }
+
     public static GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)
     {
         var branch = BranchName(goalId);
