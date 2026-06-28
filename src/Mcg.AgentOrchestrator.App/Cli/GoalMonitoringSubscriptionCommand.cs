@@ -466,7 +466,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
             var projectedEvents = ProjectCursorTokens(envelopes, timelineCursor, runEventCursor);
             var eligibleEvents = projectedEvents
-                .Where(evt => IsNewForCursor(evt, timelineCursor, runEventCursor) || !snapshotWritten)
+                .Where(evt => IsNewForCursor(evt, timelineCursor, runEventCursor) || (resumeCursor.IsEmpty && !snapshotWritten))
                 .Where(evt => Matches(evt, options))
                 .ToList();
             foreach (var evt in eligibleEvents)
@@ -484,19 +484,46 @@ internal static class GoalMonitoringSubscriptionCommand
 
             if (options.Once || (options.WaitTerminal && IsTerminalForWait(state)))
             {
-                if (options.WaitTerminal && eligibleEvents.Count == 0)
-                {
-                    var snapshot = BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor);
-                    if (Matches(snapshot, options))
-                    {
-                        PrintSubscriptionEvent(snapshot, options.Format, output);
-                    }
-                }
+                PrintCurrentSnapshotWhenNoEligibleEvent(
+                    eligibleEvents.Count,
+                    batch,
+                    state,
+                    workspace,
+                    timelineCursor,
+                    runEventCursor,
+                    options,
+                    output);
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
 
                 return state;
             }
 
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static void PrintCurrentSnapshotWhenNoEligibleEvent(
+        int eligibleEventCount,
+        GoalMonitoringBatchDto batch,
+        GoalLifecycleState state,
+        OrchestratorWorkspace workspace,
+        long timelineCursor,
+        long runEventCursor,
+        GoalMonitoringSubscriptionOptions options,
+        TextWriter output)
+    {
+        if (eligibleEventCount != 0)
+        {
+            return;
+        }
+
+        var snapshot = BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor) with
+        {
+            CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor).ToString()
+        };
+        if (Matches(snapshot, options))
+        {
+            PrintSubscriptionEvent(snapshot, options.Format, output);
         }
     }
 

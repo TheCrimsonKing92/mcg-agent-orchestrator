@@ -419,6 +419,43 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal("Created", doc.RootElement.GetProperty("currentState").GetString());
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_once_with_stale_composite_cursor_emits_current_snapshot")]
+    public async Task MonitorGoalLocalOnceWithStaleCompositeCursorEmitsCurrentSnapshot()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Emit current state", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor current state fallback", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                goal.Id.Value[..8],
+                "--once",
+                "--from-cursor",
+                "timeline:999;run-event:999",
+                "--event-kind",
+                "goal.snapshot"
+            ],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal("timeline:999;run-event:999", doc.RootElement.GetProperty("cursor").GetString());
+        Assert.Equal("goal.snapshot", doc.RootElement.GetProperty("eventKind").GetString());
+        Assert.Equal(goal.Id.Value, doc.RootElement.GetProperty("goalId").GetString());
+        Assert.Equal("Created", doc.RootElement.GetProperty("currentState").GetString());
+    }
+
     [Xunit.Theory(DisplayName = "Monitor_goal_local_current_state_uses_lifecycle_facts_for_completed_goal")]
     [Xunit.InlineData("conductor:land", GoalLifecycleState.Merged)]
     [Xunit.InlineData("conductor:record", GoalLifecycleState.Recorded)]
