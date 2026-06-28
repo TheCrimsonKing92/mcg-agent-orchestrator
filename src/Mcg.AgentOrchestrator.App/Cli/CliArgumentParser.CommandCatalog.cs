@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
 {
+internal static bool IsRecognizedCommand(string command) => IsSimpleCommand(command);
+
 private static bool IsSimpleCommand(string command)
 {
     return command.Equals("attention", StringComparison.OrdinalIgnoreCase) ||
@@ -108,6 +110,7 @@ private static bool IsSimpleCommand(string command)
         command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-show", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("goals-prune", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-channel", StringComparison.OrdinalIgnoreCase) ||

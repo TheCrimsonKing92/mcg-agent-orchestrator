@@ -8,6 +8,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
     {
         return false;
     }
+    CliCommandHelp.ThrowIfInvalidFlags(parts);
 
     var command = parts[0].ToLowerInvariant();
     var handled =

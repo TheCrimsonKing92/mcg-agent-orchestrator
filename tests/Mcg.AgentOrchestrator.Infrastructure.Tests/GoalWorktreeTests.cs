@@ -2301,6 +2301,79 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_help_does_not_create_goal_worktree")]
+    public void CliWorkspaceHelpDoesNotCreateGoalWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep workspace clean on help", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            var originalStatus = goal.Status;
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandHandlers.Execute(
+                    ["workspace", "create", goal.Id.Value[..8], "--help"],
+                    context);
+
+                Assert.False(changed);
+            });
+
+            Assert.Contains("Usage: workspace create", output);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".orchestrator-worktrees")));
+            Assert.Equal(originalStatus, goal.Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_help_does_not_create_backlog_or_goal_state")]
+    public void CliBacklogHelpDoesNotCreateBacklogOrGoalState()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            Goal? currentGoal = null;
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["backlog-list", "--help"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+
+                Assert.False(changed);
+            });
+
+            Assert.Contains("Usage: backlog-list", output);
+            Assert.False(File.Exists(workspace.BacklogStorePath));
+            Assert.Empty(kernel.Goals);
+            Assert.Null(currentGoal);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_safe_auto_stops_before_acceptance")]
     public void CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance()
     {
@@ -2823,6 +2896,54 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_commit_on_behalf_after_worker_commit_leaves_worktree_clean")]
+    public void GoalWorktreesCommitOnBehalfAfterWorkerCommitLeavesWorktreeClean()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var clock = new TestClock(DateTimeOffset.UtcNow);
+            var kernel = new AgentOrchestratorKernel();
+            var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Commit residual dirty worktree", [taskSpec]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            var dispatchedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, dispatchedAt));
+
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, "add", "-A");
+            RunGit(worktree, "commit", "-m", "Worker commit");
+            File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover");
+
+            var logs = Path.Combine(repo, "logs");
+            Directory.CreateDirectory(logs);
+            var stdout = Path.Combine(logs, "developer.out.log");
+            var stderr = Path.Combine(logs, "developer.err.log");
+            var exit = Path.Combine(logs, "developer.exit.txt");
+            File.WriteAllText(stdout, "Committed implementation.");
+            File.WriteAllText(stderr, string.Empty);
+            File.WriteAllText(exit, "0");
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, dispatchedAt, null, null));
+
+            new BackgroundDispatchRunner(clock, isStillRunning: _ => false).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.LastVerification!.ExitCode);
+            Assert.Equal(string.Empty, RunGitOutput(worktree, "status", "--short"));
+            Assert.Equal("Developer task.: Committed implementation.", RunGitOutput(worktree, "log", "-1", "--pretty=%s"));
+            Assert.Equal("seed.txt", RunGitOutput(worktree, "show", "--name-only", "--pretty=", "HEAD"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));
@@ -3104,5 +3225,10 @@ public sealed class GoalWorktreeTests
         {
             ResetPaths.Add(worktreePath);
         }
+    }
+
+    private sealed class TestClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
     }
 }

@@ -372,8 +372,11 @@ public sealed class TaskBriefTests
 
     Assert.Contains(brief, text => text.Contains("event-start", StringComparison.Ordinal));
     Assert.Contains(brief, text => text.Contains("event-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
-    Assert.True(!brief.Contains(new string('x', 900), StringComparison.Ordinal));
+    var timelineLine = brief.Split(Environment.NewLine).Single(text =>
+        text.Contains("TaskRetried", StringComparison.Ordinal) &&
+        text.Contains("event-start", StringComparison.Ordinal));
+    Assert.True(timelineLine.Contains("[truncated", StringComparison.Ordinal));
+    Assert.True(!timelineLine.Contains(new string('x', 900), StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_timeline_message_budget_for_simple_tasks")]
     public void BuildTaskBriefUsesSmallerTimelineMessageBudgetForSimpleTasks()
@@ -381,7 +384,7 @@ public sealed class TaskBriefTests
     var kernel = new AgentOrchestratorKernel(new FakeClock());
     var goal = kernel.CreateGoal(
         "Keep routine brief timeline entries small",
-        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+        [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Planner)]);
     var task = goal.Tasks.Single();
     var note = $"simple-brief-event-start {new string('s', 110)} simple-brief-event-middle {new string('m', 50)} simple-brief-event-tail";
     kernel.RetryTask(goal.Id, task.Id, note);
