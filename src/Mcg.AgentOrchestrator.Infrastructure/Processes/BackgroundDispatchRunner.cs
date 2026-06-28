@@ -395,11 +395,14 @@ public sealed class BackgroundDispatchRunner
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(processRecord, standardOutput, standardError);
+            var shouldCommitDirtyWorktree =
+                worktreeEvidence.HasRelevantCommitAfterDispatch ||
+                (task.LastDispatch.SandboxLowIntegrity &&
+                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                  sandboxCommitBlocked));
+
             if (!worktreeEvidence.IsClean &&
-                task.LastDispatch.SandboxLowIntegrity &&
-                (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                 sandboxCommitBlocked ||
-                 worktreeEvidence.HasRelevantCommitAfterDispatch) &&
+                shouldCommitDirtyWorktree &&
                 TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
                     BuildOrchestratorCommitSubject(task, standardOutput, standardError)) &&
