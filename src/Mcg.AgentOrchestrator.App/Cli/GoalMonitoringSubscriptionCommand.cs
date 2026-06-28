@@ -22,6 +22,9 @@ internal static class GoalMonitoringSubscriptionCommand
 
     public static GoalMonitoringSubscriptionOptions Parse(IReadOnlyList<string> parts)
     {
+        var isGoalsSubscribe = parts.Count >= 2 &&
+            parts[0].Equals("goals", StringComparison.OrdinalIgnoreCase) &&
+            parts[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase);
         parts = NormalizeCommandShape(parts);
         if (parts.Count < 2)
         {
@@ -31,7 +34,7 @@ internal static class GoalMonitoringSubscriptionCommand
         var sinceEventId = 0L;
         var once = false;
         var waitTerminal = false;
-        var format = GoalMonitoringOutputFormat.Sse;
+        var format = isGoalsSubscribe ? GoalMonitoringOutputFormat.Ndjson : GoalMonitoringOutputFormat.Sse;
         string? goalPrefix = null;
         string? taskId = null;
         var eventKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

@@ -79,6 +79,24 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.True(options.WaitTerminal);
     }
 
+    [Xunit.Fact(DisplayName = "Goals_subscribe_defaults_to_ndjson_for_headless_consumers")]
+    public void GoalsSubscribeDefaultsToNdjsonForHeadlessConsumers()
+    {
+        var subscribe = GoalMonitoringSubscriptionCommand.Parse([
+            "goals",
+            "subscribe",
+            "--goal-prefix",
+            "abc123"
+        ]);
+        var legacy = GoalMonitoringSubscriptionCommand.Parse([
+            "monitor-goal",
+            "abc123"
+        ]);
+
+        Assert.Equal(GoalMonitoringOutputFormat.Ndjson, subscribe.Format);
+        Assert.Equal(GoalMonitoringOutputFormat.Sse, legacy.Format);
+    }
+
     [Xunit.Fact(DisplayName = "Goals_subscribe_runs_outside_state_transaction")]
     public void GoalsSubscribeRunsOutsideStateTransaction()
     {
@@ -302,6 +320,48 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             Assert.True(doc.RootElement.TryGetProperty("CurrentState", out _));
             Assert.True(doc.RootElement.TryGetProperty("ArtifactPath", out _) || doc.RootElement.TryGetProperty("ProcessId", out _));
         });
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_resumes_persisted_run_events_from_cursor")]
+    public async Task MonitorGoalLocalNdjsonResumesPersistedRunEventsFromCursor()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new SqliteRunEventStore(workspace.RunEventStorePath);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Persist event", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor durable cursor", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        var first = await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            goal.Id.Value,
+            "conductor:dispatch",
+            "Begin",
+            "ignored",
+            null));
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            goal.Id.Value,
+            "conductor:dispatch",
+            "Completed",
+            "process=123",
+            null));
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["goals", "subscribe", "--goal-prefix", goal.Id.Value[..8], "--once", "--from-cursor", first.Sequence.ToString(), "--event-kind", "conductor:dispatch"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal(first.Sequence + 1, doc.RootElement.GetProperty("Cursor").GetInt64());
+        Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("EventKind").GetString());
+        Assert.Equal("Completed", doc.RootElement.GetProperty("CurrentState").GetString());
+        Assert.Equal(workspace.RunEventStorePath, doc.RootElement.GetProperty("ArtifactPath").GetString());
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_without_once_stays_attached_until_cancelled")]
