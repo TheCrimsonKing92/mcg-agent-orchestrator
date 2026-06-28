@@ -255,6 +255,64 @@ public sealed class WorkerDispatchTests
     Assert.Contains(File.ReadAllText(second.PromptPath), text => text.Contains("latest retry feedback for second prompt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "StartDispatches_refreshes_recorded_prompt_before_worker_start")]
+    public void StartDispatchesRefreshesRecordedPromptBeforeWorkerStart()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:00:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Fix stale retry dispatch prompts",
+        ["Recorded worker starts launch a prompt rendered from current task state."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+
+    try
+    {
+        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            profiles.GetRequired("codex-cli"),
+            [agent]);
+        var lateState = "late operator note that must appear in the prompt started by the worker";
+        kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], profiles));
+
+        var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
+        Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
+        Assert.Contains(File.ReadAllText(refreshedPromptPath), text => text.Contains(lateState, StringComparison.Ordinal));
+        Assert.Contains(developer.LastDispatch.Command, text => text.Contains(refreshedPromptPath, StringComparison.Ordinal));
+        Xunit.Assert.Null(developer.LastProcess);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
+    }
+}
+
     [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_within_budget_prompt_unchanged")]
     public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
 {

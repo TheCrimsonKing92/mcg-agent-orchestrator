@@ -123,7 +123,11 @@ public sealed partial class AgentOrchestratorKernel
         task.SetDispatchSandboxLowIntegrity(sandboxLowIntegrity);
     }
 
-    public void RecordTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
+    public void RecordTaskDispatch(
+        GoalId goalId,
+        TaskId taskId,
+        TaskDispatchRecord dispatch,
+        bool allowPendingRecordedDispatchRefresh = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -133,7 +137,11 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' already has passing verification; retry the task before dispatching it again.");
         }
 
-        if (task.Status != WorkTaskStatus.Assigned)
+        if (task.Status != WorkTaskStatus.Assigned &&
+            !(allowPendingRecordedDispatchRefresh &&
+                task.Status == WorkTaskStatus.Running &&
+                task.LastDispatch is not null &&
+                task.LastProcess is null))
         {
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before dispatching it again.");
         }

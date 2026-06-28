@@ -131,9 +131,10 @@ public static class WorkerProfileDispatcher
         string? reasoningEffort = null,
         TaskComplexity? taskComplexity = null,
         bool usesComplexModel = false,
-        IReadOnlyList<string>? preflightFindings = null)
+        IReadOnlyList<string>? preflightFindings = null,
+        bool allowPendingRecordedDispatchRefresh = false)
     {
-        EnsureTaskNeedsExecution(task);
+        EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
@@ -167,7 +168,8 @@ public static class WorkerProfileDispatcher
             preparation.PromptCharacterCount,
             usesComplexModel,
             PromptPath: preparation.PromptPath,
-            WorkerProviderKind: workerProviderKind));
+            WorkerProviderKind: workerProviderKind),
+            allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 
@@ -677,11 +679,19 @@ public static class WorkerProfileDispatcher
             $"A goal workspace is required to dispatch a {role} task; run 'workspace create' before subscription-dispatch.");
     }
 
-    private static void EnsureTaskNeedsExecution(TaskSpec task)
+    private static void EnsureTaskNeedsExecution(TaskSpec task, bool allowPendingRecordedDispatchRefresh = false)
     {
         if (task.LastVerification?.Succeeded is true)
         {
             throw new InvalidOperationException($"Task '{task.Id}' already has passing verification; retry the task before dispatching it again.");
+        }
+
+        if (allowPendingRecordedDispatchRefresh &&
+            task.Status == WorkTaskStatus.Running &&
+            task.LastDispatch is not null &&
+            task.LastProcess is null)
+        {
+            return;
         }
 
         if (task.Status != WorkTaskStatus.Assigned)
