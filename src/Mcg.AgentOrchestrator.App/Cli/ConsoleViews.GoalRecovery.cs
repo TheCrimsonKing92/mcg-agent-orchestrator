@@ -70,7 +70,10 @@ public static void PrintGoalRecoveryReport(GoalRecoveryReport report)
             Console.WriteLine($"  Task {finding.TaskNumber} {finding.Role} {finding.Status}: {OutputTextPreview.CreateTimeline(finding.Finding).Text}");
             if (finding.RecoveryDecision is { } decision)
             {
-                Console.WriteLine($"     recovery: action='{decision.ActionName}' evidence='{decision.EvidencePath}'");
+                var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
+                    ? string.Empty
+                    : $" blocker='{decision.Blocker}'";
+                Console.WriteLine($"     recovery: action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}");
             }
             Console.WriteLine($"     command: {finding.SuggestedCommand}");
         }

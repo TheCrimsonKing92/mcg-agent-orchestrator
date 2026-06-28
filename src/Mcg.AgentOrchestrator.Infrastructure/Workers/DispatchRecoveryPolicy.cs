@@ -148,12 +148,15 @@ public sealed class DispatchRecoveryPolicy
 
     public static int GetStaleRetryBudgetRemaining(TaskSpec task)
     {
-        var consumed = task.VerificationHistory.Count(IsStaleDispatchRecoveryVerification);
+        var consumed = task.VerificationHistory.Count(IsStaleDispatchRetryVerification);
         return Math.Max(0, DefaultStaleDispatchRetries - consumed);
     }
 
+    public static bool IsStaleDispatchRetryVerification(TaskVerificationRecord verification) =>
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal);
+
     public static bool IsStaleDispatchRecoveryVerification(TaskVerificationRecord verification) =>
-        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        IsStaleDispatchRetryVerification(verification) ||
         verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
         verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
