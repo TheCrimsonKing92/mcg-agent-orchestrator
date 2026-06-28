@@ -2088,3 +2088,10 @@ Goal 34acf303: # GOAL: Typed DispatchOutcome + failure taxonomy, FIRST increment
 
 - Operator gate: Planner: not-run; planner-only task, no repository changes (exit 0); Researcher: not-run; Researcher task only, no repo changes (exit 0); Developer: pass - 11 DispatchOutcome filtered tests passed (exit 0); Tester: pass - 11 passed, 0 failed (exit 0); Reviewer: not-run by reviewer; prior evidence shows focused DispatchOutcome tests passed 11/0 (exit 0)
 - Model fit: Model fit: OpenAI/gpt-5.5 - adequate - planner decomposition - handled source-oriented planning and verification constraints without needing code edits.
+
+## 2026-06-28 - Backlog slice: Implement real --help for CLI commands  Observed backlog-list ...
+
+Goal 7244dd95: Backlog slice: Implement real --help for CLI commands  Observed backlog-list --help falling through to normal backlog.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 3d7f6ab6a023a6e08d6c3cdf11ba0a7376eb369b). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 3d7f6ab6a023a6e08d6c3cdf11ba0a7376eb369b). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, no repository edits (exit 0); Researcher: not-run; read-only Researcher task, verification is repository evidence above (exit 0); Developer: pass, 15 passed; existing NuGet vulnerability-cache access/analyzer warnings only (exit 0); Tester: pass, 15/15 focused tests passed; manual CLI help/invalid-flag checks passed (exit 0); Reviewer: not-run; prior Tester evidence says focused suite passed, 15 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - identified a spec coverage gap from code evidence.
