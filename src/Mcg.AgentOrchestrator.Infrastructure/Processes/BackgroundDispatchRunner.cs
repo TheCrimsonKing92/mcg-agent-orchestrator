@@ -201,7 +201,7 @@ public sealed class BackgroundDispatchRunner
             return WorkerSandboxProvider.Claude;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAIJudge)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
         {
             return WorkerSandboxProvider.Codex;
         }

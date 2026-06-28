@@ -70,7 +70,7 @@ public static class WorkerProfileDiagnostics
         return provider.Identity.Kind switch
         {
             ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAIJudge => EvaluateCodexPatchCapability(normalized),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark => EvaluateCodexPatchCapability(normalized),
             _ => new WorkerProfilePatchCapability(
                 true,
                 "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")

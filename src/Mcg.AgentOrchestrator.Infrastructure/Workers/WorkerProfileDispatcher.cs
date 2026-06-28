@@ -945,8 +945,12 @@ public static class WorkerProfileDispatcher
 
     private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
     {
-        var provider = DefaultProviders.ResolveModelProvider(providerName);
-        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAIJudge &&
+        if (!DefaultProviders.TryResolveModelProvider(providerName, out var provider))
+        {
+            return false;
+        }
+
+        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 

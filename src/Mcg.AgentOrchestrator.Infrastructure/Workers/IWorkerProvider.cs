@@ -134,10 +134,18 @@ public sealed class WorkerProviderCatalog
     }
 
     public IWorkerProvider ResolveModelProvider(string providerName) =>
-        _providers.FirstOrDefault(provider =>
-            provider.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
-            provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.AnthropicClaudeCli or ProviderKind.OllamaQwenCodeCli)
-        ?? throw new InvalidOperationException($"Provider '{providerName}' does not have a default subscription worker profile.");
+        TryResolveModelProvider(providerName, out var provider)
+            ? provider
+            : throw new InvalidOperationException($"Provider '{providerName}' does not have a default subscription worker profile.");
+
+    public bool TryResolveModelProvider(string providerName, out IWorkerProvider provider)
+    {
+        provider = _providers.FirstOrDefault(candidate =>
+            candidate.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+            candidate.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.AnthropicClaudeCli or ProviderKind.OllamaQwenCodeCli)
+            ?? DefaultUnknownProvider.Instance;
+        return provider.Identity.Kind != ProviderKind.Unknown;
+    }
 
     public static WorkerProviderCatalog Default() => new(
     [
@@ -162,15 +170,6 @@ public sealed class WorkerProviderCatalog
         new StaticWorkerProvider(
             new WorkerProviderIdentity(ProviderKind.OpenAICodexSpark, UsesCodexExitFileBehavior: true),
             "codex-spark",
-            "OpenAI",
-            new WorkerCapabilities(
-                CanSelfCommit: false,
-                CanSelfVerify: true,
-                SupportsInteractiveSession: false,
-                SupportsPlanMode: true)),
-        new StaticWorkerProvider(
-            new WorkerProviderIdentity(ProviderKind.OpenAIJudge, UsesCodexExitFileBehavior: true),
-            "gpt-5.5-judge",
             "OpenAI",
             new WorkerCapabilities(
                 CanSelfCommit: false,
