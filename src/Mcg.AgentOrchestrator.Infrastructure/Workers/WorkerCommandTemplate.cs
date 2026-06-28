@@ -61,7 +61,8 @@ public static partial class WorkerCommandTemplate
         string workerName,
         string commandTemplate,
         string promptRoot,
-        IReadOnlyDictionary<string, string?>? variables = null)
+        IReadOnlyDictionary<string, string?>? variables = null,
+        DateTimeOffset? dispatchedAt = null)
     {
         if (string.IsNullOrWhiteSpace(workerName))
         {
@@ -73,7 +74,9 @@ public static partial class WorkerCommandTemplate
             throw new ArgumentException("Value cannot be empty.", nameof(commandTemplate));
         }
 
-        var promptPath = Path.Combine(promptRoot, $"{brief.GoalId.Value[..8]}-{brief.TaskId.Value[..8]}-{Sanitize(workerName)}.md");
+        var stamp = (dispatchedAt ?? DateTimeOffset.UtcNow).UtcDateTime.ToString("yyyyMMddHHmmssfffffff");
+        var nonce = Guid.NewGuid().ToString("N")[..8];
+        var promptPath = Path.Combine(promptRoot, $"{brief.GoalId.Value[..8]}-{brief.TaskId.Value[..8]}-{stamp}-{nonce}-{Sanitize(workerName)}.md");
         var command = commandTemplate
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{goalId}", brief.GoalId.Value, StringComparison.OrdinalIgnoreCase)

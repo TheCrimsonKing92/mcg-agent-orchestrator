@@ -95,6 +95,7 @@ public sealed record TaskDispatchSnapshot(
     string? BaseCommit = null,
     string? ResultCommit = null,
     bool SandboxLowIntegrity = false,
+    string? PromptPath = null,
     ProviderKind WorkerProviderKind = ProviderKind.Unknown);
 
 public sealed record TaskProcessSnapshot(

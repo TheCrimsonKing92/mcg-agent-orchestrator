@@ -178,6 +178,196 @@ public sealed class WorkerDispatchTests
     Assert.Contains(preparation.Command, text => text.Contains("--role Developer", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_renders_latest_retry_feedback_into_fresh_prompt_before_dispatch")]
+    public void WorkerProfileDispatcherRendersLatestRetryFeedbackIntoFreshPromptBeforeDispatch()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T12:00:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    kernel.RetryTask(goal.Id, developer.Id, "old retry feedback that should not be the current blocker");
+    var latestFeedback = "latest retry feedback: fix goals subscribe routing before redispatch";
+    kernel.RetryTask(goal.Id, developer.Id, latestFeedback);
+    var profile = new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    var result = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        developer,
+        profile,
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-28T12:01:00Z"),
+        providerName: "OpenAI",
+        modelName: "gpt-5.5");
+
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains(prompt, text => text.Contains(latestFeedback, StringComparison.Ordinal));
+    Assert.Equal(result.PromptPath, developer.LastDispatch!.PromptPath);
+    Assert.Contains(developer.LastDispatch.Command, text => text.Contains(result.PromptPath, StringComparison.Ordinal));
+    Assert.True(File.Exists(developer.LastDispatch.PromptPath));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_repeated_dispatches_do_not_reuse_same_prompt_path")]
+    public void WorkerProfileDispatcherRepeatedDispatchesDoNotReuseSamePromptPath()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T13:00:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var profile = new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+
+    var first = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        developer,
+        profile,
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-28T13:01:00Z"),
+        providerName: "OpenAI",
+        modelName: "gpt-5.5");
+    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Synthetic first dispatch failed before retry.");
+    kernel.RetryTask(goal.Id, developer.Id, "latest retry feedback for second prompt");
+    var second = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        developer,
+        profile,
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-28T13:01:00Z"),
+        providerName: "OpenAI",
+        modelName: "gpt-5.5");
+
+    Assert.NotEqual(first.PromptPath, second.PromptPath);
+    Assert.True(File.Exists(first.PromptPath));
+    Assert.True(File.Exists(second.PromptPath));
+    Assert.Equal(second.PromptPath, developer.LastDispatch!.PromptPath);
+    Assert.Contains(File.ReadAllText(second.PromptPath), text => text.Contains("latest retry feedback for second prompt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "StartDispatches_refreshes_recorded_prompt_before_worker_start")]
+    public void StartDispatchesRefreshesRecordedPromptBeforeWorkerStart()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:00:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Fix stale retry dispatch prompts",
+        ["Recorded worker starts launch a prompt rendered from current task state."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+
+    try
+    {
+        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            profiles.GetRequired("codex-cli"),
+            [agent]);
+        var lateState = "late operator note that must appear in the prompt started by the worker";
+        kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], profiles));
+
+        var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
+        Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
+        Assert.Contains(File.ReadAllText(refreshedPromptPath), text => text.Contains(lateState, StringComparison.Ordinal));
+        Assert.Contains(developer.LastDispatch.Command, text => text.Contains(refreshedPromptPath, StringComparison.Ordinal));
+        Xunit.Assert.Null(developer.LastProcess);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
+    }
+}
+
+    [Xunit.Fact(DisplayName = "StartDispatches_fails_closed_when_recorded_worker_profile_is_missing")]
+    public void StartDispatchesFailsClosedWhenRecordedWorkerProfileIsMissing()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:10:00Z")));
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Fix stale retry dispatch prompts",
+        ["Recorded worker starts fail closed when the previous worker profile cannot be resolved."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+
+    try
+    {
+        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            profiles.GetRequired("codex-cli"),
+            [agent]);
+        var missingProfiles = new WorkerProfileCatalog([]);
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], missingProfiles));
+
+        Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
+        Assert.Equal(prepared.PromptPath, developer.LastDispatch!.PromptPath);
+        Xunit.Assert.Null(developer.LastProcess);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
+    }
+}
+
     [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_within_budget_prompt_unchanged")]
     public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
 {

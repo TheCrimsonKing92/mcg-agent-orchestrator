@@ -36,7 +36,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
     TaskSpec task,
     WorkerProfile profile,
     IReadOnlyList<AgentDefinition>? agents = null,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    bool allowPendingRecordedDispatchRefresh = false)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -53,11 +54,81 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         workspace.PromptDirectory,
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
-        subscriptionMetadata?.Variables,
-        subscriptionMetadata?.ProviderName,
-        subscriptionMetadata?.ModelName,
-        subscriptionMetadata?.ReasoningEffort,
-        subscriptionMetadata?.Complexity);
+        variables: subscriptionMetadata?.Variables,
+        providerName: subscriptionMetadata?.ProviderName,
+        modelName: subscriptionMetadata?.ModelName,
+        reasoningEffort: subscriptionMetadata?.ReasoningEffort,
+        taskComplexity: subscriptionMetadata?.Complexity,
+        usesComplexModel: false,
+        preflightFindings: null,
+        allowPendingRecordedDispatchRefresh: allowPendingRecordedDispatchRefresh);
+}
+
+public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskSpec task,
+    IReadOnlyList<AgentDefinition>? agents = null,
+    WorkerProfileCatalog? profiles = null,
+    IModelProviderRegistry? providers = null)
+{
+    var lastDispatch = task.LastDispatch
+        ?? throw new InvalidOperationException($"Task '{task.Id}' has no dispatch to refresh before start.");
+    if (task.LastProcess is not null)
+    {
+        throw new InvalidOperationException($"Task '{task.Id}' already has a dispatch process record; refresh, cancel, or retry before starting it again.");
+    }
+
+    var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
+    var resolvedProfiles = profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
+    var profile = resolvedProfiles.Profiles.FirstOrDefault(candidate =>
+        candidate.Name.Equals(lastDispatch.WorkerName, StringComparison.OrdinalIgnoreCase));
+    if (profile is null)
+    {
+        throw new InvalidOperationException(
+            $"Cannot refresh dispatch for task '{task.Id}' before start because worker profile '{lastDispatch.WorkerName}' is not available.");
+    }
+
+    return ProfileDispatchTask(
+        kernel,
+        workspace,
+        goal,
+        task,
+        profile,
+        resolvedAgents,
+        providers,
+        allowPendingRecordedDispatchRefresh: true);
+}
+
+public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatchesBeforeStart(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    IReadOnlyList<AgentDefinition>? agents = null,
+    WorkerProfileCatalog? profiles = null,
+    IModelProviderRegistry? providers = null)
+{
+    var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
+    var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
+    var resolvedProfiles = profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
+    var refreshed = new List<WorkerProfileDispatchResult>();
+
+    foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
+    {
+        var task = goal.Tasks.Single(task => task.Id == item.TaskId);
+        var dispatch = RefreshPreparedDispatchBeforeStart(
+            kernel,
+            workspace,
+            goal,
+            task,
+            resolvedAgents,
+            resolvedProfiles,
+            providers);
+        refreshed.Add(dispatch);
+    }
+
+    return refreshed;
 }
 
 private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
@@ -214,7 +285,11 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         kernel,
         workspace,
         goal,
-        batch.Dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet());
+        batch.Dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet(),
+        refreshBeforeStart: false,
+        agents,
+        profiles,
+        providers);
     return new SubscriptionStartResult(batch.Dispatches, processes, safeBatch.Plan, batch.Blocked);
 }
 
@@ -329,27 +404,62 @@ private static string? ResolveParallelProviderKey(TaskSpec task, IReadOnlyList<A
     return agent?.Model.ProviderName;
 }
 
-public static ProcessBatchExecutionResult StartDispatches(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)
+public static ProcessBatchExecutionResult StartDispatches(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    IReadOnlyList<AgentDefinition>? agents = null,
+    WorkerProfileCatalog? profiles = null,
+    IModelProviderRegistry? providers = null,
+    bool refreshBeforeStart = true)
 {
-    return StartDispatches(kernel, workspace, goal, taskIdsToStart: null);
+    return StartDispatches(
+        kernel,
+        workspace,
+        goal,
+        taskIdsToStart: null,
+        refreshBeforeStart,
+        agents,
+        profiles,
+        providers);
 }
 
 private static ProcessBatchExecutionResult StartDispatches(
     AgentOrchestratorKernel kernel,
     OrchestratorWorkspace workspace,
     Goal goal,
-    HashSet<TaskId>? taskIdsToStart)
+    HashSet<TaskId>? taskIdsToStart,
+    bool refreshBeforeStart,
+    IReadOnlyList<AgentDefinition>? agents = null,
+    WorkerProfileCatalog? profiles = null,
+    IModelProviderRegistry? providers = null)
 {
     var runner = new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var started = new List<TaskSpec>();
+    IReadOnlyList<AgentDefinition>? resolvedAgents = null;
+    WorkerProfileCatalog? resolvedProfiles = null;
 
     foreach (var item in plan.Items.Where(item =>
         item.Status == ProcessBatchItemStatus.Ready &&
         (taskIdsToStart is null || taskIdsToStart.Contains(item.TaskId))))
     {
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
+        if (refreshBeforeStart)
+        {
+            resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
+            resolvedProfiles ??= profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
+            RefreshPreparedDispatchBeforeStart(
+                kernel,
+                workspace,
+                goal,
+                task,
+                resolvedAgents,
+                resolvedProfiles,
+                providers);
+        }
+
         runner.StartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
         started.Add(task);
     }

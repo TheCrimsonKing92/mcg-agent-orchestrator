@@ -47,6 +47,7 @@ public static async Task<object?> ApplyTaskActionAsync(
             return DashboardResponseMapper.ToProfileDispatchDto(goal, subscriptionDispatch);
 
         case "start":
+            RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers);
             new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
             return null;
 
