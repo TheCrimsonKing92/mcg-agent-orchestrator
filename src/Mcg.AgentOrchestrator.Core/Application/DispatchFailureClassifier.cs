@@ -44,6 +44,49 @@ public static class DispatchFailureClassifier
 {
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
 
+    public static DispatchOutcome ClassifyProviderFailure(
+        ProviderFailureKind failureKind,
+        int exitCode,
+        bool hasZeroByteOutput,
+        string evidenceSummary)
+    {
+        return failureKind switch
+        {
+            ProviderFailureKind.RateLimit => new DispatchOutcome(
+                DispatchOutcomeKind.RecoverableSubscriptionLimit,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                evidenceSummary),
+            ProviderFailureKind.Connectivity => new DispatchOutcome(
+                DispatchOutcomeKind.ProviderConnectivity,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                evidenceSummary),
+            ProviderFailureKind.Sandbox1312 => new DispatchOutcome(
+                DispatchOutcomeKind.SandboxCommitBlocked,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.CommitAndVerify,
+                evidenceSummary),
+            _ => new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                evidenceSummary)
+        };
+    }
+
     private static readonly Regex PowerShellNativeErrorPrefix = new(
         "^[^:\\r\\n]{1,120}\\s+:\\s+(?<error>ERROR:|Error:|error:)",
         RegexOptions.CultureInvariant);

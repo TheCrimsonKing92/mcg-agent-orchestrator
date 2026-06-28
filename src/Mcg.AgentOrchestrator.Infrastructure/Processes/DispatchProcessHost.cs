@@ -677,28 +677,10 @@ public static void DropToLow() {
 
         try
         {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = WorkerShell.Executable,
-                WorkingDirectory = parameters.WorkingDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                // Redirect stdin so we can close it immediately: CLI workers (e.g. claude-cli, a
-                // node shim) otherwise inherit the orchestrator's stdin. Under a background/detached
-                // launch that handle is an open pipe that never reaches EOF, so the worker blocks
-                // indefinitely waiting for stdin (the CLI's 3s "no stdin" skip only applies to a
-                // TTY, not an inherited pipe). Closing stdin gives an immediate EOF and prevents
-                // the startup hang.
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            foreach (var argument in WorkerShell.BaseArguments())
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            startInfo.ArgumentList.Add(parameters.Command);
+            // Redirect stdin so we can close it immediately: CLI workers otherwise inherit the
+            // orchestrator's stdin. Under a background/detached launch that handle is an open pipe
+            // that never reaches EOF, so the worker blocks indefinitely waiting for stdin.
+            var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(parameters.Command, parameters.WorkingDirectory);
 
             if (parameters.DisableSharedCompilation)
             {

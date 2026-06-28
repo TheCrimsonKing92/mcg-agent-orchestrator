@@ -765,6 +765,26 @@ public sealed class WorkerDispatchTests
     Assert.True(outcome.EvidenceSummary.Contains("401", StringComparison.OrdinalIgnoreCase), outcome.EvidenceSummary);
 }
 
+    [Xunit.Fact(DisplayName = "DispatchFailureClassifier_uses_provider_failure_kind_from_worker_provider_parse_outcome")]
+    public void DispatchFailureClassifierUsesProviderFailureKindFromWorkerProviderParseOutcome()
+{
+    var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+    var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
+        1,
+        string.Empty,
+        "ERROR: You've hit your usage limit. Try again later."));
+
+    var outcome = DispatchFailureClassifier.ClassifyProviderFailure(
+        failureKind,
+        exitCode: 1,
+        hasZeroByteOutput: true,
+        evidenceSummary: "provider supplied typed failure");
+
+    Assert.Equal(ProviderFailureKind.RateLimit, failureKind);
+    Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+    Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_repo_scoped_skill_targets")]
     public void WorkerProfileDispatcherPreflightBlocksRepoScopedSkillTargets()
 {
@@ -1148,6 +1168,48 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Equal("gpt-5.5", complexTask.LastDispatch.ModelName);
     Assert.Equal("high", complexTask.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Complex, complexTask.LastDispatch.TaskComplexity);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_small_developer_task_can_route_to_codex_spark_provider_by_typed_selection")]
+    public void WorkerProfileDispatcherSmallDeveloperTaskCanRouteToCodexSparkProviderByTypedSelection()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a typo",
+        [new TaskSpec(TaskId.New(), "Update one label.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("spark-developer"),
+        "Spark Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-spark", "gpt-5.3-codex-spark", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-spark", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+
+    var provider = WorkerProviderCatalog.Default().ResolveProfile(task.LastDispatch!.WorkerName);
+    Assert.Equal(ProviderKind.OpenAICodexSpark, provider.Identity.Kind);
+    Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_test_only_surface_tasks_on_routine_subscription_model")]
@@ -4195,8 +4257,32 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_verified_without_low_integrity_evidence_stays_failed")]
-    public void BackgroundDispatchRunnerFileRoleDirtyVerifiedWithoutLowIntegrityEvidenceStaysFailed()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_self_committing_provider_dirty_verified_without_low_integrity_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerSelfCommittingProviderDirtyVerifiedWithoutLowIntegrityEvidenceStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        workerName: "claude-cli",
+        command: "claude prompt");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_activates_orchestrator_commit_path")]
+    public void BackgroundDispatchRunnerCodexProviderCanSelfCommitFalseActivatesOrchestratorCommitPath()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4210,11 +4296,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
@@ -5965,7 +6054,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Action<string>? mutateWorktree = null,
         string? taskDescription = null,
         string? verificationPlan = null,
-        bool sandboxLowIntegrity = false)
+        bool sandboxLowIntegrity = false,
+        string workerName = "codex-cli",
+        string command = "codex exec prompt")
 {
     var kernel = new AgentOrchestratorKernel();
     var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
@@ -5994,12 +6085,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var task = goal.Tasks.Single(candidate => candidate.RequiredRole == role);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
-        "codex-cli",
-        "codex exec prompt",
+        workerName,
+        command,
         worktree,
         clock.UtcNow,
         SandboxLowIntegrity: sandboxLowIntegrity));
-    var process = new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, clock.UtcNow, null, null);
+    var process = new TaskProcessRecord(999999, command, worktree, stdout, stderr, exit, clock.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return (kernel, goal, task, process);
 }

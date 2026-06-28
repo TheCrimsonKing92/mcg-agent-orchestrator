@@ -192,23 +192,18 @@ public sealed class BackgroundDispatchRunner
 
     private static WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
-        if (dispatch.ProviderName?.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) == true ||
-            dispatch.WorkerName.Contains("claude", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.Contains("claude", StringComparison.OrdinalIgnoreCase))
+        var provider = ResolveWorkerProvider(dispatch);
+        if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
         {
             return WorkerSandboxProvider.Claude;
         }
 
-        if (dispatch.ProviderName?.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) == true ||
-            dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.Contains("codex", StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAIJudge)
         {
             return WorkerSandboxProvider.Codex;
         }
 
-        if (dispatch.ProviderName?.Equals("Ollama", StringComparison.OrdinalIgnoreCase) == true ||
-            dispatch.WorkerName.Contains("qwen", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.Contains("qwen", StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind == ProviderKind.OllamaQwenCodeCli)
         {
             return WorkerSandboxProvider.Ollama;
         }
@@ -425,11 +420,13 @@ public sealed class BackgroundDispatchRunner
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(task, processRecord, standardOutput, standardError);
+            var providerCannotSelfCommit = task.LastDispatch is { } dispatch &&
+                !ResolveWorkerProvider(dispatch).Capabilities.CanSelfCommit;
             var shouldCommitDirtyWorktree =
                 worktreeEvidence.HasRelevantCommitAfterDispatch ||
-                (task.LastDispatch.SandboxLowIntegrity &&
-                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                  sandboxCommitBlocked));
+                ((task.LastDispatch.SandboxLowIntegrity || providerCannotSelfCommit) &&
+                  (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                   sandboxCommitBlocked));
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree &&
@@ -1476,7 +1473,21 @@ public sealed class BackgroundDispatchRunner
     }
 
     private static bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
-        WorkerProviderResolver.Resolve(dispatch?.WorkerName).UsesCodexExitFileBehavior;
+        dispatch is not null && ResolveWorkerProvider(dispatch).Identity.UsesCodexExitFileBehavior;
+
+    private static IWorkerProvider ResolveWorkerProvider(TaskDispatchRecord dispatch)
+    {
+        var catalog = WorkerProviderCatalog.Default();
+        var provider = catalog.ResolveProfile(dispatch.WorkerName);
+        if (provider.Identity.Kind != ProviderKind.Unknown)
+        {
+            return provider;
+        }
+
+        return string.IsNullOrWhiteSpace(dispatch.ProviderName)
+            ? provider
+            : catalog.ResolveProviderName(dispatch.ProviderName);
+    }
 
     private static bool ContainsCodexFinalOutput(string value)
     {

@@ -115,6 +115,7 @@ public static class WorkerProfileDispatcher
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
     public const string OllamaSubscriptionProfileName = "qwen-code-cli";
+    private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
 
     public static WorkerProfileDispatchResult PrepareTask(
         AgentOrchestratorKernel kernel,
@@ -270,7 +271,7 @@ public static class WorkerProfileDispatcher
             var profile = profiles.GetRequired(profileName);
             findings.Add($"profile: {profile.Name}");
             var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-            AddClaudeLowIntegrityAuthFinding(findings, profile.Name, sandbox, claudeAuthProbe);
+            AddClaudeLowIntegrityAuthFinding(findings, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
                 : ResolveEffectiveSubscriptionModelName(agent, selection);
@@ -349,11 +350,11 @@ public static class WorkerProfileDispatcher
 
     private static void AddClaudeLowIntegrityAuthFinding(
         List<string> findings,
-        string profileName,
+        IWorkerProvider provider,
         WorkerSandboxOptions sandbox,
         Func<ClaudeCliAuthState>? claudeAuthProbe)
     {
-        if (!profileName.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind != ProviderKind.AnthropicClaudeCli)
         {
             findings.Add("auth: Claude CLI Low-IL auth preflight not applicable for this worker profile");
             return;
@@ -708,22 +709,10 @@ public static class WorkerProfileDispatcher
 
     private static string ResolveDispatchProviderName(string selectedProviderName, string profileName, DispatchModelOverride? modelOverride)
     {
-        if (profileName.Equals(OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return "OpenAI";
-        }
-
-        if (profileName.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return "Anthropic";
-        }
-
-        if (profileName.Equals(OllamaSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return "Ollama";
-        }
-
-        return selectedProviderName;
+        var provider = DefaultProviders.ResolveProfile(profileName);
+        return provider.Identity.Kind == ProviderKind.Unknown
+            ? selectedProviderName
+            : provider.ProviderName;
     }
 
     public static string ResolveSubscriptionProfileName(AgentDefinition agent)
@@ -743,22 +732,7 @@ public static class WorkerProfileDispatcher
             return agent.Subscription.WorkerProfileName;
         }
 
-        if (model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
-        {
-            return OpenAiSubscriptionProfileName;
-        }
-
-        if (model.ProviderName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-        {
-            return AnthropicSubscriptionProfileName;
-        }
-
-        if (model.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            return OllamaSubscriptionProfileName;
-        }
-
-        throw new InvalidOperationException($"Provider '{model.ProviderName}' does not have a default subscription worker profile.");
+        return DefaultProviders.ResolveModelProvider(model.ProviderName).ProfileName;
     }
 
     private static void EnsureSubscriptionRetryWindowHasPassed(TaskSpec task, DateTimeOffset dispatchedAt)
@@ -967,7 +941,8 @@ public static class WorkerProfileDispatcher
 
     private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
     {
-        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+        var provider = DefaultProviders.ResolveProviderName(providerName);
+        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAIJudge &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 

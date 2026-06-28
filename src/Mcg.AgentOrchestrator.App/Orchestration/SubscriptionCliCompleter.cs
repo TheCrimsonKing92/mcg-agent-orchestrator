@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -69,7 +68,8 @@ internal sealed class SubscriptionCliCompleter
         string? reasoningEffort,
         string workingDirectory)
     {
-        var permissionMode = IsClaudeCliProfile(profileName) ? "default" : "plan";
+        var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
+        var permissionMode = provider.Identity.Kind == ProviderKind.AnthropicClaudeCli ? "default" : "plan";
         return template
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
@@ -79,76 +79,20 @@ internal sealed class SubscriptionCliCompleter
             .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsClaudeCliProfile(string profileName) =>
-        profileName.Equals("claude-cli", StringComparison.OrdinalIgnoreCase);
-
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
     // Extracted so tests can assert ProcessStartInfo properties without launching a real process.
-    internal static ProcessStartInfo BuildStartInfo(string command, string workingDirectory)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = WorkerShell.Executable,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory,
-            // Force UTF-8 so non-ASCII model output (em-dashes, smart quotes) is decoded correctly
-            // rather than via the legacy console code page, which mojibakes clarification text.
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
-            StandardErrorEncoding = System.Text.Encoding.UTF8
-        };
-        foreach (var arg in WorkerShell.BaseArguments())
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
-        startInfo.ArgumentList.Add(command);
-        return startInfo;
-    }
+    internal static System.Diagnostics.ProcessStartInfo BuildStartInfo(string command, string workingDirectory) =>
+        WorkerProcessRunner.BuildPowerShellStartInfo(command, workingDirectory);
 
     internal static async Task<string> RunCommandAsync(
         string command,
         string workingDirectory,
         CancellationToken cancellationToken)
     {
-        var startInfo = BuildStartInfo(command, workingDirectory);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start subscription CLI completion.");
-
-        // Close stdin immediately so codex exec doesn't block on "Reading additional input from stdin...".
-        // claude-cli ignores stdin; codex hangs until EOF arrives.
-        process.StandardInput.Close();
-
-        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(drainCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(drainCts.Token);
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-
-        const int DrainTimeoutMs = 12_000;
-        drainCts.CancelAfter(DrainTimeoutMs);
-        string stdout;
-        try
-        {
-            stdout = await stdoutTask.ConfigureAwait(false);
-            await stderrTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            stdout = string.Empty;
-        }
-        return stdout.Trim();
+        var result = await WorkerProcessRunner.RunBufferedAsync(
+            new WorkerProcessRunRequest(command, workingDirectory),
+            cancellationToken).ConfigureAwait(false);
+        return result.StandardOutput.Trim();
     }
 }
