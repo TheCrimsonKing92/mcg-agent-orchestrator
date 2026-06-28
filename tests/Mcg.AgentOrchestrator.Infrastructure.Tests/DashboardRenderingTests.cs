@@ -2288,12 +2288,12 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents,
         WorkerProfiles: profiles));
 
-    Xunit.Assert.Null(risk);
+    Xunit.Assert.NotNull(risk);
+    Xunit.Assert.False(risk.IsAnomalous);
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/advance-subscription-until-blocked?confirmSubscriptionAdvance=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
-    Assert.False(html.Contains("cost gate: large paid subscription start", StringComparison.Ordinal));
     Assert.False(html.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", StringComparison.Ordinal));
 }

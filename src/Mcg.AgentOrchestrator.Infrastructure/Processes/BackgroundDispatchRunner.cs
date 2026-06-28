@@ -394,12 +394,15 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
-            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(processRecord, standardOutput, standardError);
+            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(task, processRecord, standardOutput, standardError);
+            var shouldCommitDirtyWorktree =
+                worktreeEvidence.HasRelevantCommitAfterDispatch ||
+                (task.LastDispatch.SandboxLowIntegrity &&
+                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                  sandboxCommitBlocked));
+
             if (!worktreeEvidence.IsClean &&
-                task.LastDispatch.SandboxLowIntegrity &&
-                (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                 sandboxCommitBlocked ||
-                 worktreeEvidence.HasRelevantCommitAfterDispatch) &&
+                shouldCommitDirtyWorktree &&
                 TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
                     BuildOrchestratorCommitSubject(task, standardOutput, standardError)) &&
@@ -586,6 +589,7 @@ public sealed class BackgroundDispatchRunner
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
+        TaskSpec task,
         TaskProcessRecord processRecord,
         string standardOutput,
         string standardError)
@@ -597,7 +601,7 @@ public sealed class BackgroundDispatchRunner
             standardOutput,
             standardError,
             DateTimeOffset.UtcNow);
-        return DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification);
+        return DispatchFailureClassifier.Classify(task, verification).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
     }
 
     private static string TryResolveIndexLockPath(string workingDirectory)
