@@ -97,7 +97,8 @@ public sealed partial class AgentOrchestratorKernel
                 NextActionKind.AnswerHumanInput,
                 request.TaskId,
                 request.Id,
-                request.Question));
+                $"{request.Kind} wait age={FormatAge(_clock.UtcNow - request.CreatedAt)}: {request.Question}. Resume: {request.ResumeCommand}",
+                request.ResumeCommand));
         }
 
         foreach (var task in goal.Tasks)
@@ -193,5 +194,16 @@ public sealed partial class AgentOrchestratorKernel
             ? string.Join("; ", recovery.VerificationEvidence)
             : "no verification evidence found; rerun focused tests before committing";
         return $"{recovery.Label} dispatch recovery needed: changed files [{changed}]; verification evidence: {evidence}.";
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalDays >= 1)
+            return $"{(int)age.TotalDays}d";
+        if (age.TotalHours >= 1)
+            return $"{(int)age.TotalHours}h";
+        if (age.TotalMinutes >= 1)
+            return $"{(int)age.TotalMinutes}m";
+        return $"{Math.Max(0, (int)age.TotalSeconds)}s";
     }
 }

@@ -43,6 +43,17 @@ public enum WorkTaskStatus
     Cancelled
 }
 
+public enum HumanWaitKind
+{
+    SpecClarification,
+    OperatorApproval,
+    RiskReview,
+    ExternalCredential,
+    ProviderAuth,
+    RecoveryChoice,
+    Other
+}
+
 public enum ProgressKind
 {
     GoalCreated = 0,

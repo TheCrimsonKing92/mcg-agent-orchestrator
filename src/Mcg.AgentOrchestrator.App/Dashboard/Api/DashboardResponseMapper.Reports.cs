@@ -450,6 +450,7 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
     return new HumanInputWorkItemDto(
         item.RequestId.Value,
+        item.RequestId.Value,
         item.TaskId?.Value,
         taskNumber,
         item.Role,
@@ -457,8 +458,16 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
         item.TaskStatus,
         SummaryText(item.Question),
         item.RequestedAt,
+        item.Kind,
+        item.IsAutoDefaultable,
+        item.IsDismissible,
+        item.IsAnswerRequired,
+        item.IsExternallyBlocked,
+        item.AgeSeconds,
+        goal.Id.Value,
+        item.ResumeCommand,
         TimelineText(item.SuggestedAction),
-        ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId));
+        item.ResumeCommand);
 }
 
 public static NextActionsDto ToNextActionsDto(
@@ -518,11 +527,19 @@ public static HumanInputDto ToHumanInputDto(AgentOrchestratorKernel kernel, Huma
 
     return new HumanInputDto(
         request.Id.Value,
+        request.Id.Value,
         request.GoalId.Value,
         request.TaskId?.Value,
         taskNumber,
         SummaryText(request.Question),
         request.RequestedAt,
+        request.Kind,
+        request.IsAutoDefaultable,
+        request.IsDismissible,
+        request.IsAnswerRequired,
+        request.IsExternallyBlocked,
+        Math.Max(0, (long)(DateTimeOffset.UtcNow - request.CreatedAt).TotalSeconds),
+        request.ResumeCommand,
         request.IsCompleted,
         request.Answer is null ? null : SummaryText(request.Answer),
         request.AnsweredAt);

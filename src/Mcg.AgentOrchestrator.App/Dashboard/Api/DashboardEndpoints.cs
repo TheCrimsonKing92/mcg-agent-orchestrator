@@ -129,6 +129,8 @@ internal static partial class DashboardEndpoints
                 await Safe(() => AcknowledgeOperatorInboxItemAsync(context, services)));
             api.MapPost("/input/{inputId}/answer", async Task<IResult> (HttpContext context, string inputId) =>
                 await Safe(() => AnswerHumanInputAsync(context, inputId, services)));
+            api.MapPost("/input/{inputId}/dismiss", async Task<IResult> (HttpContext context, string inputId) =>
+                await Safe(() => DismissHumanInputAsync(context, inputId, services)));
         }
         else
         {

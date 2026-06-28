@@ -286,14 +286,27 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var goal = kernel.CreateGoal("Goal with human input");
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
-        kernel.RequestHumanInput(goal.Id, task.Id, "What should I do?");
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "What should I do?",
+            HumanWaitKind.ProviderAuth,
+            suggestedDefaultAnswer: "unused",
+            resumeCommand: "provider auth resume");
 
         await repo.SaveAsync(kernel);
         var restored = await repo.LoadAsync();
 
         Assert.Equal(1, restored.HumanInputRequests.Count);
-        Assert.Equal("What should I do?", restored.HumanInputRequests.Single().Question);
-        Assert.Equal(goal.Id, restored.HumanInputRequests.Single().GoalId);
+        var restoredRequest = restored.HumanInputRequests.Single();
+        Assert.Equal(request.Id, restoredRequest.Id);
+        Assert.Equal("What should I do?", restoredRequest.Question);
+        Assert.Equal(goal.Id, restoredRequest.GoalId);
+        Assert.Equal(HumanWaitKind.ProviderAuth, restoredRequest.Kind);
+        Assert.True(restoredRequest.IsExternallyBlocked);
+        Assert.False(restoredRequest.IsAutoDefaultable);
+        Assert.False(restoredRequest.IsDismissible);
+        Assert.Equal("provider auth resume", restoredRequest.ResumeCommand);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]

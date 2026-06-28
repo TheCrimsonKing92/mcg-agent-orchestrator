@@ -706,6 +706,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
                     catch { /* dynamic pickup is best-effort */ }
 
+                    foreach (var resolved in loopKernel.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
+                    {
+                        Console.WriteLine($"[conduct --loop] Resolved stale human wait {resolved.RequestId.Value[..8]} ({resolved.Kind}) via {resolved.Resolution}.");
+                    }
+
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
                     {
                         try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
@@ -762,6 +767,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchReaper = new BackgroundDispatchRunner();
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
+                    foreach (var resolved in wk.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
+                    {
+                        Console.WriteLine($"[conduct --watch] Resolved stale human wait {resolved.RequestId.Value[..8]} ({resolved.Kind}) via {resolved.Resolution}.");
+                    }
+
                     watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }

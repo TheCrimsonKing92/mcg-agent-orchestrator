@@ -15,6 +15,7 @@ public enum DispatchOutcomeKind
 {
     VerifiedSuccess,
     RecoverableSubscriptionLimit,
+    PreflightFailure,
     EmptyOutputFlake,
     SandboxCommitBlocked,
     ProviderNeutralProgressStall,
@@ -84,6 +85,11 @@ public static class DispatchFailureClassifier
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
+        if (IsPreflightFailure(verification))
+        {
+            return false;
+        }
+
         // exit 0 with evidence the worker actually produced output is never a transient empty-output flake.
         // The heartbeat stdout-byte count is the flush-race-proof signal: a worker that streamed bytes per its
         // heartbeat genuinely ran (the out.log file read can race the exit flush and momentarily report empty,
@@ -202,6 +208,18 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
+        if (IsPreflightFailure(verification))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.PreflightFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildPreflightFailureEvidenceSummary(verification));
+        }
+
         if (IsRecoverableProviderAuthenticationFailure(verification))
         {
             return new DispatchOutcome(
@@ -298,6 +316,11 @@ public static class DispatchFailureClassifier
 
     private static string BuildEvidenceSummary(TaskVerificationRecord verification)
     {
+        if (TryGetPreflightFailureEvidenceLine(verification, out var preflightLine))
+        {
+            return BuildPreflightFailureEvidenceSummary(preflightLine);
+        }
+
         if (TryGetRecoverableSubscriptionLimitLine(verification, out var providerLimitLine))
         {
             return TruncateEvidence(providerLimitLine);
@@ -327,6 +350,97 @@ public static class DispatchFailureClassifier
 
     private static string TruncateEvidence(string evidence) =>
         evidence.Length > 200 ? evidence[..200] : evidence;
+
+    public static bool IsPreflightFailure(TaskVerificationRecord verification)
+    {
+        if (verification.Succeeded ||
+            !string.IsNullOrWhiteSpace(verification.StandardOutput) ||
+            HasStandardOutputFileBytes(verification))
+        {
+            return false;
+        }
+
+        return TryGetPreflightFailureEvidenceLine(verification, out _);
+    }
+
+    private static string BuildPreflightFailureEvidenceSummary(TaskVerificationRecord verification) =>
+        TryGetPreflightFailureEvidenceLine(verification, out var line)
+            ? BuildPreflightFailureEvidenceSummary(line)
+            : "sandbox-preflight-failure";
+
+    private static string BuildPreflightFailureEvidenceSummary(string evidence) =>
+        $"sandbox-preflight-failure: {TruncateEvidence(evidence)}";
+
+    private static bool TryGetPreflightFailureEvidenceLine(TaskVerificationRecord verification, out string line)
+    {
+        foreach (var candidate in GetPreflightEvidenceLines(verification))
+        {
+            if (ContainsPreflightFailureText(candidate))
+            {
+                line = candidate;
+                return true;
+            }
+        }
+
+        line = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<string> GetPreflightEvidenceLines(TaskVerificationRecord verification)
+    {
+        foreach (var line in SplitEvidenceLines(verification.StandardError))
+        {
+            yield return line;
+        }
+
+        foreach (var line in SplitEvidenceLines(ReadEvidenceFile(verification.StandardErrorPath)))
+        {
+            yield return line;
+        }
+    }
+
+    private static IEnumerable<string> SplitEvidenceLines(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            yield break;
+        }
+
+        foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            yield return line;
+        }
+    }
+
+    private static string ReadEvidenceFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool ContainsPreflightFailureText(string text)
+    {
+        return text.Contains("Low Integrity", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("integrity label", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("icacls", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("CreateProcessAsUser", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("preflight", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasVerificationEvidence(string standardOutput, string standardError)
     {

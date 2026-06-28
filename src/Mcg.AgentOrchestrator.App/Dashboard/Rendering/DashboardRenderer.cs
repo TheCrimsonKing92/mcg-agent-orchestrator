@@ -431,10 +431,10 @@ public static partial class DashboardRenderer
         html.AppendLine("<h3>Human decisions</h3>");
         var humanInputWorklist = kernel.BuildHumanInputWorklist(goal.Id);
         html.AppendLine($"<p class=\"{(humanInputWorklist.OpenCount == 0 ? "ok" : "bad")}\">Open: {humanInputWorklist.OpenCount}</p>");
-        html.AppendLine("<table><thead><tr><th>Request</th><th>Work item</th><th>Question</th><th>Command</th></tr></thead><tbody>");
+        html.AppendLine("<table><thead><tr><th>Wait</th><th>Work item</th><th>Question</th><th>Policy</th><th>Command</th></tr></thead><tbody>");
         if (humanInputWorklist.Items.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"4\">none</td></tr>");
+            html.AppendLine("<tr><td colspan=\"5\">none</td></tr>");
         }
         else
         {
@@ -443,8 +443,9 @@ public static partial class DashboardRenderer
                 var answerLink = options.EnableOperatorControls
                     ? $"<br><a class=\"button-link\" href=\"#{Encode(BuildHumanInputFormAnchor(item.RequestId))}\">Answer</a>"
                     : string.Empty;
+                var policy = $"auto-defaultable={item.IsAutoDefaultable}; dismissible={item.IsDismissible}; answer-required={item.IsAnswerRequired}; externally-blocked={item.IsExternallyBlocked}; age={item.AgeSeconds}s";
                 html.AppendLine("<tr>");
-                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}</td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(OutputTextPreview.CreateSummary(item.Question).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</span></td><td><code>{Encode(ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId))}</code>{answerLink}</td>");
+                html.AppendLine($"<td>{Encode(item.RequestId.Value[..8])}<br><span class=\"meta\">{Encode(item.Kind.ToString())}</span></td><td>{RenderWorkItemReference(goal, item.TaskId, item.Role, item.TaskStatus, item.Description)}</td><td>{Encode(OutputTextPreview.CreateSummary(item.Question).Text)}<br><span class=\"meta\">{Encode(OutputTextPreview.CreateTimeline(item.SuggestedAction).Text)}</span></td><td><span class=\"meta\">{Encode(policy)}</span></td><td><code>{Encode(item.ResumeCommand)}</code>{answerLink}</td>");
                 html.AppendLine("</tr>");
             }
         }

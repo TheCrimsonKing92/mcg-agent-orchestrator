@@ -86,8 +86,9 @@ public static partial class GoalTranscriptRenderer
                 var scope = item.TaskId is null
                     ? "goal"
                     : $"task {TaskDisplayNumber.Resolve(goal, item.TaskId)} [{Display(item.TaskStatus!.Value)}] {item.Role}";
-                text.AppendLine($"- {item.RequestId.Value[..8]} ({scope}): {OutputTextPreview.CreateSummary(item.Question).Text}");
-                text.AppendLine($"  Suggested command: {ConsoleViews.BuildHumanInputSuggestedCommand(item.RequestId)}");
+                text.AppendLine($"- {item.RequestId.Value[..8]} {item.Kind} age={item.AgeSeconds}s ({scope}): {OutputTextPreview.CreateSummary(item.Question).Text}");
+                text.AppendLine($"  Flags: auto-defaultable={item.IsAutoDefaultable}; dismissible={item.IsDismissible}; answer-required={item.IsAnswerRequired}; externally-blocked={item.IsExternallyBlocked}");
+                text.AppendLine($"  Suggested command: {item.ResumeCommand}");
             }
         }
 

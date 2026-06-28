@@ -41,6 +41,14 @@ internal static partial class CliCommandHandlers
         };
     }
 
+    private static IReadOnlyList<HumanInputRequest> OpenHumanWaits(AgentOrchestratorKernel kernel, GoalId? goalId = null)
+    {
+        return kernel.HumanInputRequests
+            .Where(request => !request.IsCompleted && (goalId is null || request.GoalId == goalId))
+            .OrderBy(request => request.CreatedAt)
+            .ToList();
+    }
+
     private static CollaborationItem ResolveClarificationByShortId(
         IReadOnlyList<CollaborationItem> clarifications,
         string id,
@@ -112,18 +120,41 @@ internal static partial class CliCommandHandlers
                     return false;
                 }
 
-                // `attention show <goal-id-prefix>`: list a goal's open spec clarifications with a stable id
+                // `attention show [--goal] <goal-id-prefix>`: list open typed human waits, falling back to
+                // collaboration clarifications for compatibility with existing spec-refinement reach-ups.
                 // and the question, so the operator can read them before deciding to answer or dismiss.
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
                     if (parts.Count < 3)
                     {
+                        var waits = OpenHumanWaits(context.Kernel);
+                        if (waits.Count > 0)
+                        {
+                            ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow);
+                            return false;
+                        }
+
                         var globalQueue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
                         ConsoleViews.PrintAttentionQueue(globalQueue);
                         return false;
                     }
 
-                    var goal = ResolveAttentionGoal(context.Kernel, parts[2]);
+                    if (parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase) && parts.Count < 4)
+                    {
+                        throw new ArgumentException("Usage: attention show [--goal] <goal-id-prefix>");
+                    }
+
+                    var goalPrefix = parts.Count >= 4 && parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase)
+                        ? parts[3]
+                        : parts[2];
+                    var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
+                    var waitsForGoal = OpenHumanWaits(context.Kernel, goal.Id);
+                    if (waitsForGoal.Count > 0)
+                    {
+                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow);
+                        return false;
+                    }
+
                     var clarifications = OpenClarificationsForGoal(store, goal);
                     if (clarifications.Count == 0)
                     {
