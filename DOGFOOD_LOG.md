@@ -2081,3 +2081,10 @@ Goal 6f1fc5b0: Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f. Fix xUnit1
 
 - Operator gate: Developer: pass focused 1/1; full project attempted but blocked by lock/timeout (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - scoped test-only async cleanup - enough reasoning for safe edit and Windows test-lock handling.
+
+## 2026-06-28 - # GOAL: Typed DispatchOutcome + failure taxonomy, FIRST increment (roadmap st...
+
+Goal 34acf303: # GOAL: Typed DispatchOutcome + failure taxonomy, FIRST increment (roadmap step B / anchor abc85822)  ## Current stat.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 8e1adba). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 8e1adba3f402c49b504e1542766fbddf50035c22). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, no repository changes (exit 0); Researcher: not-run; Researcher task only, no repo changes (exit 0); Developer: pass - 11 DispatchOutcome filtered tests passed (exit 0); Tester: pass - 11 passed, 0 failed (exit 0); Reviewer: not-run by reviewer; prior evidence shows focused DispatchOutcome tests passed 11/0 (exit 0)
+- Model fit: Model fit: OpenAI/gpt-5.5 - adequate - planner decomposition - handled source-oriented planning and verification constraints without needing code edits.
