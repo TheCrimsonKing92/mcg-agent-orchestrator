@@ -68,7 +68,8 @@ public sealed record TaskDispatchRecord(
     int? PromptCharacterCount = null,
     bool UsesComplexModel = false,
     string? BaseCommit = null,
-    string? ResultCommit = null);
+    string? ResultCommit = null,
+    bool SandboxLowIntegrity = false);
 
 public sealed record TaskProcessRecord(
     int ProcessId,

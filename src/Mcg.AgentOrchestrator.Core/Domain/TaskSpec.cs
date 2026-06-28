@@ -117,7 +117,8 @@ public sealed class TaskSpec
                     LastDispatch.PromptCharacterCount,
                     LastDispatch.UsesComplexModel,
                     LastDispatch.BaseCommit,
-                    LastDispatch.ResultCommit),
+                    LastDispatch.ResultCommit,
+                    LastDispatch.SandboxLowIntegrity),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -220,7 +221,8 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.PromptCharacterCount,
                 snapshot.LastDispatch.UsesComplexModel,
                 snapshot.LastDispatch.BaseCommit,
-                snapshot.LastDispatch.ResultCommit));
+                snapshot.LastDispatch.ResultCommit,
+                snapshot.LastDispatch.SandboxLowIntegrity));
         }
 
         if (snapshot.LastProcess is not null)
@@ -332,6 +334,12 @@ public sealed class TaskSpec
     {
         if (LastDispatch is not null)
             LastDispatch = LastDispatch with { ResultCommit = resultCommit };
+    }
+
+    internal void SetDispatchSandboxLowIntegrity(bool sandboxLowIntegrity)
+    {
+        if (LastDispatch is not null)
+            LastDispatch = LastDispatch with { SandboxLowIntegrity = sandboxLowIntegrity };
     }
 
     internal void RecordProcess(TaskProcessRecord process) => LastProcess = process;

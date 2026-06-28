@@ -62,7 +62,7 @@ public static class DispatchProcessHost
     // never the medium-integrity profile or main repo. The host runs at medium and cannot launch a Low
     // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
     // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
-    private static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
+    internal static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
@@ -93,8 +93,10 @@ public static class DispatchProcessHost
 
         var codexHome = Path.Combine(sandboxRoot, "codex-home");
         var tempDir = Path.Combine(sandboxRoot, "temp");
+        var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
         Directory.CreateDirectory(codexHome);
         Directory.CreateDirectory(tempDir);
+        WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
 
         SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome, parameters.StderrPath);
 
@@ -105,7 +107,7 @@ public static class DispatchProcessHost
         startInfo.Environment["CODEX_HOME"] = codexHome;
         startInfo.Environment["TEMP"] = tempDir;
         startInfo.Environment["TMP"] = tempDir;
-        startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable);
+        startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
         WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory);
 
         // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
@@ -176,9 +178,14 @@ public static class DispatchProcessHost
         return new FileStream(stderrPath, FileMode.Append, FileAccess.Write, FileShare.Read);
     }
 
-    internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable)
+    internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable, string? sandboxBin = null)
     {
         var entries = new List<string>();
+        if (!string.IsNullOrWhiteSpace(sandboxBin))
+        {
+            entries.Add(sandboxBin);
+        }
+
         var shellDirectory = Path.GetDirectoryName(shellExecutable);
         if (!string.IsNullOrWhiteSpace(shellDirectory))
         {
@@ -200,6 +207,181 @@ public static class DispatchProcessHost
         }
 
         return string.Join(Path.PathSeparator, entries);
+    }
+
+    internal static string CreateSandboxBinDirectory(string sandboxRoot)
+    {
+        var sandboxBin = Path.Combine(sandboxRoot, "bin");
+        Directory.CreateDirectory(sandboxBin);
+        return sandboxBin;
+    }
+
+    internal static void WriteWorkerCommandShims(string sandboxBin, string? currentPath)
+    {
+        Directory.CreateDirectory(sandboxBin);
+        WriteCommandShim(Path.Combine(sandboxBin, "git.cmd"), "git", ResolveExecutableWithWhere("git", currentPath));
+        WriteCommandShim(Path.Combine(sandboxBin, "dotnet.cmd"), "dotnet", ResolveExecutableWithWhere("dotnet", currentPath));
+    }
+
+    internal static string ResolveExecutableWithWhere(string commandName, string? currentPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "where.exe" : "which",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add(commandName);
+        if (!string.IsNullOrWhiteSpace(currentPath))
+        {
+            startInfo.Environment["PATH"] = currentPath;
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to resolve '{commandName}' with {startInfo.FileName}.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"Timed out resolving '{commandName}' with {startInfo.FileName}.");
+        }
+
+        var resolved = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(File.Exists);
+        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(resolved))
+        {
+            throw new InvalidOperationException($"Failed to resolve '{commandName}' with {startInfo.FileName}: {error.Trim()}");
+        }
+
+        return Path.GetFullPath(resolved);
+    }
+
+    internal static void WriteCommandShim(string shimPath, string commandName, string realExecutable)
+    {
+        var escapedExecutable = realExecutable.Replace("%", "%%", StringComparison.Ordinal);
+        var contents = $"""
+            @echo off
+            setlocal EnableExtensions EnableDelayedExpansion
+            set "MCG_REAL={escapedExecutable}"
+            set "MCG_ATTEMPT=1"
+            set "MCG_STDERR=%TEMP%\mcg-{commandName}-shim-%RANDOM%-%RANDOM%.err"
+            :retry
+            "%MCG_REAL%" %* 2>"%MCG_STDERR%"
+            set "MCG_EXIT=!ERRORLEVEL!"
+            type "%MCG_STDERR%" 1>&2 2>nul
+            if "!MCG_EXIT!"=="0" (
+                del "%MCG_STDERR%" >nul 2>nul
+                exit /b 0
+            )
+            findstr /i /c:"CreateProcessAsUserW 1312" /c:"specified logon session does not exist" "%MCG_STDERR%" >nul 2>nul
+            if errorlevel 1 (
+                del "%MCG_STDERR%" >nul 2>nul
+                exit /b !MCG_EXIT!
+            )
+            if "!MCG_ATTEMPT!"=="3" (
+                echo [mcg-shim] CreateProcessAsUserW 1312 retry exhausted for {commandName}. 1>&2
+                del "%MCG_STDERR%" >nul 2>nul
+                exit /b !MCG_EXIT!
+            )
+            set /a MCG_ATTEMPT+=1
+            if "!MCG_ATTEMPT!"=="2" (
+                "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "Start-Sleep -Milliseconds 250" >nul 2>nul
+            ) else (
+                "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "Start-Sleep -Milliseconds 750" >nul 2>nul
+            )
+            goto retry
+            """;
+        File.WriteAllText(shimPath, contents.Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    internal static void RunLowIntegrityLaunchPreflight(ProcessStartInfo workerStartInfo, DispatchRunParameters parameters)
+    {
+        if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        RunLowIntegrityLaunchPreflightCommand("git", parameters.WorkingDirectory, workerStartInfo.Environment["PATH"]);
+        RunLowIntegrityLaunchPreflightCommand("dotnet", parameters.WorkingDirectory, workerStartInfo.Environment["PATH"]);
+    }
+
+    private static void RunLowIntegrityLaunchPreflightCommand(string commandName, string workingDirectory, string? path)
+    {
+        var commandPath = ResolveCommandFromPath(commandName, path)
+            ?? throw new InvalidOperationException($"Low-integrity launch preflight could not resolve '{commandName}' from the shimmed PATH.");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = commandPath,
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        if (OperatingSystem.IsWindows() &&
+            (commandPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
+             commandPath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)))
+        {
+            startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+            startInfo.Arguments = $"/d /s /c \"\"{commandPath}\" --version\"";
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--version");
+        }
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            startInfo.Environment["PATH"] = path;
+        }
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            throw new InvalidOperationException($"Low-integrity launch preflight failed to start '{commandName} --version'.");
+        }
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"Low-integrity launch preflight timed out running '{commandName} --version'.");
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Low-integrity launch preflight failed for '{commandName} --version' with exit {process.ExitCode}: {stderr.Trim()} {stdout.Trim()}".Trim());
+        }
+    }
+
+    internal static string? ResolveCommandFromPath(string commandName, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var extensions = OperatingSystem.IsWindows()
+            ? new[] { ".cmd", ".exe", ".bat", ".com" }
+            : new[] { string.Empty };
+        foreach (var rawEntry in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var extension in extensions)
+            {
+                var candidate = Path.Combine(rawEntry, commandName + extension);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
     }
 
     internal static bool IsWindowsAppsPathSegment(string path)
@@ -527,6 +709,9 @@ public static void DropToLow() {
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             ApplyWorkerSandbox(startInfo, parameters);
+
+            WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
+            RunLowIntegrityLaunchPreflight(startInfo, parameters);
 
             WriteHeartbeat("starting");
             RequireStartGate();

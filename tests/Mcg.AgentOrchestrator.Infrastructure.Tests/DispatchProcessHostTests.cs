@@ -60,6 +60,191 @@ public sealed class DispatchProcessHostTests
         Assert.Equal(1, entries.Count(entry => string.Equals(entry, shellDir, StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_path_prepends_sandbox_bin_before_shell_dir")]
+    public void LowIntegrityPathPrependsSandboxBinBeforeShellDir()
+    {
+        var shellDir = Path.Combine(Path.GetTempPath(), "real-powershell");
+        var shell = Path.Combine(shellDir, OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh");
+        var sandboxBin = Path.Combine(Path.GetTempPath(), "mcg-sandbox-bin");
+        var toolDir = Path.Combine(Path.GetTempPath(), "tooling");
+
+        var result = DispatchProcessHost.BuildLowIntegrityPath(toolDir, shell, sandboxBin);
+        var entries = result.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(sandboxBin, entries[0]);
+        Assert.Equal(shellDir, entries[1]);
+        Assert.Contains(toolDir, entries);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_git_and_dotnet_shims_with_resolved_absolute_paths_and_retry_evidence")]
+    public void DispatchProcessHostWritesGitAndDotnetShims()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-shim-generation-test", Guid.NewGuid().ToString("n"));
+        var toolDir = Path.Combine(dir, "tools");
+        var sandboxBin = Path.Combine(dir, "bin");
+        Directory.CreateDirectory(toolDir);
+        Directory.CreateDirectory(sandboxBin);
+        var realGit = Path.Combine(toolDir, "git.exe");
+        var realDotnet = Path.Combine(toolDir, "dotnet.exe");
+        File.WriteAllText(realGit, string.Empty);
+        File.WriteAllText(realDotnet, string.Empty);
+        try
+        {
+            DispatchProcessHost.WriteWorkerCommandShims(sandboxBin, toolDir);
+
+            var gitShim = Path.Combine(sandboxBin, "git.cmd");
+            var dotnetShim = Path.Combine(sandboxBin, "dotnet.cmd");
+            Assert.True(File.Exists(gitShim));
+            Assert.True(File.Exists(dotnetShim));
+            Assert.Contains(realGit, File.ReadAllText(gitShim));
+            Assert.Contains(realDotnet, File.ReadAllText(dotnetShim));
+            Assert.Contains("CreateProcessAsUserW 1312", File.ReadAllText(gitShim));
+            Assert.Contains("specified logon session does not exist", File.ReadAllText(dotnetShim));
+            Assert.Contains("\"!MCG_ATTEMPT!\"==\"3\"", File.ReadAllText(gitShim));
+            Assert.Contains("Start-Sleep -Milliseconds 250", File.ReadAllText(gitShim));
+            Assert.Contains("Start-Sleep -Milliseconds 750", File.ReadAllText(gitShim));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_creates_bin_shims_and_prepends_child_path_only")]
+    public void ApplyWorkerSandboxCreatesBinShimsAndPrependsChildPathOnly()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-test", Guid.NewGuid().ToString("n"));
+        var repo = Path.Combine(root, "repo");
+        var worktree = Path.Combine(root, "linked-worktree");
+        Directory.CreateDirectory(root);
+        var hostPathBefore = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            CreateLinkedWorktree(repo, worktree);
+            var startInfo = new ProcessStartInfo
+            {
+                UseShellExecute = false,
+                WorkingDirectory = worktree
+            };
+            startInfo.ArgumentList.Add("Write-Output ok");
+            var childPathBefore = startInfo.Environment["PATH"];
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                worktree,
+                Path.Combine(root, "out.log"),
+                Path.Combine(root, "err.log"),
+                Path.Combine(root, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: true,
+                WorkerSandboxProvider.Codex);
+
+            DispatchProcessHost.ApplyWorkerSandbox(startInfo, parameters);
+
+            var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
+            Assert.True(Directory.Exists(sandboxBin));
+            Assert.True(File.Exists(Path.Combine(sandboxBin, "git.cmd")));
+            Assert.True(File.Exists(Path.Combine(sandboxBin, "dotnet.cmd")));
+            Assert.NotNull(childPathBefore);
+            Assert.True(startInfo.Environment["PATH"].StartsWith(sandboxBin, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(hostPathBefore, Environment.GetEnvironmentVariable("PATH"));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_preflight_invokes_git_and_dotnet_from_shimmed_path")]
+    public void DispatchProcessHostPreflightInvokesShimmedGitAndDotnet()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-shim-preflight-test", Guid.NewGuid().ToString("n"));
+        var sandboxBin = Path.Combine(dir, "bin");
+        Directory.CreateDirectory(sandboxBin);
+        var marker = Path.Combine(dir, "marker.txt");
+        WriteMarkerShim(Path.Combine(sandboxBin, "git.cmd"), marker, "git");
+        WriteMarkerShim(Path.Combine(sandboxBin, "dotnet.cmd"), marker, "dotnet");
+        try
+        {
+            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            startInfo.Environment["PATH"] = sandboxBin;
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: true);
+
+            DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters);
+
+            var lines = File.ReadAllLines(marker);
+            Assert.Contains("git --version", lines);
+            Assert.Contains("dotnet --version", lines);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_preflight_fails_when_shimmed_command_exits_nonzero")]
+    public void DispatchProcessHostPreflightFailsWhenShimExitsNonZero()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-shim-preflight-fail-test", Guid.NewGuid().ToString("n"));
+        var sandboxBin = Path.Combine(dir, "bin");
+        Directory.CreateDirectory(sandboxBin);
+        File.WriteAllText(Path.Combine(sandboxBin, "git.cmd"), "@echo off\r\nexit /b 9\r\n");
+        File.WriteAllText(Path.Combine(sandboxBin, "dotnet.cmd"), "@echo off\r\nexit /b 0\r\n");
+        try
+        {
+            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            startInfo.Environment["PATH"] = sandboxBin;
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: true);
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters));
+            Assert.Contains("git --version", ex.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_exit_file_when_grandchild_holds_pipe_after_worker_exits")]
     public void DispatchProcessHostWritesExitFileWhenGrandchildHoldsPipeAfterWorkerExits()
     {
@@ -222,6 +407,7 @@ public sealed class DispatchProcessHostTests
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             var codexHome = Path.Combine(sandboxRoot, "codex-home");
             var tempDir = Path.Combine(sandboxRoot, "temp");
+            var sandboxBin = Path.Combine(sandboxRoot, "bin");
             var setupArtifact = Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName);
             var logs = Path.Combine(root, "logs");
             Directory.CreateDirectory(logs);
@@ -253,6 +439,9 @@ public sealed class DispatchProcessHostTests
             Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(workerFile));
             Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(codexHome));
             Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(tempDir));
+            Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(sandboxBin));
+            Assert.True(File.Exists(Path.Combine(sandboxBin, "git.cmd")));
+            Assert.True(File.Exists(Path.Combine(sandboxBin, "dotnet.cmd")));
             Assert.True(File.Exists(setupArtifact));
 
             using (var setup = JsonDocument.Parse(File.ReadAllText(setupArtifact)))
@@ -375,6 +564,18 @@ public sealed class DispatchProcessHostTests
 
     private static string EscapePowerShellSingleQuoted(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static void WriteMarkerShim(string path, string marker, string commandName)
+    {
+        var escapedMarker = marker.Replace("%", "%%", StringComparison.Ordinal);
+        File.WriteAllText(
+            path,
+            $"""
+            @echo off
+            echo {commandName} %*>>"{escapedMarker}"
+            exit /b 0
+            """);
+    }
 
     private const int LowIntegrityRid = 0x1000;
     private const int MediumIntegrityRid = 0x2000;

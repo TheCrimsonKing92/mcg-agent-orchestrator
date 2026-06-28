@@ -28,6 +28,17 @@ public sealed class SandboxCommitBlockedFailureTests
         Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification));
     }
 
+    [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_true_for_low_integrity_1312_logon_session_evidence")]
+    public void TrueForLowIntegrity1312LogonSessionEvidence()
+    {
+        var verification = Verification(
+            1,
+            WorkerResultStdout,
+            "dotnet.cmd: CreateProcessAsUserW 1312: A specified logon session does not exist. It may already have been terminated.");
+
+        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification));
+    }
+
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_when_succeeded")]
     public void FalseWhenSucceeded()
     {

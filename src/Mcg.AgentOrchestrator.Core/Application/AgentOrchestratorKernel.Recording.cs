@@ -102,6 +102,13 @@ public sealed partial class AgentOrchestratorKernel
         task.SetDispatchResultCommit(resultCommit);
     }
 
+    public void RecordDispatchSandboxLowIntegrity(GoalId goalId, TaskId taskId, bool sandboxLowIntegrity)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.SetDispatchSandboxLowIntegrity(sandboxLowIntegrity);
+    }
+
     public void RecordTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
     {
         var goal = GetGoal(goalId);
