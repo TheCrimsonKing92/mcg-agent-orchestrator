@@ -2482,8 +2482,17 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        // RetryTask refuses Running/WaitingForHuman/Cancelled; normalize to Failed first (the dance's middle step).
-        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Cancelled)
+        if (task.Status == WorkTaskStatus.Cancelled)
+        {
+            context.Kernel.RequeueInterruptedDispatch(goal.Id, task.Id, note);
+            Console.WriteLine($"recover: requeued interrupted task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+            alreadyReset.Add(task.Id);
+            actions++;
+            continue;
+        }
+
+        // RetryTask refuses Running/WaitingForHuman; normalize to Failed first (the dance's middle step).
+        if (task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
         {
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }

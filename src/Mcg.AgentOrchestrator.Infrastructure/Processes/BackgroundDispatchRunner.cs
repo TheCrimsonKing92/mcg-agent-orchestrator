@@ -231,7 +231,7 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is null || task.LastVerification is not null)
+                if (process is null || process.WasCancelled || task.LastVerification is not null)
                     continue;
 
                 var recoveryDecision = _recoveryPolicy.Evaluate(process, AnyTrackedProcessStillRunning(process));

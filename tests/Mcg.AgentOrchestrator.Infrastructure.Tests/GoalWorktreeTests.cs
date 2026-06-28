@@ -1603,25 +1603,42 @@ public sealed class GoalWorktreeTests
             kernel.ReportTaskProgress(goal.Id, completed.Id, WorkTaskStatus.Completed, "Already done.");
             RecordCancelledProcess(kernel, goal.Id, cancelledOne.Id, 111, repo);
             RecordCancelledProcess(kernel, goal.Id, cancelledTwo.Id, 222, repo);
+            using var runningProcess = StartLongRunningHelper();
             var runningStartedAt = DateTimeOffset.UtcNow;
-            kernel.RecordTaskDispatch(
-                goal.Id,
-                running.Id,
-                new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, runningStartedAt));
-            kernel.RecordTaskProcessStarted(
-                goal.Id,
-                running.Id,
-                new TaskProcessRecord(333, "codex exec prompt.md", repo, "out.log", "err.log", "exit.txt", runningStartedAt, null, null));
+            try
+            {
+                kernel.RecordTaskDispatch(
+                    goal.Id,
+                    running.Id,
+                    new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, runningStartedAt));
+                kernel.RecordTaskProcessStarted(
+                    goal.Id,
+                    running.Id,
+                    new TaskProcessRecord(
+                        runningProcess.Id,
+                        "codex exec prompt.md",
+                        repo,
+                        Path.Combine(repo, "running.out.log"),
+                        Path.Combine(repo, "running.err.log"),
+                        Path.Combine(repo, "running.exit.txt"),
+                        runningStartedAt,
+                        null,
+                        null));
 
-            var context = CreateAcceptanceContext(kernel, repo, goal);
-            CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "retry cancelled work"], context));
+                var context = CreateAcceptanceContext(kernel, repo, goal);
+                CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "retry cancelled work"], context));
 
-            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledOne.Id).Status);
-            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledTwo.Id).Status);
-            Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, completed.Id).Status);
-            var runningTask = kernel.GetTask(goal.Id, running.Id);
-            Assert.Equal(WorkTaskStatus.Running, runningTask.Status);
-            Assert.True(runningTask.LastProcess is { IsRunning: true });
+                Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledOne.Id).Status);
+                Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledTwo.Id).Status);
+                Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, completed.Id).Status);
+                var runningTask = kernel.GetTask(goal.Id, running.Id);
+                Assert.Equal(WorkTaskStatus.Running, runningTask.Status);
+                Assert.True(runningTask.LastProcess is { IsRunning: true });
+            }
+            finally
+            {
+                StopProcess(runningProcess);
+            }
         }
         finally
         {
@@ -2997,6 +3014,10 @@ public sealed class GoalWorktreeTests
         string workingDirectory)
     {
         var startedAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var artifactPrefix = Path.Combine(workingDirectory, $"cancelled-{taskId.Value[..8]}");
+        var standardOutputPath = artifactPrefix + ".out.log";
+        var standardErrorPath = artifactPrefix + ".err.log";
+        var exitCodePath = artifactPrefix + ".exit.txt";
         kernel.RecordTaskDispatch(
             goalId,
             taskId,
@@ -3004,11 +3025,49 @@ public sealed class GoalWorktreeTests
         kernel.RecordTaskProcessStarted(
             goalId,
             taskId,
-            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, null, null));
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, standardOutputPath, standardErrorPath, exitCodePath, startedAt, null, null));
         kernel.RecordTaskProcessCancelled(
             goalId,
             taskId,
-            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, DateTimeOffset.UtcNow, null, WasCancelled: true));
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, standardOutputPath, standardErrorPath, exitCodePath, startedAt, DateTimeOffset.UtcNow, null, WasCancelled: true));
+    }
+
+    private static Process StartLongRunningHelper()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "ping.exe" : "sleep",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("-n");
+            startInfo.ArgumentList.Add("30");
+            startInfo.ArgumentList.Add("127.0.0.1");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("30");
+        }
+
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start long-running helper process.");
+    }
+
+    private static void StopProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            process.WaitForExit(5000);
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private sealed class RecordingGoalLifecycleEventWriter(List<string> order) : IGoalLifecycleEventWriter

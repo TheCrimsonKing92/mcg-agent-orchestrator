@@ -834,10 +834,13 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        var stdout = Path.Combine(root, "stale.out.log");
+        var stderr = Path.Combine(root, "stale.err.log");
+        var exit = Path.Combine(root, "stale.exit.txt");
         kernel.RecordTaskProcessStarted(
             goal.Id,
             task.Id,
-            new TaskProcessRecord(999999, "codex exec prompt.md", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+            new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
         bool changed = false;
         var output = CaptureConsole(() =>
         {
