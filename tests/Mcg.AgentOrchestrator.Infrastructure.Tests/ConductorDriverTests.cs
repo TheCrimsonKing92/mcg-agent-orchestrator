@@ -47,6 +47,15 @@ public sealed class ConductorDriverTests
         return path;
     }
 
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Error}");
+        }
+    }
+
     private static GoalLifecycleFacts ReadFactsPerGoal(OrchestratorWorkspace workspace, Goal goal)
     {
         var dir = workspace.ExecutionDirectory;
@@ -123,6 +132,18 @@ public sealed class ConductorDriverTests
             IReadOnlyList<string>? changedFiles = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
+    }
+
+    private sealed class CountingModelProvider(string providerName, string text) : IModelProvider
+    {
+        public string ProviderName { get; } = providerName;
+        public int Calls { get; private set; }
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new ModelResponse(text, null, "stop"));
+        }
     }
 
     // ── Empty-batch escalation diagnostics ───────────────────────────────
@@ -628,6 +649,65 @@ public sealed class ConductorDriverTests
 
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Xunit.Assert.Equal(new[] { "semantic", "land", "close" }, order);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_landing_writes_semantic_receipt_and_closes_backlog_item")]
+    public async Task ConductorDriverVerifiedLandingWritesSemanticReceiptAndClosesBacklogItem()
+    {
+        var root = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "src", "A.cs"), "class A {}\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+        RunGit(root, "checkout", "-b", "goal/test");
+        File.WriteAllText(Path.Combine(root, "src", "A.cs"), "class A { string Done() => \"done\"; }\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "goal change");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog(
+        [
+            new ModelFunctionBinding(ModelFunctionPurposes.AcceptanceJudge, ModelLane.CheapApi,
+                new ModelProfile("Fake", "judge", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var provider = new CountingModelProvider("Fake",
+            """{"criteria_met": true, "confidence": "high", "reasons": ["implemented"], "unmet_criteria": []}""");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Landing target");
+        var (kernel, goal) = SimpleGoal("Implement required behavior");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        PassVerification(kernel, goal, goal.Tasks.Single());
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAdvisorySemanticAcceptance: (g, summary) => GoalLandingPostActions.RunAdvisorySemanticAcceptance(
+                g,
+                workspace,
+                providers,
+                WorkerProfileCatalog.Default(),
+                root,
+                null),
+            land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
+            afterSuccessfulLanding: (g, result) =>
+            {
+                Assert.True(result.MainAdvanced);
+                GoalLandingPostActions.AutoCloseSourceBacklogItem(g, workspace.BacklogStorePath);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.True(provider.Calls > 0);
+        var receipt = File.ReadLines(workspace.SemanticAcceptanceLogPath).Single();
+        Assert.True(receipt.Contains(goal.Id.Value, StringComparison.Ordinal));
+        var fetched = await backlogStore.GetByExactIdAsync(item.Id);
+        Assert.NotNull(fetched);
+        Assert.Equal(BacklogItemStatus.Done, fetched!.Status);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_does_not_close_backlog_when_landing_does_not_advance_main")]

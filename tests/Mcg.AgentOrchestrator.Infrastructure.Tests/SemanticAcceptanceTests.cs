@@ -286,6 +286,49 @@ public sealed class SemanticAcceptanceTests
         Assert.Equal("required behavior absent", judge.GetProperty("unmetCriteria").EnumerateArray().Single().GetString());
     }
 
+    [Xunit.Fact(DisplayName = "GoalLandingPostActions_skips_semantic_judges_when_goal_receipt_exists")]
+    public void GoalLandingPostActionsSkipsSemanticJudgesWhenGoalReceiptExists()
+    {
+        var root = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        RunGit(root, "init");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "src", "A.cs"), "class A {}\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+        RunGit(root, "checkout", "-b", "goal/test");
+        File.WriteAllText(Path.Combine(root, "src", "A.cs"), "class A { string Done() => \"done\"; }\n");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "goal change");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog(
+        [
+            JudgeBinding(ModelLane.CheapApi, "Fake", "judge")
+        ]));
+        var provider = new FakeJudgeProvider("Fake",
+            """{"criteria_met": true, "confidence": "high", "reasons": ["ok"], "unmet_criteria": []}""");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Implement required behavior", [
+            new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer, verificationPlan: "required behavior present")
+        ]);
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        File.WriteAllText(workspace.SemanticAcceptanceLogPath,
+            $$"""{"at":"2026-06-28T00:00:00Z","goalId":"{{goal.Id.Value}}","objective":"existing","consensus":null,"judges":[]}""" + Environment.NewLine);
+
+        GoalLandingPostActions.RunAdvisorySemanticAcceptance(
+            goal,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            root,
+            null);
+
+        Assert.Equal(0, provider.Calls);
+        Assert.Single(File.ReadLines(workspace.SemanticAcceptanceLogPath));
+    }
+
     [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_BuildJudges_resolves_acceptance_judge_bindings_deduped")]
     public void BuildJudgesResolvesAcceptanceJudgeBindingsDeduped()
     {
@@ -1013,9 +1056,13 @@ public sealed class SemanticAcceptanceTests
     private sealed class FakeJudgeProvider(string providerName, string text) : IModelProvider
     {
         public string ProviderName { get; } = providerName;
+        public int Calls { get; private set; }
 
         public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
-            => Task.FromResult(new ModelResponse(text, null, "stop"));
+        {
+            Calls++;
+            return Task.FromResult(new ModelResponse(text, null, "stop"));
+        }
     }
 
     private sealed class CapturingFakeProvider(string providerName, string text) : IModelProvider
