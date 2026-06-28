@@ -2053,3 +2053,10 @@ Goal f5e53f11: Source backlog item: e208f55ebf3b4eed9559a1604add15c3. Fix CA1859
 
 - Operator gate: Developer: fail - full `dotnet test --verbosity minimal` compiled without CA1859 for the edited helpers, Core tests passed 420/420, Infrastructure tests failed 12 unrelated environment-sensitive tests (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - narrow test analyzer cleanup - enough reasoning to keep scope tight and verify failure cause.
+
+## 2026-06-28 - Backlog slice: Fix commit-on-behalf residual dirty worktree regression blocki...
+
+Goal 3a2c7830: Backlog slice: Fix commit-on-behalf residual dirty worktree regression blocking acceptance  Observed 2026-06-28 while.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 910839d0be24f32f6550690c4e4686f12959af67). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 910839d0be24f32f6550690c4e4686f12959af67). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner-only inspection, no repository modifications (exit 0); Researcher: not-run/inconclusive - focused dotnet test failed before execution with NETSDK1004 missing project.assets.json (exit 0); Developer: pass - 2 focused tests passed (exit 0); Tester: pass - focused isolated run exited 0, 0 failed, 2 passed (exit 0); Reviewer: pass evidence reviewed - prior isolated focused run exited 0 with 2 passed: BackgroundDispatchRunnerFileRoleWithCommitAndResidualDirtyWorktreeCommitsResidual and GoalWorktreesCommitOnBehalfAfterWorkerCommitLeavesWorktreeClean. Reviewer did not rerun dotnet tests because this task sandbox is read-only. (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer task - targeted source and verification evidence fit the context window.
