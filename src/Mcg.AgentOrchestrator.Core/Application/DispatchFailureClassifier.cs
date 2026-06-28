@@ -485,6 +485,8 @@ public static class DispatchFailureClassifier
         var commitBlocked =
             output.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("CreateProcessAsUserW 1312", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
             (output.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
              output.Contains("Permission denied", StringComparison.OrdinalIgnoreCase));
 

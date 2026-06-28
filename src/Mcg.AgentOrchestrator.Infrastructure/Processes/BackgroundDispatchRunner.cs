@@ -107,6 +107,7 @@ public sealed class BackgroundDispatchRunner
         var sandbox = WorkerSandboxOptions.FromEnvironment();
         var useSandbox = sandbox.Enabled && !isLocalDispatch &&
             task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+        kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
 
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatch.Command,
@@ -394,10 +395,14 @@ public sealed class BackgroundDispatchRunner
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(processRecord, standardOutput, standardError);
+            var shouldCommitDirtyWorktree =
+                worktreeEvidence.HasRelevantCommitAfterDispatch ||
+                (task.LastDispatch.SandboxLowIntegrity &&
+                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                  sandboxCommitBlocked));
+
             if (!worktreeEvidence.IsClean &&
-                (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                 sandboxCommitBlocked ||
-                 worktreeEvidence.HasRelevantCommitAfterDispatch) &&
+                shouldCommitDirtyWorktree &&
                 TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
                     BuildOrchestratorCommitSubject(task, standardOutput, standardError)) &&

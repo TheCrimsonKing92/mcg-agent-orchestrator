@@ -52,6 +52,7 @@ public sealed partial class AgentOrchestratorKernel
             "# Agent Task Brief",
             string.Empty
         };
+        headerLines.AddRange(BuildLatestDeveloperRetryBlock(goal, task, targetBranchName, targetHeadCommit));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task));
         headerLines.AddRange([
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
@@ -405,6 +406,56 @@ public sealed partial class AgentOrchestratorKernel
         };
         lines.AddRange(failure.FailedChecks.Select(check => $"- {check}"));
         lines.Add("<!-- ACCEPTANCE_FAILURE_END -->");
+        lines.Add(string.Empty);
+        return lines;
+    }
+
+    private static List<string> BuildLatestDeveloperRetryBlock(
+        Goal goal,
+        TaskSpec task,
+        string? targetBranchName,
+        string? targetHeadCommit)
+    {
+        if (task.RequiredRole != AgentRole.Developer)
+        {
+            return [];
+        }
+
+        var latestRetry = goal.Timeline
+            .Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried)
+            .OrderByDescending(evt => evt.OccurredAt)
+            .FirstOrDefault();
+        if (latestRetry is null || string.IsNullOrWhiteSpace(latestRetry.Message))
+        {
+            return [];
+        }
+
+        var lines = new List<string>
+        {
+            "<!-- LATEST_DEVELOPER_RETRY_BLOCKER_START -->",
+            "## LATEST DEVELOPER RETRY BLOCKER - FIX FIRST",
+            "This is the latest retry feedback for this Developer task. Address it before using prior task history, branch evidence, or context digests.",
+            $"Source: {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}; {latestRetry.Kind}.",
+        };
+
+        if (!string.IsNullOrWhiteSpace(targetBranchName) || !string.IsNullOrWhiteSpace(targetHeadCommit))
+        {
+            lines.Add("Current branch/head for this retry:");
+            if (!string.IsNullOrWhiteSpace(targetBranchName))
+            {
+                lines.Add($"- Branch: {targetBranchName.Trim()}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(targetHeadCommit))
+            {
+                lines.Add($"- HEAD commit: {targetHeadCommit.Trim()}");
+            }
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("Retry feedback (verbatim):");
+        lines.Add(latestRetry.Message);
+        lines.Add("<!-- LATEST_DEVELOPER_RETRY_BLOCKER_END -->");
         lines.Add(string.Empty);
         return lines;
     }
