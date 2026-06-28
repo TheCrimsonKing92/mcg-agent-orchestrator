@@ -596,8 +596,8 @@ public sealed class ConductorDriverTests
         Assert.Equal(0, task.CriterionRetryFeedback.Count);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_runs_semantic_acceptance_after_acceptance_before_landing")]
-    public void ConductorDriverVerifiedRunsSemanticAcceptanceAfterAcceptanceBeforeLanding()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_runs_semantic_acceptance_after_acceptance_and_landing")]
+    public void ConductorDriverVerifiedRunsSemanticAcceptanceAfterAcceptanceAndLanding()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -620,11 +620,11 @@ public sealed class ConductorDriverTests
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
-        Xunit.Assert.Equal(new[] { "acceptance", "semantic", "land" }, order);
+        Xunit.Assert.Equal(new[] { "acceptance", "land", "semantic" }, order);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_successful_landing_runs_post_landing_close_after_main_advances")]
-    public void ConductorDriverVerifiedSuccessfulLandingRunsPostLandingCloseAfterMainAdvances()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_successful_landing_runs_semantic_then_post_landing_close_after_main_advances")]
+    public void ConductorDriverVerifiedSuccessfulLandingRunsSemanticThenPostLandingCloseAfterMainAdvances()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -648,7 +648,33 @@ public sealed class ConductorDriverTests
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
-        Xunit.Assert.Equal(new[] { "semantic", "land", "close" }, order);
+        Xunit.Assert.Equal(new[] { "land", "semantic", "close" }, order);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_policy_escalation_skips_semantic_receipt")]
+    public void ConductorDriverVerifiedPolicyEscalationSkipsSemanticReceipt()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var semanticCalled = false;
+        var landCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAdvisorySemanticAcceptance: (_, _) => { semanticCalled = true; },
+            classifyRisk: _ => ChangeRiskTier.Broad,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.False(semanticCalled);
+        Assert.False(landCalled);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_landing_writes_semantic_receipt_and_closes_backlog_item")]

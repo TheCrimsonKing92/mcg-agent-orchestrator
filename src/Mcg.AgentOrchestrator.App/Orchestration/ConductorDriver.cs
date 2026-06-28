@@ -249,6 +249,11 @@ internal sealed class ConductorDriver
                 return;
             }
 
+            if (goal.SourceBacklogItemId is null)
+            {
+                return;
+            }
+
             GoalOperationJournal.Begin(dir, goal, "conductor:backlog-close", "Closing linked source backlog item.");
             var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, workspace.BacklogStorePath, Console.WriteLine);
             GoalOperationJournal.Completed(dir, goal, "conductor:backlog-close",
@@ -782,11 +787,7 @@ internal sealed class ConductorDriver
             _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
-        // Gate 3: advisory semantic acceptance runs only after deterministic acceptance passed. It
-        // records judge receipts for observability but never gates landing.
-        _runAdvisorySemanticAcceptance(goal, acceptance);
-
-        // Gate 4: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
+        // Gate 3: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
         var changeRisk = _classifyChangeRisk(goal);
         if (changeRisk.HasValue)
         {
@@ -798,7 +799,7 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 5: land via integration branch (the branch is already rebased onto main by Gate 1).
+        // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
@@ -807,6 +808,9 @@ internal sealed class ConductorDriver
 
         if (landResult.MainAdvanced)
         {
+            // Gate 5: advisory semantic acceptance runs only after deterministic acceptance and
+            // successful landing. It records judge receipts for observability but never gates landing.
+            _runAdvisorySemanticAcceptance(goal, acceptance);
             _afterSuccessfulLanding(goal, landResult);
         }
 
