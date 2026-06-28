@@ -2116,3 +2116,10 @@ Goal 70907530: Backlog slice: ANCHOR - typed IWorkerProvider abstraction (the ar
 
 - Operator gate: Planner: not-run; planning-only task, source/context inspection completed (exit 0); Researcher: not-run; research-only read pass, repository evidence cited above (exit 0); Reviewer: not-run locally; prior evidence says Core DispatchOutcomeClassify 11/11 and Infrastructure WorkerDispatchTests 167/167 passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - sufficient for diff/evidence inspection.
+
+## 2026-06-28 - Backlog slice: Tests must MOCK the nested build/acceptance, not run a real one
+
+Goal b2af5e12: Backlog slice: Tests must MOCK the nested build/acceptance, not run a real one. GoalWorktreeTests.CliLifecycleSimpleG.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 9ea245b375dc4732c8eb9d8c27fe768551689659). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 9ea245b375dc4732c8eb9d8c27fe768551689659). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner source inspection only (exit 0); Researcher: not-run - read-only research task; source evidence inspected (exit 0); Developer: pass; GoalWorktreeTests 4/4 in 963ms test duration / 2.56s wall-clock; GoalAcceptanceVerifierTests 37/37 in 139ms (exit 0); Tester: pass with caveat: all focused wrapper runs exited 0; no-build timing attempt invalid due missing test DLL (exit 0); Reviewer: not-run by reviewer; prior pass evidence reviewed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer task - handled focused source/evidence comparison.
