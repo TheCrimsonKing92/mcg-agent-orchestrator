@@ -424,6 +424,8 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
+            var commitAttempted = false;
+            var commitAttempt = default(CommitWorktreeEditsResult);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
                 task,
                 processRecord,
@@ -439,27 +441,31 @@ public sealed class BackgroundDispatchRunner
                    sandboxCommitBlocked));
 
             if (!worktreeEvidence.IsClean &&
-                shouldCommitDirtyWorktree &&
-                TryCommitWorktreeEdits(
+                shouldCommitDirtyWorktree)
+            {
+                commitAttempt = TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
                     BuildOrchestratorCommitSubject(task, standardOutput, standardError),
-                    worktreeEvidence.DirtyPaths) &&
-                TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
-                worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
-            {
-                orchestratorCommitted = true;
-                hasCommittedChanges = true;
-                exitCode = 0;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    "Orchestrator committed the worker's verified worktree edits. " +
-                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
-                if (sandboxCommitBlocked)
+                    worktreeEvidence.DirtyPaths);
+                commitAttempted = true;
+                if (commitAttempt.Succeeded &&
+                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+                    worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
                 {
+                    orchestratorCommitted = true;
+                    hasCommittedChanges = true;
+                    exitCode = 0;
                     standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic,
-                        "Classified worker git metadata write failure as non-fatal; orchestrator commit-on-behalf is the commit path. " +
-                        $"index_lock={TryResolveIndexLockPath(processRecord.WorkingDirectory)}.");
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Orchestrator committed the worker's verified worktree edits. " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+                    if (sandboxCommitBlocked)
+                    {
+                        standardErrorDiagnostic = AppendDiagnostic(
+                            standardErrorDiagnostic,
+                            "Classified worker git metadata write failure as non-fatal; orchestrator commit-on-behalf is the commit path. " +
+                            $"index_lock={TryResolveIndexLockPath(processRecord.WorkingDirectory)}.");
+                    }
                 }
             }
 
@@ -468,6 +474,13 @@ public sealed class BackgroundDispatchRunner
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
+                if (commitAttempted && !commitAttempt.Succeeded && commitAttempt.Diagnostic.Length > 0)
+                {
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        commitAttempt.Diagnostic);
+                }
+
                 standardErrorDiagnostic = AppendDiagnostic(
                     standardErrorDiagnostic ?? string.Empty,
                     "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
@@ -736,13 +749,13 @@ public sealed class BackgroundDispatchRunner
     // Commits the worker's uncommitted worktree edits from the orchestrator after verification guards
     // pass. The dirty path list is filtered from git status so generated/noise paths are not absorbed
     // into the recovery commit.
-    private static bool TryCommitWorktreeEdits(string workingDirectory, string subject, IReadOnlyList<string> dirtyPaths)
+    private static CommitWorktreeEditsResult TryCommitWorktreeEdits(string workingDirectory, string subject, IReadOnlyList<string> dirtyPaths)
     {
         try
         {
             if (dirtyPaths.Count == 0)
             {
-                return false;
+                return CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf skipped: no commit-worthy dirty paths.");
             }
 
             var addArgs = new List<string>(dirtyPaths.Count + 3) { "add", "-A", "--" };
@@ -750,7 +763,7 @@ public sealed class BackgroundDispatchRunner
             var add = GitCli.Run(workingDirectory, addArgs.ToArray());
             if (!add.Succeeded)
             {
-                return false;
+                return CommitWorktreeEditsResult.FromGitFailure("add", addArgs, add);
             }
 
             var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--name-only");
@@ -758,15 +771,21 @@ public sealed class BackgroundDispatchRunner
             {
                 // Nothing to commit (e.g. only the excluded sandbox scratch was dirty) — leave the
                 // dispatch to fail/report rather than create an empty commit.
-                return false;
+                return staged.ExitCode == 0
+                    ? CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no staged changes after git add.")
+                    : CommitWorktreeEditsResult.FromGitFailure("diff", ["diff", "--cached", "--name-only"], staged);
             }
 
-            var commit = GitCli.Run(workingDirectory, "commit", "-m", subject);
-            return commit.Succeeded;
+            var commitArgs = new[] { "commit", "-m", subject };
+            var commit = GitCli.Run(workingDirectory, commitArgs);
+            return commit.Succeeded
+                ? CommitWorktreeEditsResult.Success
+                : CommitWorktreeEditsResult.FromGitFailure("commit", commitArgs, commit);
         }
-        catch
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            return false;
+            return CommitWorktreeEditsResult.Failed(
+                $"Orchestrator commit-on-behalf failed with {ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
         }
     }
 
@@ -1578,6 +1597,14 @@ public sealed class BackgroundDispatchRunner
             : standardError.TrimEnd() + Environment.NewLine + diagnostic;
     }
 
+    private static string NormalizeDiagnosticText(string value)
+    {
+        var normalized = string.Join(
+            " ",
+            value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return string.IsNullOrWhiteSpace(normalized) ? "none" : normalized;
+    }
+
     private static string BuildRecoveryDiagnostic(DispatchRecoveryDecision? decision)
     {
         if (decision is null)
@@ -1828,5 +1855,33 @@ public sealed class BackgroundDispatchRunner
         public string ChangedPathsSummary => FormatChangedPaths(ChangedPaths);
 
         public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
+    }
+
+    private readonly record struct CommitWorktreeEditsResult(bool Succeeded, string Diagnostic)
+    {
+        public static CommitWorktreeEditsResult Success { get; } = new(true, string.Empty);
+
+        public static CommitWorktreeEditsResult Failed(string diagnostic) => new(false, diagnostic);
+
+        public static CommitWorktreeEditsResult FromGitFailure(
+            string operation,
+            IReadOnlyList<string> arguments,
+            GitCli.GitResult result)
+        {
+            var detail = string.IsNullOrWhiteSpace(result.Error)
+                ? result.Output
+                : result.Error;
+            return Failed(
+                "Orchestrator commit-on-behalf git command failed. " +
+                $"operation={operation}; command=git {FormatGitArguments(arguments)}; exit_code={result.ExitCode}; " +
+                $"error={NormalizeDiagnosticText(detail)}.");
+        }
+
+        private static string FormatGitArguments(IReadOnlyList<string> arguments)
+        {
+            return string.Join(
+                ' ',
+                arguments.Select(argument => argument.Contains(' ', StringComparison.Ordinal) ? $"\"{argument}\"" : argument));
+        }
     }
 }
