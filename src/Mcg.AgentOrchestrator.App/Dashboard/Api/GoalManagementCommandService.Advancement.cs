@@ -391,7 +391,15 @@ private static object? ExecuteSubscriptionAutomation(
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>
-            ExecuteSubscriptionStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart),
+            ExecuteSubscriptionStartRecordedDispatch(
+                kernel,
+                agents,
+                profiles,
+                workspace,
+                goal,
+                automation.TaskId!,
+                allowLargePaidSubscriptionStart,
+                providers),
         NextActionAutomationKind.DelegatePendingTask =>
             DashboardResponseMapper.ToDelegationPlanDto(RefineAndActivateGoal(
                 kernel,
@@ -449,13 +457,19 @@ private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
 
 private static TaskDetailDto ExecuteSubscriptionStartRecordedDispatch(
     AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
     Goal goal,
     TaskId taskId,
-    bool allowLargePaidSubscriptionStart)
+    bool allowLargePaidSubscriptionStart,
+    IModelProviderRegistry? providers = null)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
-    RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, task);
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+        SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
+        allowLargePaidSubscriptionStart);
+    RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, task, agents, profiles, providers);
     SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
         SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
         allowLargePaidSubscriptionStart);
