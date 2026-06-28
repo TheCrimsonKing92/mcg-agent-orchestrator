@@ -68,7 +68,7 @@ public sealed class DispatchRecoveryPolicy
                 if (staleRetryBudgetRemaining > 0 && !hasDirtyWorktreeEvidence)
                 {
                     return Decision(
-                        DispatchRecoveryAction.MarkStale,
+                        DispatchRecoveryAction.RetryStale,
                         heartbeatEvidence,
                         $"no live process, exit-absent, stale retry budget remaining={staleRetryBudgetRemaining}");
                 }
@@ -103,14 +103,12 @@ public sealed class DispatchRecoveryPolicy
 
             if (heartbeat.IdleDuration is { } idleDuration &&
                 idleDuration < _liveIdleTimeout &&
-                (heartbeat.OwnedCpuMs > 0 ||
-                 heartbeat.StandardOutputBytes > 0 ||
-                 heartbeat.StandardErrorBytes > 0))
+                heartbeat.LastProgressAt is not null)
             {
                 return Decision(
                     DispatchRecoveryAction.Hold,
                     heartbeat.Path,
-                    $"live process with CPU activity/output progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
+                    $"live process with recent CPU/output/file progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
             }
 
             if (heartbeat.IdleDuration >= _liveIdleTimeout &&

@@ -3403,8 +3403,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Contains(nextActions, action => action.TaskId == tester.Id && action.Kind == NextActionKind.RunAssignedTask);
     }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_exit_file_when_child_pid_is_recorded")]
-    public void BackgroundDispatchRunnerReconcileHoldsExitFileWhenChildPidIsRecorded()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_ignores_stale_child_pid_when_exit_file_exists")]
+    public void BackgroundDispatchRunnerReconcileIgnoresStaleChildPidWhenExitFileExists()
 {
     var root = CreateTempDirectory();
     var stdout = Path.Combine(root, "out.log");
@@ -3435,9 +3435,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Null(outcome.Verification);
-    Assert.Null(outcome.ProcessRecord.ExitCode);
-    Assert.Null(outcome.ProcessRecord.CompletedAt);
+    Assert.NotNull(outcome.Verification);
+    Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+    Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 

@@ -359,12 +359,6 @@ public sealed class BackgroundDispatchRunner
         IReadOnlyList<int>? ownedProcessIds = null;
         if (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
         {
-            if (heartbeat.ChildProcessId is not null)
-            {
-                outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-                return false;
-            }
-
             ownedProcessIds = heartbeat.OwnedProcessIds;
         }
 

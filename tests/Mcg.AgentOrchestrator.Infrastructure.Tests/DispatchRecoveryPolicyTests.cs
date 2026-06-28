@@ -26,8 +26,8 @@ public sealed class DispatchRecoveryPolicyTests
 
         var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false, staleRetryBudgetRemaining: 1);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, decision.Action);
-        Xunit.Assert.Equal("mark-stale", decision.ActionName);
+        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, decision.Action);
+        Xunit.Assert.Equal("retry-stale", decision.ActionName);
         Xunit.Assert.Equal(BackgroundDispatchRunner.GetHeartbeatPath(process), decision.EvidencePath);
     }
 
@@ -105,9 +105,9 @@ public sealed class DispatchRecoveryPolicyTests
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
         BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(DispatchRecoveryAction.RetryStale, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, task.EmptyOutputRetryCount);
-        Xunit.Assert.Contains("action='mark-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action='retry-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
         Xunit.Assert.Contains("stale retry budget remaining=1", task.LastVerification.StandardError, StringComparison.Ordinal);
     }
 
@@ -148,6 +148,36 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal(DispatchRecoveryAction.BudgetExhausted, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, task.EmptyOutputRetryCount);
         Xunit.Assert.Contains("action='budget-exhausted'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciles_exit_artifact_despite_stale_child_pid_heartbeat")]
+    public void BackgroundDispatchRunnerReconcilesExitArtifactDespiteStaleChildPidHeartbeat()
+    {
+        var root = CreateTempDirectory();
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, "WORKER_RESULT:\ntests: pass\nEND_WORKER_RESULT\n");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+        var clock = new TestClock(Now);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Reconcile stale heartbeat exit");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, Now.AddMinutes(-20)));
+        var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, Now.AddMinutes(-20), null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        WriteHeartbeat(process, Now.AddMinutes(-10), Now.AddMinutes(-10), 0, 0, 0);
+
+        var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+        Xunit.Assert.NotNull(task.LastVerification);
+        Xunit.Assert.Contains("action='reconcile-from-exit'", task.LastVerification!.StandardError, StringComparison.Ordinal);
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));
