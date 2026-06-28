@@ -56,6 +56,8 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal("abc", options.GoalPrefix);
         Assert.Equal("task1", options.TaskId);
         Assert.Equal(4, options.SinceEventId);
+        Assert.Equal(4, options.ResumeCursor.TimelineCursor);
+        Assert.Equal(0, options.ResumeCursor.RunEventCursor);
         Assert.Equal(["TaskStarted", "TaskCompleted"], options.EventKinds);
     }
 
@@ -331,7 +333,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Xunit.Assert.All(lines, line =>
         {
             using var doc = JsonDocument.Parse(line);
-            Assert.True(doc.RootElement.GetProperty("cursor").GetInt64() > 1);
+            Assert.StartsWith("timeline:", doc.RootElement.GetProperty("cursor").GetString());
             Assert.True(doc.RootElement.TryGetProperty("timestamp", out _));
             Assert.True(doc.RootElement.TryGetProperty("eventKind", out _));
             Assert.Equal(goal.Id.Value, doc.RootElement.GetProperty("goalId").GetString());
@@ -368,7 +370,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         using var output = new StringWriter();
 
         await GoalMonitoringSubscriptionCommand.RunAsync(
-            ["goals", "subscribe", "--goal-prefix", goal.Id.Value[..8], "--once", "--from-cursor", first.Sequence.ToString(), "--event-kind", "conductor:dispatch"],
+            ["goals", "subscribe", "--goal-prefix", goal.Id.Value[..8], "--once", "--from-cursor", $"run-event:{first.Sequence}", "--event-kind", "conductor:dispatch"],
             output,
             kernel,
             workspace,
@@ -377,10 +379,44 @@ public sealed class GoalMonitoringSubscriptionCommandTests
 
         var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         using var doc = JsonDocument.Parse(line);
-        Assert.Equal(first.Sequence + 1, doc.RootElement.GetProperty("cursor").GetInt64());
+        Assert.Equal($"timeline:1;run-event:{first.Sequence + 1}", doc.RootElement.GetProperty("cursor").GetString());
         Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("eventKind").GetString());
         Assert.Equal("Completed", doc.RootElement.GetProperty("currentState").GetString());
         Assert.Equal(workspace.RunEventStorePath, doc.RootElement.GetProperty("artifactPath").GetString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_timeline_cursor_does_not_skip_lower_run_events")]
+    public async Task MonitorGoalLocalNdjsonTimelineCursorDoesNotSkipLowerRunEvents()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new SqliteRunEventStore(workspace.RunEventStorePath);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Persist event", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor cross-domain cursor", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            goal.Id.Value,
+            "conductor:dispatch",
+            "Completed",
+            "process=123",
+            null));
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["goals", "subscribe", "--goal-prefix", goal.Id.Value[..8], "--once", "--from-cursor", "timeline:50", "--event-kind", "conductor:dispatch"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal("timeline:50;run-event:1", doc.RootElement.GetProperty("cursor").GetString());
+        Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("eventKind").GetString());
+        Assert.Equal("Completed", doc.RootElement.GetProperty("currentState").GetString());
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_tracks_timeline_and_run_event_cursors_independently")]
@@ -440,7 +476,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         {
             using var doc = JsonDocument.Parse(line);
             return doc.RootElement.GetProperty("eventKind").GetString() == "conductor:dispatch" &&
-                doc.RootElement.GetProperty("cursor").GetInt64() == 1;
+                doc.RootElement.GetProperty("cursor").GetString()?.EndsWith("run-event:1", StringComparison.Ordinal) == true;
         });
     }
 
