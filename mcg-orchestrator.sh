@@ -12,7 +12,7 @@ LOCK_STALE_SECONDS=60
 
 # Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 # A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
-# A younger lock is also reclaimed when owner.pid is missing or its owner is gone.
+# A younger lock is also reclaimed when owner.pid is missing after a short recheck or its owner is gone.
 if [ -d "$LOCK_DIR" ]; then
     PID_FILE="$LOCK_DIR/owner.pid"
     reclaim=0
@@ -20,6 +20,9 @@ if [ -d "$LOCK_DIR" ]; then
     now=$(date +%s)
     if [ $((now - lock_mtime)) -gt "$LOCK_STALE_SECONDS" ]; then
         reclaim=1
+    fi
+    if [ ! -f "$PID_FILE" ] && [ "$reclaim" -eq 0 ]; then
+        sleep 0.5
     fi
     if [ -f "$PID_FILE" ] && owner_pid=$(cat "$PID_FILE" 2>/dev/null) && [ -n "$owner_pid" ]; then
         if [ "$reclaim" -eq 0 ] && ! kill -0 "$owner_pid" 2>/dev/null; then
