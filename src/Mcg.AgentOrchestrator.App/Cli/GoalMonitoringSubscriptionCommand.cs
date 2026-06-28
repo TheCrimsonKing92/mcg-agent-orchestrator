@@ -454,10 +454,11 @@ internal static class GoalMonitoringSubscriptionCommand
         {
             var current = reloadKernel?.Invoke() ?? kernel;
             var goal = OrchestratorEntityResolver.ResolveGoal(current, OrchestratorEntityResolver.GetLatestGoal(current), options.GoalId);
-            var state = GoalLifecycle.ResolveState(goal);
+            var facts = ReadLifecycleFacts(workspace, goal);
+            var state = GoalLifecycle.ResolveState(goal, facts);
             var batch = GoalMonitoringStream.BuildBatch(current, goal, timelineCursor, agents, workerProfiles, workspace);
             var runRecords = await runEvents.ReadSinceAsync(runEventCursor, maxCount: 500, cancellationToken: cancellationToken).ConfigureAwait(false);
-            var envelopes = BuildSubscriptionEvents(batch, goal, workspace, runRecords);
+            var envelopes = BuildSubscriptionEvents(batch, goal, state, workspace, runRecords);
             if (!snapshotWritten && !resumeCursor.IsEmpty && envelopes.Count == 0)
             {
                 envelopes = [BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor)];
@@ -499,15 +500,15 @@ internal static class GoalMonitoringSubscriptionCommand
         }
     }
 
-    private static IReadOnlyList<GoalStateSubscriptionEvent> BuildSubscriptionEvents(
+    internal static IReadOnlyList<GoalStateSubscriptionEvent> BuildSubscriptionEvents(
         GoalMonitoringBatchDto batch,
         Goal goal,
+        GoalLifecycleState state,
         OrchestratorWorkspace workspace,
         IReadOnlyList<RunEventRecord> runRecords)
     {
-        var state = GoalLifecycle.ResolveState(goal);
         var events = new List<GoalStateSubscriptionEvent> { BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, batch.LastEventId) };
-        events.AddRange(batch.Events.Select(evt => BuildTimelineEnvelope(evt, goal, workspace)));
+        events.AddRange(batch.Events.Select(evt => BuildTimelineEnvelope(evt, goal, state, workspace)));
         events.AddRange(runRecords
             .Where(record => record.GoalId is null || string.Equals(record.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
             .Select(record => new GoalStateSubscriptionEvent(
@@ -517,7 +518,7 @@ internal static class GoalMonitoringSubscriptionCommand
                 record.Operation ?? record.EventType,
                 record.GoalId ?? batch.GoalId,
                 null,
-                record.Status ?? state.ToString(),
+                state.ToString(),
                 workspace.RunEventStorePath,
                 null,
                 record.Detail)
@@ -543,7 +544,11 @@ internal static class GoalMonitoringSubscriptionCommand
             CursorDomain = GoalStateCursorDomain.Timeline
         };
 
-    private static GoalStateSubscriptionEvent BuildTimelineEnvelope(GoalMonitoringEventDto evt, Goal goal, OrchestratorWorkspace workspace)
+    private static GoalStateSubscriptionEvent BuildTimelineEnvelope(
+        GoalMonitoringEventDto evt,
+        Goal goal,
+        GoalLifecycleState state,
+        OrchestratorWorkspace workspace)
     {
         var task = evt.TaskId is null ? null : goal.Tasks.FirstOrDefault(candidate => candidate.Id.Value == evt.TaskId);
         var artifactPath = task?.LastVerification?.StandardOutputPath ?? task?.LastProcess?.StandardOutputPath ?? workspace.RunEventStorePath;
@@ -554,13 +559,30 @@ internal static class GoalMonitoringSubscriptionCommand
             evt.Kind.ToString(),
             evt.GoalId,
             evt.TaskId,
-            evt.TaskStatus?.ToString() ?? GoalLifecycle.ResolveState(goal).ToString(),
+            evt.TaskStatus?.ToString() ?? state.ToString(),
             artifactPath,
             task?.LastProcess?.ProcessId,
             evt.Message)
         {
             CursorDomain = GoalStateCursorDomain.Timeline
         };
+    }
+
+    internal static GoalLifecycleFacts ReadLifecycleFacts(OrchestratorWorkspace workspace, Goal goal)
+    {
+        var executionDirectory = workspace.ExecutionDirectory;
+        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var workspaceExists = worktree is not null;
+        var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+        var isMerged = journal.LatestByOperation.Any(entry =>
+            entry.Operation == "conductor:land" && entry.Status == GoalOperationStatus.Completed);
+        var isRecorded = journal.LatestByOperation.Any(entry =>
+            entry.Operation == "conductor:record" && entry.Status == GoalOperationStatus.Completed);
+        var isCleanedUp = journal.LatestByOperation.Any(entry =>
+            entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed)
+            || (!workspaceExists && goal.Status == GoalStatus.Completed);
+        var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
+        return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }
 
     private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor)

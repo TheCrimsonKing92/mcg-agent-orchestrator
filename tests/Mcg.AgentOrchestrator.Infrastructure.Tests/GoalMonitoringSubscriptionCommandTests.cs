@@ -381,7 +381,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         using var doc = JsonDocument.Parse(line);
         Assert.Equal($"timeline:1;run-event:{first.Sequence + 1}", doc.RootElement.GetProperty("cursor").GetString());
         Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("eventKind").GetString());
-        Assert.Equal("Completed", doc.RootElement.GetProperty("currentState").GetString());
+        Assert.Equal("Created", doc.RootElement.GetProperty("currentState").GetString());
         Assert.Equal(workspace.RunEventStorePath, doc.RootElement.GetProperty("artifactPath").GetString());
     }
 
@@ -416,7 +416,134 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         using var doc = JsonDocument.Parse(line);
         Assert.Equal("timeline:50;run-event:1", doc.RootElement.GetProperty("cursor").GetString());
         Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("eventKind").GetString());
-        Assert.Equal("Completed", doc.RootElement.GetProperty("currentState").GetString());
+        Assert.Equal("Created", doc.RootElement.GetProperty("currentState").GetString());
+    }
+
+    [Xunit.Theory(DisplayName = "Monitor_goal_local_current_state_uses_lifecycle_facts_for_completed_goal")]
+    [Xunit.InlineData("conductor:land", GoalLifecycleState.Merged)]
+    [Xunit.InlineData("conductor:record", GoalLifecycleState.Recorded)]
+    [Xunit.InlineData("conductor:cleanup", GoalLifecycleState.CleanedUp)]
+    public async Task MonitorGoalLocalCurrentStateUsesLifecycleFactsForCompletedGoal(
+        string completedOperation,
+        GoalLifecycleState expectedState)
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Complete lifecycle", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor lifecycle facts", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        if (expectedState != GoalLifecycleState.CleanedUp)
+        {
+            CreateLinkedWorktreeMarker(root, goal.Id);
+        }
+
+        GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+        if (completedOperation is "conductor:record" or "conductor:cleanup")
+        {
+            GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
+        }
+
+        if (completedOperation == "conductor:cleanup")
+        {
+            GoalOperationJournal.Completed(root, goal, "conductor:cleanup", "cleaned");
+        }
+
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--once", "--format", "ndjson", "--event-kind", "goal.snapshot"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal(expectedState.ToString(), doc.RootElement.GetProperty("currentState").GetString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_current_state_reports_open_clarification")]
+    public async Task MonitorGoalLocalCurrentStateReportsOpenClarification()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Clarify", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Monitor clarification", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Need answer",
+            "Question?",
+            correlationKey: $"spec-clarification:{goal.Id.Value}:observable-behavior:test");
+        var facts = GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, kernel.GetGoal(goal.Id));
+        Assert.Equal(GoalLifecycleState.AwaitingClarification, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
+        using var output = new StringWriter();
+
+        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--once", "--format", "ndjson", "--event-kind", "goal.snapshot"],
+            output,
+            kernel,
+            workspace,
+            [agent],
+            WorkerProfileCatalog.Default()));
+        Assert.Equal(1, ex.ExitCode);
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal("AwaitingClarification", doc.RootElement.GetProperty("currentState").GetString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_run_event_envelopes_use_lifecycle_state_not_run_event_status")]
+    public void MonitorGoalRunEventEnvelopesUseLifecycleStateNotRunEventStatus()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Blocked", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor blocked", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        var batch = BuildEmptyMonitoringBatch(goal);
+        var records = new[]
+        {
+            new RunEventRecord(
+                3,
+                "evt-3",
+                DateTimeOffset.UnixEpoch,
+                RunEventTypes.GoalOperation,
+                goal.Id.Value,
+                "conductor:cleanup",
+                "Completed",
+                "cleanup finished",
+                null)
+        };
+
+        var events = GoalMonitoringSubscriptionCommand.BuildSubscriptionEvents(
+            batch,
+            goal,
+            GoalLifecycleState.Blocked,
+            workspace,
+            records);
+
+        var runEvent = Assert.Single(events.Where(evt => evt.CursorDomain == GoalStateCursorDomain.RunEvent));
+        Assert.Equal("conductor:cleanup", runEvent.EventKind);
+        Assert.Equal("Blocked", runEvent.CurrentState);
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_tracks_timeline_and_run_event_cursors_independently")]
@@ -522,6 +649,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "ok",
             string.Empty,
             DateTimeOffset.UtcNow));
+        CreateLinkedWorktreeMarker(root, completedGoal.Id);
         using var completedOutput = new StringWriter();
 
         await GoalMonitoringSubscriptionCommand.RunAsync(
@@ -715,6 +843,38 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var path = Path.Combine(Path.GetTempPath(), "mcg-monitor-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static void CreateLinkedWorktreeMarker(string root, GoalId goalId)
+    {
+        var path = GoalWorktrees.WorktreePath(root, goalId);
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, ".git"), "gitdir: test");
+    }
+
+    private static GoalMonitoringBatchDto BuildEmptyMonitoringBatch(Goal goal)
+    {
+        var observedAt = DateTimeOffset.UnixEpoch;
+        return new GoalMonitoringBatchDto(
+            goal.Id.Value,
+            0,
+            1,
+            new GoalMonitoringSnapshotDto(
+                goal.Id.Value,
+                observedAt,
+                1,
+                new MonitorDto(
+                    goal.Id.Value,
+                    goal.Objective,
+                    goal.Status,
+                    goal.Tasks.Count,
+                    [],
+                    0,
+                    [],
+                    observedAt),
+                []),
+            [],
+            "/events/stream");
     }
 
     private static int CountOccurrences(string text, string value)
