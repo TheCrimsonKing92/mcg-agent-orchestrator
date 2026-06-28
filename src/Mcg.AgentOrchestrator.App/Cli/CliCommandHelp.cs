@@ -63,6 +63,9 @@ internal static class CliCommandHelp
         "Render all backlog items as markdown.",
         ["--help", "-h"]);
 
+    private static readonly IReadOnlySet<string> GenericHelpFlags =
+        new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
     {
         if (!TryResolveEntry(args, out var entry) || !HasHelpFlag(args))
@@ -82,6 +85,11 @@ internal static class CliCommandHelp
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
         if (!TryResolveEntry(args, out var entry))
+        {
+            return;
+        }
+
+        if (!entry.ValidateFlags)
         {
             return;
         }
@@ -153,6 +161,12 @@ internal static class CliCommandHelp
 
         if (!args[0].Equals("workspace", StringComparison.OrdinalIgnoreCase))
         {
+            if (CliArgumentParser.IsRecognizedCommand(args[0]))
+            {
+                entry = CommandHelpEntry.Generic(args[0]);
+                return true;
+            }
+
             return false;
         }
 
@@ -192,11 +206,18 @@ internal static class CliCommandHelp
     private readonly record struct CommandHelpEntry(
         string Usage,
         string Description,
-        IReadOnlySet<string> Flags)
+        IReadOnlySet<string> Flags,
+        bool ValidateFlags)
     {
         public CommandHelpEntry(string usage, string description, IEnumerable<string> flags)
-            : this(usage, description, flags.ToHashSet(StringComparer.OrdinalIgnoreCase))
+            : this(usage, description, flags.ToHashSet(StringComparer.OrdinalIgnoreCase), ValidateFlags: true)
         {
         }
+
+        public static CommandHelpEntry Generic(string command) => new(
+            $"Usage: {command} [options]",
+            "Run this operator command.",
+            GenericHelpFlags,
+            ValidateFlags: false);
     }
 }

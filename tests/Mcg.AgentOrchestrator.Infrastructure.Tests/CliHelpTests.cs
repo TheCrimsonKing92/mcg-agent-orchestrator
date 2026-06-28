@@ -13,6 +13,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--reason-file")]
     [Xunit.InlineData(new[] { "conduct", "--help" }, "conduct", "--loop")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
+    [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
     public void CliHelpPrintsUsageWithoutExecutingCommand(string[] args, string synopsisToken, string optionToken)
     {
         var root = CreateTempDirectory();

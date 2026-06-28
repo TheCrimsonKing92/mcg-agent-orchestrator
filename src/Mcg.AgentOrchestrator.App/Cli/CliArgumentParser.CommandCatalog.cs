@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
 {
+internal static bool IsRecognizedCommand(string command) => IsSimpleCommand(command);
+
 private static bool IsSimpleCommand(string command)
 {
     return command.Equals("attention", StringComparison.OrdinalIgnoreCase) ||
