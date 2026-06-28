@@ -4405,6 +4405,33 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_does_not_activate_commit_path_from_provider_display_name")]
+    public void BackgroundDispatchRunnerDoesNotActivateCommitPathFromProviderDisplayName()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        workerName: "opaque-worker",
+        command: "opaque worker prompt",
+        providerName: "OpenAI");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedIsCommittedByOrchestrator()
 {
@@ -6156,7 +6183,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         bool sandboxLowIntegrity = false,
         string workerName = "codex-cli",
         string command = "codex exec prompt",
-        ProviderKind workerProviderKind = ProviderKind.Unknown)
+        ProviderKind workerProviderKind = ProviderKind.Unknown,
+        string? providerName = null)
 {
     var kernel = new AgentOrchestratorKernel();
     var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
@@ -6189,6 +6217,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         command,
         worktree,
         clock.UtcNow,
+        providerName,
         SandboxLowIntegrity: sandboxLowIntegrity,
         WorkerProviderKind: workerProviderKind));
     var process = new TaskProcessRecord(999999, command, worktree, stdout, stderr, exit, clock.UtcNow, null, null);

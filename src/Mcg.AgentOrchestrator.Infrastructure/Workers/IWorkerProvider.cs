@@ -139,11 +139,6 @@ public sealed class WorkerProviderCatalog
             provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.AnthropicClaudeCli or ProviderKind.OllamaQwenCodeCli)
         ?? throw new InvalidOperationException($"Provider '{providerName}' does not have a default subscription worker profile.");
 
-    public IWorkerProvider ResolveProviderName(string providerName) =>
-        _providers.FirstOrDefault(provider =>
-            provider.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase))
-        ?? DefaultUnknownProvider.Instance;
-
     public static WorkerProviderCatalog Default() => new(
     [
         new StaticWorkerProvider(

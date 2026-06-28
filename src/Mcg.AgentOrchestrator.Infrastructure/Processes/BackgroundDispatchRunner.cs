@@ -1519,9 +1519,7 @@ public sealed class BackgroundDispatchRunner
             return provider;
         }
 
-        return string.IsNullOrWhiteSpace(dispatch.ProviderName)
-            ? provider
-            : _workerProviders.ResolveProviderName(dispatch.ProviderName);
+        return provider;
     }
 
     private static bool ContainsCodexFinalOutput(string value)
