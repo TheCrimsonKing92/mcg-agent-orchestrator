@@ -631,6 +631,18 @@ public sealed class WorkerDispatchTests
     Assert.Null(typeof(WorkerSandboxOptions).GetProperty("Provider"));
 }
 
+    [Xunit.Fact(DisplayName = "IWorkerProvider_keeps_sandbox_policy_on_IWorkerSandbox")]
+    public void IWorkerProviderKeepsSandboxPolicyOnIWorkerSandbox()
+{
+    Assert.True(typeof(IWorkerSandbox).IsInterface);
+    Assert.True(new EnvironmentWorkerSandbox() is IWorkerSandbox);
+
+    Assert.Null(typeof(IWorkerProvider).GetProperty("Options"));
+    Assert.Null(typeof(IWorkerProvider).GetProperty("Sandbox"));
+    Assert.Null(typeof(WorkerCapabilities).GetProperty("Sandbox"));
+    Assert.Null(typeof(WorkerCapabilities).GetProperty("SandboxMode"));
+}
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_claude_auth_environment_for_claude_worker_sandbox")]
     public void DispatchProcessHostSeedsClaudeAuthEnvironmentForClaudeWorkerSandbox()
 {
