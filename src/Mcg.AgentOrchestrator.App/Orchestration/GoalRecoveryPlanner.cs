@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -95,11 +94,11 @@ internal static class GoalRecoveryPlanner
     {
         if (task.LastProcess is { CompletedAt: null } process && task.LastVerification is null)
         {
-            var alive = IsProcessAlive(process.ProcessId);
-            var recoveryDecision = new DispatchRecoveryPolicy().Evaluate(
-                process,
-                alive,
-                DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task));
+            var recoveryDecision = DispatchRecoveryView.Evaluate(goal, task)!;
+            var alive = recoveryDecision.Action != DispatchRecoveryAction.MarkStale &&
+                recoveryDecision.Action != DispatchRecoveryAction.RetryStale &&
+                recoveryDecision.Action != DispatchRecoveryAction.BudgetExhausted &&
+                recoveryDecision.Action != DispatchRecoveryAction.ReconcileFromExit;
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,
@@ -221,23 +220,6 @@ internal static class GoalRecoveryPlanner
 
     private static bool IsTerminal(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
-
-    private static bool IsProcessAlive(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
 
     private static bool? TryIsWorktreeDirty(string worktree)
     {

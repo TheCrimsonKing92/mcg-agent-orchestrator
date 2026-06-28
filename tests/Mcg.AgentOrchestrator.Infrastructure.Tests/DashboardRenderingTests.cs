@@ -484,6 +484,36 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
+    public void DashboardResponseMapperNextActionIncludesDispatchRecoveryPolicyAction()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Next recovery policy",
+        [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.Single();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+
+    var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
+    var recovery = dto.Items.Single().Recovery;
+
+    Assert.NotNull(recovery);
+    Assert.Equal(DispatchRecoveryAction.RetryStale, recovery!.Action);
+    Assert.Equal("retry-stale", recovery.ActionName);
+    Assert.Equal("heartbeat-absent", recovery.EvidencePath);
+}
+
     [Xunit.Fact(DisplayName = "Dashboard_human_wait_dto_and_rendering_include_operator_evidence")]
     public void DashboardHumanWaitDtoAndRenderingIncludeOperatorEvidence()
 {

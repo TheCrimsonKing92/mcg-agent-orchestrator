@@ -859,6 +859,39 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"park-goal {goal.Id.Value[..8]} <reason> --confirm-goal-park", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_next_reports_dispatch_recovery_policy_action_for_refresh")]
+    public void CliNextReportsDispatchRecoveryPolicyActionForRefresh()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Next recovery policy", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["next"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("RefreshRunningProcess", output);
+        Xunit.Assert.Contains("recovery: action='retry-stale' evidence='heartbeat-absent'", output);
+        Xunit.Assert.Contains("command: refresh-dispatch 1", output);
+    }
+
     [Xunit.Fact(DisplayName = "HistoricalDogfoodEvaluation_scores_recorded_goal_state_without_starting_workers")]
     public void HistoricalDogfoodEvaluationScoresRecordedGoalStateWithoutStartingWorkers()
     {
