@@ -64,6 +64,7 @@ public sealed class CliHelpTests
 
     [Xunit.Theory(DisplayName = "Cli_invalid_flags_fail_before_handler_execution")]
     [Xunit.InlineData(new[] { "backlog-list", "--frobnitz" }, "backlog-list", "--frobnitz")]
+    [Xunit.InlineData(new[] { "backlog-list", "-x" }, "backlog-list", "-x")]
     [Xunit.InlineData(new[] { "backlog-close", "abc123", "--frobnitz" }, "backlog-close", "--frobnitz")]
     public void CliInvalidFlagsFailBeforeHandlerExecution(string[] args, string usageToken, string invalidFlag)
     {

@@ -187,8 +187,7 @@ internal static class CliCommandHelp
     }
 
     private static bool IsFlag(string arg) =>
-        arg.StartsWith("--", StringComparison.Ordinal) ||
-        arg.Equals("-h", StringComparison.OrdinalIgnoreCase);
+        arg.StartsWith("-", StringComparison.Ordinal);
 
     private readonly record struct CommandHelpEntry(
         string Usage,
