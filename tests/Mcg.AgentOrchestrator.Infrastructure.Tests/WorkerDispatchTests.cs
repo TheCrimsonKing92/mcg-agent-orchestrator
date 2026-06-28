@@ -4172,7 +4172,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
         string.Empty,
         clock,
-        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"));
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        sandboxLowIntegrity: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -4194,6 +4195,28 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_verified_without_low_integrity_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerFileRoleDirtyVerifiedWithoutLowIntegrityEvidenceStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedIsCommittedByOrchestrator()
 {
@@ -4205,7 +4228,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "Implemented the change and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.",
         string.Empty,
         clock,
-        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited but commit failed under low integrity"));
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited but commit failed under low integrity"),
+        sandboxLowIntegrity: true);
 
     // A low-integrity worker edited the worktree and verified its work but could NOT write the medium
     // .git to commit, so it exited non-zero. The worker's exit code is not authoritative: the
@@ -4234,7 +4258,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             WorkerResultBlock("feature.txt", "git add -A; git commit -m Feature", "not-run"),
         string.Empty,
         clock,
-        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git metadata failure"));
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git metadata failure"),
+        sandboxLowIntegrity: true);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var indexLockPath = Path.GetFullPath(Path.Combine(
         root,
@@ -4257,6 +4282,37 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(
         task.LastVerification.StandardError,
         text => text.Contains("index_lock=", StringComparison.Ordinal));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dotnet_1312_dirty_worker_result_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerLowIntegrityDotnet1312DirtyWorkerResultIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the requested change." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "dotnet test --filter LowIntegrity", "not-run"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before dotnet 1312 failure"),
+        sandboxLowIntegrity: true);
+    File.WriteAllText(
+        process.StandardErrorPath,
+        "dotnet.cmd: CreateProcessAsUserW 1312: A specified logon session does not exist. It may already have been terminated.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
@@ -5770,7 +5826,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         IClock clock,
         Action<string>? mutateWorktree = null,
         string? taskDescription = null,
-        string? verificationPlan = null)
+        string? verificationPlan = null,
+        bool sandboxLowIntegrity = false)
 {
     var kernel = new AgentOrchestratorKernel();
     var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
@@ -5798,7 +5855,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     File.WriteAllText(exit, "0");
 
     var task = goal.Tasks.Single(candidate => candidate.RequiredRole == role);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, clock.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt",
+        worktree,
+        clock.UtcNow,
+        SandboxLowIntegrity: sandboxLowIntegrity));
     var process = new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, clock.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return (kernel, goal, task, process);

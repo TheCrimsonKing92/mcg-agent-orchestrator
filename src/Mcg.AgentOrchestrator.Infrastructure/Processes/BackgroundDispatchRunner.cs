@@ -107,6 +107,7 @@ public sealed class BackgroundDispatchRunner
         var sandbox = WorkerSandboxOptions.FromEnvironment();
         var useSandbox = sandbox.Enabled && !isLocalDispatch &&
             task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+        kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
 
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatch.Command,
@@ -395,6 +396,7 @@ public sealed class BackgroundDispatchRunner
             var orchestratorCommitted = false;
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(processRecord, standardOutput, standardError);
             if (!worktreeEvidence.IsClean &&
+                task.LastDispatch.SandboxLowIntegrity &&
                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
                  sandboxCommitBlocked ||
                  worktreeEvidence.HasRelevantCommitAfterDispatch) &&
