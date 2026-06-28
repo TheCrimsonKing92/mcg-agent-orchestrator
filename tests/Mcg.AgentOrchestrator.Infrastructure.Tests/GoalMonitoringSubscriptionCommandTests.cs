@@ -304,6 +304,31 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         });
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_without_once_stays_attached_until_cancelled")]
+    public async Task MonitorGoalLocalNdjsonWithoutOnceStaysAttachedUntilCancelled()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Keep streaming", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor continuous", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
+        using var output = new StringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--format", "ndjson"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default(),
+            cancellationToken: cts.Token));
+
+        Assert.Contains("\"EventKind\":\"goal.snapshot\"", output.ToString());
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_exits_zero_for_completed_and_nonzero_for_failed")]
     public async Task MonitorGoalWaitTerminalExitBehavior()
     {

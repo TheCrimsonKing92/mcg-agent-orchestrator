@@ -453,7 +453,7 @@ internal static class GoalMonitoringSubscriptionCommand
             await output.FlushAsync().ConfigureAwait(false);
             snapshotWritten = true;
 
-            if (!options.WaitTerminal || IsTerminalForWait(state))
+            if (options.Once || (options.WaitTerminal && IsTerminalForWait(state)))
             {
                 if (options.WaitTerminal && eligibleEvents.Count == 0)
                 {
