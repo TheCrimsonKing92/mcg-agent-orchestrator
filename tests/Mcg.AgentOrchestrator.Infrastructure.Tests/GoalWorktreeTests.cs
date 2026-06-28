@@ -2754,7 +2754,8 @@ public sealed class GoalWorktreeTests
                 worktree,
                 DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
                 BaseCommit: "old-base",
-                ResultCommit: "old-result");
+                ResultCommit: "old-result",
+                PromptPath: Path.Combine(worktree, ".orchestrator", "prompts", "old-prompt.md"));
             kernel.RecordTaskDispatch(goal.Id, task.Id, oldDispatch);
             kernel.RecordTaskProcessStarted(
                 goal.Id,
@@ -2789,7 +2790,8 @@ public sealed class GoalWorktreeTests
                 "codex exec retry-prompt.md",
                 worktree,
                 DateTimeOffset.Parse("2026-06-26T12:05:00Z"),
-                BaseCommit: "retry-base");
+                BaseCommit: "retry-base",
+                PromptPath: Path.Combine(worktree, ".orchestrator", "prompts", "retry-prompt.md"));
             kernel.RecordTaskDispatch(goal.Id, task.Id, newDispatch);
 
             Assert.Equal(GoalStatus.Active, goal.Status);
@@ -2799,6 +2801,8 @@ public sealed class GoalWorktreeTests
             Assert.Equal(newDispatch, task.LastDispatch);
             Assert.Equal("codex exec retry-prompt.md", task.LastDispatch!.Command);
             Assert.Equal("retry-base", task.LastDispatch.BaseCommit);
+            Assert.NotEqual(oldDispatch.PromptPath, task.LastDispatch.PromptPath);
+            Assert.Equal(Path.Combine(worktree, ".orchestrator", "prompts", "retry-prompt.md"), task.LastDispatch.PromptPath);
             Assert.Null(task.LastDispatch.ResultCommit);
             Assert.Equal(worktree, GoalWorktrees.TryResolve(repo, goal.Id));
         }

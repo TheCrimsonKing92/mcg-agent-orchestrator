@@ -121,6 +121,7 @@ public sealed class TaskSpec
                     LastDispatch.BaseCommit,
                     LastDispatch.ResultCommit,
                     LastDispatch.SandboxLowIntegrity,
+                    LastDispatch.PromptPath,
                     LastDispatch.WorkerProviderKind),
             LastProcess is null
                 ? null
@@ -228,6 +229,7 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.BaseCommit,
                 snapshot.LastDispatch.ResultCommit,
                 snapshot.LastDispatch.SandboxLowIntegrity,
+                snapshot.LastDispatch.PromptPath,
                 snapshot.LastDispatch.WorkerProviderKind));
         }
 

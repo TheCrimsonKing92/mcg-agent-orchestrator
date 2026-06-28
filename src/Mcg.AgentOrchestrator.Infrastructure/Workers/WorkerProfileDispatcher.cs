@@ -152,7 +152,8 @@ public static class WorkerProfileDispatcher
             profile.Name,
             profile.CommandTemplate,
             promptRoot,
-            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables));
+            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables),
+            dispatchedAt);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
@@ -165,6 +166,7 @@ public static class WorkerProfileDispatcher
             taskComplexity,
             preparation.PromptCharacterCount,
             usesComplexModel,
+            PromptPath: preparation.PromptPath,
             WorkerProviderKind: workerProviderKind));
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
