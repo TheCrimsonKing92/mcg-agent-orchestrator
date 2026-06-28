@@ -70,6 +70,19 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal("live-idle-no-progress", decision.Blocker);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_does_not_hold_live_process_on_stale_cumulative_cpu")]
+    public void DispatchRecoveryPolicyDoesNotHoldLiveProcessOnStaleCumulativeCpu()
+    {
+        var process = CreateProcess();
+        WriteHeartbeat(process, Now.AddMinutes(-40), Now.AddMinutes(-40), 0, 0, 25_000);
+
+        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: true);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.ClassifyBlocker, decision.Action);
+        Xunit.Assert.Equal("classify-blocker", decision.ActionName);
+        Xunit.Assert.Equal("live-idle-no-progress", decision.Blocker);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_stale_no_exit_does_not_consume_empty_output_flake_budget")]
     public void BackgroundDispatchRunnerStaleNoExitDoesNotConsumeEmptyOutputFlakeBudget()
     {

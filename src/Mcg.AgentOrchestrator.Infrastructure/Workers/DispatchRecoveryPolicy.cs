@@ -101,12 +101,16 @@ public sealed class DispatchRecoveryPolicy
                     $"live process with recent heartbeat age={FormatDuration(heartbeat.HeartbeatAge.Value)}");
             }
 
-            if (heartbeat.OwnedCpuMs > 0)
+            if (heartbeat.IdleDuration is { } idleDuration &&
+                idleDuration < _liveIdleTimeout &&
+                (heartbeat.OwnedCpuMs > 0 ||
+                 heartbeat.StandardOutputBytes > 0 ||
+                 heartbeat.StandardErrorBytes > 0))
             {
                 return Decision(
                     DispatchRecoveryAction.Hold,
                     heartbeat.Path,
-                    $"live process with recorded CPU activity ownedCpuMs={heartbeat.OwnedCpuMs}");
+                    $"live process with recent output/CPU progress idle_for={FormatDuration(idleDuration)} ownedCpuMs={heartbeat.OwnedCpuMs}");
             }
 
             if (heartbeat.IdleDuration >= _liveIdleTimeout &&
@@ -143,6 +147,17 @@ public sealed class DispatchRecoveryPolicy
             DispatchRecoveryAction.Reap => "reap",
             _ => action.ToString()
         };
+
+    public static int GetStaleRetryBudgetRemaining(TaskSpec task)
+    {
+        var consumed = task.VerificationHistory.Count(IsStaleDispatchRecoveryVerification);
+        return Math.Max(0, DefaultStaleDispatchRetries - consumed);
+    }
+
+    public static bool IsStaleDispatchRecoveryVerification(TaskVerificationRecord verification) =>
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
     private static DispatchRecoveryDecision Decision(
         DispatchRecoveryAction action,

@@ -270,7 +270,7 @@ public sealed class BackgroundDispatchRunner
         var recoveryDecision = _recoveryPolicy.Evaluate(
             processRecord,
             hasLiveProcess,
-            GetStaleRetryBudgetRemaining(task),
+            DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task),
             hasDirtyWorktreeEvidence);
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
         if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, recoveryDecision, out var completion))
@@ -1510,17 +1510,6 @@ public sealed class BackgroundDispatchRunner
             : $" blocker='{decision.Blocker}'";
         return $"Dispatch recovery policy action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.";
     }
-
-    private static int GetStaleRetryBudgetRemaining(TaskSpec task)
-    {
-        var consumed = task.VerificationHistory.Count(IsStaleDispatchRecoveryVerification);
-        return Math.Max(0, DispatchRecoveryPolicy.DefaultStaleDispatchRetries - consumed);
-    }
-
-    private static bool IsStaleDispatchRecoveryVerification(TaskVerificationRecord verification) =>
-        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
-        verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
-        verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
     private static DispatchRecoveryDecision WithAction(
         DispatchRecoveryAction action,

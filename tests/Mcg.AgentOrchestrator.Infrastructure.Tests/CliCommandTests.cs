@@ -853,6 +853,7 @@ public sealed class CliCommandTests
         Xunit.Assert.False(changed);
         Xunit.Assert.Contains("Goal recovery", output);
         Xunit.Assert.Contains("recorded process pid=999999 is not alive", output);
+        Xunit.Assert.Contains("recovery: action='retry-stale' evidence='heartbeat-absent'", output);
         Xunit.Assert.Contains("command: refresh-dispatch 1", output);
         Xunit.Assert.Contains("workspace create", output);
         Xunit.Assert.Contains($"park-goal {goal.Id.Value[..8]} <reason> --confirm-goal-park", output);

@@ -93,10 +93,13 @@ internal static class GoalRecoveryPlanner
 
     private static void AddTaskFindings(List<GoalRecoveryTaskFinding> findings, Goal goal, TaskSpec task, int taskNumber)
     {
-        if (task.LastProcess is { IsRunning: true } process)
+        if (task.LastProcess is { CompletedAt: null } process && task.LastVerification is null)
         {
             var alive = IsProcessAlive(process.ProcessId);
-            var recoveryDecision = new DispatchRecoveryPolicy().Evaluate(process, alive);
+            var recoveryDecision = new DispatchRecoveryPolicy().Evaluate(
+                process,
+                alive,
+                DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task));
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,
