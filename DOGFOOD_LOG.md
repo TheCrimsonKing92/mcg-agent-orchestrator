@@ -2095,3 +2095,10 @@ Goal 7244dd95: Backlog slice: Implement real --help for CLI commands  Observed b
 
 - Operator gate: Planner: not-run; planner-only task, no repository edits (exit 0); Researcher: not-run; read-only Researcher task, verification is repository evidence above (exit 0); Developer: pass, 15 passed; existing NuGet vulnerability-cache access/analyzer warnings only (exit 0); Tester: pass, 15/15 focused tests passed; manual CLI help/invalid-flag checks passed (exit 0); Reviewer: not-run; prior Tester evidence says focused suite passed, 15 passed (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - identified a spec coverage gap from code evidence.
+
+## 2026-06-28 - Backlog slice: Bound dispatch recovery by persisted artifacts and liveness st...
+
+Goal 3e32860f: Backlog slice: Bound dispatch recovery by persisted artifacts and liveness state  Problem: Dispatch recovery decision.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 12e59c613ea56b639132a530d176f656bf8eee63). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run Planner-only no code changes (exit 0); Researcher: not-run; read-only Researcher task, repository evidence inspected (exit 0); Developer: pass - DispatchRecoveryPolicyTests 10/10; broad class run had unrelated Windows path-length failure after 302/303 passed (exit 0); Tester: pass; isolated .NET test slice exited 0, 19 passed, 0 failed, 0 skipped; only existing analyzer/package warnings (exit 0); Reviewer: not-run by Reviewer; prior Tester isolated .NET slice passed 19/19; review found acceptance blocker (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - code-review verification - enough context to compare implementation against acceptance rows.
