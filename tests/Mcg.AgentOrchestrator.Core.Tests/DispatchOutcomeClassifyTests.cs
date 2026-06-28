@@ -21,7 +21,12 @@ public sealed class DispatchOutcomeClassifyTests
         kernel.RecordTaskDispatch(
             goal.Id,
             task.Id,
-            new TaskDispatchRecord("codex-cli", "opaque command", "C:\\repo", clock.UtcNow));
+            new TaskDispatchRecord(
+                "codex-cli",
+                "opaque command",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
         return task;
     }
 
@@ -149,7 +154,15 @@ public sealed class DispatchOutcomeClassifyTests
         var goal = kernel.CreateGoal("Dirty worktree test goal");
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
         var verification = new TaskVerificationRecord(
             "codex exec",
             "C:\\repo",
