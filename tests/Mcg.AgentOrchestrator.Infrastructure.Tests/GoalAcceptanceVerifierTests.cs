@@ -16,6 +16,49 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(expected, GoalAcceptanceVerifier.IsTransientTesthostAbort(output));
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_invokes_dotnet_test_with_isolated_script_arguments")]
+    public async Task GoalAcceptanceVerifierInvokesDotnetTestWithIsolatedScriptArguments()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "full dotnet tests", "type": "dotnet-test", "project": "Mcg.AgentOrchestrator.sln", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            });
+
+            var goalId = new GoalId("abcdef12abcdef12abcdef12abcdef12");
+            var result = await verifier.RunAsync(root, goalId);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, calls.Count);
+            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+
+            var dotnetArgs = calls[1];
+            AssertIsolatedTestCommand(dotnetArgs);
+            Assert.Equal("Mcg.AgentOrchestrator.sln", dotnetArgs[2]);
+            Assert.Contains("--filter", dotnetArgs);
+            Assert.Contains("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration", dotnetArgs);
+            Assert.Contains("--blame-hang-timeout", dotnetArgs);
+            Assert.Contains("120s", dotnetArgs);
+            Assert.Equal("goal-abcdef12", result.Checks!.Single().LeaseId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_once_on_CS2012_and_returns_passed")]
     public async Task GoalAcceptanceVerifierRetriesOnceOnCs2012AndReturnsPassed()
     {

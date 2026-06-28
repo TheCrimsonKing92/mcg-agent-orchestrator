@@ -2513,6 +2513,39 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_keeps_workspace_when_acceptance_throws")]
+    public void CliLifecycleSimpleGoalKeepsWorkspaceWhenAcceptanceThrows()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = SeedSpecRefiner(workspace);
+            var profiles = EchoProfiles();
+            var fakeVerifier = FakeAcceptanceVerifier.Throws(new InvalidOperationException("fake verifier boom"));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+            {
+                AcceptanceVerifier = fakeVerifier
+            };
+
+            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["lifecycle-simple-goal", "Run but verifier throws", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                context));
+
+            var goal = context.CurrentGoal!;
+            Assert.Equal("fake verifier boom", ex.Message);
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+            Assert.Equal(1, fakeVerifier.RunCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_invokes_build_server_shutdown_before_directory_delete")]
     public void GoalWorktreesRemoveInvokesBuildServerShutdownBeforeDirectoryDelete()
     {
@@ -3093,8 +3126,9 @@ public sealed class GoalWorktreeTests
     }
 
     private sealed class FakeAcceptanceVerifier(
-        AcceptanceVerificationResult result,
-        Action? onRun = null) : IGoalAcceptanceVerifier
+        AcceptanceVerificationResult? result,
+        Action? onRun = null,
+        Exception? exception = null) : IGoalAcceptanceVerifier
     {
         public int RunCount { get; private set; }
 
@@ -3106,7 +3140,11 @@ public sealed class GoalWorktreeTests
         {
             RunCount++;
             onRun?.Invoke();
-            return Task.FromResult(AddPolicyRequiredChecks(result, changedFiles ?? []));
+            if (exception is not null)
+                throw exception;
+
+            var configuredResult = Assert.IsType<AcceptanceVerificationResult>(result);
+            return Task.FromResult(AddPolicyRequiredChecks(configuredResult, changedFiles ?? []));
         }
 
         private static AcceptanceVerificationResult AddPolicyRequiredChecks(
@@ -3156,6 +3194,9 @@ public sealed class GoalWorktreeTests
                     OutputTail: outputTail,
                     Checks: [new AcceptanceCheckResult("fake acceptance", false, 1, outputTail)]),
                 onRun);
+
+        public static FakeAcceptanceVerifier Throws(Exception exception, Action? onRun = null) =>
+            new(null, onRun, exception);
     }
 
     private static bool BranchExists(string workingDirectory, string branch)
