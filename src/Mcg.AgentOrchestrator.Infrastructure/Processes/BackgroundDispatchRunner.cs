@@ -433,7 +433,7 @@ public sealed class BackgroundDispatchRunner
             var providerCannotSelfCommit = task.LastDispatch is { } dispatch &&
                 !ResolveWorkerProvider(dispatch).Capabilities.CanSelfCommit;
             var shouldCommitDirtyWorktree =
-                worktreeEvidence.HasRelevantCommitAfterDispatch ||
+                (exitCode == 0 && worktreeEvidence.HasCommitAfterDispatch) ||
                 ((task.LastDispatch.SandboxLowIntegrity || providerCannotSelfCommit) &&
                   (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
                    sandboxCommitBlocked));
@@ -442,7 +442,8 @@ public sealed class BackgroundDispatchRunner
                 shouldCommitDirtyWorktree &&
                 TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
-                    BuildOrchestratorCommitSubject(task, standardOutput, standardError)) &&
+                    BuildOrchestratorCommitSubject(task, standardOutput, standardError),
+                    worktreeEvidence.DirtyPaths) &&
                 TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
                 worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
             {
@@ -733,17 +734,20 @@ public sealed class BackgroundDispatchRunner
     }
 
     // Commits the worker's uncommitted worktree edits from the orchestrator after verification guards
-    // pass. Workers edit the worktree; this path deterministically stages and commits the diff. The
-    // sandbox scratch dir (.mcg-sandbox) is kept out of the commit via the worktree's local git
-    // exclude (ExcludeSandboxFromGit), so a plain `add -A` honours that exclusion. We must NOT pass an
-    // explicit ":(exclude).mcg-sandbox" pathspec here: combined with the ignore entry, git treats the
-    // ignored path as explicitly requested and exits non-zero ("paths are ignored ... Use -f") AFTER
-    // partially staging the real files — which previously left edits staged-but-uncommitted.
-    private static bool TryCommitWorktreeEdits(string workingDirectory, string subject)
+    // pass. The dirty path list is filtered from git status so generated/noise paths are not absorbed
+    // into the recovery commit.
+    private static bool TryCommitWorktreeEdits(string workingDirectory, string subject, IReadOnlyList<string> dirtyPaths)
     {
         try
         {
-            var add = GitCli.Run(workingDirectory, "add", "-A");
+            if (dirtyPaths.Count == 0)
+            {
+                return false;
+            }
+
+            var addArgs = new List<string>(dirtyPaths.Count + 3) { "add", "-A", "--" };
+            addArgs.AddRange(dirtyPaths);
+            var add = GitCli.Run(workingDirectory, addArgs.ToArray());
             if (!add.Succeeded)
             {
                 return false;
@@ -854,7 +858,7 @@ public sealed class BackgroundDispatchRunner
                 .ToArray()
             : [];
 
-        var filteredStatusOutput = FilterWorkerResultArtifacts(status.Output);
+        var filteredStatusOutput = FilterCommitWorthyStatus(status.Output);
         evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
@@ -862,7 +866,8 @@ public sealed class BackgroundDispatchRunner
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
             FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
             commitsAfterDispatch,
-            pathsChangedAfterDispatch);
+            pathsChangedAfterDispatch,
+            ParseStatusPaths(filteredStatusOutput));
         return true;
     }
 
@@ -890,7 +895,7 @@ public sealed class BackgroundDispatchRunner
             !normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string FilterWorkerResultArtifacts(string statusOutput)
+    private static string FilterCommitWorthyStatus(string statusOutput)
     {
         if (string.IsNullOrWhiteSpace(statusOutput))
         {
@@ -899,23 +904,54 @@ public sealed class BackgroundDispatchRunner
 
         var lines = statusOutput
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(line => !IsWorkerResultArtifactStatusLine(line));
+            .Where(IsCommitWorthyStatusLine);
         return string.Join("\n", lines);
     }
 
-    private static bool IsWorkerResultArtifactStatusLine(string line)
+    private static bool IsCommitWorthyStatusLine(string line)
     {
-        // Untracked WORKER_RESULT.md/.txt show as "?? WORKER_RESULT.md" in git status --short.
-        // We ignore these as result artifacts, not real work artifacts.
-        var trimmed = line.TrimStart();
-        if (!trimmed.StartsWith("??", StringComparison.Ordinal))
+        var paths = ParseStatusLinePaths(line);
+        return paths.Length > 0 && paths.Any(IsRelevantSourcePath);
+    }
+
+    private static string[] ParseStatusPaths(string statusOutput)
+    {
+        if (string.IsNullOrWhiteSpace(statusOutput))
         {
-            return false;
+            return [];
         }
 
-        var filename = trimmed[2..].Trim();
-        return string.Equals(filename, "WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(filename, "WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase);
+        return statusOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(ParseStatusLinePaths)
+            .Where(IsRelevantSourcePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string[] ParseStatusLinePaths(string line)
+    {
+        if (line.Length < 4)
+        {
+            return [];
+        }
+
+        var path = line[3..].Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return [];
+        }
+
+        var renameSeparator = path.IndexOf(" -> ", StringComparison.Ordinal);
+        if (renameSeparator >= 0)
+        {
+            var source = path[..renameSeparator].Trim();
+            var destination = path[(renameSeparator + 4)..].Trim();
+            return [source, destination];
+        }
+
+        return [path];
     }
 
     private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
@@ -1784,12 +1820,13 @@ public sealed class BackgroundDispatchRunner
         string WorktreeStatus,
         string StatusShort,
         int CommitsAfterDispatch,
-        IReadOnlyList<string> ChangedPaths)
+        IReadOnlyList<string> ChangedPaths,
+        IReadOnlyList<string> DirtyPaths)
     {
         public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
         public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(IsRelevantSourcePath);
         public string ChangedPathsSummary => FormatChangedPaths(ChangedPaths);
 
-        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, []);
+        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
     }
 }
