@@ -257,6 +257,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
 
         case "goals":
+            if (parts.Count > 1 && parts[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase))
+            {
+                GoalMonitoringSubscriptionCommand.RunAsync(
+                    parts,
+                    Console.Out,
+                    context.Kernel,
+                    context.Workspace,
+                    context.Agents,
+                    context.WorkerProfiles,
+                    context.ReloadKernel).GetAwaiter().GetResult();
+                return false;
+            }
+
             ConsoleViews.PrintGoals(context.Kernel);
             return false;
 

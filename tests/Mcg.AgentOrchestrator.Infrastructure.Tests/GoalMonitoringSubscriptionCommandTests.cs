@@ -59,6 +59,33 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal(["TaskStarted", "TaskCompleted"], options.EventKinds);
     }
 
+    [Xunit.Fact(DisplayName = "Goals_subscribe_parses_goal_prefix_as_headless_target")]
+    public void GoalsSubscribeParsesGoalPrefixAsHeadlessTarget()
+    {
+        var options = GoalMonitoringSubscriptionCommand.Parse([
+            "goals",
+            "subscribe",
+            "--goal-prefix",
+            "abc123",
+            "--format",
+            "human",
+            "--wait-terminal"
+        ]);
+
+        Assert.True(options.IsLocal);
+        Assert.Equal("abc123", options.GoalId);
+        Assert.Equal("abc123", options.GoalPrefix);
+        Assert.Equal(GoalMonitoringOutputFormat.Human, options.Format);
+        Assert.True(options.WaitTerminal);
+    }
+
+    [Xunit.Fact(DisplayName = "Goals_subscribe_runs_outside_state_transaction")]
+    public void GoalsSubscribeRunsOutsideStateTransaction()
+    {
+        Assert.True(CliPersistentStateRunner.IsGoalSubscriptionCommand(["goals", "subscribe", "--goal-prefix", "abc123"]));
+        Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing(["goals", "subscribe", "--goal-prefix", "abc123"]));
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_filter_predicate_applies_AND_semantics")]
     public void MonitorGoalFilterPredicateAppliesAndSemantics()
     {
@@ -265,7 +292,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
 
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.NotEmpty(lines);
-        Assert.All(lines, line =>
+        Xunit.Assert.All(lines, line =>
         {
             using var doc = JsonDocument.Parse(line);
             Assert.True(doc.RootElement.GetProperty("Cursor").GetInt64() > 1);
@@ -313,7 +340,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         failedKernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Failed.");
         using var failedOutput = new StringWriter();
 
-        var ex = await Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
             ["monitor-goal", failedGoal.Id.Value[..8], "--wait-terminal", "--format", "human"],
             failedOutput,
             failedKernel,

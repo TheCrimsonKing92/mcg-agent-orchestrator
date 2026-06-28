@@ -10,6 +10,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class GoalMonitoringSubscriptionCommand
 {
+    private static readonly JsonSerializerOptions NdjsonOptions = new(DashboardJson.Options()) { WriteIndented = false };
     private const string OnceFlag = "--once";
     private const string SinceFlag = "--since";
     private const string FromCursorFlag = "--from-cursor";
@@ -21,6 +22,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
     public static GoalMonitoringSubscriptionOptions Parse(IReadOnlyList<string> parts)
     {
+        parts = NormalizeCommandShape(parts);
         if (parts.Count < 2)
         {
             throw new ArgumentException(Usage);
@@ -140,6 +142,32 @@ internal static class GoalMonitoringSubscriptionCommand
             goalPrefix,
             taskId,
             eventKinds.ToArray());
+    }
+
+    internal static IReadOnlyList<string> NormalizeCommandShape(IReadOnlyList<string> parts)
+    {
+        if (parts.Count < 2 ||
+            !parts[0].Equals("goals", StringComparison.OrdinalIgnoreCase) ||
+            !parts[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts;
+        }
+
+        var normalized = new List<string> { "monitor-goal" };
+        normalized.AddRange(parts.Skip(2));
+        if (normalized.Count >= 2 && !normalized[1].StartsWith("--", StringComparison.Ordinal))
+        {
+            return normalized;
+        }
+
+        var goalPrefix = FindFlagValue(normalized, GoalPrefixFlag);
+        if (string.IsNullOrWhiteSpace(goalPrefix))
+        {
+            throw new ArgumentException(Usage);
+        }
+
+        normalized.Insert(1, goalPrefix);
+        return normalized;
     }
 
     public static Uri BuildSnapshotUri(GoalMonitoringSubscriptionOptions options)
@@ -502,7 +530,7 @@ internal static class GoalMonitoringSubscriptionCommand
             return;
         }
 
-        output.WriteLine(JsonSerializer.Serialize(evt, DashboardJson.Options()));
+        output.WriteLine(JsonSerializer.Serialize(evt, NdjsonOptions));
     }
 
     private static bool TryParseOutputFormat(string value, out GoalMonitoringOutputFormat format)
@@ -527,6 +555,19 @@ internal static class GoalMonitoringSubscriptionCommand
 
         format = GoalMonitoringOutputFormat.Sse;
         return false;
+    }
+
+    private static string? FindFlagValue(IReadOnlyList<string> parts, string flag)
+    {
+        for (var index = 0; index < parts.Count - 1; index++)
+        {
+            if (parts[index].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                return parts[index + 1];
+            }
+        }
+
+        return null;
     }
 
     private static Uri BuildUri(GoalMonitoringSubscriptionOptions options, bool stream)
@@ -564,7 +605,7 @@ internal static class GoalMonitoringSubscriptionCommand
         return value.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(value + "/");
     }
 
-    private const string Usage = "Usage: monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]";
+    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]";
 
     private sealed class TextWriterStream(TextWriter writer) : Stream
     {
