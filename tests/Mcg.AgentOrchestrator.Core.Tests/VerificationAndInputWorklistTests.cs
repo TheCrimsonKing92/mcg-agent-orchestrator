@@ -159,6 +159,82 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.WaitingForHuman, taskItem.TaskStatus);
     Assert.Contains(taskItem.SuggestedAction, text => text.Contains("Answer", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "HumanWaitPolicy_defaults_and_dismisses_stale_spec_clarifications_only")]
+    public void HumanWaitPolicyDefaultsAndDismissesStaleSpecClarificationsOnly()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var defaultGoal = kernel.CreateGoal("Default stale clarification");
+    var dismissGoal = kernel.CreateGoal("Dismiss stale clarification");
+    var approvalGoal = kernel.CreateGoal("Keep approval");
+    var riskGoal = kernel.CreateGoal("Keep risk review");
+    var defaultWait = kernel.RequestHumanInput(defaultGoal.Id, null, "Use proposed scope?", suggestedDefaultAnswer: "Use proposed scope.");
+    var dismissWait = kernel.RequestHumanInput(dismissGoal.Id, null, "Still relevant?", isAnswerRequired: false);
+    var approvalWait = kernel.RequestHumanInput(approvalGoal.Id, null, "Approve paid run?", HumanWaitKind.OperatorApproval);
+    var riskWait = kernel.RequestHumanInput(riskGoal.Id, null, "Accept risk?", HumanWaitKind.RiskReview);
+    clock.Advance(TimeSpan.FromHours(25));
+
+    var resolved = kernel.SweepStaleHumanWaits(TimeSpan.FromHours(24));
+
+    Assert.Equal(2, resolved.Count);
+    Assert.Contains(resolved, item => item.RequestId == defaultWait.Id && item.Resolution == HumanWaitPolicyResolution.Defaulted);
+    Assert.Contains(resolved, item => item.RequestId == dismissWait.Id && item.Resolution == HumanWaitPolicyResolution.Dismissed);
+    Assert.True(kernel.GetHumanInputRequest(defaultWait.Id).IsCompleted);
+    Assert.Equal("Use proposed scope.", kernel.GetHumanInputRequest(defaultWait.Id).Answer);
+    Assert.True(kernel.GetHumanInputRequest(dismissWait.Id).IsCompleted);
+    Assert.True(kernel.GetHumanInputRequest(dismissWait.Id).WasDismissed);
+    Assert.False(kernel.GetHumanInputRequest(approvalWait.Id).IsCompleted);
+    Assert.False(kernel.GetHumanInputRequest(riskWait.Id).IsCompleted);
+}
+
+    [Xunit.Fact(DisplayName = "HumanWaitPolicy_never_touches_operator_approval_or_risk_review")]
+    public void HumanWaitPolicyNeverTouchesOperatorApprovalOrRiskReview()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var approvalGoal = kernel.CreateGoal("Keep approval forever");
+    var riskGoal = kernel.CreateGoal("Keep risk forever");
+    var approvalWait = kernel.RequestHumanInput(approvalGoal.Id, null, "Approve?", HumanWaitKind.OperatorApproval, suggestedDefaultAnswer: "yes");
+    var riskWait = kernel.RequestHumanInput(riskGoal.Id, null, "Accept?", HumanWaitKind.RiskReview, suggestedDefaultAnswer: "yes");
+    clock.Advance(TimeSpan.FromDays(30));
+
+    var resolved = kernel.SweepStaleHumanWaits(TimeSpan.FromHours(24));
+
+    Assert.Empty(resolved);
+    Assert.False(kernel.GetHumanInputRequest(approvalWait.Id).IsCompleted);
+    Assert.False(kernel.GetHumanInputRequest(riskWait.Id).IsCompleted);
+    Assert.False(approvalWait.IsAutoDefaultable);
+    Assert.False(approvalWait.IsDismissible);
+    Assert.False(riskWait.IsAutoDefaultable);
+    Assert.False(riskWait.IsDismissible);
+}
+
+    [Xunit.Fact(DisplayName = "Dismissed_human_wait_resumes_same_goal_and_task_without_reinitializing")]
+    public void DismissedHumanWaitResumesSameGoalAndTaskWithoutReinitializing()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var task = new TaskSpec(TaskId.New(), "Continue after wait", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Resume without restart", [task]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var originalGoalId = goal.Id;
+    var originalTaskId = task.Id;
+    var wait = kernel.RequestHumanInput(
+        goal.Id,
+        task.Id,
+        "Can this stale question be dismissed?",
+        isAnswerRequired: false);
+
+    kernel.DismissHumanInput(wait.Id);
+
+    Assert.Equal(originalGoalId, goal.Id);
+    Assert.Equal(originalTaskId, goal.Tasks.Single().Id);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Running, goal.Tasks.Single().Status);
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+}
+
     [Xunit.Fact(DisplayName = "Passing_task_verification_completes_running_task_without_open_human_input")]
     public void PassingTaskVerificationCompletesRunningTaskWithoutOpenHumanInput()
 {

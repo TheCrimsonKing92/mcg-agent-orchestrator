@@ -36,4 +36,20 @@ internal static partial class DashboardEndpoints
             },
             context.RequestAborted);
     }
+
+    private static async Task<IResult> DismissHumanInputAsync(
+        HttpContext context,
+        string inputId,
+        DashboardEndpointServices services)
+    {
+        return await MutateAsync(
+            services,
+            current =>
+            {
+                var request = OrchestratorEntityResolver.ResolveHumanInputRequest(current, inputId);
+                current.DismissHumanInput(request.Id);
+                return Task.FromResult(Json(DashboardResponseMapper.ToHumanInputDto(current, current.GetHumanInputRequest(request.Id))));
+            },
+            context.RequestAborted);
+    }
 }

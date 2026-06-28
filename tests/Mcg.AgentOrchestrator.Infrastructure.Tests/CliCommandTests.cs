@@ -4337,6 +4337,38 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Global clarification 9", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_show_lists_typed_human_waits_with_goal_filter")]
+    public void CliAttentionShowListsTypedHumanWaitsWithGoalFilter()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("abc10000111111111111111111111111"), "Target wait");
+        var other = kernel.CreateGoal(new GoalId("def20000222222222222222222222222"), "Other wait");
+        _ = kernel.RequestHumanInput(
+            target.Id,
+            null,
+            "Need provider login.",
+            HumanWaitKind.ProviderAuth,
+            resumeCommand: "provider login resume");
+        _ = kernel.RequestHumanInput(
+            other.Id,
+            null,
+            "Approve risk.",
+            HumanWaitKind.RiskReview,
+            resumeCommand: "risk resume");
+
+        var globalOutput = ExecuteCliAndCapture(["attention", "show"], kernel, workspace);
+        var scopedOutput = ExecuteCliAndCapture(["attention", "show", "--goal", "abc10000"], kernel, workspace);
+
+        Xunit.Assert.Contains("ProviderAuth", globalOutput);
+        Xunit.Assert.Contains("RiskReview", globalOutput);
+        Xunit.Assert.Contains("resume: provider login resume", scopedOutput);
+        Xunit.Assert.Contains("goal=abc10000", scopedOutput);
+        Xunit.Assert.DoesNotContain("RiskReview", scopedOutput);
+        Xunit.Assert.DoesNotContain("risk resume", scopedOutput);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_show_unknown_goal_prefix_errors")]
     public void CliAttentionShowUnknownGoalPrefixErrors()
     {

@@ -34,7 +34,8 @@ public sealed record NextActionItem(
     NextActionKind Kind,
     TaskId? TaskId,
     HumanInputRequestId? HumanInputRequestId,
-    string Message);
+    string Message,
+    string? ResumeCommand = null);
 
 public sealed record NextActionAutomationPlan(
     bool CanExecute,

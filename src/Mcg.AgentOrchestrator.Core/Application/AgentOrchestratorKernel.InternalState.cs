@@ -136,7 +136,7 @@ public sealed partial class AgentOrchestratorKernel
         };
     }
 
-    private static HumanInputWorkItem BuildHumanInputWorkItem(Goal goal, HumanInputRequest request)
+    private HumanInputWorkItem BuildHumanInputWorkItem(Goal goal, HumanInputRequest request)
     {
         TaskSpec? task = null;
         if (request.TaskId is not null)
@@ -152,7 +152,26 @@ public sealed partial class AgentOrchestratorKernel
             task?.Status,
             request.Question,
             request.RequestedAt,
-            "Answer the pending human input request.");
+            request.Kind,
+            request.IsAutoDefaultable,
+            request.IsDismissible,
+            request.IsAnswerRequired,
+            request.IsExternallyBlocked,
+            Math.Max(0, (long)(_clock.UtcNow - request.CreatedAt).TotalSeconds),
+            request.ResumeCommand,
+            BuildHumanWaitSuggestedAction(request));
+    }
+
+    private static string BuildHumanWaitSuggestedAction(HumanInputRequest request)
+    {
+        if (request.IsExternallyBlocked)
+        {
+            return $"{request.Kind} is externally blocked; complete the external prerequisite, then resume with `{request.ResumeCommand}`.";
+        }
+
+        return request.IsAnswerRequired
+            ? $"Answer required for {request.Kind}. Resume with `{request.ResumeCommand}`."
+            : $"{request.Kind} can be dismissed or resumed with `{request.ResumeCommand}`.";
     }
 
     private static ProcessBatchPlanItem BuildProcessBatchPlanItem(TaskSpec task, ProcessBatchActionKind action)

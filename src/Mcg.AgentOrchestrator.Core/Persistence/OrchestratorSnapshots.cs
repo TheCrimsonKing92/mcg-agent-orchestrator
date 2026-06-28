@@ -120,9 +120,17 @@ public sealed record HumanInputRequestSnapshot(
     string? TaskId,
     string Question,
     DateTimeOffset RequestedAt,
-    bool IsCompleted,
-    string? Answer,
-    DateTimeOffset? AnsweredAt);
+    HumanWaitKind Kind = HumanWaitKind.SpecClarification,
+    bool? IsAutoDefaultable = null,
+    bool? IsDismissible = null,
+    bool IsAnswerRequired = true,
+    bool? IsExternallyBlocked = null,
+    string? SuggestedDefaultAnswer = null,
+    string? ResumeCommand = null,
+    bool IsCompleted = false,
+    string? Answer = null,
+    DateTimeOffset? AnsweredAt = null,
+    bool WasDismissed = false);
 
 public static class VerificationTextBounds
 {

@@ -135,7 +135,7 @@ internal static class GoalHealthEvaluator
                 .FirstOrDefault(task => task.Id == item.TaskId)?.Number;
         return item.Kind switch
         {
-            NextActionKind.AnswerHumanInput => item.HumanInputRequestId is null ? "input-needed" : $"answer {item.HumanInputRequestId.Value[..8]} <answer>",
+            NextActionKind.AnswerHumanInput => item.HumanInputRequestId is null ? "input-needed" : item.ResumeCommand ?? $"answer {item.HumanInputRequestId.Value[..8]} <answer>",
             NextActionKind.InspectFailedTask => taskNumber is null ? "monitor" : $"task {taskNumber} | retry {taskNumber} <note>",
             NextActionKind.FixFailedVerification => taskNumber is null ? "monitor" : $"verifications {taskNumber} | retry {taskNumber} <note>",
             NextActionKind.RefreshRunningProcess => taskNumber is null ? "monitor" : $"refresh-dispatch {taskNumber}",

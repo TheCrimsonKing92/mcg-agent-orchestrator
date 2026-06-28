@@ -33,4 +33,11 @@ public sealed record HumanInputWorkItem(
     WorkTaskStatus? TaskStatus,
     string Question,
     DateTimeOffset RequestedAt,
+    HumanWaitKind Kind,
+    bool IsAutoDefaultable,
+    bool IsDismissible,
+    bool IsAnswerRequired,
+    bool IsExternallyBlocked,
+    long AgeSeconds,
+    string ResumeCommand,
     string SuggestedAction);

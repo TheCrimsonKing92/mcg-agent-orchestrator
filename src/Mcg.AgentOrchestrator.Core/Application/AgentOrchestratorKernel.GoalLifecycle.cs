@@ -464,10 +464,33 @@ public sealed partial class AgentOrchestratorKernel
         _ => int.MaxValue
     };
 
-    public HumanInputRequest RequestHumanInput(GoalId goalId, TaskId? taskId, string question)
+    public HumanInputRequest RequestHumanInput(
+        GoalId goalId,
+        TaskId? taskId,
+        string question,
+        HumanWaitKind kind = HumanWaitKind.SpecClarification,
+        bool? isAutoDefaultable = null,
+        bool? isDismissible = null,
+        bool isAnswerRequired = true,
+        bool? isExternallyBlocked = null,
+        string? suggestedDefaultAnswer = null,
+        string? resumeCommand = null)
     {
         var goal = GetGoal(goalId);
-        var request = new HumanInputRequest(HumanInputRequestId.New(), goal.Id, taskId, question, _clock.UtcNow);
+        var id = HumanInputRequestId.New();
+        var request = new HumanInputRequest(
+            id,
+            goal.Id,
+            taskId,
+            question,
+            _clock.UtcNow,
+            kind,
+            isAutoDefaultable,
+            isDismissible,
+            isAnswerRequired,
+            isExternallyBlocked,
+            suggestedDefaultAnswer,
+            resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id));
         _humanInputRequests.Add(request.Id, request);
 
         if (taskId is not null)
@@ -507,6 +530,66 @@ public sealed partial class AgentOrchestratorKernel
         RefreshGoalStatus(goal);
 
         Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer);
+    }
+
+    public void DismissHumanInput(HumanInputRequestId requestId)
+    {
+        if (!_humanInputRequests.TryGetValue(requestId, out var request))
+        {
+            throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
+        }
+
+        if (request.IsCompleted)
+        {
+            throw new InvalidOperationException($"Human input request '{requestId}' has already been answered.");
+        }
+
+        if (!request.IsDismissible)
+        {
+            throw new InvalidOperationException($"Human input request '{requestId}' is not dismissible.");
+        }
+
+        var goal = GetGoal(request.GoalId);
+        request.Dismiss(_clock.UtcNow);
+
+        if (request.TaskId is not null)
+        {
+            goal.FindTask(request.TaskId).SetStatus(WorkTaskStatus.Running);
+        }
+
+        RefreshGoalStatus(goal);
+        Append(goal, request.TaskId, ProgressKind.HumanInputReceived, $"Dismissed human wait {request.Id.Value[..8]}.");
+    }
+
+    public IReadOnlyList<HumanWaitPolicyResult> SweepStaleHumanWaits(TimeSpan specClarificationStaleAfter)
+    {
+        var resolved = new List<HumanWaitPolicyResult>();
+        foreach (var request in _humanInputRequests.Values
+            .Where(request => !request.IsCompleted)
+            .OrderBy(request => request.RequestedAt)
+            .ToList())
+        {
+            var age = _clock.UtcNow - request.CreatedAt;
+            if (request.Kind != HumanWaitKind.SpecClarification || age < specClarificationStaleAfter)
+            {
+                continue;
+            }
+
+            if (request.IsAutoDefaultable && !string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer))
+            {
+                SubmitHumanInput(request.Id, request.SuggestedDefaultAnswer);
+                resolved.Add(new HumanWaitPolicyResult(request.Id, request.GoalId, request.TaskId, request.Kind, HumanWaitPolicyResolution.Defaulted));
+                continue;
+            }
+
+            if (!request.IsAnswerRequired && request.IsDismissible)
+            {
+                DismissHumanInput(request.Id);
+                resolved.Add(new HumanWaitPolicyResult(request.Id, request.GoalId, request.TaskId, request.Kind, HumanWaitPolicyResolution.Dismissed));
+            }
+        }
+
+        return resolved;
     }
 
     public Goal GetGoal(GoalId goalId)

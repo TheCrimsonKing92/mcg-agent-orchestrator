@@ -484,6 +484,48 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_human_wait_dto_and_rendering_include_operator_evidence")]
+    public void DashboardHumanWaitDtoAndRenderingIncludeOperatorEvidence()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Expose typed wait",
+        [new TaskSpec(TaskId.New(), "Authenticate provider", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var request = kernel.RequestHumanInput(
+        goal.Id,
+        task.Id,
+        "Complete OAuth.",
+        HumanWaitKind.ProviderAuth,
+        resumeCommand: "provider auth resume");
+
+    var dto = DashboardResponseMapper.ToHumanInputDto(kernel, request);
+    var worklist = DashboardResponseMapper.ToHumanInputWorklistDto(goal, kernel.BuildHumanInputWorklist(goal.Id));
+    var html = DashboardRenderer.Render(
+        kernel,
+        new DashboardRenderOptions(EnableOperatorControls: true, FocusGoalPrefix: goal.Id.Value[..8], View: DashboardView.Goal));
+
+    Assert.Equal(request.Id.Value, dto.WaitId);
+    Assert.Equal(HumanWaitKind.ProviderAuth, dto.Kind);
+    Assert.True(dto.IsExternallyBlocked);
+    Assert.False(dto.IsAutoDefaultable);
+    Assert.False(dto.IsDismissible);
+    Assert.Equal("provider auth resume", dto.ResumeCommand);
+    var item = worklist.Items.Single();
+    Assert.Equal(request.Id.Value, item.WaitId);
+    Assert.Equal(goal.Id.Value, item.GoalId);
+    Assert.Equal("provider auth resume", item.ResumeCommand);
+    Assert.Contains(html, text => text.Contains("ProviderAuth", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("externally-blocked=True", StringComparison.Ordinal));
+    Assert.Contains(html, text => text.Contains("provider auth resume", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_subscription_plan_detail")]
     public void DashboardResponseMapperTrimsVerboseSubscriptionPlanDetail()
 {

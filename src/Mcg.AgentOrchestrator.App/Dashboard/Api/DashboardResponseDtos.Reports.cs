@@ -9,11 +9,19 @@ internal sealed record AttentionDto(TaskAttentionKind Kind, string? TaskId, stri
 
 internal sealed record HumanInputDto(
     string Id,
+    string WaitId,
     string GoalId,
     string? TaskId,
     int? TaskNumber,
     string Question,
     DateTimeOffset RequestedAt,
+    HumanWaitKind Kind,
+    bool IsAutoDefaultable,
+    bool IsDismissible,
+    bool IsAnswerRequired,
+    bool IsExternallyBlocked,
+    long AgeSeconds,
+    string ResumeCommand,
     bool IsCompleted,
     string? Answer,
     DateTimeOffset? AnsweredAt);
@@ -27,6 +35,7 @@ internal sealed record HumanInputWorklistDto(
 
 internal sealed record HumanInputWorkItemDto(
     string RequestId,
+    string WaitId,
     string? TaskId,
     int? TaskNumber,
     AgentRole? Role,
@@ -34,6 +43,14 @@ internal sealed record HumanInputWorkItemDto(
     WorkTaskStatus? TaskStatus,
     string Question,
     DateTimeOffset RequestedAt,
+    HumanWaitKind Kind,
+    bool IsAutoDefaultable,
+    bool IsDismissible,
+    bool IsAnswerRequired,
+    bool IsExternallyBlocked,
+    long AgeSeconds,
+    string GoalId,
+    string ResumeCommand,
     string SuggestedAction,
     string SuggestedCommand);
 
