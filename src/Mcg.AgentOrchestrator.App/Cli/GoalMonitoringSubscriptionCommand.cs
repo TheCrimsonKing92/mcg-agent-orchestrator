@@ -453,7 +453,7 @@ internal static class GoalMonitoringSubscriptionCommand
                 since = Math.Max(since, evt.Cursor);
             }
 
-            await output.FlushAsync().ConfigureAwait(false);
+            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             snapshotWritten = true;
 
             if (options.Once || (options.WaitTerminal && IsTerminalForWait(state)))
@@ -608,7 +608,7 @@ internal static class GoalMonitoringSubscriptionCommand
         return value.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(value + "/");
     }
 
-    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]";
+    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states.";
 
     private sealed class TextWriterStream(TextWriter writer) : Stream
     {

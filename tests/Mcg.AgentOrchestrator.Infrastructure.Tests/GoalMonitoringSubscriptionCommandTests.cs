@@ -149,6 +149,24 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             GoalMonitoringSubscriptionCommand.GoalStateEventSchemaFields());
     }
 
+    [Xunit.Theory(DisplayName = "Monitor_goal_wait_terminal_treats_operator_action_states_as_terminal")]
+    [Xunit.InlineData(GoalLifecycleState.Verified, true)]
+    [Xunit.InlineData(GoalLifecycleState.Merged, true)]
+    [Xunit.InlineData(GoalLifecycleState.Recorded, true)]
+    [Xunit.InlineData(GoalLifecycleState.CleanedUp, true)]
+    [Xunit.InlineData(GoalLifecycleState.Failed, true)]
+    [Xunit.InlineData(GoalLifecycleState.Blocked, true)]
+    [Xunit.InlineData(GoalLifecycleState.AwaitingClarification, true)]
+    [Xunit.InlineData(GoalLifecycleState.AwaitingHumanInput, true)]
+    [Xunit.InlineData(GoalLifecycleState.Running, false)]
+    [Xunit.InlineData(GoalLifecycleState.Dispatched, false)]
+    public void MonitorGoalWaitTerminalTreatsOperatorActionStatesAsTerminal(
+        GoalLifecycleState state,
+        bool expected)
+    {
+        Assert.Equal(expected, GoalMonitoringSubscriptionCommand.IsTerminalForWait(state));
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_and_timeline_lines")]
     public void MonitorGoalPrintsCompactSnapshotAndTimelineLines()
     {
@@ -433,6 +451,54 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             [],
             WorkerProfileCatalog.Default()));
         Assert.Equal(1, ex.ExitCode);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_exits_nonzero_for_abandoned_goal")]
+    public async Task MonitorGoalWaitTerminalExitsNonzeroForAbandonedGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Stop", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Wait abandoned", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.CancelGoal(goal.Id, "Abandoned by operator.");
+        using var output = new StringWriter();
+
+        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--wait-terminal", "--format", "human"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.Equal(1, ex.ExitCode);
+        Assert.Contains("-> Failed", output.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_exits_nonzero_for_awaiting_human_input")]
+    public async Task MonitorGoalWaitTerminalExitsNonzeroForAwaitingHumanInput()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Ask", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Wait input", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.RequestHumanInput(goal.Id, task.Id, "Which command should run?");
+        using var output = new StringWriter();
+
+        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--wait-terminal", "--format", "human"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.Equal(1, ex.ExitCode);
+        Assert.Contains("-> AwaitingHumanInput", output.ToString());
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_unknown_goal_emits_structured_error_event")]
