@@ -1251,23 +1251,20 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         Subscription: new SubscriptionLaunchProfile("codex-spark", "gpt-5.3-codex-spark", "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
-    var profiles = new WorkerProfileCatalog(
-    [
-        new WorkerProfile("codex-spark", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
-    ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
         [agent],
-        profiles,
+        WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
         DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
 
     var provider = WorkerProviderCatalog.Default().ResolveProfile(task.LastDispatch!.WorkerName);
     Assert.Equal(ProviderKind.OpenAICodexSpark, provider.Identity.Kind);
+    Assert.Equal(ProviderKind.OpenAICodexSpark, task.LastDispatch.WorkerProviderKind);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
 }
