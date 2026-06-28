@@ -200,7 +200,7 @@ internal static class CliPersistentStateRunner
     {
         var kernel = LoadConductLoopKernel(stateRepository);
         var sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
-        ConsoleViews.PrintTerminalGoalSweep(sweep);
+        ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: false);
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 

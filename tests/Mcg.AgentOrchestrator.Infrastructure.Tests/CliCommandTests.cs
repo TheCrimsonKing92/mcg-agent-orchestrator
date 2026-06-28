@@ -5786,6 +5786,7 @@ public sealed class CliCommandTests
             Xunit.Assert.Contains(command, nextOutput);
             Xunit.Assert.Contains(expected, conductOutput);
             Xunit.Assert.Contains(command, conductOutput);
+            Xunit.Assert.Equal(1, CountLinesContaining(conductOutput, expected));
             Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
         }
         finally
@@ -6059,6 +6060,10 @@ public sealed class CliCommandTests
         text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Where(line => line.StartsWith("READY_BLOCKED ", StringComparison.Ordinal))
             .ToArray();
+
+    private static int CountLinesContaining(string text, string value) =>
+        text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Count(line => line.Contains(value, StringComparison.Ordinal));
 
     private static AgentDefinition TestAgent(string id, AgentRole role) => new(
         new AgentId(id),
