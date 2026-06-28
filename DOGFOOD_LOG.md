@@ -2102,3 +2102,10 @@ Goal 3e32860f: Backlog slice: Bound dispatch recovery by persisted artifacts and
 
 - Operator gate: Planner: not-run Planner-only no code changes (exit 0); Researcher: not-run; read-only Researcher task, repository evidence inspected (exit 0); Developer: pass - DispatchRecoveryPolicyTests 10/10; broad class run had unrelated Windows path-length failure after 302/303 passed (exit 0); Tester: pass; isolated .NET test slice exited 0, 19 passed, 0 failed, 0 skipped; only existing analyzer/package warnings (exit 0); Reviewer: not-run by Reviewer; prior Tester isolated .NET slice passed 19/19; review found acceptance blocker (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - code-review verification - enough context to compare implementation against acceptance rows.
+
+## 2026-06-28 - Backlog slice: Conductor auto-landing skips the semantic acceptance judges an...
+
+Goal 2873c8b4: Backlog slice: Conductor auto-landing skips the semantic acceptance judges and does not auto-close the linked backlog.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 682b054). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 682b054dfa42ac60544e69a85c2c9e40581ebe7b). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, source inspection completed (exit 0); Researcher: not-run; read-only research task, source inspection only (exit 0); Developer: pass - 112 passed, 0 failed (exit 0); Tester: pass - 112 passed, 0 failed, 0 skipped (exit 0); Reviewer: pass evidence reviewed - prior isolated focused run reported 112 passed, 0 failed, 0 skipped; not rerun due read-only sandbox (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer/code-verification task - handled targeted repository review and evidence comparison.
