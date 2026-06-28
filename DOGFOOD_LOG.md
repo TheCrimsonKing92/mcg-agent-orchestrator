@@ -2074,3 +2074,10 @@ Goal 41c6e2a2: Backlog slice: Make latest Developer retry feedback first-class i
 
 - Operator gate: Planner: not-run; Planner inspection only, no repo files modified (exit 0); Researcher: not-run; read-only Researcher task, claims verified by repository-local source inspection (exit 0); Developer: pass; 3 passed, 0 failed (exit 0); Tester: pass; Infrastructure 4 passed, Core 2 passed; warnings only (exit 0); Reviewer: pass evidence from prior-task-evidence.md: Infrastructure 4 passed, Core 2 passed; not rerun due read-only filesystem (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - reviewer inspection of prompt-construction fix - enough context capacity for targeted review.
+
+## 2026-06-28 - Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f
+
+Goal 6f1fc5b0: Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f. Fix xUnit1031 blocking waits in tests/Mcg.AgentOrchestrator.In.... Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass focused 1/1; full project attempted but blocked by lock/timeout (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped test-only async cleanup - enough reasoning for safe edit and Windows test-lock handling.
