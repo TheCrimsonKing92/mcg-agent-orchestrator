@@ -2032,3 +2032,17 @@ Goal e290a4e8: Backlog slice: Reduce low-integrity dispatch startup cost by avoi
 
 - Operator gate: Planner: not-run; Planner inspection only (exit 0); Researcher: not-run; research-only source/API inspection (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - repository research task - enough context and source tracing without code edits.
+
+## 2026-06-28 - Source backlog item: 8af2ecd0649248e08098692e56ff7014  Implement: Terminal st...
+
+Goal 541e8491: Source backlog item: 8af2ecd0649248e08098692e56ff7014  Implement: Terminal stale-goal sweep should auto-repair lifecy.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 5f8a013). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 5f8a013). Acceptance passed.
+
+- Operator gate: Planner: not-run Planner-only; source inspection completed (exit 0); Researcher: not-run; research-only source inspection (exit 0); Developer: not-run per current-task.md DO NOT RUN; git diff --check passed (exit 0); Tester: not-run per current-task.md DO NOT RUN; manual/static verification passed; git diff --check passed (exit 0); Reviewer: not-run by reviewer; static review and `git diff --check` passed; focused `dotnet test` still needed before acceptance (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer/static branch validation - sufficient for code review; test execution gap remains.
+
+## 2026-06-28 - Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f
+
+Goal f101c31a: Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f. Fix xUnit1031 blocking waits in tests/Mcg.AgentOrchestrator.In.... Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass; focused changed-test filter passed 5/5, no remaining `GetAwaiter().GetResult()` in target file. Broader `FullyQualifiedName~CliCommandTests` built with no xUnit1031 diagnostics but had one unrelated failure creating a git worktree ref: permission denied. (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped xUnit async test refactor - handled direct code edit and verification.
