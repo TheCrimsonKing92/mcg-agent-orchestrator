@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Net.Http.Json;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
@@ -406,16 +407,16 @@ internal static class GoalMonitoringSubscriptionCommand
 
     internal static IReadOnlyList<string> GoalStateEventSchemaFields() =>
     [
-        nameof(GoalStateSubscriptionEvent.SchemaVersion),
-        nameof(GoalStateSubscriptionEvent.Cursor),
-        nameof(GoalStateSubscriptionEvent.Timestamp),
-        nameof(GoalStateSubscriptionEvent.EventKind),
-        nameof(GoalStateSubscriptionEvent.GoalId),
-        nameof(GoalStateSubscriptionEvent.TaskId),
-        nameof(GoalStateSubscriptionEvent.CurrentState),
-        nameof(GoalStateSubscriptionEvent.ArtifactPath),
-        nameof(GoalStateSubscriptionEvent.ProcessId),
-        nameof(GoalStateSubscriptionEvent.Message)
+        "schemaVersion",
+        "cursor",
+        "timestamp",
+        "eventKind",
+        "goalId",
+        "taskId",
+        "currentState",
+        "artifactPath",
+        "processId",
+        "message"
     ];
 
     private static async Task<GoalLifecycleState> RunHeadlessLocalAsync(
@@ -429,28 +430,34 @@ internal static class GoalMonitoringSubscriptionCommand
         IRunEventStore runEvents,
         CancellationToken cancellationToken)
     {
-        var since = options.SinceEventId;
+        var timelineCursor = options.SinceEventId;
+        var runEventCursor = options.SinceEventId;
         var snapshotWritten = false;
         while (true)
         {
             var current = reloadKernel?.Invoke() ?? kernel;
             var goal = OrchestratorEntityResolver.ResolveGoal(current, OrchestratorEntityResolver.GetLatestGoal(current), options.GoalId);
             var state = GoalLifecycle.ResolveState(goal);
-            var batch = GoalMonitoringStream.BuildBatch(current, goal, since, agents, workerProfiles, workspace);
-            var envelopes = BuildSubscriptionEvents(batch, goal, workspace, await runEvents.ReadSinceAsync(since, maxCount: 500, cancellationToken: cancellationToken).ConfigureAwait(false));
-            if (!snapshotWritten && since > 0 && envelopes.Count == 0)
+            var batch = GoalMonitoringStream.BuildBatch(current, goal, timelineCursor, agents, workerProfiles, workspace);
+            var runRecords = await runEvents.ReadSinceAsync(runEventCursor, maxCount: 500, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var envelopes = BuildSubscriptionEvents(batch, goal, workspace, runRecords);
+            if (!snapshotWritten && options.SinceEventId > 0 && envelopes.Count == 0)
             {
-                envelopes = [BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, since)];
+                envelopes = [BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor)];
             }
 
             var eligibleEvents = envelopes
-                .Where(evt => evt.Cursor > since || !snapshotWritten)
+                .Where(evt => IsNewForCursor(evt, timelineCursor, runEventCursor) || !snapshotWritten)
                 .Where(evt => Matches(evt, options))
                 .ToList();
             foreach (var evt in eligibleEvents)
             {
                 PrintSubscriptionEvent(evt, options.Format, output);
-                since = Math.Max(since, evt.Cursor);
+            }
+
+            foreach (var evt in envelopes)
+            {
+                AdvanceCursor(evt, ref timelineCursor, ref runEventCursor);
             }
 
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -460,7 +467,11 @@ internal static class GoalMonitoringSubscriptionCommand
             {
                 if (options.WaitTerminal && eligibleEvents.Count == 0)
                 {
-                    PrintSubscriptionEvent(BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, since), options.Format, output);
+                    var snapshot = BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor);
+                    if (Matches(snapshot, options))
+                    {
+                        PrintSubscriptionEvent(snapshot, options.Format, output);
+                    }
                 }
 
                 return state;
@@ -491,7 +502,10 @@ internal static class GoalMonitoringSubscriptionCommand
                 record.Status ?? state.ToString(),
                 workspace.RunEventStorePath,
                 null,
-                record.Detail)));
+                record.Detail)
+                {
+                    CursorDomain = GoalStateCursorDomain.RunEvent
+                }));
         return events.OrderBy(evt => evt.Cursor).ThenBy(evt => evt.Timestamp).ToList();
     }
 
@@ -506,7 +520,10 @@ internal static class GoalMonitoringSubscriptionCommand
             state.ToString(),
             artifactPath,
             null,
-            $"tasks={snapshot.Tasks.Count} attention={snapshot.Monitor.Attention.Count}");
+            $"tasks={snapshot.Tasks.Count} attention={snapshot.Monitor.Attention.Count}")
+        {
+            CursorDomain = GoalStateCursorDomain.Timeline
+        };
 
     private static GoalStateSubscriptionEvent BuildTimelineEnvelope(GoalMonitoringEventDto evt, Goal goal, OrchestratorWorkspace workspace)
     {
@@ -522,7 +539,27 @@ internal static class GoalMonitoringSubscriptionCommand
             evt.TaskStatus?.ToString() ?? GoalLifecycle.ResolveState(goal).ToString(),
             artifactPath,
             task?.LastProcess?.ProcessId,
-            evt.Message);
+            evt.Message)
+        {
+            CursorDomain = GoalStateCursorDomain.Timeline
+        };
+    }
+
+    private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor)
+    {
+        var cursor = evt.CursorDomain == GoalStateCursorDomain.RunEvent ? runEventCursor : timelineCursor;
+        return evt.Cursor > cursor;
+    }
+
+    private static void AdvanceCursor(GoalStateSubscriptionEvent evt, ref long timelineCursor, ref long runEventCursor)
+    {
+        if (evt.CursorDomain == GoalStateCursorDomain.RunEvent)
+        {
+            runEventCursor = Math.Max(runEventCursor, evt.Cursor);
+            return;
+        }
+
+        timelineCursor = Math.Max(timelineCursor, evt.Cursor);
     }
 
     private static void PrintSubscriptionEvent(GoalStateSubscriptionEvent evt, GoalMonitoringOutputFormat format, TextWriter output)
@@ -638,16 +675,36 @@ internal enum GoalMonitoringOutputFormat
 }
 
 internal sealed record GoalStateSubscriptionEvent(
+    [property: JsonPropertyName("schemaVersion")]
     int SchemaVersion,
+    [property: JsonPropertyName("cursor")]
     long Cursor,
+    [property: JsonPropertyName("timestamp")]
     DateTimeOffset Timestamp,
+    [property: JsonPropertyName("eventKind")]
     string EventKind,
+    [property: JsonPropertyName("goalId")]
     string GoalId,
+    [property: JsonPropertyName("taskId")]
     string? TaskId,
+    [property: JsonPropertyName("currentState")]
     string CurrentState,
+    [property: JsonPropertyName("artifactPath")]
     string? ArtifactPath,
+    [property: JsonPropertyName("processId")]
     int? ProcessId,
-    string? Message);
+    [property: JsonPropertyName("message")]
+    string? Message)
+{
+    [JsonIgnore]
+    public GoalStateCursorDomain CursorDomain { get; init; }
+}
+
+internal enum GoalStateCursorDomain
+{
+    Timeline,
+    RunEvent
+}
 
 internal sealed record GoalMonitoringSubscriptionOptions(
     Uri? DashboardUri,

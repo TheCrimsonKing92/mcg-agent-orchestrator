@@ -135,16 +135,16 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     {
         Assert.Equal(
             [
-                "SchemaVersion",
-                "Cursor",
-                "Timestamp",
-                "EventKind",
-                "GoalId",
-                "TaskId",
-                "CurrentState",
-                "ArtifactPath",
-                "ProcessId",
-                "Message"
+                "schemaVersion",
+                "cursor",
+                "timestamp",
+                "eventKind",
+                "goalId",
+                "taskId",
+                "currentState",
+                "artifactPath",
+                "processId",
+                "message"
             ],
             GoalMonitoringSubscriptionCommand.GoalStateEventSchemaFields());
     }
@@ -331,12 +331,13 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Xunit.Assert.All(lines, line =>
         {
             using var doc = JsonDocument.Parse(line);
-            Assert.True(doc.RootElement.GetProperty("Cursor").GetInt64() > 1);
-            Assert.True(doc.RootElement.TryGetProperty("Timestamp", out _));
-            Assert.True(doc.RootElement.TryGetProperty("EventKind", out _));
-            Assert.Equal(goal.Id.Value, doc.RootElement.GetProperty("GoalId").GetString());
-            Assert.True(doc.RootElement.TryGetProperty("CurrentState", out _));
-            Assert.True(doc.RootElement.TryGetProperty("ArtifactPath", out _) || doc.RootElement.TryGetProperty("ProcessId", out _));
+            Assert.True(doc.RootElement.GetProperty("cursor").GetInt64() > 1);
+            Assert.True(doc.RootElement.TryGetProperty("timestamp", out _));
+            Assert.True(doc.RootElement.TryGetProperty("eventKind", out _));
+            Assert.Equal(goal.Id.Value, doc.RootElement.GetProperty("goalId").GetString());
+            Assert.True(doc.RootElement.TryGetProperty("currentState", out _));
+            Assert.True(doc.RootElement.TryGetProperty("artifactPath", out _) || doc.RootElement.TryGetProperty("processId", out _));
+            Assert.False(doc.RootElement.TryGetProperty("CursorDomain", out _));
         });
     }
 
@@ -376,10 +377,71 @@ public sealed class GoalMonitoringSubscriptionCommandTests
 
         var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         using var doc = JsonDocument.Parse(line);
-        Assert.Equal(first.Sequence + 1, doc.RootElement.GetProperty("Cursor").GetInt64());
-        Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("EventKind").GetString());
-        Assert.Equal("Completed", doc.RootElement.GetProperty("CurrentState").GetString());
-        Assert.Equal(workspace.RunEventStorePath, doc.RootElement.GetProperty("ArtifactPath").GetString());
+        Assert.Equal(first.Sequence + 1, doc.RootElement.GetProperty("cursor").GetInt64());
+        Assert.Equal("conductor:dispatch", doc.RootElement.GetProperty("eventKind").GetString());
+        Assert.Equal("Completed", doc.RootElement.GetProperty("currentState").GetString());
+        Assert.Equal(workspace.RunEventStorePath, doc.RootElement.GetProperty("artifactPath").GetString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_tracks_timeline_and_run_event_cursors_independently")]
+    public async Task MonitorGoalLocalNdjsonTracksTimelineAndRunEventCursorsIndependently()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new SqliteRunEventStore(workspace.RunEventStorePath);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Catch late run event", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor independent cursors", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Timeline cursor moves first.");
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Timeline cursor moves again.");
+        var reloadCount = 0;
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--wait-terminal", "--format", "ndjson"],
+            output,
+            kernel,
+            workspace,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            reloadKernel: () =>
+            {
+                reloadCount++;
+                if (reloadCount == 2)
+                {
+                    store.AppendAsync(new RunEventAppend(
+                        RunEventTypes.GoalOperation,
+                        goal.Id.Value,
+                        "conductor:dispatch",
+                        "Completed",
+                        "process=123",
+                        null)).GetAwaiter().GetResult();
+                    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Finished.");
+                    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                        "manual",
+                        root,
+                        0,
+                        "ok",
+                        string.Empty,
+                        DateTimeOffset.UtcNow));
+                }
+
+                return kernel;
+            });
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains(lines, line =>
+        {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.GetProperty("eventKind").GetString() == "conductor:dispatch" &&
+                doc.RootElement.GetProperty("cursor").GetInt64() == 1;
+        });
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_without_once_stays_attached_until_cancelled")]
@@ -404,7 +466,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             WorkerProfileCatalog.Default(),
             cancellationToken: cts.Token));
 
-        Assert.Contains("\"EventKind\":\"goal.snapshot\"", output.ToString());
+        Assert.Contains("\"eventKind\":\"goal.snapshot\"", output.ToString());
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_exits_zero_for_completed_and_nonzero_for_failed")]
@@ -499,6 +561,36 @@ public sealed class GoalMonitoringSubscriptionCommandTests
 
         Assert.Equal(1, ex.ExitCode);
         Assert.Contains("-> AwaitingHumanInput", output.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_does_not_emit_snapshot_that_violates_filters")]
+    public async Task MonitorGoalWaitTerminalDoesNotEmitSnapshotThatViolatesFilters()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Complete quietly", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Wait filtered terminal", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--wait-terminal", "--format", "ndjson", "--event-kind", "conductor:dispatch"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        Assert.Equal(string.Empty, output.ToString());
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_unknown_goal_emits_structured_error_event")]
