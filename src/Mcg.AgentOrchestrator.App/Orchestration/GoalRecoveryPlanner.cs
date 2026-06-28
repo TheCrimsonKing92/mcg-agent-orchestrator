@@ -26,7 +26,8 @@ internal sealed record GoalRecoveryTaskFinding(
     AgentRole Role,
     WorkTaskStatus Status,
     string Finding,
-    string SuggestedCommand);
+    string SuggestedCommand,
+    DispatchRecoveryDecision? RecoveryDecision = null);
 
 internal static class GoalRecoveryPlanner
 {
@@ -95,15 +96,17 @@ internal static class GoalRecoveryPlanner
         if (task.LastProcess is { IsRunning: true } process)
         {
             var alive = IsProcessAlive(process.ProcessId);
+            var recoveryDecision = new DispatchRecoveryPolicy().Evaluate(process, alive);
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,
                 task.RequiredRole,
                 task.Status,
                 alive
-                    ? $"recorded process is still alive pid={process.ProcessId}"
-                    : $"recorded process pid={process.ProcessId} is not alive; refresh should reconcile durable state",
-                alive ? $"refresh-dispatch {taskNumber}" : $"refresh-dispatch {taskNumber}"));
+                    ? $"recorded process is still alive pid={process.ProcessId}; recovery action={recoveryDecision.ActionName} evidence={recoveryDecision.EvidencePath}"
+                    : $"recorded process pid={process.ProcessId} is not alive; recovery action={recoveryDecision.ActionName} evidence={recoveryDecision.EvidencePath}",
+                alive ? $"refresh-dispatch {taskNumber}" : $"refresh-dispatch {taskNumber}",
+                recoveryDecision));
         }
         else if (task.Status == WorkTaskStatus.Running && task.LastDispatch is not null)
         {
