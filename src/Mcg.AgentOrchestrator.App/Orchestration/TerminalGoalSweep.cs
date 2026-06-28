@@ -65,32 +65,30 @@ internal static class TerminalGoalSweep
 
             if (goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory))
             {
-                var hasBranchDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id) is not null;
-
-                if (hasBranchDiff)
+                if (!GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "completed-branch-unmerged",
-                        $"completed goal still has unmerged changes on {GoalWorktrees.BranchName(goal.Id)}",
+                        $"completed goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
+                        $"acceptance {prefix}"));
+                    results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                    continue;
+                }
+
+                var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
+                if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "completed-branch-unmerged",
+                        removeResult.Message,
                         $"acceptance {prefix}"));
                 }
-                else
+                else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
-                    var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
-                    if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
-                    {
-                        blockers.Add(new TerminalGoalSweepBlocker(
-                            "completed-branch-unmerged",
-                            removeResult.Message,
-                            $"acceptance {prefix}"));
-                    }
-                    else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
-                    {
-                        repairs.Add(new TerminalGoalSweepRepair(
-                            "merged-branch-cleanup",
-                            removeResult.Message,
-                            $"workspace remove {prefix}"));
-                    }
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "merged-branch-cleanup",
+                        removeResult.Message,
+                        $"workspace remove {prefix}"));
                 }
             }
 

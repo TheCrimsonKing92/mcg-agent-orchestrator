@@ -5786,6 +5786,7 @@ public sealed class CliCommandTests
             Xunit.Assert.Contains(command, nextOutput);
             Xunit.Assert.Contains(expected, conductOutput);
             Xunit.Assert.Contains(command, conductOutput);
+            Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
         }
         finally
         {

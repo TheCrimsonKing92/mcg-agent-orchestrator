@@ -470,6 +470,15 @@ public static class GoalWorktrees
         return string.IsNullOrWhiteSpace(stat) ? patch : $"{stat}{Environment.NewLine}---{Environment.NewLine}{patch}";
     }
 
+    public static bool IsBranchMergedIntoCurrent(string executionDirectory, GoalId goalId)
+    {
+        RequireGitWorkTree(executionDirectory);
+
+        var branch = BranchName(goalId);
+        return !BranchExists(executionDirectory, branch) ||
+            GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", branch, "HEAD").ExitCode == 0;
+    }
+
     public static GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)
     {
         var branch = BranchName(goalId);
