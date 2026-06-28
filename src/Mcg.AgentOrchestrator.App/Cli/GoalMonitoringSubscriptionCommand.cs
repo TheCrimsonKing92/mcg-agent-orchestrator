@@ -399,7 +399,7 @@ internal static class GoalMonitoringSubscriptionCommand
     internal static bool Matches(GoalStateSubscriptionEvent evt, GoalMonitoringSubscriptionOptions options)
     {
         return (string.IsNullOrWhiteSpace(options.GoalPrefix) ||
-                evt.GoalId.StartsWith(options.GoalPrefix, StringComparison.OrdinalIgnoreCase)) &&
+                (evt.GoalId is not null && evt.GoalId.StartsWith(options.GoalPrefix, StringComparison.OrdinalIgnoreCase))) &&
             (string.IsNullOrWhiteSpace(options.TaskId) ||
                 string.Equals(evt.TaskId, options.TaskId, StringComparison.OrdinalIgnoreCase)) &&
             ((options.EventKinds?.Count ?? 0) == 0 ||
@@ -412,7 +412,8 @@ internal static class GoalMonitoringSubscriptionCommand
 
     internal static string FormatHuman(GoalStateSubscriptionEvent evt)
     {
-        var scope = evt.TaskId is null ? evt.GoalId : $"{evt.GoalId}/{evt.TaskId}";
+        var goalScope = evt.GoalId ?? "global";
+        var scope = evt.TaskId is null ? goalScope : $"{goalScope}/{evt.TaskId}";
         var evidence = evt.ArtifactPath is not null ? $" artifact={evt.ArtifactPath}" : string.Empty;
         if (evt.ProcessId is not null)
         {
@@ -544,7 +545,7 @@ internal static class GoalMonitoringSubscriptionCommand
                 record.Sequence,
                 record.OccurredAt,
                 record.Operation ?? record.EventType,
-                record.GoalId ?? batch.GoalId,
+                record.GoalId,
                 null,
                 state.ToString(),
                 workspace.RunEventStorePath,
@@ -778,7 +779,7 @@ internal sealed record GoalStateSubscriptionEvent(
     [property: JsonPropertyName("eventKind")]
     string EventKind,
     [property: JsonPropertyName("goalId")]
-    string GoalId,
+    string? GoalId,
     [property: JsonPropertyName("taskId")]
     string? TaskId,
     [property: JsonPropertyName("currentState")]

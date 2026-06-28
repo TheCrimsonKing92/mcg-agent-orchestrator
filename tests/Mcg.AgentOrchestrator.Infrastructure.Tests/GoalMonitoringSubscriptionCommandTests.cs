@@ -619,6 +619,61 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal("Blocked", runEvent.CurrentState);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_prefix_subscription_excludes_global_conductor_ticks")]
+    public void MonitorGoalPrefixSubscriptionExcludesGlobalConductorTicks()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Filtered", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor filtered ticks", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        var batch = BuildEmptyMonitoringBatch(goal);
+        var records = new[]
+        {
+            new RunEventRecord(
+                3,
+                "evt-3",
+                DateTimeOffset.UnixEpoch,
+                RunEventTypes.GoalOperation,
+                null,
+                "conduct:tick",
+                "Completed",
+                "tick summary",
+                null),
+            new RunEventRecord(
+                4,
+                "evt-4",
+                DateTimeOffset.UnixEpoch.AddSeconds(1),
+                RunEventTypes.GoalOperation,
+                goal.Id.Value,
+                "conductor:dispatch",
+                "Completed",
+                "goal dispatch",
+                null)
+        };
+
+        var events = GoalMonitoringSubscriptionCommand.BuildSubscriptionEvents(
+            batch,
+            goal,
+            GoalLifecycleState.Running,
+            workspace,
+            records);
+        var options = new GoalMonitoringSubscriptionOptions(
+            null,
+            goal.Id.Value,
+            0,
+            false,
+            GoalPrefix: goal.Id.Value[..8]);
+
+        var globalTick = Assert.Single(events.Where(evt => evt.EventKind == "conduct:tick"));
+        Assert.Null(globalTick.GoalId);
+        Assert.False(GoalMonitoringSubscriptionCommand.Matches(globalTick, options));
+        Assert.Contains(events, evt =>
+            evt.EventKind == "conductor:dispatch" &&
+            GoalMonitoringSubscriptionCommand.Matches(evt, options));
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_tracks_timeline_and_run_event_cursors_independently")]
     public async Task MonitorGoalLocalNdjsonTracksTimelineAndRunEventCursorsIndependently()
     {
