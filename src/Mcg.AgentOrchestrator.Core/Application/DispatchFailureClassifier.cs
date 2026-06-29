@@ -115,6 +115,9 @@ public static class DispatchFailureClassifier
     private static readonly Regex ResetsInPattern = new(
         @"\bresets?\s+in\s*:?\s*(?:(?<hours>\d+)\s*h(?:ours?)?)?\s*(?:(?<minutes>\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(?<seconds>\d+)\s*s(?:ec(?:ond)?s?)?)?",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex StandaloneHttp429Pattern = new(
+        @"(?<!\d)429(?!\d)",
+        RegexOptions.CultureInvariant);
 
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
@@ -854,6 +857,7 @@ public static class DispatchFailureClassifier
             text.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("http 429", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
+            StandaloneHttp429Pattern.IsMatch(text) ||
             text.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||
@@ -1070,6 +1074,7 @@ public static class DispatchFailureClassifier
         line.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("http 429", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
+        StandaloneHttp429Pattern.IsMatch(line) ||
         line.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||

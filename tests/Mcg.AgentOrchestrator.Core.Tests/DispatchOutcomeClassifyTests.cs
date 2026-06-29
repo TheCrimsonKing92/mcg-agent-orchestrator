@@ -64,12 +64,12 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "Error: Too many requests from provider. HTTP 429."));
+            Verification(1, "Error: provider returned 429."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Xunit.Assert.Null(outcome.RetryAfter);
-        Xunit.Assert.Contains("Too many requests", outcome.EvidenceSummary);
+        Xunit.Assert.Contains("provider returned 429", outcome.EvidenceSummary);
     }
 
     [Xunit.Fact(DisplayName = "Classify defaults recoverable subscription limit retry when duration is absent")]
