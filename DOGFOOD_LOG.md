@@ -2151,3 +2151,10 @@ Goal 79d912db: # GOAL: Narrow the state.db lock window during acceptance and lan
 
 - Operator gate: Planner: not-run planner-only inspection (exit 0); Researcher: not-run; research-only evidence gathered; git status clean (exit 0); Developer: pass; 3 focused filters passed. NuGet vulnerability-cache access warnings only. (exit 0); Tester: pass for focused acceptance/CLI checks; broad `CliCommandTests` class failed 7 unrelated tests (exit 0); Reviewer: not-run independently; sandbox denied isolated dotnet lease directory creation. Prior Tester evidence: focused acceptance/CLI tests passed. (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - code inspection was decisive; test rerun was sandbox-blocked.
+
+## 2026-06-29 - Backlog slice: Terminal stale-goal sweep for lifecycle/task desyncs  Problem:...
+
+Goal 60716944: Backlog slice: Terminal stale-goal sweep for lifecycle/task desyncs. Landed as b42aac8. Added terminal/task desync repair, live-dispatch and dirty-worktree blockers, completed-branch-unmerged surfacing, and CLI help alignment for acceptance.
+
+- Operator gate: Developer retries eventually hit Low-IL sandbox-preflight before Codex launch; operator recovery commits c6e95c5 and 414ca0e were verified with focused help, terminal-sweep, and preflight tests. Reviewer found no code defect; its goal-scoped test slot was blocked by `lease.lock` access denied, resolved by operator manual-slot verification. Acceptance passed and worktree cleaned.
+- Model fit: OpenAI/gpt-5.5 was adequate for planner/research/reviewer and early development; Codex Developer became underpowered operationally when Low-IL setup failed before model launch.
