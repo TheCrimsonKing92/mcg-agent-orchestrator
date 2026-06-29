@@ -257,7 +257,9 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
         Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Contains("--filter", calls[2]);
-        Assert.Contains(calls[2], argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(calls[2], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.False(calls[2].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
+        Assert.False(calls[2].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
         Assert.Equal(["git diff whitespace", "focused CLI infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
@@ -289,7 +291,9 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[3][2]);
         Assert.Contains("--filter", calls[3]);
-        Assert.Contains(calls[3], argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(calls[3], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.False(calls[3].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
+        Assert.False(calls[3].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.DoesNotContain(
             calls,
             call => call.Length > 2 &&

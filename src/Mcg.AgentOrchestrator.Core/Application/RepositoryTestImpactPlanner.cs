@@ -37,7 +37,7 @@ public static class RepositoryTestImpactPlanner
     ];
 
     private const string CliInfrastructureFilter =
-        "FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~FundamentalAliasTests";
+        "FullyQualifiedName~CliHelpTests";
 
     private const string DashboardInfrastructureFilter =
         "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardValidationHarnessTests";

@@ -1886,7 +1886,9 @@ public sealed class DashboardRenderingTests
     Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
     Assert.False(workSummary.BuildEnvironment.LeaseExists);
     Assert.Equal("focused CLI infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
-    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
+    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliHelpTests", StringComparison.Ordinal));
+    Assert.False(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~FundamentalAliasTests", StringComparison.Ordinal));
+    Assert.False(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
     Assert.True(html.Contains("Test impact: Selected focused CLI infrastructure tests from changed file scope.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));

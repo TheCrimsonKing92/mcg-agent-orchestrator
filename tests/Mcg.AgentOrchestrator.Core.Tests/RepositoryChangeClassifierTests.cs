@@ -110,7 +110,9 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused CLI infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains(check.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.False(check.Command.Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
+        Assert.False(check.Command.Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
     }
 
