@@ -187,7 +187,21 @@ internal static class CliCommandHelp
         Console.WriteLine(entry.Description);
         Console.WriteLine();
         Console.WriteLine("Options:");
-        foreach (var flag in entry.Flags.Where(flag => flag.StartsWith("-", StringComparison.Ordinal)).Distinct(StringComparer.OrdinalIgnoreCase))
+        var flags = entry.Flags
+            .Where(flag => flag.StartsWith("-", StringComparison.Ordinal))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (flags.Contains("-h", StringComparer.OrdinalIgnoreCase) &&
+            flags.Contains("--help", StringComparer.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("  -h, --help");
+            flags = flags
+                .Where(flag => !flag.Equals("-h", StringComparison.OrdinalIgnoreCase) &&
+                               !flag.Equals("--help", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+
+        foreach (var flag in flags)
         {
             Console.WriteLine($"  {flag}");
         }

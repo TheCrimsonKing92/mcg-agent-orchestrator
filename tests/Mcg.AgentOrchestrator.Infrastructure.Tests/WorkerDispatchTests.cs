@@ -73,6 +73,39 @@ public sealed class WorkerDispatchTests
             evt.Kind == ProgressKind.TaskRedelegated);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_swept_terminal_goal_without_starting_worker")]
+    public void WorkerProfileDispatcherPreflightAllowsSweptTerminalGoalWithoutStartingWorker()
+    {
+        var root = CreateTempDirectory();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan swept preflight.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Repair terminal preflight desync", [task]);
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var repairedGoal = kernel.GetGoal(goal.Id);
+        var repairedTask = repairedGoal.Tasks.Single(candidate => candidate.Id == task.Id);
+        Assert.Equal(GoalStatus.Active, repairedGoal.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, repairedTask.Status);
+
+        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            repairedGoal,
+            repairedTask,
+            [agent],
+            DispatchTestProfiles(),
+            promptRoot,
+            root,
+            DateTimeOffset.UtcNow);
+
+        Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
+        Assert.NotNull(prepared.PromptPath);
+        Assert.Null(repairedTask.LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_replace_midflight_role_agent_dispatches_with_repaired_assignment")]
     public void WorkerProfileDispatcherReplaceMidflightRoleAgentDispatchesWithRepairedAssignment()
     {
@@ -6580,6 +6613,20 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             "codex-cli",
             "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}")
     ]);
+
+    private static AgentOrchestratorKernel WithGoalStatus(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        GoalStatus status)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goal => goal.Id == goalId.Value ? goal with { Status = status } : goal)
+                .ToArray()
+        });
+    }
 
     private static string CreateSeededDispatchRepository()
 {

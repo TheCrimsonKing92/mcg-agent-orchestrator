@@ -327,13 +327,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "readiness":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            var readinessSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
+            context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
                 context.Worktrees.TryResolve));
-            return false;
+            return readinessSweep.Changed;
 
         case "goal-recovery":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
@@ -633,7 +636,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "conduct":
             if (IsHelpRequested(parts))
             {
-                PrintConductUsage();
+                CliCommandHelp.TryPrintStartupHelp(parts);
                 return false;
             }
 
@@ -1172,6 +1175,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
 
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
         context.EventWriter.AppendCleanedUp(goal.Id);
+        context.PersistCheckpoint(context.Kernel);
     }
 }
 
@@ -1272,6 +1276,14 @@ private static string BuildLifecycleRunGoalNextCommand(string goalPrefix, RunGoa
 
 internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context, Goal goal, bool confirmed)
 {
+    var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
+    ConsoleViews.PrintTerminalGoalSweep(sweep);
+    goal = context.Kernel.GetGoal(goal.Id);
+    if (context.CurrentGoal?.Id == goal.Id)
+    {
+        context.CurrentGoal = goal;
+    }
+
     var readiness = GoalReadinessPreflight.Build(
         goal,
         context.Agents,
@@ -2206,7 +2218,7 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
 {
     if (IsHelpRequested(parts))
     {
-        PrintWorkspaceUsage();
+        CliCommandHelp.TryPrintStartupHelp(parts);
         return;
     }
 
@@ -2260,14 +2272,13 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
 
 private static void PrintConductUsage()
 {
-    Console.WriteLine("Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
-    Console.WriteLine("       conduct --loop [--policy <Conservative|Permissive|Manual>] [--max-iterations <count>] [--watch]");
+    Console.WriteLine(CliCommandHelp.ConductUsage);
     Console.WriteLine("  -h, --help  Show this help.");
 }
 
 private static void PrintWorkspaceUsage()
 {
-    Console.WriteLine("Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+    Console.WriteLine(CliCommandHelp.WorkspaceUsage);
     Console.WriteLine("  -h, --help  Show this help.");
 }
 

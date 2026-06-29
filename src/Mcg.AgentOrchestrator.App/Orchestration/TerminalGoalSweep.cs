@@ -61,8 +61,19 @@ internal static class TerminalGoalSweep
             var branchAlreadyLanded = isCompletedGitGoal &&
                 hasGoalBranchArtifact &&
                 GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
+            var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
+            var blockedByDirtyWorktree = false;
 
-            if (branchAlreadyLanded)
+            if (hasTerminalTaskDesync &&
+                TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix, desyncEvidence, out var dirtyEvidence, out var dirtyCommand))
+            {
+                blockedByDirtyWorktree = true;
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "terminal-dirty-worktree",
+                    dirtyEvidence,
+                    dirtyCommand));
+            }
+            else if (branchAlreadyLanded)
             {
                 foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
                 {
@@ -81,17 +92,30 @@ internal static class TerminalGoalSweep
                 goal = kernel.GetGoal(originalGoal.Id);
             }
 
-            if (!branchAlreadyLanded &&
-                kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+            if (!blockedByDirtyWorktree &&
+                !branchAlreadyLanded &&
+                TryBuildTerminalLiveDispatchBlocker(goal, prefix, out var liveDispatchEvidence, out var liveDispatchCommand))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "terminal-live-dispatch",
+                    liveDispatchEvidence,
+                    liveDispatchCommand));
+            }
+            else if (!blockedByDirtyWorktree &&
+                     !branchAlreadyLanded &&
+                     hasTerminalTaskDesync &&
+                     kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",
-                    "terminal goal had non-terminal task state",
+                    desyncEvidence,
                     $"conduct {prefix} --loop"));
                 goal = kernel.GetGoal(originalGoal.Id);
             }
 
-            if (goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory))
+            if (!blockedByDirtyWorktree &&
+                goal.Status == GoalStatus.Completed &&
+                GoalWorktrees.IsGitWorkTree(executionDirectory))
             {
                 if (!GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
                 {
@@ -127,5 +151,115 @@ internal static class TerminalGoalSweep
         }
 
         return new TerminalGoalSweepResult(results);
+    }
+
+    private static bool TryBuildTerminalTaskDesyncEvidence(Goal goal, out string evidence)
+    {
+        evidence = string.Empty;
+        if (!IsTerminalSweepStatus(goal.Status))
+        {
+            return false;
+        }
+
+        var dispatchableTasks = goal.Tasks
+            .Where(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+            .Select(task => $"{task.Id.Value[..8]}:{task.Status}")
+            .ToArray();
+        if (dispatchableTasks.Length == 0)
+        {
+            return false;
+        }
+
+        evidence = $"goalState={goal.Status}; dispatchableTasks={string.Join(",", dispatchableTasks)}";
+        return true;
+    }
+
+    private static bool TryBuildTerminalDirtyWorktreeBlocker(
+        Goal goal,
+        string executionDirectory,
+        string goalPrefix,
+        string desyncEvidence,
+        out string evidence,
+        out string command)
+    {
+        evidence = string.Empty;
+        command = string.Empty;
+        if (!GoalWorktrees.IsGitWorkTree(executionDirectory))
+        {
+            return false;
+        }
+
+        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        if (worktree is null || GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id))
+        {
+            return false;
+        }
+
+        evidence = $"{desyncEvidence}; worktreeDirty=true; worktree={worktree}";
+        command = $"goal-recovery {goalPrefix}";
+        return true;
+    }
+
+    private static bool TryBuildTerminalLiveDispatchBlocker(
+        Goal goal,
+        string goalPrefix,
+        out string evidence,
+        out string command)
+    {
+        evidence = string.Empty;
+        command = string.Empty;
+        if (!IsTerminalSweepStatus(goal.Status))
+        {
+            return false;
+        }
+
+        var liveTasks = goal.Tasks
+            .Where(task => task.Status == WorkTaskStatus.Running &&
+                           task.LastProcess is { IsRunning: true } process &&
+                           process.TrackedProcessIds.Any(IsProcessAlive))
+            .Select(task =>
+            {
+                var process = task.LastProcess!;
+                var livePids = process.TrackedProcessIds.Where(IsProcessAlive).ToArray();
+                return new
+                {
+                    Task = task,
+                    TaskNumber = TaskDisplayNumber.Resolve(goal, task.Id),
+                    Process = process,
+                    LivePids = livePids
+                };
+            })
+            .ToArray();
+        if (liveTasks.Length == 0)
+        {
+            return false;
+        }
+
+        evidence =
+            $"goalState={goal.Status}; liveDispatchTasks={string.Join(",", liveTasks.Select(item => $"{item.Task.Id.Value[..8]}:{item.Task.Status}:pid={item.Process.ProcessId}:livePids={string.Join("+", item.LivePids)}"))}";
+        command = liveTasks.Length == 1
+            ? $"refresh-dispatch {goalPrefix} {liveTasks[0].TaskNumber}"
+            : $"refresh-dispatches {goalPrefix}";
+        return true;
+    }
+
+    private static bool IsTerminalSweepStatus(GoalStatus status) =>
+        status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded;
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 }

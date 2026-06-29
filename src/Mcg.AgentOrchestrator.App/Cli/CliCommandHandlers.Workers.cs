@@ -254,6 +254,9 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 parts,
                 "--confirm-batch-start",
                 "start-subscription-ready requires --confirm-batch-start because it can start multiple worker processes.");
+            var startReadySweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            ConsoleViews.PrintTerminalGoalSweep(startReadySweep);
+            context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             var readiness = GoalReadinessPreflight.Build(
                 context.CurrentGoal,
                 context.Agents,

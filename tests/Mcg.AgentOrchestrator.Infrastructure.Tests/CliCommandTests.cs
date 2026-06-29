@@ -104,7 +104,7 @@ public sealed class CliCommandTests
     {
         AssertHelpCommandDoesNotResolveGoal(["workspace", "--help"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
         AssertHelpCommandDoesNotResolveGoal(["workspace", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
-        AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace create [goal-id-prefix]");
     }
 
     [Xunit.Fact(DisplayName = "Cli_run_blocks_subscription_capable_agents_without_calling_provider")]
@@ -5004,6 +5004,17 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_acceptance_workflows_outside_command_transaction")]
+    public void RunnerRoutesAcceptanceWorkflowsOutsideCommandTransaction()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsAcceptanceCommand(["acceptance"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsAcceptanceCommand(["accept"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsAcceptanceCommand(["acceptance-queue", "--apply"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand(["next"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand([]));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_commands")]
     public void RunnerSkipsKernelStateForOperatorAndBacklogCommands()
     {
@@ -5761,6 +5772,48 @@ public sealed class CliCommandTests
         Xunit.Assert.True(Directory.Exists(worktree));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_verifier_runs_outside_state_write_transaction")]
+    public void PersistentRunnerAcceptanceVerifierRunsOutsideStateWriteTransaction()
+    {
+        var root = CreateAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Verify outside transaction", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var verifierObservedUnlockedState = false;
+        var verifier = new ProbeAcceptanceVerifier(() =>
+        {
+            Xunit.Assert.False(repository.IsInTransaction);
+            verifierObservedUnlockedState = true;
+        });
+
+        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier));
+
+        Xunit.Assert.True(verifierObservedUnlockedState);
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.False(repository.IsInTransaction);
+        Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_blocks_task_status_change")]
     public void PersistentRunnerAcceptanceBlocksTaskStatusChange()
     {
@@ -5849,9 +5902,141 @@ public sealed class CliCommandTests
         var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
 
         Xunit.Assert.True(first.Changed);
-        Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
+        var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
+        Xunit.Assert.Contains("goalState=Completed", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal($"conduct {goal.Id.Value[..8]} --loop", repair.Command);
         Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Empty(second.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
+    public void TerminalGoalSweepSupersededWithAssignedTaskReopensGoal()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Premature superseded", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.True(first.Changed);
+        var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
+        Xunit.Assert.Contains("goalState=Superseded", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Empty(second.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_after_retry_reopens_goal")]
+    public void TerminalGoalSweepCompletedWithAssignedTaskAfterRetryReopensGoal()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retry stale terminal", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed before retry");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+        kernel.RetryTask(goal.Id, task.Id, "retry after stale terminal completion");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
+        Xunit.Assert.Contains("goalState=Completed", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Empty(second.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_terminal_running_task_with_live_process_blocks_without_reopening")]
+    public void TerminalGoalSweepTerminalRunningTaskWithLiveProcessBlocksWithoutReopening()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Live dispatch terminal desync", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root, Environment.ProcessId);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.False(first.Changed);
+        var blocker = first.Goals.Single().Blockers.Single(blocker => blocker.Kind == "terminal-live-dispatch");
+        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Running", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"pid={Environment.ProcessId}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal($"refresh-dispatch {goal.Id.Value[..8]} 1", blocker.Command);
+        Xunit.Assert.Empty(first.Goals.Single().Repairs);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.False(second.Changed);
+        Xunit.Assert.Contains(second.Goals.Single().Blockers, blocker => blocker.Kind == "terminal-live-dispatch");
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_assigned_task_with_dirty_worktree_blocks_without_reopening")]
+    public void TerminalGoalSweepCompletedAssignedTaskWithDirtyWorktreeBlocksWithoutReopening()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.com");
+        RunGit(root, "config", "user.name", "CLI Tests");
+        File.WriteAllText(Path.Combine(root, "README.md"), "seed");
+        RunGit(root, "add", "-A");
+        RunGit(root, "commit", "-m", "Seed");
+
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Dirty terminal desync", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.False(first.Changed);
+        var blocker = first.Goals.Single().Blockers.Single(blocker => blocker.Kind == "terminal-dirty-worktree");
+        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worktreeDirty=true", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains(worktree, blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal($"goal-recovery {goal.Id.Value[..8]}", blocker.Command);
+        Xunit.Assert.Empty(first.Goals.Single().Repairs);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.False(second.Changed);
+        Xunit.Assert.Contains(second.Goals.Single().Blockers, blocker => blocker.Kind == "terminal-dirty-worktree");
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_terminal_tasks_is_clean_and_idempotent")]
+    public void TerminalGoalSweepCompletedWithTerminalTasksIsCleanAndIdempotent()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Valid terminal goal", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+        var before = kernel.ExportSnapshot();
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var after = kernel.ExportSnapshot();
+
+        Xunit.Assert.Empty(first.Goals);
+        Xunit.Assert.Empty(second.Goals);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(after));
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_next_persists_terminal_sweep_repairs")]
@@ -5884,7 +6069,93 @@ public sealed class CliCommandTests
         var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(GoalStatus.Active, restored.Status);
-        Xunit.Assert.Equal(1, repository.TransactionCount);
+            Xunit.Assert.Equal(1, repository.TransactionCount);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_conduct_surface_same_terminal_task_repair")]
+    public void TerminalGoalSweepNextAndConductSurfaceSameTerminalTaskRepair()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Completed assigned desync", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var nextOutput = CaptureConsole(() =>
+        {
+            var nextRepository = new InMemoryTransactionalStateRepository(kernel);
+            CliPersistentStateRunner.ExecuteCommand(
+                ["next", goal.Id.Value[..8]],
+                nextRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+
+        agents = AgentCatalog.Default().Agents;
+        profiles = WorkerProfileCatalog.Default();
+        currentGoal = goal;
+        var conductOutput = CaptureConsole(() =>
+        {
+            var conductRepository = new InMemoryTransactionalStateRepository(kernel);
+            CliPersistentStateRunner.ExecuteCommand(
+                ["conduct", "--loop", "--max-iterations", "1"],
+                conductRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+
+        var nextRepair = SingleLineContaining(nextOutput, "SWEEP_REPAIR");
+        var conductRepair = SingleLineContaining(conductOutput, "SWEEP_REPAIR");
+        Xunit.Assert.Equal(nextRepair, conductRepair);
+        Xunit.Assert.Contains("kind=terminal-task-desync", nextRepair, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goalState=Completed", nextRepair, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", nextRepair, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"command=\"conduct {goal.Id.Value[..8]} --loop\"", nextRepair, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_readiness_prints_repair_before_preflight")]
+    public void TerminalGoalSweepReadinessPrintsRepairBeforePreflight()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Readiness desync", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var changed = false;
+        var output = CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["readiness", goal.Id.Value[..8]],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var repairIndex = output.IndexOf("SWEEP_REPAIR", StringComparison.Ordinal);
+        var readinessIndex = output.IndexOf("Goal readiness", StringComparison.Ordinal);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.True(repairIndex >= 0, output);
+        Xunit.Assert.True(readinessIndex > repairIndex, output);
     }
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_running_task_with_exit_file_reconciles_and_is_idempotent")]
@@ -5972,6 +6243,64 @@ public sealed class CliCommandTests
         finally
         {
             CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_early_exits_print_blocker")]
+    public void TerminalGoalSweepConductLoopEarlyExitsPrintBlocker()
+    {
+        var cases = new[]
+        {
+            new { Name = "max-iterations-zero", Args = new[] { "conduct", "--loop", "--max-iterations", "0" }, StopFile = false },
+            new { Name = "zero-duration", Args = new[] { "conduct", "--loop", "--max-duration", "0" }, StopFile = false },
+            new { Name = "stop-file", Args = new[] { "conduct", "--loop" }, StopFile = true }
+        };
+
+        foreach (var testCase in cases)
+        {
+            var root = CreateAcceptanceRepository();
+            GoalId? cleanupGoalId = null;
+            try
+            {
+                var kernel = new AgentOrchestratorKernel();
+                var task = new TaskSpec(TaskId.New(), $"Do work for {testCase.Name}", AgentRole.Developer);
+                var goal = kernel.CreateGoal($"Completed but unmerged {testCase.Name}", [task]);
+                cleanupGoalId = goal.Id;
+                kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+                CommitGoalWork(root, goal.Id, $"src/{testCase.Name}.txt", "goal work");
+                if (testCase.StopFile)
+                {
+                    File.WriteAllText(Path.Combine(root, ConductorBatchLoop.StopFileName), "stop");
+                }
+
+                var workspace = CreateRefinedWorkspace(root);
+                IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+                var providers = new InMemoryModelProviderRegistry([]);
+                var profiles = WorkerProfileCatalog.Default();
+                Goal? currentGoal = goal;
+
+                var output = CaptureConsole(() =>
+                {
+                    var repository = new InMemoryTransactionalStateRepository(kernel);
+                    CliPersistentStateRunner.ExecuteCommand(
+                        testCase.Args,
+                        repository,
+                        workspace,
+                        ref agents,
+                        providers,
+                        ref profiles,
+                        ref currentGoal);
+                });
+
+                var expected = $"SWEEP_BLOCKER goal={goal.Id.Value[..8]} kind=completed-branch-unmerged";
+                Xunit.Assert.Contains(expected, output);
+                Xunit.Assert.Equal(1, CountLinesContaining(output, expected));
+            }
+            finally
+            {
+                CleanupAcceptanceRepository(root, cleanupGoalId);
+            }
         }
     }
 
@@ -6245,6 +6574,10 @@ public sealed class CliCommandTests
         text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.Contains(value, StringComparison.Ordinal));
 
+    private static string SingleLineContaining(string text, string value) =>
+        text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.Contains(value, StringComparison.Ordinal));
+
     private static AgentDefinition TestAgent(string id, AgentRole role) => new(
         new AgentId(id),
         id,
@@ -6261,7 +6594,8 @@ public sealed class CliCommandTests
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
-        string workingDirectory)
+        string workingDirectory,
+        int processId = 999999)
     {
         var stdout = Path.Combine(workingDirectory, $"{task.Id.Value}-out.log");
         var stderr = Path.Combine(workingDirectory, $"{task.Id.Value}-err.log");
@@ -6272,7 +6606,7 @@ public sealed class CliCommandTests
         kernel.RecordTaskProcessStarted(
             goal.Id,
             task.Id,
-            new TaskProcessRecord(999999, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
     }
 
     private static AgentOrchestratorKernel WithGoalStatus(
@@ -6484,6 +6818,8 @@ public sealed class CliCommandTests
 
         public int TransactionCount { get; private set; }
 
+        public bool IsInTransaction { get; private set; }
+
         public int LoadCount { get; private set; }
 
         public int LoadGoalsCount { get; private set; }
@@ -6575,13 +6911,21 @@ public sealed class CliCommandTests
                 return Task.CompletedTask;
             }
 
-            var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
-            if (shouldSave)
+            IsInTransaction = true;
+            try
             {
-                _kernel = Clone(transactionKernel);
-            }
+                var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
+                if (shouldSave)
+                {
+                    _kernel = Clone(transactionKernel);
+                }
 
-            return result;
+                return result;
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
         }
 
         public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
@@ -6602,6 +6946,28 @@ public sealed class CliCommandTests
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+    }
+
+    private sealed class ProbeAcceptanceVerifier(Action onRun) : IGoalAcceptanceVerifier
+    {
+        public int RunCount { get; private set; }
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            CancellationToken cancellationToken = default)
+        {
+            RunCount++;
+            onRun();
+            return Task.FromResult(new AcceptanceVerificationResult(
+                true,
+                false,
+                0,
+                "Passed.",
+                ArtifactsPath: Path.Combine(worktreePath, "artifacts"),
+                Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.")]));
+        }
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry")]
