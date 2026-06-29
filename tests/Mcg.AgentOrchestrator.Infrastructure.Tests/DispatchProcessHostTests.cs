@@ -124,13 +124,12 @@ public sealed class DispatchProcessHostTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-test", Guid.NewGuid().ToString("n"));
-        var repo = Path.Combine(root, "repo");
-        var worktree = Path.Combine(root, "linked-worktree");
+        var worktree = Path.Combine(root, "worktree");
         Directory.CreateDirectory(root);
         var hostPathBefore = Environment.GetEnvironmentVariable("PATH");
         try
         {
-            CreateLinkedWorktree(repo, worktree);
+            Directory.CreateDirectory(worktree);
             var startInfo = new ProcessStartInfo
             {
                 UseShellExecute = false,
@@ -150,7 +149,10 @@ public sealed class DispatchProcessHostTests
                 SandboxLowIntegrity: true,
                 WorkerSandboxProvider.Codex);
 
-            DispatchProcessHost.ApplyWorkerSandbox(startInfo, parameters);
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
 
             var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
             Assert.True(Directory.Exists(sandboxBin));
@@ -175,12 +177,11 @@ public sealed class DispatchProcessHostTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), "mcg-provider-sandbox-test", Guid.NewGuid().ToString("n"));
-        var repo = Path.Combine(root, "repo");
-        var worktree = Path.Combine(root, "linked-worktree");
+        var worktree = Path.Combine(root, "worktree");
         Directory.CreateDirectory(root);
         try
         {
-            CreateLinkedWorktree(repo, worktree);
+            Directory.CreateDirectory(worktree);
             var startInfo = CreateSandboxStartInfo(worktree);
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude);
 
@@ -211,12 +212,11 @@ public sealed class DispatchProcessHostTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), "mcg-unknown-provider-sandbox-test", Guid.NewGuid().ToString("n"));
-        var repo = Path.Combine(root, "repo");
-        var worktree = Path.Combine(root, "linked-worktree");
+        var worktree = Path.Combine(root, "worktree");
         Directory.CreateDirectory(root);
         try
         {
-            CreateLinkedWorktree(repo, worktree);
+            Directory.CreateDirectory(worktree);
             var startInfo = CreateSandboxStartInfo(worktree);
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
 
@@ -499,6 +499,24 @@ public sealed class DispatchProcessHostTests
         Assert.True(completed);
         Assert.True(process.HasExited);
         Assert.NotEqual(0, process.ExitCode);
+    }
+
+    [Xunit.Fact(DisplayName = "IcaclsIntegrityLabeler_set_integrity_returns_false_when_helper_exits_nonzero")]
+    public void IcaclsIntegrityLabelerSetIntegrityReturnsFalseWhenHelperExitsNonZero()
+    {
+        var labeler = new IcaclsIntegrityLabeler(_ => StartNonZeroHelper());
+        var root = Path.Combine(Path.GetTempPath(), "mcg-icacls-nonzero-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var applied = labeler.SetIntegrity(root, "(OI)(CI)L", recursive: false);
+
+            Assert.False(applied);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_setup_keeps_linked_worktree_git_file_medium")]

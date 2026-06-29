@@ -82,6 +82,18 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 
 internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 {
+    private readonly Func<ProcessStartInfo, Process?> startProcess;
+
+    public IcaclsIntegrityLabeler()
+        : this(Process.Start)
+    {
+    }
+
+    internal IcaclsIntegrityLabeler(Func<ProcessStartInfo, Process?> startProcess)
+    {
+        this.startProcess = startProcess;
+    }
+
     public IntegrityLabelState Query(string path)
     {
         if (!File.Exists(path) && !Directory.Exists(path))
@@ -101,7 +113,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             };
             startInfo.ArgumentList.Add(path);
 
-            using var process = Process.Start(startInfo);
+            using var process = startProcess(startInfo);
             if (process is null)
             {
                 return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
@@ -146,7 +158,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 psi.ArgumentList.Add("/T");
             }
 
-            using var process = Process.Start(psi);
+            using var process = startProcess(psi);
             if (process is null)
             {
                 return false;
@@ -156,7 +168,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
             var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
             try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return completed;
+            return completed && process.ExitCode == 0;
         }
         catch
         {

@@ -475,6 +475,11 @@ public static void DropToLow() {
     private static void ProtectGitMetadata(string worktree)
     {
         var checkoutGitFile = Path.Combine(worktree, ".git");
+        if (!File.Exists(checkoutGitFile) && !Directory.Exists(checkoutGitFile))
+        {
+            return;
+        }
+
         if (File.Exists(checkoutGitFile))
         {
             if (!SetMediumIntegrity(checkoutGitFile))
