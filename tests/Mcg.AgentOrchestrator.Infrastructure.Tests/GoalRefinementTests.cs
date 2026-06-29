@@ -230,6 +230,56 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal("Stripe", precedent!.Choice);
     }
 
+    [Xunit.Fact(DisplayName = "GoalRefinementService_kernel_resolve_falls_back_when_goal_missing")]
+    public async Task KernelResolveFallsBackWhenGoalMissing()
+    {
+        var json = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+
+        var tempDir = CreateTempDirectory();
+        var precedentStore = new SpecRefinerPrecedentStore(Path.Combine(tempDir, "precedents.json"));
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: json,
+            precedentStore: precedentStore);
+
+        await service.RefineAsync(kernel, goalId);
+        var correlationKey = collab.Items[0].CorrelationKey!;
+        using var warningWriter = new StringWriter();
+        var originalError = Console.Error;
+        Console.SetError(warningWriter);
+        try
+        {
+            var resolved = await service.TryResolveOpenClarificationAsync(
+                new AgentOrchestratorKernel(),
+                correlationKey,
+                "Stripe");
+
+            Xunit.Assert.True(resolved);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        var resolvedItem = Xunit.Assert.Single(collab.Items);
+        Xunit.Assert.Equal(CollaborationItemStatus.Resolved, resolvedItem.Status);
+        Xunit.Assert.Equal("Stripe", resolvedItem.Resolution);
+        var precedent = await precedentStore.TryGetPrecedentAsync("external-contract");
+        Xunit.Assert.NotNull(precedent);
+        Xunit.Assert.Equal("Stripe", precedent!.Choice);
+        Xunit.Assert.Contains("Warning:", warningWriter.ToString(), StringComparison.Ordinal);
+        Xunit.Assert.Contains(correlationKey, warningWriter.ToString(), StringComparison.Ordinal);
+    }
+
     // --- Precedent reuse: second goal with same forkKind does not re-ask ---
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_reuses_precedent_for_same_forkKind")]
