@@ -330,7 +330,8 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(3, calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
         Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain("--filter", calls[2]);
+        Assert.Contains("--filter", calls[2]);
+        Assert.Contains("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration", calls[2]);
         Assert.Equal(["git diff whitespace", "infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
 
@@ -358,7 +359,8 @@ public sealed class GoalAcceptanceVerifierTests
             Assert.True(result.Passed);
             Assert.Equal(3, calls.Count);
             Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
-            Assert.DoesNotContain("--filter", calls[2]);
+            Assert.Contains("--filter", calls[2]);
+            Assert.Contains("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration", calls[2]);
             Assert.Equal("infrastructure tests", result.Checks![1].Name);
         }
 

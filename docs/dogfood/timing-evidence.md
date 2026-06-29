@@ -10,12 +10,17 @@ Baseline before this increment:
 - Wall clock: 9m25s / 565s.
 - Source: goal objective timing record for the legacy acceptance mapping.
 
-Focused run after this increment:
-- Command: `.\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix ceb87244 -AttemptName timing-focused-cli-help test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter FullyQualifiedName~CliHelpTests`
-- Scope: CLI-focused Infrastructure shard representative of the new planner filter path.
-- Wall clock: 25.4s.
-- Result: passed.
+Focused wrapper run after this increment:
+- Command: `.\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix ceb87244 -AttemptName timing-focused-cli-planner test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter 'FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~FundamentalAliasTests'`
+- Scope: actual CLI-focused Infrastructure filter emitted by RepositoryTestImpactPlanner; quote the filter so PowerShell does not split `|` into pipeline segments.
+- Result: blocked in this worktree by `Cli_profile_dispatch_allows_complex_paid_subscription_start_under_size_threshold`, which creates a nested git worktree and fails with Windows `Filename too long` under the current checkout path.
+
+Passing wrapper timing probe:
+- Command: `.\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix ceb87244 -AttemptName probe-filter test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter 'FullyQualifiedName~CliHelpTests'`
+- Scope: single CLI Infrastructure test class proving `Invoke-IsolatedDotnet.ps1` threads `--filter` through to `dotnet test`.
+- Wall clock: 31.3s.
+- Result: passed, 15 tests.
 
 Comparison:
-- Focused run was about 22x faster than the 565s baseline.
-- The planner emits the broader CLI filter as `FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~FundamentalAliasTests`; unit coverage verifies that emitted acceptance command. The direct PowerShell timing shell split `|`, so this evidence uses one stable CLI shard to record real wrapper timing.
+- The passing single-class focused run was about 18x faster than the 565s baseline.
+- The actual emitted multi-class CLI filter still needs a passing timing run from a shorter checkout path or a shard that excludes long-path-sensitive worktree tests.

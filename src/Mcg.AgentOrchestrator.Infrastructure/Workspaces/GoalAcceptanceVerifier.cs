@@ -830,7 +830,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // both by class name (works on a worktree built before the trait existed) and by the
         // [Trait("Category","HostIntegration")] tag (covers any future such tests). They run in a
         // dedicated lane instead.
-        if (string.IsNullOrWhiteSpace(explicitFilter) && IsSolutionWideDotnetCheck(check))
+        if (string.IsNullOrWhiteSpace(explicitFilter) && NeedsUnattendedHostIntegrationExclusion(check))
         {
             args.Add("--filter");
             args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
@@ -847,9 +847,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return [.. args];
     }
 
-    private static bool IsSolutionWideDotnetCheck(AcceptanceManifestCheck check) =>
+    private static bool NeedsUnattendedHostIntegrationExclusion(AcceptanceManifestCheck check) =>
         string.IsNullOrWhiteSpace(check.Project) ||
-        check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase);
+        check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
+        check.Project.EndsWith(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase) ||
+        check.Project.EndsWith(
+            "tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase);
 
     private static string? ExtractFilterArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
     {
