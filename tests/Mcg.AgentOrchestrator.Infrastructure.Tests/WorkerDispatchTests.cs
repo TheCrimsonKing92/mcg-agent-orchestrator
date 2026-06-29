@@ -843,11 +843,12 @@ public sealed class WorkerDispatchTests
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
-        var codexHome = Path.Combine(sandboxRoot, "codex-home");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome);
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot);
 
         Assert.Equal("test-claude-key", startInfo.Environment["ANTHROPIC_API_KEY"]);
+        Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+        Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
         Assert.True(Directory.Exists(claudeConfigDir));
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(claudeConfigDir!, "settings.json")));
@@ -869,12 +870,13 @@ public sealed class WorkerDispatchTests
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
-        var codexHome = Path.Combine(sandboxRoot, "codex-home");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome, stderrPath);
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, stderrPath);
 
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+        Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
         Assert.True(Directory.Exists(claudeConfigDir));
         var stderr = File.ReadAllText(stderrPath);
@@ -898,10 +900,9 @@ public sealed class WorkerDispatchTests
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
-        var codexHome = Path.Combine(sandboxRoot, "codex-home");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, codexHome, stderrPath);
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, stderrPath);
 
         using (var stderr = DispatchProcessHost.OpenWorkerStderrStream(stderrPath))
         using (var writer = new StreamWriter(stderr))
@@ -934,12 +935,13 @@ public sealed class WorkerDispatchTests
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
-        var codexHome = Path.Combine(sandboxRoot, "codex-home");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Codex, sandboxRoot, codexHome);
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Codex, sandboxRoot);
 
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+        Assert.Equal(Path.Combine(sandboxRoot, "codex-home"), startInfo.Environment["CODEX_HOME"]);
+        Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
     }
     finally
     {

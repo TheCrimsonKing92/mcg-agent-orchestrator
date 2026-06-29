@@ -166,6 +166,79 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_codex_home_to_codex_provider")]
+    public void ApplyWorkerSandboxScopesCodexHomeToCodexProvider()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var repo = Path.Combine(root, "repo");
+        var worktree = Path.Combine(root, "linked-worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            CreateLinkedWorktree(repo, worktree);
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude);
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
+            Assert.Equal(Path.Combine(sandboxRoot, "claude-config"), startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_leaves_unknown_provider_without_provider_home")]
+    public void ApplyWorkerSandboxLeavesUnknownProviderWithoutProviderHome()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-unknown-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var repo = Path.Combine(root, "repo");
+        var worktree = Path.Combine(root, "linked-worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            CreateLinkedWorktree(repo, worktree);
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_skips_recursive_icacls_when_roots_are_prepared")]
     public void WorkerSandboxPreparerSkipsRecursiveIcaclsWhenRootsArePrepared()
     {
@@ -595,6 +668,35 @@ public sealed class DispatchProcessHostTests
         RunGit(repo, "add", "seed.txt");
         RunGit(repo, "commit", "-m", "seed");
         RunGit(repo, "worktree", "add", "-b", "linked-test", worktree);
+    }
+
+    private static ProcessStartInfo CreateSandboxStartInfo(string worktree)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            UseShellExecute = false,
+            WorkingDirectory = worktree
+        };
+        startInfo.ArgumentList.Add("Write-Output ok");
+        return startInfo;
+    }
+
+    private static DispatchProcessHost.DispatchRunParameters CreateSandboxParameters(
+        string root,
+        string worktree,
+        WorkerSandboxProvider provider)
+    {
+        return new DispatchProcessHost.DispatchRunParameters(
+            "Write-Output ok",
+            worktree,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "exit.txt"),
+            null,
+            ShutdownBuildServerOnExit: false,
+            DisableSharedCompilation: false,
+            SandboxLowIntegrity: true,
+            provider);
     }
 
     private static string RunGit(string workingDirectory, params string[] arguments)

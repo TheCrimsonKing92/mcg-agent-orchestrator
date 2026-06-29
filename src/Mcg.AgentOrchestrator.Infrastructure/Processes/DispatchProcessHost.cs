@@ -86,23 +86,20 @@ public static class DispatchProcessHost
         var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
         ProtectGitMetadata(parameters.WorkingDirectory);
 
-        // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
-        // stays authenticated) and a temp scratch. The sandbox root is labeled before child paths are
+        // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
+        // provider-specific home/config directories. The sandbox root is labeled before child paths are
         // materialized so they inherit Low without a second recursive icacls traversal.
-        var codexHome = Path.Combine(sandboxRoot, "codex-home");
         var tempDir = Path.Combine(sandboxRoot, "temp");
         var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
-        Directory.CreateDirectory(codexHome);
         Directory.CreateDirectory(tempDir);
         WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
 
-        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome, parameters.StderrPath);
+        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
         ExcludeSandboxFromGit(parameters.WorkingDirectory);
 
-        startInfo.Environment["CODEX_HOME"] = codexHome;
         startInfo.Environment["TEMP"] = tempDir;
         startInfo.Environment["TMP"] = tempDir;
         startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
@@ -123,16 +120,24 @@ public static class DispatchProcessHost
         ProcessStartInfo startInfo,
         WorkerSandboxProvider provider,
         string sandboxRoot,
-        string codexHome,
         string? stderrPath = null)
     {
-        if (provider == WorkerSandboxProvider.Claude)
+        startInfo.Environment.Remove("CODEX_HOME");
+        startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+
+        if (provider == WorkerSandboxProvider.Codex)
         {
-            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+            var codexHome = Path.Combine(sandboxRoot, "codex-home");
+            Directory.CreateDirectory(codexHome);
+            SeedCodexAuth(codexHome);
+            startInfo.Environment["CODEX_HOME"] = codexHome;
             return;
         }
 
-        SeedCodexAuth(codexHome);
+        if (provider == WorkerSandboxProvider.Claude)
+        {
+            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+        }
     }
 
     private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath)
