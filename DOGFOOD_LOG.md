@@ -2158,3 +2158,11 @@ Goal 60716944: Backlog slice: Terminal stale-goal sweep for lifecycle/task desyn
 
 - Operator gate: Developer retries eventually hit Low-IL sandbox-preflight before Codex launch; operator recovery commits c6e95c5 and 414ca0e were verified with focused help, terminal-sweep, and preflight tests. Reviewer found no code defect; its goal-scoped test slot was blocked by `lease.lock` access denied, resolved by operator manual-slot verification. Acceptance passed and worktree cleaned.
 - Model fit: OpenAI/gpt-5.5 was adequate for planner/research/reviewer and early development; Codex Developer became underpowered operationally when Low-IL setup failed before model launch.
+
+
+## 2026-06-29 - Distinguish provider rate limits from local kills
+
+Goal 2a0d377b: rate-limit classifier fix for backlog 39f8cb7e. Landed as 4ce2962 after rebase onto current main; implementation commits became 698a106 and 2d38860.
+
+- Operator gate: branch changed only `DispatchFailureClassifier` and `DispatchOutcomeClassifyTests`; prior focused verification passed `DispatchOutcomeClassifyTests` 13/13 and `Mcg.AgentOrchestrator.Core.Tests` 409/409. Acceptance passed and worktree cleaned.
+- Model fit: OpenAI/gpt-5.5 was adequate for this Core-only classifier/test increment; operator recovery was needed only for the bare-429 retry after Low-IL preflight blocked Codex launch.
