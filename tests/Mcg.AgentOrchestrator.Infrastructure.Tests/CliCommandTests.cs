@@ -84,6 +84,21 @@ public sealed class CliCommandTests
         AssertHelpCommandDoesNotResolveGoal(["conduct", "--loop", "--help"], "Usage: conduct <goal-id-prefix>");
     }
 
+    [Xunit.Fact(DisplayName = "Cli_startup_conduct_help_exits_before_workspace_setup")]
+    public void CliStartupConductHelpExitsBeforeWorkspaceSetup()
+    {
+        var root = CreateTempDirectory();
+        var beforeFiles = SnapshotFiles(root);
+
+        var result = RunAppCommand(root, "conduct", "--help");
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("Usage: conduct <goal-id-prefix>", result.Stdout);
+        Xunit.Assert.Contains("-h, --help", result.Stdout);
+        Xunit.Assert.DoesNotContain("Error:", result.Stderr);
+        Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_help_prints_usage_without_resolving_goal")]
     public void CliWorkspaceHelpPrintsUsageWithoutResolvingGoal()
     {
@@ -4889,6 +4904,41 @@ public sealed class CliCommandTests
             .Select(path => Path.GetRelativePath(root, path))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
+
+    private static CliProcessResult RunAppCommand(string workingDirectory, params string[] arguments)
+    {
+        var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
+        startInfo.ArgumentList.Add(appAssembly);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app process.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(60000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("App command did not exit within 60 seconds.");
+        }
+
+        return new CliProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private sealed record CliProcessResult(int ExitCode, string Stdout, string Stderr);
 
     private static void WritePlanningBacklog(string root)
     {

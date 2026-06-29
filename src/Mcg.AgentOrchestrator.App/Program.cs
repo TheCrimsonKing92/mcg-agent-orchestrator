@@ -32,6 +32,11 @@ catch (Exception ex)
 var startupArgs = tenantSelection.CommandArgs.Count == 0
     ? []
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
+if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+{
+    return 0;
+}
+
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
 // a Git repository root so .orchestrator is rooted with the target repo regardless of launch CWD.

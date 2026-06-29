@@ -7,6 +7,28 @@ internal static partial class CliCommandHandlers
             part.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
             part.Equals("-h", StringComparison.OrdinalIgnoreCase));
 
+    internal static bool TryPrintStartupHelp(IReadOnlyList<string> parts)
+    {
+        if (parts.Count == 0 || !IsHelpRequested(parts))
+        {
+            return false;
+        }
+
+        switch (parts[0].ToLowerInvariant())
+        {
+            case "conduct":
+                PrintConductUsage();
+                return true;
+
+            case "workspace":
+                PrintWorkspaceUsage();
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
 public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context)
 {
     if (CliCommandHelp.TryPrintStartupHelp(parts))
