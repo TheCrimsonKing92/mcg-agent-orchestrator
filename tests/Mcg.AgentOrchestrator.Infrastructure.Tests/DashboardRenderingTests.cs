@@ -1895,6 +1895,56 @@ public sealed class DashboardRenderingTests
     Assert.Contains(transcript, text => text.Contains("Cost: large paid subscription start. Inspect the generated prompt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_preview_resolves_test_impact_from_workspace_when_focus_changed_files_are_null")]
+    public void DashboardPreviewResolvesTestImpactFromWorkspaceWhenFocusChangedFilesAreNull()
+{
+    var root = CreateTempDirectory();
+    RunGit(root, "init", "-b", "main");
+    RunGit(root, "config", "user.email", "dashboard-tests@example.com");
+    RunGit(root, "config", "user.name", "Dashboard Tests");
+    File.WriteAllText(Path.Combine(root, "README.md"), "seed");
+    RunGit(root, "add", "-A");
+    RunGit(root, "commit", "-m", "Seed");
+
+    var workspace = CreateRefinedWorkspace(root);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render workspace-backed test impact", [new TaskSpec(TaskId.New(), "Change dashboard rendering", AgentRole.Developer)]);
+    var worktree = GoalWorktrees.Ensure(workspace.ExecutionDirectory, goal.Id);
+    var changedFile = Path.Combine(
+        worktree,
+        "src",
+        "Mcg.AgentOrchestrator.App",
+        "Dashboard",
+        "Preview.cs");
+    Directory.CreateDirectory(Path.GetDirectoryName(changedFile)!);
+    File.WriteAllText(changedFile, "// dashboard preview change");
+    RunGit(worktree, "add", "-A");
+    RunGit(worktree, "commit", "-m", "Dashboard preview change");
+    var dashboardWorkspace = new DashboardWorkspaceContext(
+        workspace.RootDirectory,
+        workspace.SqliteStatePath,
+        workspace.ExecutionDirectory,
+        workspace.PromptDirectory,
+        workspace.LogDirectory,
+        workspace.WorkerProfilePath,
+        workspace.AgentCatalogPath,
+        0);
+
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        executionDirectory: workspace.ExecutionDirectory);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goal.Id.Value[..8],
+        Workspace: dashboardWorkspace));
+
+    Assert.Equal("focused dashboard infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
+    Assert.True(html.Contains("Test impact: Selected focused dashboard infrastructure tests from changed file scope.", StringComparison.Ordinal));
+    Assert.False(html.Contains("Test impact: No changed files detected; no build verification required.", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_allow_complex_paid_prepared_dispatch_under_size_threshold")]
     public void DashboardNextActionControlsAllowComplexPaidPreparedDispatchUnderSizeThreshold()
 {
@@ -2923,5 +2973,31 @@ private static void AssertOpenAiModelOrderIsCostAware(string text)
     Assert.True(miniIndex >= 0);
     Assert.True(expensiveIndex >= 0);
     Assert.True(miniIndex < expensiveIndex);
+}
+
+private static void RunGit(string workingDirectory, params string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        WorkingDirectory = workingDirectory,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start git.");
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {output}{error}");
+    }
 }
 }

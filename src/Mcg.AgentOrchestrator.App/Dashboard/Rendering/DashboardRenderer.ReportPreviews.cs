@@ -28,6 +28,7 @@ public static partial class DashboardRenderer
             kernel,
             goal,
             options.AgentDefinitions,
+            executionDirectory: options.Workspace?.ExecutionDirectory,
             changedFiles: options.FocusGoalChangedFiles).TestImpact;
 
         html.AppendLine("<div class=\"report-preview-grid\">");
