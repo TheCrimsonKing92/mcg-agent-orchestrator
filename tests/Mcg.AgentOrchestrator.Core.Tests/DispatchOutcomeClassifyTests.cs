@@ -46,8 +46,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(0, outcome.ExitCode);
     }
 
-    [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for usage limit output")]
-    public void ClassifyRecoverableSubscriptionLimit()
+    [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider rate limit stderr")]
+    public void ClassifyRecoverableSubscriptionLimitFromStderr()
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
@@ -56,6 +56,33 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
         Xunit.Assert.True(outcome.RetryAfter is { TotalSeconds: > 0 });
+        Xunit.Assert.Contains("Rate limit reached", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider rate limit stdout")]
+    public void ClassifyRecoverableSubscriptionLimitFromStdout()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SubscriptionTask(),
+            Verification(1, "Error: provider returned 429."));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Null(outcome.RetryAfter);
+        Xunit.Assert.Contains("provider returned 429", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify defaults recoverable subscription limit retry when duration is absent")]
+    public void ClassifyRecoverableSubscriptionLimitDefaultsWhenDurationAbsent()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SubscriptionTask(),
+            Verification(1, "", "Provider quota exceeded for this account."));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Null(outcome.RetryAfter);
+        Xunit.Assert.Contains("quota exceeded", outcome.EvidenceSummary);
     }
 
     [Xunit.Fact(DisplayName = "Classify returns PreflightFailure for sandbox preflight evidence")]
@@ -70,12 +97,13 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("sandbox-preflight-failure", outcome.EvidenceSummary);
     }
 
-    [Xunit.Fact(DisplayName = "Classify returns EmptyOutputFlake for zero-byte stdout with nonzero exit")]
+    [Xunit.Fact(DisplayName = "Classify returns EmptyOutputFlake for empty subscription output with nonzero exit")]
     public void ClassifyEmptyOutputFlake()
     {
-        var outcome = DispatchFailureClassifier.Classify(SimpleTask(), Verification(1, ""));
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, ""));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.True(outcome.HasZeroByteOutput);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
     }
