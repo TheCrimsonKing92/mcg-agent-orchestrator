@@ -447,6 +447,9 @@ internal static class CliPersistentStateRunner
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
+        void Persist(AgentOrchestratorKernel checkpoint) =>
+            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+
         AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
         {
             return stateRepository.TransactAsync(
@@ -491,8 +494,14 @@ internal static class CliPersistentStateRunner
             ref currentGoal,
             channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            Persist,
             finalizeAcceptanceMerge: Finalize,
             acceptanceVerifier: acceptanceVerifier);
+
+        if (shouldSave)
+        {
+            Persist(kernel);
+        }
 
         return shouldSave;
     }

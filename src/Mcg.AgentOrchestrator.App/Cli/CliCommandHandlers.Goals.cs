@@ -1172,6 +1172,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
 
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
         context.EventWriter.AppendCleanedUp(goal.Id);
+        context.PersistCheckpoint(context.Kernel);
     }
 }
 

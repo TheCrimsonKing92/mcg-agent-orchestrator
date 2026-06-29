@@ -1777,6 +1777,54 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_queue_apply_persists_cleanup_after_outside_transaction_routing")]
+    public async Task CliAcceptanceQueueApplyPersistsCleanupAfterOutsideTransactionRouting()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Queued acceptance persistence", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["previous verifier failure"]);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "queue-persist.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Queued persistence goal");
+
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance-queue", "--apply", "--confirm-acceptance-queue"],
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal,
+                acceptanceVerifier: FakeAcceptanceVerifier.Passed());
+
+            Assert.True(changed);
+            Assert.True(File.Exists(Path.Combine(repo, "queue-persist.txt")));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+
+            var reloaded = await stateRepository.LoadAsync();
+            var reloadedGoal = reloaded.GetGoal(goal.Id);
+            Assert.Null(reloadedGoal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_queue_holds_stale_branch_with_manual_merge_command")]
     public void CliAcceptanceQueueHoldsStaleBranchWithManualMergeCommand()
     {
