@@ -16,7 +16,8 @@ internal static class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        IOperatorChannel? channel = null,
+        IGoalAcceptanceVerifier? acceptanceVerifier = null)
     {
         if (IsModelOutcomesScorecard(args))
         {
@@ -48,7 +49,16 @@ internal static class CliPersistentStateRunner
 
         if (IsAcceptanceCommand(args))
         {
-            return ExecuteAcceptanceOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteAcceptanceOutsideTransaction(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref currentGoal,
+                channel,
+                acceptanceVerifier);
         }
 
         if (IsProcessRefreshCommand(args))
@@ -431,7 +441,8 @@ internal static class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        IOperatorChannel? channel = null,
+        IGoalAcceptanceVerifier? acceptanceVerifier = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -480,7 +491,8 @@ internal static class CliPersistentStateRunner
             ref currentGoal,
             channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-            finalizeAcceptanceMerge: Finalize);
+            finalizeAcceptanceMerge: Finalize,
+            acceptanceVerifier: acceptanceVerifier);
 
         return shouldSave;
     }

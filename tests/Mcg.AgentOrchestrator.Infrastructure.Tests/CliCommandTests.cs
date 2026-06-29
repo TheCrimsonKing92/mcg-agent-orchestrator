@@ -5772,6 +5772,48 @@ public sealed class CliCommandTests
         Xunit.Assert.True(Directory.Exists(worktree));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_verifier_runs_outside_state_write_transaction")]
+    public void PersistentRunnerAcceptanceVerifierRunsOutsideStateWriteTransaction()
+    {
+        var root = CreateAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Verify outside transaction", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var verifierObservedUnlockedState = false;
+        var verifier = new ProbeAcceptanceVerifier(() =>
+        {
+            Xunit.Assert.False(repository.IsInTransaction);
+            verifierObservedUnlockedState = true;
+        });
+
+        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier));
+
+        Xunit.Assert.True(verifierObservedUnlockedState);
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.False(repository.IsInTransaction);
+        Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_blocks_task_status_change")]
     public void PersistentRunnerAcceptanceBlocksTaskStatusChange()
     {
@@ -6495,6 +6537,8 @@ public sealed class CliCommandTests
 
         public int TransactionCount { get; private set; }
 
+        public bool IsInTransaction { get; private set; }
+
         public int LoadCount { get; private set; }
 
         public int LoadGoalsCount { get; private set; }
@@ -6586,13 +6630,21 @@ public sealed class CliCommandTests
                 return Task.CompletedTask;
             }
 
-            var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
-            if (shouldSave)
+            IsInTransaction = true;
+            try
             {
-                _kernel = Clone(transactionKernel);
-            }
+                var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
+                if (shouldSave)
+                {
+                    _kernel = Clone(transactionKernel);
+                }
 
-            return result;
+                return result;
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
         }
 
         public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
@@ -6613,6 +6665,28 @@ public sealed class CliCommandTests
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+    }
+
+    private sealed class ProbeAcceptanceVerifier(Action onRun) : IGoalAcceptanceVerifier
+    {
+        public int RunCount { get; private set; }
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            CancellationToken cancellationToken = default)
+        {
+            RunCount++;
+            onRun();
+            return Task.FromResult(new AcceptanceVerificationResult(
+                true,
+                false,
+                0,
+                "Passed.",
+                ArtifactsPath: Path.Combine(worktreePath, "artifacts"),
+                Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.")]));
+        }
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry")]
