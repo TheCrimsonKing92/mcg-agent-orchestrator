@@ -77,13 +77,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
 
-        // Inject any policy-required checks (derived from the change scope) that are not
-        // already present in the manifest, so the anti-drift gate never fires from a stale
-        // manifest without the operator needing to hand-edit acceptance-manifest.json.
-        var injected = BuildPolicyInjectedChecks(manifest.Checks, changedFiles);
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks = injected.Count == 0
-            ? manifest.Checks
-            : [.. manifest.Checks, .. injected];
+        // Apply policy-required checks from the change scope. Focused project checks replace
+        // matching unfiltered project checks so a narrow App change does not still run the full
+        // Infrastructure project suite from the tracked manifest.
+        var effectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles);
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
@@ -327,35 +324,68 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static List<AcceptanceManifestCheck> BuildPolicyInjectedChecks(
+    private static IReadOnlyList<AcceptanceManifestCheck> BuildPolicyEffectiveChecks(
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles)
     {
         if (changedFiles is null || changedFiles.Count == 0)
-            return [];
+            return manifestChecks;
 
         var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        var plannedChecks = plan.Checks
+            .Where(c => c.Command.Count > 0)
+            .Select(PolicyCheckToManifestCheck)
+            .ToArray();
+        var focusedProjectChecks = plannedChecks
+            .Where(IsFocusedProjectDotnetCheck)
+            .ToArray();
         var coveredNames = manifestChecks
             .Select(c => c.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var injected = new List<AcceptanceManifestCheck>();
+        var effective = manifestChecks
+            .Where(check => !IsReplacedByFocusedProjectCheck(check, focusedProjectChecks))
+            .ToList();
         var injectedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var check in plan.Checks.Where(c => c.Command.Count > 0))
+        foreach (var plannedManifestCheck in plannedChecks)
         {
-            if (coveredNames.Contains(check.Name))
+            if (coveredNames.Contains(plannedManifestCheck.Name))
                 continue;
 
-            var commandKey = $"dotnet-test:{check.CommandLine}";
+            if (effective.Any(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                DotnetCheckMatches(check, plannedManifestCheck)))
+                continue;
+
+            var commandKey = ManifestCheckKey(plannedManifestCheck);
             if (!injectedKeys.Add(commandKey))
                 continue;
 
-            injected.Add(PolicyCheckToManifestCheck(check));
+            effective.Add(plannedManifestCheck);
         }
 
-        return injected;
+        return effective;
     }
+
+    private static bool IsFocusedProjectDotnetCheck(AcceptanceManifestCheck check) =>
+        check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(check.Project) &&
+        check.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+        check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsReplacedByFocusedProjectCheck(
+        AcceptanceManifestCheck manifestCheck,
+        IReadOnlyList<AcceptanceManifestCheck> focusedProjectChecks) =>
+        manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(manifestCheck.Project) &&
+        manifestCheck.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+        !manifestCheck.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase)) &&
+        focusedProjectChecks.Any(focused =>
+            string.Equals(NormalizePath(focused.Project), NormalizePath(manifestCheck.Project), StringComparison.OrdinalIgnoreCase));
+
+    private static string ManifestCheckKey(AcceptanceManifestCheck check) =>
+        $"{check.Type}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
 
     private static AcceptanceManifestCheck PolicyCheckToManifestCheck(RepositoryTestImpactCheck check)
     {
