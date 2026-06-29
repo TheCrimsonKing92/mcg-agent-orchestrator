@@ -2137,3 +2137,10 @@ Goal fee6dd8f: Backlog slice: Expose headless goal-state subscription without da
 
 - Operator gate: Planner: not-run; planner-only task, no repository changes (exit 0); Researcher: not-run; Researcher role and read-only sandbox, no implementation changes (exit 0); Developer: pass - GoalMonitoringSubscriptionCommandTests 40 passed, 0 failed (exit 0); Tester: pass - 40/40 GoalMonitoringSubscriptionCommandTests and 1/1 headless no-paid-start WorkerDispatch test passed; broader WorkerDispatchTests timed out on unrelated case after lock retry (exit 0); Reviewer: not-run by Reviewer; reviewed prior pass evidence: 40/40 GoalMonitoringSubscriptionCommandTests and 1/1 headless no-paid-start WorkerDispatch test (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - code-review over focused C# CLI/event feed changes - enough local evidence and prior focused tests to assess acceptance.
+
+## 2026-06-29 - # GOAL: Reduce low-integrity dispatch startup cost from recursive ACL relabel...
+
+Goal 946820de: # GOAL: Reduce low-integrity dispatch startup cost from recursive ACL relabels  Source backlog item: - f368782e0c8344.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit c007f48). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit c007f488b0f951a0c74c9276f18dc3a9bf520f72). Acceptance passed.
+
+- Operator gate: Planner: not-run - Planner task only, deterministic source/context inspection completed (exit 0); Researcher: not-run - Researcher inspection only; read-only filesystem prevents dotnet build/test output (exit 0); Developer: pass - DispatchProcessHost 25/25, WorkerDispatch 182/182 (exit 0); Tester: pass - DispatchProcessHost 25/25, WorkerDispatch 182/182, WorkerSandbox 14/14 (exit 0); Reviewer: not-run locally; prior evidence pass - DispatchProcessHost 25/25, WorkerDispatch 182/182, WorkerSandbox 14/14 (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer code/evidence audit - handled focused diff review and acceptance-risk check.
