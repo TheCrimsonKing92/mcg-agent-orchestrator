@@ -6436,6 +6436,51 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(root2.TryGetProperty("timestamp", out _));
 }
 
+    [Xunit.Fact(DisplayName = "ShowOrchestratorLogArtifacts_defaults_to_latest_dispatch_run_and_all_restores_history")]
+    public void ShowOrchestratorLogArtifactsDefaultsToLatestDispatchRunAndAllRestoresHistory()
+{
+    var root = CreateTempDirectory();
+    var scripts = Path.Combine(root, "scripts");
+    var logs = Path.Combine(root, ".orchestrator", "logs");
+    Directory.CreateDirectory(scripts);
+    Directory.CreateDirectory(logs);
+    File.Copy(
+        FindRepositoryFile("scripts", "Show-OrchestratorLogArtifacts.ps1"),
+        Path.Combine(scripts, "Show-OrchestratorLogArtifacts.ps1"));
+
+    const string goalPrefix = "946820de";
+    const string taskPrefix = "1f0ce3bb";
+    var olderPrefix = $"{goalPrefix}-{taskPrefix}-20260629120000";
+    var latestPrefix = $"{goalPrefix}-{taskPrefix}-20260629130000";
+
+    WriteDispatchArtifact(logs, olderPrefix, ".out.log", "older stdout line 1\nolder stdout tail", DateTime.Parse("2026-06-29T12:00:01"));
+    WriteDispatchArtifact(logs, olderPrefix, ".err.log", "older stderr tail", DateTime.Parse("2026-06-29T12:00:02"));
+    WriteDispatchArtifact(logs, olderPrefix, ".exit.txt", "1", DateTime.Parse("2026-06-29T12:00:03"));
+    WriteDispatchArtifact(logs, latestPrefix, ".out.log", "latest stdout line 1\nlatest stdout tail", DateTime.Parse("2026-06-29T13:00:01"));
+    WriteDispatchArtifact(logs, latestPrefix, ".err.log", "latest stderr tail", DateTime.Parse("2026-06-29T13:00:02"));
+    WriteDispatchArtifact(logs, latestPrefix, ".exit.txt", "0", DateTime.Parse("2026-06-29T13:00:03"));
+
+    var defaultResult = RunPowerShellCommand(
+        root,
+        "& '.\\scripts\\Show-OrchestratorLogArtifacts.ps1' -GoalPrefix '946820de' -TaskPrefix '1f0ce3bb' -TailLines 1");
+
+    Assert.Equal(0, defaultResult.ExitCode);
+    Assert.Contains(latestPrefix, defaultResult.StandardOutput);
+    Assert.Contains("latest stdout tail", defaultResult.StandardOutput);
+    Assert.DoesNotContain(olderPrefix, defaultResult.StandardOutput);
+    Assert.DoesNotContain("older stdout tail", defaultResult.StandardOutput);
+
+    var allResult = RunPowerShellCommand(
+        root,
+        "& '.\\scripts\\Show-OrchestratorLogArtifacts.ps1' -GoalPrefix '946820de' -TaskPrefix '1f0ce3bb' -TailLines 1 -All");
+
+    Assert.Equal(0, allResult.ExitCode);
+    Assert.Contains(olderPrefix, allResult.StandardOutput);
+    Assert.Contains(latestPrefix, allResult.StandardOutput);
+    Assert.Contains("older stdout tail", allResult.StandardOutput);
+    Assert.Contains("latest stdout tail", allResult.StandardOutput);
+}
+
     private static TaskBrief CreateBudgetBrief(params string[] lines)
 {
     return new TaskBrief(
@@ -6728,6 +6773,33 @@ private static (int ExitCode, string StandardOutput, string StandardError) RunPo
     process.WaitForExit(60000);
 
     return (process.ExitCode, output, error);
+}
+
+private static void WriteDispatchArtifact(string logsRoot, string prefix, string suffix, string content, DateTime lastWriteTime)
+{
+    var path = Path.Combine(logsRoot, prefix + suffix);
+    File.WriteAllText(path, content);
+    File.SetLastWriteTime(path, lastWriteTime);
+}
+
+private static string FindRepositoryFile(params string[] relativeSegments)
+{
+    foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+    {
+        var directory = new DirectoryInfo(start);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(new[] { directory.FullName }.Concat(relativeSegments).ToArray());
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+    }
+
+    throw new FileNotFoundException($"Could not find repository file '{Path.Combine(relativeSegments)}'.");
 }
 
 private static string WorkerResultBlock(
