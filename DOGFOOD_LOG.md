@@ -2174,3 +2174,10 @@ Goal afe08767: Speed up the acceptance gate by removing a redundant full-suite t
 
 - Operator gate: Developer: pass - manifest JSON parses, check count is 3, remaining checks target Core and Infrastructure projects, no full-dotnet/sln reference found; full tests not run for cleanup-only change (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - narrow cleanup task - enough context handling for the branch-state constraint.
+
+## 2026-06-29 - The Discord clarification answer-back is broken across the listener/conductor...
+
+Goal d53d23b2: The Discord clarification answer-back is broken across the listener/conductor process split, and refiner text is moji.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit bb64bbab9712dc9cd0b8ad33f5f220d27f9331d5). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 79fcdcad1288138dbeda1c27b58705ee7ab0dcba). Acceptance passed.
+
+- Operator gate: Planner: not-run; planning-only inspection (exit 0); Researcher: not-run evidence: --no-build failed because `tests/.../bin/Debug/net10.0/Mcg.AgentOrchestrator.Infrastructure.Tests.dll` was not found (exit 0); Developer: focused pass: 32 passed, 0 failed; full Infrastructure.Tests timed out after prior CS2012 lock (exit 0); Reviewer: not-run by Reviewer; prior evidence focused GoalRefinement pass 32 passed/0 failed; full Infrastructure.Tests not completed due timeout after file-lock retry (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - review of localized C# fix and test evidence - enough context to verify behavior, but full test proof is still missing.
