@@ -5910,6 +5910,27 @@ public sealed class CliCommandTests
         Xunit.Assert.Empty(second.Goals);
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
+    public void TerminalGoalSweepSupersededWithAssignedTaskReopensGoal()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Premature superseded", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.True(first.Changed);
+        var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
+        Xunit.Assert.Contains("goalState=Superseded", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Empty(second.Goals);
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_after_retry_reopens_goal")]
     public void TerminalGoalSweepCompletedWithAssignedTaskAfterRetryReopensGoal()
     {
@@ -5931,6 +5952,33 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Empty(second.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_terminal_running_task_with_live_process_blocks_without_reopening")]
+    public void TerminalGoalSweepTerminalRunningTaskWithLiveProcessBlocksWithoutReopening()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Live dispatch terminal desync", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root, Environment.ProcessId);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.False(first.Changed);
+        var blocker = first.Goals.Single().Blockers.Single(blocker => blocker.Kind == "terminal-live-dispatch");
+        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Running", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"pid={Environment.ProcessId}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal($"refresh-dispatch {goal.Id.Value[..8]} 1", blocker.Command);
+        Xunit.Assert.Empty(first.Goals.Single().Repairs);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.False(second.Changed);
+        Xunit.Assert.Contains(second.Goals.Single().Blockers, blocker => blocker.Kind == "terminal-live-dispatch");
     }
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_terminal_tasks_is_clean_and_idempotent")]
@@ -6452,7 +6500,8 @@ public sealed class CliCommandTests
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
-        string workingDirectory)
+        string workingDirectory,
+        int processId = 999999)
     {
         var stdout = Path.Combine(workingDirectory, $"{task.Id.Value}-out.log");
         var stderr = Path.Combine(workingDirectory, $"{task.Id.Value}-err.log");
@@ -6463,7 +6512,7 @@ public sealed class CliCommandTests
         kernel.RecordTaskProcessStarted(
             goal.Id,
             task.Id,
-            new TaskProcessRecord(999999, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
     }
 
     private static AgentOrchestratorKernel WithGoalStatus(
