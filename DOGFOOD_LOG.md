@@ -2166,3 +2166,11 @@ Goal 2a0d377b: rate-limit classifier fix for backlog 39f8cb7e. Landed as 4ce2962
 
 - Operator gate: branch changed only `DispatchFailureClassifier` and `DispatchOutcomeClassifyTests`; prior focused verification passed `DispatchOutcomeClassifyTests` 13/13 and `Mcg.AgentOrchestrator.Core.Tests` 409/409. Acceptance passed and worktree cleaned.
 - Model fit: OpenAI/gpt-5.5 was adequate for this Core-only classifier/test increment; operator recovery was needed only for the bare-429 retry after Low-IL preflight blocked Codex launch.
+
+
+## 2026-06-29 - Speed up the acceptance gate by removing a redundant full-suite test run
+
+Goal afe08767: Speed up the acceptance gate by removing a redundant full-suite test run. config/acceptance-manifest.json runs FOUR c.... Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass - manifest JSON parses, check count is 3, remaining checks target Core and Infrastructure projects, no full-dotnet/sln reference found; full tests not run for cleanup-only change (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - narrow cleanup task - enough context handling for the branch-state constraint.
