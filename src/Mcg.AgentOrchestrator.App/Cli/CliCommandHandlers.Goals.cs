@@ -636,7 +636,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "conduct":
             if (IsHelpRequested(parts))
             {
-                PrintConductUsage();
+                CliCommandHelp.TryPrintStartupHelp(parts);
                 return false;
             }
 
@@ -2218,7 +2218,7 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
 {
     if (IsHelpRequested(parts))
     {
-        PrintWorkspaceUsage();
+        CliCommandHelp.TryPrintStartupHelp(parts);
         return;
     }
 
@@ -2272,14 +2272,13 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
 
 private static void PrintConductUsage()
 {
-    Console.WriteLine("Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
-    Console.WriteLine("       conduct --loop [--policy <Conservative|Permissive|Manual>] [--max-iterations <count>] [--watch]");
+    Console.WriteLine(CliCommandHelp.ConductUsage);
     Console.WriteLine("  -h, --help  Show this help.");
 }
 
 private static void PrintWorkspaceUsage()
 {
-    Console.WriteLine("Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+    Console.WriteLine(CliCommandHelp.WorkspaceUsage);
     Console.WriteLine("  -h, --help  Show this help.");
 }
 

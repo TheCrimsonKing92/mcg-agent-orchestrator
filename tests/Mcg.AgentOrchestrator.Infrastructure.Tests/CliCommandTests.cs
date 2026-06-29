@@ -104,7 +104,7 @@ public sealed class CliCommandTests
     {
         AssertHelpCommandDoesNotResolveGoal(["workspace", "--help"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
         AssertHelpCommandDoesNotResolveGoal(["workspace", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
-        AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace create [goal-id-prefix]");
     }
 
     [Xunit.Fact(DisplayName = "Cli_run_blocks_subscription_capable_agents_without_calling_provider")]

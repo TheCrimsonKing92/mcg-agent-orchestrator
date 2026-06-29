@@ -14,19 +14,7 @@ internal static partial class CliCommandHandlers
             return false;
         }
 
-        switch (parts[0].ToLowerInvariant())
-        {
-            case "conduct":
-                PrintConductUsage();
-                return true;
-
-            case "workspace":
-                PrintWorkspaceUsage();
-                return true;
-
-            default:
-                return false;
-        }
+        return CliCommandHelp.TryPrintStartupHelp(parts);
     }
 
 public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context)
