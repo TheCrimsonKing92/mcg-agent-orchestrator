@@ -294,6 +294,48 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(["git diff whitespace", "infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_full_infrastructure_suite_for_app_plus_shared_infrastructure_or_script_changes")]
+    public async Task GoalAcceptanceVerifierRunsFullInfrastructureSuiteForAppPlusSharedInfrastructureOrScriptChanges()
+    {
+        var root = CreateStandardManifestWorkspace();
+
+        static async Task AssertFullInfrastructureRunAsync(string root, IReadOnlyList<string> changedFiles)
+        {
+            var calls = new List<string[]>();
+            var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+                new(0, ""),
+                new(0, ""),
+                new(0, "Full Infrastructure tests passed.")
+            ]);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var result = await verifier.RunAsync(root, changedFiles: changedFiles);
+
+            Assert.True(result.Passed);
+            Assert.Equal(3, calls.Count);
+            Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+            Assert.DoesNotContain("--filter", calls[2]);
+            Assert.Equal("infrastructure tests", result.Checks![1].Name);
+        }
+
+        await AssertFullInfrastructureRunAsync(
+            root,
+            [
+                "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.ReportPreviews.cs",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
+            ]);
+        await AssertFullInfrastructureRunAsync(
+            root,
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
+                "scripts/Invoke-IsolatedDotnet.ps1"
+            ]);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_manifest_command_checks_before_dotnet_tests")]
     public async Task GoalAcceptanceVerifierRunsManifestCommandChecksBeforeDotnetTests()
     {

@@ -154,6 +154,41 @@ public sealed class RepositoryChangeClassifierTests
         Assert.DoesNotContain("--filter", check.Command);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_disables_focused_app_filter_when_shared_infrastructure_changes")]
+    public void RepositoryTestImpactPlannerDisablesFocusedAppFilterWhenSharedInfrastructureChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.ReportPreviews.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
+        Assert.DoesNotContain("--filter", check.Command);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_disables_focused_app_filter_when_script_or_config_changes")]
+    public void RepositoryTestImpactPlannerDisablesFocusedAppFilterWhenScriptOrConfigChanges()
+    {
+        var scriptPlan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
+            "scripts/Invoke-IsolatedDotnet.ps1"
+        ]);
+        var configPlan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.ReportPreviews.cs",
+            "src/Mcg.AgentOrchestrator.App/appsettings.json"
+        ]);
+
+        foreach (var plan in new[] { scriptPlan, configPlan })
+        {
+            var check = Assert.Single(plan.Checks);
+            Assert.Equal("infrastructure tests", check.Name);
+            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
+            Assert.DoesNotContain("--filter", check.Command);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_infrastructure_test_class_filter")]
     public void RepositoryTestImpactPlannerSelectsTouchedInfrastructureTestClassFilter()
     {

@@ -21,7 +21,8 @@ public sealed record DashboardRenderOptions(
     IReadOnlyList<AgentDefinition>? AgentDefinitions = null,
     WorkerProfileCatalog? WorkerProfiles = null,
     OperatorInboxReportDto? OperatorInbox = null,
-    IReadOnlyList<TaskDurationStatsDto>? TaskDurationStats = null);
+    IReadOnlyList<TaskDurationStatsDto>? TaskDurationStats = null,
+    IReadOnlyList<string>? FocusGoalChangedFiles = null);
 
 public sealed record DashboardWorkspaceContext(
     string RootDirectory,

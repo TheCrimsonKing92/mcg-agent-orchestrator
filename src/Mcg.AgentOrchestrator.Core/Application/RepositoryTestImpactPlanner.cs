@@ -221,6 +221,12 @@ public static class RepositoryTestImpactPlanner
         if (appSubsystems.Length != 1)
             return null;
 
+        if (summary.Files.Any(file =>
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
+            file.Categories.Contains(RepositoryChangeCategory.Script) ||
+            file.Categories.Contains(RepositoryChangeCategory.Configuration)))
+            return null;
+
         if (summary.Files.Count(file => file.Categories.Contains(RepositoryChangeCategory.Source)) > 5)
             return null;
 

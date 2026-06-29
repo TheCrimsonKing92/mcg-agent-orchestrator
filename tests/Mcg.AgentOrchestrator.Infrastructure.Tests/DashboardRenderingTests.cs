@@ -1860,11 +1860,15 @@ public sealed class DashboardRenderingTests
 
     var control = DashboardNextActionControls.Build(goal, action);
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id)).Items.Single();
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
-        FocusGoalPrefix: goalPrefix));
+        FocusGoalPrefix: goalPrefix,
+        FocusGoalChangedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
@@ -1881,6 +1885,9 @@ public sealed class DashboardRenderingTests
     Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
     Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
     Assert.False(workSummary.BuildEnvironment.LeaseExists);
+    Assert.Equal("focused CLI infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
+    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
+    Assert.True(html.Contains("Test impact: Selected focused CLI infrastructure tests from changed file scope.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));

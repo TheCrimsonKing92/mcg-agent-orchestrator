@@ -77,11 +77,11 @@ function Clear-ArtifactsDirectory {
 function Get-BuildMaxCpuCount {
     $configured = $env:MCG_BUILD_MAXCPUCOUNT
     $value = 0
-    if ([int]::TryParse($configured, [ref]$value) -and $value -gt 1) {
+    if ([int]::TryParse($configured, [ref]$value) -and $value -gt 0) {
         return $value
     }
 
-    return [Math]::Max(2, [int]([Environment]::ProcessorCount / 4))
+    return [Math]::Max(1, [int]([Environment]::ProcessorCount / 4))
 }
 
 function Get-IsolatedRootBase {

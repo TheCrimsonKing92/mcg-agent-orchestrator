@@ -250,7 +250,19 @@ internal sealed record GoalWorkSummaryDto(
     GoalBuildEnvironmentDto BuildEnvironment,
     IReadOnlyList<TaskWorkSummaryDto> Tasks,
     string? MonitoringStreamPath = null,
-    ParallelExecutionPlanDto? ParallelPlan = null);
+    ParallelExecutionPlanDto? ParallelPlan = null,
+    GoalTestImpactDto? TestImpact = null);
+
+internal sealed record GoalTestImpactDto(
+    bool RequiresBuild,
+    bool RequiresBroadVerification,
+    string Summary,
+    IReadOnlyList<GoalTestImpactCheckDto> Checks);
+
+internal sealed record GoalTestImpactCheckDto(
+    string Name,
+    string CommandLine,
+    string Reason);
 
 internal sealed record GoalBuildEnvironmentDto(
     string LeaseId,

@@ -106,7 +106,12 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
-        return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(current, goal, agents, BuildHostInfo(services)));
+        return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(
+            current,
+            goal,
+            agents,
+            BuildHostInfo(services),
+            services.Workspace.ExecutionDirectory));
     }
 
     private static async Task<IResult> GetFailureTriageAsync(
