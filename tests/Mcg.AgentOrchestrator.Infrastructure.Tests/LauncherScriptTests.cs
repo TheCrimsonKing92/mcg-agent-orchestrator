@@ -96,6 +96,52 @@ public sealed class LauncherScriptTests
         Assert.True(launcher.Contains("Set-Content -LiteralPath '%APP_HEAD%'", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_no_trailing_arguments_forwards_zero_arguments")]
+    public void InvokeRepoScriptNoTrailingArgumentsForwardsZeroArguments()
+    {
+        using var sandbox = CreateRepoScriptArgumentSandbox();
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, sandbox.RelativeScriptPath);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        AssertForwardedArguments(result.Stdout, []);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_empty_argument_splat_forwards_zero_arguments")]
+    public void InvokeRepoScriptEmptyArgumentSplatForwardsZeroArguments()
+    {
+        using var sandbox = CreateRepoScriptArgumentSandbox();
+        var wrapperPath = Path.Combine(sandbox.RepositoryRoot, "scripts", "Invoke-RepoScript.ps1");
+
+        var result = RunPowerShellCommand(sandbox.RepositoryRoot, $"""
+            $ErrorActionPreference = 'Stop'
+            $arguments = @()
+            & '{EscapePowerShellSingleQuoted(wrapperPath)}' '{EscapePowerShellSingleQuoted(sandbox.RelativeScriptPath)}' @arguments
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        AssertForwardedArguments(result.Stdout, []);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_non_empty_arguments_are_forwarded_in_order")]
+    public void InvokeRepoScriptNonEmptyArgumentsAreForwardedInOrder()
+    {
+        using var sandbox = CreateRepoScriptArgumentSandbox();
+        var wrapperPath = Path.Combine(sandbox.RepositoryRoot, "scripts", "Invoke-RepoScript.ps1");
+
+        var result = RunPowerShellCommand(sandbox.RepositoryRoot, $"""
+            $ErrorActionPreference = 'Stop'
+            $arguments = @('alpha', ' ', ' gamma ')
+            & '{EscapePowerShellSingleQuoted(wrapperPath)}' '{EscapePowerShellSingleQuoted(sandbox.RelativeScriptPath)}' @arguments
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        AssertForwardedArguments(result.Stdout, ["alpha", " ", " gamma "]);
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_emits_json_pid_and_log_path_through_repo_script")]
     public void StartOrchestratorCommandEmitsJsonPidAndLogPathThroughRepoScript()
     {
@@ -357,6 +403,91 @@ public sealed class LauncherScriptTests
         return new DoubleDashLauncherSandbox(sandboxPath, hostPath, echoScriptPath);
     }
 
+    private static RepoScriptArgumentSandbox CreateRepoScriptArgumentSandbox()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var relativeDirectory = Path.Combine(".scratch", "invoke-repo-script-tests", Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(repoRoot, relativeDirectory);
+        Directory.CreateDirectory(directory);
+
+        var scriptPath = Path.Combine(directory, "record-arguments.ps1");
+        File.WriteAllText(scriptPath, """
+            param(
+                [Parameter(ValueFromRemainingArguments = $true)]
+                [object[]]$Arguments
+            )
+
+            $forwarded = if ($null -eq $Arguments -or $Arguments.Count -eq 0) {
+                @()
+            } else {
+                @($Arguments | ForEach-Object { [string]$_ })
+            }
+
+            [pscustomobject]@{
+                count = $forwarded.Count
+                args = @($forwarded)
+            } | ConvertTo-Json -Compress
+            """);
+
+        return new RepoScriptArgumentSandbox(repoRoot, Path.Combine(relativeDirectory, "record-arguments.ps1"), directory);
+    }
+
+    private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add(relativeScriptPath);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return RunProcess(startInfo, "Invoke-RepoScript.ps1");
+    }
+
+    private static ProcessResult RunPowerShellCommand(string repositoryRoot, string command)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(command);
+
+        return RunProcess(startInfo, "PowerShell command");
+    }
+
+    private static void AssertForwardedArguments(string stdout, string[] expected)
+    {
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal(expected.Length, root.GetProperty("count").GetInt32());
+        Assert.Equal(expected, root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
+    }
+
+    private static string EscapePowerShellSingleQuoted(string value) =>
+        value.Replace("'", "''", StringComparison.Ordinal);
+
     private static LandVerifiedGoalSandbox CreateLandVerifiedGoalSandbox(string launcherBody)
     {
         const string goalPrefix = "abcdef12";
@@ -453,6 +584,29 @@ public sealed class LauncherScriptTests
     {
         public string HostPath { get; } = hostPath;
         public string EchoScriptPath { get; } = echoScriptPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(sandboxPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class RepoScriptArgumentSandbox(
+        string repositoryRoot,
+        string relativeScriptPath,
+        string sandboxPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string RelativeScriptPath { get; } = relativeScriptPath;
 
         public void Dispose()
         {
