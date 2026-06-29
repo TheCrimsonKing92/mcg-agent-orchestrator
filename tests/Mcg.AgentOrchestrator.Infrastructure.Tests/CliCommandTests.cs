@@ -3708,6 +3708,102 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(task.LastDispatch);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_note_confirms_and_keeps_status_across_task_states")]
+    public void CliNoteConfirmsAndKeepsStatusAcrossTaskStates()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Annotate tasks",
+            [
+                new TaskSpec(TaskId.New(), "Pending task", AgentRole.Planner),
+                new TaskSpec(TaskId.New(), "Assigned task", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Running task", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Done task", AgentRole.Reviewer),
+                new TaskSpec(TaskId.New(), "Blocked task", AgentRole.Researcher)
+            ]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("researcher"), "Researcher", AgentRole.Researcher, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks[2].Id, WorkTaskStatus.Running, "Started.");
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks[3].Id, WorkTaskStatus.Completed, "Done.");
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks[4].Id, WorkTaskStatus.Failed, "Blocked.");
+        var expectedStatuses = goal.Tasks.Select(task => task.Status).ToArray();
+
+        for (var index = 0; index < goal.Tasks.Count; index++)
+        {
+            var taskNumber = index + 1;
+            var message = $"operator note {taskNumber}";
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["note", taskNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), message],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Equal($"Note added to task {taskNumber}{Environment.NewLine}", output);
+            Xunit.Assert.Equal(expectedStatuses[index], goal.Tasks[index].Status);
+            Xunit.Assert.Contains(goal.Timeline, evt =>
+                evt.TaskId == goal.Tasks[index].Id &&
+                evt.Kind == ProgressKind.TaskNote &&
+                evt.Message == message);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_note_rejects_missing_empty_and_unknown_task")]
+    public void CliNoteRejectsMissingEmptyAndUnknownTask()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Annotate task", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var missingMessage = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var emptyMessage = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "1", "   "],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var unknownTask = Xunit.Assert.Throws<KeyNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "99", "Known typo."],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Usage: note <task-number>", missingMessage.Message);
+        Xunit.Assert.Contains("Task note message cannot be empty.", emptyMessage.Message);
+        Xunit.Assert.Contains("99", unknownTask.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_task_commands_accept_goal_prefix_for_non_current_goal")]
     public void CliTaskCommandsAcceptGoalPrefixForNonCurrentGoal()
     {
