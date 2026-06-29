@@ -172,9 +172,14 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsAcceptanceCommand(IReadOnlyList<string> args)
     {
-        return args.Count > 0 &&
-            (args[0].Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
-             args[0].Equals("accept", StringComparison.OrdinalIgnoreCase));
+        if (args.Count == 0)
+        {
+            return false;
+        }
+
+        return args[0].Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("accept", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool IsProcessRefreshCommand(IReadOnlyList<string> args)

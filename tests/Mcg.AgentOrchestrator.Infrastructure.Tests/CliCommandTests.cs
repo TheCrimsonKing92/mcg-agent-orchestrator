@@ -5004,6 +5004,17 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_acceptance_workflows_outside_command_transaction")]
+    public void RunnerRoutesAcceptanceWorkflowsOutsideCommandTransaction()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsAcceptanceCommand(["acceptance"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsAcceptanceCommand(["accept"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsAcceptanceCommand(["acceptance-queue", "--apply"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand(["next"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand([]));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_commands")]
     public void RunnerSkipsKernelStateForOperatorAndBacklogCommands()
     {
