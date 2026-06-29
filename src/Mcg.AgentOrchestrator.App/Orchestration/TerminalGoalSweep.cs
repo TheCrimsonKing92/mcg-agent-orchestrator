@@ -82,11 +82,12 @@ internal static class TerminalGoalSweep
             }
 
             if (!branchAlreadyLanded &&
+                TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence) &&
                 kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",
-                    "terminal goal had non-terminal task state",
+                    desyncEvidence,
                     $"conduct {prefix} --loop"));
                 goal = kernel.GetGoal(originalGoal.Id);
             }
@@ -127,5 +128,26 @@ internal static class TerminalGoalSweep
         }
 
         return new TerminalGoalSweepResult(results);
+    }
+
+    private static bool TryBuildTerminalTaskDesyncEvidence(Goal goal, out string evidence)
+    {
+        evidence = string.Empty;
+        if (goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed))
+        {
+            return false;
+        }
+
+        var dispatchableTasks = goal.Tasks
+            .Where(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+            .Select(task => $"{task.Id.Value[..8]}:{task.Status}")
+            .ToArray();
+        if (dispatchableTasks.Length == 0)
+        {
+            return false;
+        }
+
+        evidence = $"goalState={goal.Status}; dispatchableTasks={string.Join(",", dispatchableTasks)}";
+        return true;
     }
 }
