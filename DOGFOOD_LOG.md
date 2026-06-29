@@ -2188,3 +2188,10 @@ Goal dbe69a8e: Implement the BACKLOG.md item 'Status-neutral task note command' 
 
 - Operator gate: Planner: not-run; Planner read-only task, source evidence confirms plan targets (exit 0); Researcher: not-run; research-only task, verified by repository source inspection (exit 0); Developer: pass - 3 passed, 0 failed (exit 0); Reviewer: pass by prior verified evidence - CliNote filter 3 passed, 0 failed; reviewer did not rerun tests in read-only sandbox (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - diff, test evidence, and source inspection were sufficient.
+
+## 2026-06-29 - Backlog slice: Make acceptance test-impact select focused Infrastructure filt...
+
+Goal ceb87244: Backlog slice: Make acceptance test-impact select focused Infrastructure filters before full project runs  Acceptance.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit 869ecf8470ed453c713bbef576d5ec03790b6590). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 19c6ee770d55aa84df2e680a2a467d904a92fb0a). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 19c6ee770d55aa84df2e680a2a467d904a92fb0a). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner task only, read-only inspection completed (exit 0); Researcher: not-run; research-only task, repository evidence inspected, clean git status confirmed (exit 0); Developer: pass - planner 16, GoalAcceptanceVerifier 41, exact emitted CLI filter 15 in 23.9s (exit 0); Tester: pass - planner 11, acceptance verifier 41, exact CLI filter 15, dashboard rendering 66 after CS2012 retry, exact isolated-dotnet filter forwarding 1; non-blocking broad DotnetBuildEnvironmentManager run failed 1 unrelated ProcessSpawnGuard test (exit 0); Reviewer: not-run by reviewer; prior evidence inspected: planner pass, GoalAcceptanceVerifier pass, exact CLI filter pass, DashboardRenderingTests pass, filter-forwarding pass (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer code/evidence inspection - enough context for focused acceptance review.
