@@ -2181,3 +2181,10 @@ Goal d53d23b2: The Discord clarification answer-back is broken across the listen
 
 - Operator gate: Planner: not-run; planning-only inspection (exit 0); Researcher: not-run evidence: --no-build failed because `tests/.../bin/Debug/net10.0/Mcg.AgentOrchestrator.Infrastructure.Tests.dll` was not found (exit 0); Developer: focused pass: 32 passed, 0 failed; full Infrastructure.Tests timed out after prior CS2012 lock (exit 0); Reviewer: not-run by Reviewer; prior evidence focused GoalRefinement pass 32 passed/0 failed; full Infrastructure.Tests not completed due timeout after file-lock retry (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - review of localized C# fix and test evidence - enough context to verify behavior, but full test proof is still missing.
+
+## 2026-06-29 - Implement the BACKLOG
+
+Goal dbe69a8e: Implement the BACKLOG.md item 'Status-neutral task note command' through the normal five-role pipeline. Add a CLI com.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 9aa94d5b753fe88b0d2b1bb5659308c2d980cb65). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner read-only task, source evidence confirms plan targets (exit 0); Researcher: not-run; research-only task, verified by repository source inspection (exit 0); Developer: pass - 3 passed, 0 failed (exit 0); Reviewer: pass by prior verified evidence - CliNote filter 3 passed, 0 failed; reviewer did not rerun tests in read-only sandbox (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - diff, test evidence, and source inspection were sufficient.
