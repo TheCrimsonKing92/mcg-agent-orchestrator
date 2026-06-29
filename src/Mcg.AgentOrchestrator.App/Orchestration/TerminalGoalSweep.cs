@@ -61,8 +61,19 @@ internal static class TerminalGoalSweep
             var branchAlreadyLanded = isCompletedGitGoal &&
                 hasGoalBranchArtifact &&
                 GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
+            var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
+            var blockedByDirtyWorktree = false;
 
-            if (branchAlreadyLanded)
+            if (hasTerminalTaskDesync &&
+                TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix, desyncEvidence, out var dirtyEvidence, out var dirtyCommand))
+            {
+                blockedByDirtyWorktree = true;
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "terminal-dirty-worktree",
+                    dirtyEvidence,
+                    dirtyCommand));
+            }
+            else if (branchAlreadyLanded)
             {
                 foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
                 {
@@ -81,7 +92,8 @@ internal static class TerminalGoalSweep
                 goal = kernel.GetGoal(originalGoal.Id);
             }
 
-            if (!branchAlreadyLanded &&
+            if (!blockedByDirtyWorktree &&
+                !branchAlreadyLanded &&
                 TryBuildTerminalLiveDispatchBlocker(goal, prefix, out var liveDispatchEvidence, out var liveDispatchCommand))
             {
                 blockers.Add(new TerminalGoalSweepBlocker(
@@ -89,8 +101,9 @@ internal static class TerminalGoalSweep
                     liveDispatchEvidence,
                     liveDispatchCommand));
             }
-            else if (!branchAlreadyLanded &&
-                     TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence) &&
+            else if (!blockedByDirtyWorktree &&
+                     !branchAlreadyLanded &&
+                     hasTerminalTaskDesync &&
                      kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
@@ -100,7 +113,9 @@ internal static class TerminalGoalSweep
                 goal = kernel.GetGoal(originalGoal.Id);
             }
 
-            if (goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory))
+            if (!blockedByDirtyWorktree &&
+                goal.Status == GoalStatus.Completed &&
+                GoalWorktrees.IsGitWorkTree(executionDirectory))
             {
                 if (!GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
                 {
@@ -156,6 +171,32 @@ internal static class TerminalGoalSweep
         }
 
         evidence = $"goalState={goal.Status}; dispatchableTasks={string.Join(",", dispatchableTasks)}";
+        return true;
+    }
+
+    private static bool TryBuildTerminalDirtyWorktreeBlocker(
+        Goal goal,
+        string executionDirectory,
+        string goalPrefix,
+        string desyncEvidence,
+        out string evidence,
+        out string command)
+    {
+        evidence = string.Empty;
+        command = string.Empty;
+        if (!GoalWorktrees.IsGitWorkTree(executionDirectory))
+        {
+            return false;
+        }
+
+        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        if (worktree is null || GoalWorktrees.IsWorktreeClean(executionDirectory, goal.Id))
+        {
+            return false;
+        }
+
+        evidence = $"{desyncEvidence}; worktreeDirty=true; worktree={worktree}";
+        command = $"goal-recovery {goalPrefix}";
         return true;
     }
 
