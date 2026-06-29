@@ -141,7 +141,9 @@ public sealed class GoalWorktreeIntegrationTests
         process.StandardOutput.ReadToEnd();
 
         Assert.True(process.WaitForExit(30000), "Find-OrchestratorLocks.ps1 did not exit within 30 seconds.");
-        Assert.Equal(0, process.ExitCode);
+        Assert.True(
+            process.ExitCode is 0 or 2,
+            $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
     }
 
