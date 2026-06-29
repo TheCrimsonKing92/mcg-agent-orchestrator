@@ -78,7 +78,8 @@ public sealed record TaskVerificationSnapshot(
     DateTimeOffset CompletedAt,
     string? ModelFitNote = null,
     string? StandardOutputPath = null,
-    string? StandardErrorPath = null);
+    string? StandardErrorPath = null,
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
 
 public sealed record TaskDispatchSnapshot(
     string WorkerName,
@@ -93,7 +94,9 @@ public sealed record TaskDispatchSnapshot(
     bool UsesComplexModel = false,
     string? BaseCommit = null,
     string? ResultCommit = null,
-    bool SandboxLowIntegrity = false);
+    bool SandboxLowIntegrity = false,
+    string? PromptPath = null,
+    ProviderKind WorkerProviderKind = ProviderKind.Unknown);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

@@ -427,8 +427,8 @@ public sealed class GoalBacklogLinkTests
         Assert.True(fetched!.Status == BacklogItemStatus.Done);
     }
 
-    [Xunit.Fact(DisplayName = "GoalBacklogLink_land_without_source_backlog_item_warns_and_continues")]
-    public void LandWithoutSourceBacklogItemWarnsAndContinues()
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_land_without_source_backlog_item_skips_silently")]
+    public void LandWithoutSourceBacklogItemSkipsSilently()
     {
         var dbPath = Path.Combine(CreateTempDirectory(), "backlog.db");
         var kernel = new AgentOrchestratorKernel();
@@ -438,6 +438,6 @@ public sealed class GoalBacklogLinkTests
         var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath, messages.Add);
 
         Assert.False(closed);
-        Assert.Contains(messages, message => message.Contains("without a linked source backlog item", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(messages);
     }
 }

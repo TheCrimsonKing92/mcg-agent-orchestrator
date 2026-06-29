@@ -76,6 +76,37 @@ public sealed class CliCommandTests
             parts);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_conduct_help_prints_usage_without_resolving_goal")]
+    public void CliConductHelpPrintsUsageWithoutResolvingGoal()
+    {
+        AssertHelpCommandDoesNotResolveGoal(["conduct", "--help"], "Usage: conduct <goal-id-prefix>");
+        AssertHelpCommandDoesNotResolveGoal(["conduct", "-h"], "Usage: conduct <goal-id-prefix>");
+        AssertHelpCommandDoesNotResolveGoal(["conduct", "--loop", "--help"], "Usage: conduct <goal-id-prefix>");
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_startup_conduct_help_exits_before_workspace_setup")]
+    public void CliStartupConductHelpExitsBeforeWorkspaceSetup()
+    {
+        var root = CreateTempDirectory();
+        var beforeFiles = SnapshotFiles(root);
+
+        var result = RunAppCommand(root, "conduct", "--help");
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("Usage: conduct <goal-id-prefix>", result.Stdout);
+        Xunit.Assert.Contains("-h, --help", result.Stdout);
+        Xunit.Assert.DoesNotContain("Error:", result.Stderr);
+        Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_help_prints_usage_without_resolving_goal")]
+    public void CliWorkspaceHelpPrintsUsageWithoutResolvingGoal()
+    {
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "--help"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+        AssertHelpCommandDoesNotResolveGoal(["workspace", "create", "-h"], "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
+    }
+
     [Xunit.Fact(DisplayName = "Cli_run_blocks_subscription_capable_agents_without_calling_provider")]
     public void CliRunBlocksSubscriptionCapableAgentsWithoutCallingProvider()
     {
@@ -834,10 +865,13 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        var stdout = Path.Combine(root, "stale.out.log");
+        var stderr = Path.Combine(root, "stale.err.log");
+        var exit = Path.Combine(root, "stale.exit.txt");
         kernel.RecordTaskProcessStarted(
             goal.Id,
             task.Id,
-            new TaskProcessRecord(999999, "codex exec prompt.md", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+            new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
         bool changed = false;
         var output = CaptureConsole(() =>
         {
@@ -853,9 +887,43 @@ public sealed class CliCommandTests
         Xunit.Assert.False(changed);
         Xunit.Assert.Contains("Goal recovery", output);
         Xunit.Assert.Contains("recorded process pid=999999 is not alive", output);
+        Xunit.Assert.Contains("recovery: action='mark-stale' evidence='heartbeat-absent'", output);
         Xunit.Assert.Contains("command: refresh-dispatch 1", output);
         Xunit.Assert.Contains("workspace create", output);
         Xunit.Assert.Contains($"park-goal {goal.Id.Value[..8]} <reason> --confirm-goal-park", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_next_reports_dispatch_recovery_policy_action_for_refresh")]
+    public void CliNextReportsDispatchRecoveryPolicyActionForRefresh()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Next recovery policy", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["next"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("RefreshRunningProcess", output);
+        Xunit.Assert.Contains("recovery: action='mark-stale' evidence='heartbeat-absent'", output);
+        Xunit.Assert.Contains("command: refresh-dispatch 1", output);
     }
 
     [Xunit.Fact(DisplayName = "HistoricalDogfoodEvaluation_scores_recorded_goal_state_without_starting_workers")]
@@ -1441,7 +1509,12 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec",
             root,
@@ -1484,7 +1557,12 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec",
             root,
@@ -4791,6 +4869,76 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal));
     }
+
+    private static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var beforeFiles = SnapshotFiles(root);
+        var changed = true;
+
+        var output = CaptureConsole(() => changed = CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Contains(expectedUsage, output);
+        Xunit.Assert.Contains("-h, --help", output);
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.Null(currentGoal);
+        Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
+    private static string[] SnapshotFiles(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(root, path))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+    private static CliProcessResult RunAppCommand(string workingDirectory, params string[] arguments)
+    {
+        var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
+        startInfo.ArgumentList.Add(appAssembly);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app process.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(60000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("App command did not exit within 60 seconds.");
+        }
+
+        return new CliProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private sealed record CliProcessResult(int ExitCode, string Stdout, string Stderr);
 
     private static void WritePlanningBacklog(string root)
     {

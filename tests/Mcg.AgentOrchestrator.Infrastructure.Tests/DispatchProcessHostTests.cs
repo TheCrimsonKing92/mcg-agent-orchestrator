@@ -124,13 +124,12 @@ public sealed class DispatchProcessHostTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-test", Guid.NewGuid().ToString("n"));
-        var repo = Path.Combine(root, "repo");
-        var worktree = Path.Combine(root, "linked-worktree");
+        var worktree = Path.Combine(root, "worktree");
         Directory.CreateDirectory(root);
         var hostPathBefore = Environment.GetEnvironmentVariable("PATH");
         try
         {
-            CreateLinkedWorktree(repo, worktree);
+            Directory.CreateDirectory(worktree);
             var startInfo = new ProcessStartInfo
             {
                 UseShellExecute = false,
@@ -150,7 +149,10 @@ public sealed class DispatchProcessHostTests
                 SandboxLowIntegrity: true,
                 WorkerSandboxProvider.Codex);
 
-            DispatchProcessHost.ApplyWorkerSandbox(startInfo, parameters);
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
 
             var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
             Assert.True(Directory.Exists(sandboxBin));
@@ -159,6 +161,126 @@ public sealed class DispatchProcessHostTests
             Assert.NotNull(childPathBefore);
             Assert.True(startInfo.Environment["PATH"].StartsWith(sandboxBin, StringComparison.OrdinalIgnoreCase));
             Assert.Equal(hostPathBefore, Environment.GetEnvironmentVariable("PATH"));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_codex_home_to_codex_provider")]
+    public void ApplyWorkerSandboxScopesCodexHomeToCodexProvider()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude);
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
+            Assert.Equal(Path.Combine(sandboxRoot, "claude-config"), startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_leaves_unknown_provider_without_provider_home")]
+    public void ApplyWorkerSandboxLeavesUnknownProviderWithoutProviderHome()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-unknown-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
+            Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_skips_recursive_icacls_when_roots_are_prepared")]
+    public void WorkerSandboxPreparerSkipsRecursiveIcaclsWhenRootsArePrepared()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        Directory.CreateDirectory(sandboxRoot);
+        File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        File.WriteAllText(Path.Combine(sandboxRoot, WorkerSandboxPreparer.MarkerFileName), "{}");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        try
+        {
+            var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+            Assert.False(result.WorktreeRecursiveRelabel);
+            Assert.False(result.SandboxRecursiveRelabel);
+            Assert.Empty(labeler.SetCalls);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_handles_partial_sandbox_root_without_recursive_relabel")]
+    public void WorkerSandboxPreparerHandlesPartialSandboxRootWithoutRecursiveRelabel()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-partial-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        Directory.CreateDirectory(sandboxRoot);
+        File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        try
+        {
+            var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+            Assert.False(result.WorktreeRecursiveRelabel);
+            Assert.False(result.SandboxRecursiveRelabel);
+            Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive && call.Level == "(OI)(CI)L");
+            Assert.DoesNotContain(labeler.SetCalls, call => call.Path.Contains(".git", StringComparison.OrdinalIgnoreCase));
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.MarkerFileName)));
         }
         finally
         {
@@ -379,6 +501,24 @@ public sealed class DispatchProcessHostTests
         Assert.NotEqual(0, process.ExitCode);
     }
 
+    [Xunit.Fact(DisplayName = "IcaclsIntegrityLabeler_set_integrity_returns_false_when_helper_exits_nonzero")]
+    public void IcaclsIntegrityLabelerSetIntegrityReturnsFalseWhenHelperExitsNonZero()
+    {
+        var labeler = new IcaclsIntegrityLabeler(_ => StartNonZeroHelper());
+        var root = Path.Combine(Path.GetTempPath(), "mcg-icacls-nonzero-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var applied = labeler.SetIntegrity(root, "(OI)(CI)L", recursive: false);
+
+            Assert.False(applied);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_setup_keeps_linked_worktree_git_file_medium")]
     public void LowIntegritySetupKeepsLinkedWorktreeGitFileMedium()
     {
@@ -413,7 +553,14 @@ public sealed class DispatchProcessHostTests
             Directory.CreateDirectory(logs);
             var parametersPath = Path.Combine(root, "dispatch.json");
             var stdoutPath = Path.Combine(logs, "out.log");
+            var stderrPath = Path.Combine(logs, "err.log");
+            var workspaceCreate = Path.Combine(worktree, "worker-created.txt");
+            var workspaceDelete = Path.Combine(worktree, "worker-delete.txt");
+            File.WriteAllText(workspaceDelete, "delete me");
             var command =
+                $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(workspaceCreate)}' -Value 'created'; " +
+                $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(workerFile)}' -Value 'modified'; " +
+                $"Remove-Item -LiteralPath '{EscapePowerShellSingleQuoted(workspaceDelete)}'; " +
                 $"try {{ Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(outsideWorkspaceFile)}' -Value 'unexpected'; Write-Output 'outside-write-unexpected'; exit 7 }} " +
                 "catch { Write-Output 'outside-write-denied' }; Write-Output sandbox-ready";
 
@@ -421,7 +568,7 @@ public sealed class DispatchProcessHostTests
                 command,
                 worktree,
                 stdoutPath,
-                Path.Combine(logs, "err.log"),
+                stderrPath,
                 Path.Combine(logs, "exit.txt"),
                 Path.Combine(logs, "heartbeat.json"),
                 ShutdownBuildServerOnExit: false,
@@ -434,6 +581,9 @@ public sealed class DispatchProcessHostTests
             Assert.Equal(0, exitCode);
             Assert.Contains("outside-write-denied", File.ReadAllText(stdoutPath));
             Assert.Equal("outside-protected", File.ReadAllText(outsideWorkspaceFile));
+            Assert.Equal("created", File.ReadAllText(workspaceCreate).Trim());
+            Assert.Equal("modified", File.ReadAllText(workerFile).Trim());
+            Assert.False(File.Exists(workspaceDelete));
             Assert.True(File.Exists(gitFile));
             Assert.True(GetMandatoryIntegrityRid(gitFile) >= MediumIntegrityRid);
             Assert.Equal(LowIntegrityRid, GetMandatoryIntegrityRid(workerFile));
@@ -447,10 +597,20 @@ public sealed class DispatchProcessHostTests
             using (var setup = JsonDocument.Parse(File.ReadAllText(setupArtifact)))
             {
                 var rootElement = setup.RootElement;
-                Assert.Equal("worktree-recursive-sandbox-inherited", rootElement.GetProperty("strategy").GetString());
+                Assert.Equal("prepared-root-inherited-low-integrity", rootElement.GetProperty("strategy").GetString());
                 Assert.True(rootElement.GetProperty("worktreeRecursiveRelabel").GetBoolean());
                 Assert.False(rootElement.GetProperty("sandboxRecursiveRelabel").GetBoolean());
             }
+
+            var sandboxPrepEvents = File.ReadAllLines(stderrPath)
+                .Where(line => line.Contains("\"event\":\"sandbox-prep\"", StringComparison.Ordinal))
+                .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+                .ToArray();
+            Assert.Contains(sandboxPrepEvents, evt => evt.GetProperty("phase").GetString() == "start");
+            Assert.Contains(sandboxPrepEvents, evt =>
+                evt.GetProperty("phase").GetString() == "complete" &&
+                evt.TryGetProperty("elapsedMs", out var elapsedMs) &&
+                elapsedMs.GetInt64() >= 0);
 
             var commonGitDir = RunGit(worktree, "rev-parse", "--git-common-dir");
             var commonGitDirPath = Path.IsPathRooted(commonGitDir)
@@ -528,6 +688,35 @@ public sealed class DispatchProcessHostTests
         RunGit(repo, "worktree", "add", "-b", "linked-test", worktree);
     }
 
+    private static ProcessStartInfo CreateSandboxStartInfo(string worktree)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            UseShellExecute = false,
+            WorkingDirectory = worktree
+        };
+        startInfo.ArgumentList.Add("Write-Output ok");
+        return startInfo;
+    }
+
+    private static DispatchProcessHost.DispatchRunParameters CreateSandboxParameters(
+        string root,
+        string worktree,
+        WorkerSandboxProvider provider)
+    {
+        return new DispatchProcessHost.DispatchRunParameters(
+            "Write-Output ok",
+            worktree,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "exit.txt"),
+            null,
+            ShutdownBuildServerOnExit: false,
+            DisableSharedCompilation: false,
+            SandboxLowIntegrity: true,
+            provider);
+    }
+
     private static string RunGit(string workingDirectory, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo
@@ -575,6 +764,19 @@ public sealed class DispatchProcessHostTests
             echo {commandName} %*>>"{escapedMarker}"
             exit /b 0
             """);
+    }
+
+    private sealed class RecordingIntegrityLabeler(IntegrityLabelState queryState) : IWorkerIntegrityLabeler
+    {
+        public List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
+
+        public IntegrityLabelState Query(string path) => queryState;
+
+        public bool SetIntegrity(string path, string level, bool recursive)
+        {
+            SetCalls.Add((path, level, recursive));
+            return true;
+        }
     }
 
     private const int LowIntegrityRid = 0x1000;

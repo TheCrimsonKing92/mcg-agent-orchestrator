@@ -23,25 +23,31 @@ public static class WorkerSandboxCapabilityPlanner
             return new WorkerSandboxCapabilityResult(false, "blocked", $"A goal workspace is required for {task.RequiredRole} file work.");
         }
 
-        var targetRisk = DetectTargetRisk(goal, task, profile, allowGitReference);
+        var provider = WorkerProviderCatalog.Default().ResolveProfile(profile.Name);
+        var targetRisk = DetectTargetRisk(goal, task, profile, provider, allowGitReference);
         if (targetRisk is not null)
         {
             return targetRisk;
         }
 
-        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
+        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider);
         return patchCapability.IsPatchCapable
             ? new WorkerSandboxCapabilityResult(true, "workspace-write", patchCapability.Detail)
             : new WorkerSandboxCapabilityResult(false, "blocked", patchCapability.Detail);
     }
 
-    private static WorkerSandboxCapabilityResult? DetectTargetRisk(Goal goal, TaskSpec task, WorkerProfile profile, bool allowGitReference)
+    private static WorkerSandboxCapabilityResult? DetectTargetRisk(
+        Goal goal,
+        TaskSpec task,
+        WorkerProfile profile,
+        IWorkerProvider provider,
+        bool allowGitReference)
     {
         var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
         if (text.Contains(".agents/skills", StringComparison.Ordinal) ||
             text.Contains(".agents\\skills", StringComparison.Ordinal))
         {
-            if (CanWriteRepoScopedSkillTarget(profile.CommandTemplate))
+            if (CanWriteRepoScopedSkillTarget(profile.CommandTemplate, provider))
             {
                 return new WorkerSandboxCapabilityResult(
                     true,
@@ -93,8 +99,14 @@ public static class WorkerSandboxCapabilityPlanner
         return false;
     }
 
-    private static bool CanWriteRepoScopedSkillTarget(string commandTemplate)
+    private static bool CanWriteRepoScopedSkillTarget(string commandTemplate, IWorkerProvider provider)
     {
+        if (provider.Identity.Kind != ProviderKind.Unknown &&
+            provider.Identity.Kind != ProviderKind.AnthropicClaudeCli)
+        {
+            return false;
+        }
+
         return commandTemplate.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||
             commandTemplate.Contains("--permission-mode {permissionMode}", StringComparison.OrdinalIgnoreCase) ||
             commandTemplate.Contains("--dangerously-skip-permissions", StringComparison.OrdinalIgnoreCase);

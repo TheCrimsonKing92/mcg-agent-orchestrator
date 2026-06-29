@@ -522,6 +522,68 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal("Subscription CLI refined the goal.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
     }
 
+    [Xunit.Fact(DisplayName = "GoalRefinementService_selects_subscription_refiner_binding_by_identity_when_not_first")]
+    public async Task GoalRefinementServiceSelectsSubscriptionRefinerBindingByIdentityWhenNotFirst()
+    {
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.Capable,
+                new ModelProfile("missing-api-provider", "wrong-api-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: "wrong-refiner",
+                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6")),
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.Capable,
+                new ModelProfile("missing-api-provider", "intended-api-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner,
+                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"))
+        ]);
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})"),
+            new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        ]);
+        SubscriptionLaunchProfile? capturedSubscription = null;
+        string? capturedCommand = null;
+        var (service, kernel, goalId, _) = BuildScenario(
+            catalog,
+            workerProfiles: profiles,
+            subscriptionCompleterFactory: sub =>
+            {
+                capturedSubscription = sub;
+                return new SubscriptionCliCompleter(
+                    profiles.GetRequired(sub.WorkerProfileName).CommandTemplate,
+                    sub.WorkerProfileName,
+                    sub.ModelAlias ?? string.Empty,
+                    sub.ReasoningEffort,
+                    (command, _, _) =>
+                    {
+                        capturedCommand = command;
+                        return Task.FromResult("""
+                            ```json
+                            {
+                              "behavioralContract": "The typed subscription refiner was used.",
+                              "acceptanceCriteria": ["Selected by binding identity"],
+                              "verificationClass": "TestVerifiable",
+                              "decisions": [],
+                              "forks": []
+                            }
+                            ```
+                            """);
+                    });
+            });
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
+        Xunit.Assert.NotNull(capturedSubscription);
+        var provider = WorkerProviderCatalog.Default().ResolveProfile(capturedSubscription!.WorkerProfileName);
+        Xunit.Assert.Equal(ProviderKind.OpenAICodexCli, provider.Identity.Kind);
+        Xunit.Assert.True(capturedCommand is not null);
+        Xunit.Assert.Contains("--model 'gpt-5.5'", capturedCommand!);
+        Xunit.Assert.Equal("The typed subscription refiner was used.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
+    }
+
     // --- SpecRefinerPlanner.ClassifyFork ---
 
     [Xunit.Fact(DisplayName = "ClassifyFork_low_confidence_high_blast_radius_returns_Ask")]

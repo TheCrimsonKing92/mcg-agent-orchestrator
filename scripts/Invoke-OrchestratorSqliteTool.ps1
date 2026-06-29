@@ -26,7 +26,7 @@ if ($Arguments.Count -eq 0) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $projectPath = Join-Path $repoRoot "scripts\OrchestratorSqliteTools"
 
-& dotnet run --project $projectPath -- @Arguments
+& dotnet run --project $projectPath -- @($Arguments)
 if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

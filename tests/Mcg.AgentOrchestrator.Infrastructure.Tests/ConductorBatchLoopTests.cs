@@ -916,8 +916,11 @@ public sealed class ConductorBatchLoopTests
 
         kernel.RecordTaskDispatch(goal.Id, task.Id,
             new TaskDispatchRecord("test-worker", "first.exe", "C:\\goal", now));
+        var firstStdout = Path.Combine(Path.GetTempPath(), $"mcg-first-{Guid.NewGuid():N}.out.log");
+        var firstStderr = Path.Combine(Path.GetTempPath(), $"mcg-first-{Guid.NewGuid():N}.err.log");
+        var firstExit = Path.Combine(Path.GetTempPath(), $"mcg-first-{Guid.NewGuid():N}.exit.txt");
         kernel.RecordTaskProcessStarted(goal.Id, task.Id,
-            new TaskProcessRecord(444, "first.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+            new TaskProcessRecord(444, "first.exe", "C:\\goal", firstStdout, firstStderr, firstExit,
                 now, null, null, OwnedProcessIds: [444]));
 
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
@@ -1079,8 +1082,11 @@ public sealed class ConductorBatchLoopTests
 
         kernel.RecordTaskDispatch(goal.Id, task.Id,
             new TaskDispatchRecord("test-worker", "first.exe", "C:\\goal", now));
+        var firstStdout = Path.Combine(Path.GetTempPath(), $"mcg-first-{Guid.NewGuid():N}.out.log");
+        var firstStderr = Path.Combine(Path.GetTempPath(), $"mcg-first-{Guid.NewGuid():N}.err.log");
+        var firstExit = Path.Combine(Path.GetTempPath(), $"mcg-first-{Guid.NewGuid():N}.exit.txt");
         kernel.RecordTaskProcessStarted(goal.Id, task.Id,
-            new TaskProcessRecord(444, "first.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+            new TaskProcessRecord(444, "first.exe", "C:\\goal", firstStdout, firstStderr, firstExit,
                 now, null, null, OwnedProcessIds: [444]));
 
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);

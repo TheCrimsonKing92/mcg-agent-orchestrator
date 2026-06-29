@@ -32,6 +32,11 @@ catch (Exception ex)
 var startupArgs = tenantSelection.CommandArgs.Count == 0
     ? []
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
+if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+{
+    return 0;
+}
+
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
 // a Git repository root so .orchestrator is rooted with the target repo regardless of launch CWD.
@@ -72,9 +77,19 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName);
-if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
+try
 {
-    return 0;
+    if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
+    {
+        return 0;
+    }
+
+    CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
 }
 
 WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
@@ -204,7 +219,8 @@ Console.WriteLine("  goals, agents, autonomy-policies");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");
 Console.WriteLine("  agent-add <role> <provider> <model> [name] [--complex-model <model>] (add/replace id)");
 Console.WriteLine("  reassign-agent <task-number> <agent-id> (persist exact task agent assignment)");
-Console.WriteLine("  monitor-goal <goal-id> [--since <event-id>] [--once]");
+Console.WriteLine("  goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal]");
+Console.WriteLine("  monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal]");
 Console.WriteLine("  monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
 Console.WriteLine("  acceptance [goal-id] [--autonomy <policy>], workspace [create|merge|remove] [goal-id-prefix] [--autonomy <policy>]");
 Console.WriteLine("  advance [goal-id], advance-subscription [goal-id] --confirm-subscription-advance [--autonomy <policy>]");

@@ -115,6 +115,7 @@ public static class WorkerProfileDispatcher
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
     public const string OllamaSubscriptionProfileName = "qwen-code-cli";
+    private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
 
     public static WorkerProfileDispatchResult PrepareTask(
         AgentOrchestratorKernel kernel,
@@ -130,9 +131,10 @@ public static class WorkerProfileDispatcher
         string? reasoningEffort = null,
         TaskComplexity? taskComplexity = null,
         bool usesComplexModel = false,
-        IReadOnlyList<string>? preflightFindings = null)
+        IReadOnlyList<string>? preflightFindings = null,
+        bool allowPendingRecordedDispatchRefresh = false)
     {
-        EnsureTaskNeedsExecution(task);
+        EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
@@ -151,7 +153,9 @@ public static class WorkerProfileDispatcher
             profile.Name,
             profile.CommandTemplate,
             promptRoot,
-            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables));
+            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables),
+            dispatchedAt);
+        var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -162,7 +166,10 @@ public static class WorkerProfileDispatcher
             reasoningEffort,
             taskComplexity,
             preparation.PromptCharacterCount,
-            usesComplexModel));
+            usesComplexModel,
+            PromptPath: preparation.PromptPath,
+            WorkerProviderKind: workerProviderKind),
+            allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 
@@ -270,7 +277,7 @@ public static class WorkerProfileDispatcher
             var profile = profiles.GetRequired(profileName);
             findings.Add($"profile: {profile.Name}");
             var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-            AddClaudeLowIntegrityAuthFinding(findings, profile.Name, sandbox, claudeAuthProbe);
+            AddClaudeLowIntegrityAuthFinding(findings, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
                 : ResolveEffectiveSubscriptionModelName(agent, selection);
@@ -349,11 +356,11 @@ public static class WorkerProfileDispatcher
 
     private static void AddClaudeLowIntegrityAuthFinding(
         List<string> findings,
-        string profileName,
+        IWorkerProvider provider,
         WorkerSandboxOptions sandbox,
         Func<ClaudeCliAuthState>? claudeAuthProbe)
     {
-        if (!profileName.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind != ProviderKind.AnthropicClaudeCli)
         {
             findings.Add("auth: Claude CLI Low-IL auth preflight not applicable for this worker profile");
             return;
@@ -672,11 +679,19 @@ public static class WorkerProfileDispatcher
             $"A goal workspace is required to dispatch a {role} task; run 'workspace create' before subscription-dispatch.");
     }
 
-    private static void EnsureTaskNeedsExecution(TaskSpec task)
+    private static void EnsureTaskNeedsExecution(TaskSpec task, bool allowPendingRecordedDispatchRefresh = false)
     {
         if (task.LastVerification?.Succeeded is true)
         {
             throw new InvalidOperationException($"Task '{task.Id}' already has passing verification; retry the task before dispatching it again.");
+        }
+
+        if (allowPendingRecordedDispatchRefresh &&
+            task.Status == WorkTaskStatus.Running &&
+            task.LastDispatch is not null &&
+            task.LastProcess is null)
+        {
+            return;
         }
 
         if (task.Status != WorkTaskStatus.Assigned)
@@ -708,22 +723,10 @@ public static class WorkerProfileDispatcher
 
     private static string ResolveDispatchProviderName(string selectedProviderName, string profileName, DispatchModelOverride? modelOverride)
     {
-        if (profileName.Equals(OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return "OpenAI";
-        }
-
-        if (profileName.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return "Anthropic";
-        }
-
-        if (profileName.Equals(OllamaSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return "Ollama";
-        }
-
-        return selectedProviderName;
+        var provider = DefaultProviders.ResolveProfile(profileName);
+        return provider.Identity.Kind == ProviderKind.Unknown
+            ? selectedProviderName
+            : provider.ProviderName;
     }
 
     public static string ResolveSubscriptionProfileName(AgentDefinition agent)
@@ -743,22 +746,7 @@ public static class WorkerProfileDispatcher
             return agent.Subscription.WorkerProfileName;
         }
 
-        if (model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
-        {
-            return OpenAiSubscriptionProfileName;
-        }
-
-        if (model.ProviderName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-        {
-            return AnthropicSubscriptionProfileName;
-        }
-
-        if (model.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            return OllamaSubscriptionProfileName;
-        }
-
-        throw new InvalidOperationException($"Provider '{model.ProviderName}' does not have a default subscription worker profile.");
+        return DefaultProviders.ResolveModelProvider(model.ProviderName).ProfileName;
     }
 
     private static void EnsureSubscriptionRetryWindowHasPassed(TaskSpec task, DateTimeOffset dispatchedAt)
@@ -932,7 +920,9 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
+        var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(
+            profile,
+            DefaultProviders.ResolveProfile(profile.Name));
         if (capability.IsPatchCapable)
         {
             return;
@@ -967,7 +957,12 @@ public static class WorkerProfileDispatcher
 
     private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
     {
-        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+        if (!DefaultProviders.TryResolveModelProvider(providerName, out var provider))
+        {
+            return false;
+        }
+
+        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 

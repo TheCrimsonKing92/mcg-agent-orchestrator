@@ -44,6 +44,49 @@ public static class DispatchFailureClassifier
 {
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
 
+    public static DispatchOutcome ClassifyProviderFailure(
+        ProviderFailureKind failureKind,
+        int exitCode,
+        bool hasZeroByteOutput,
+        string evidenceSummary)
+    {
+        return failureKind switch
+        {
+            ProviderFailureKind.RateLimit => new DispatchOutcome(
+                DispatchOutcomeKind.RecoverableSubscriptionLimit,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                evidenceSummary),
+            ProviderFailureKind.Connectivity => new DispatchOutcome(
+                DispatchOutcomeKind.ProviderConnectivity,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                evidenceSummary),
+            ProviderFailureKind.Sandbox1312 => new DispatchOutcome(
+                DispatchOutcomeKind.SandboxCommitBlocked,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.CommitAndVerify,
+                evidenceSummary),
+            _ => new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                evidenceSummary)
+        };
+    }
+
     private static readonly Regex PowerShellNativeErrorPrefix = new(
         "^[^:\\r\\n]{1,120}\\s+:\\s+(?<error>ERROR:|Error:|error:)",
         RegexOptions.CultureInvariant);
@@ -80,12 +123,22 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (verification.ProviderFailureKind == ProviderFailureKind.RateLimit)
+        {
+            return true;
+        }
+
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
         if (IsPreflightFailure(verification))
+        {
+            return false;
+        }
+
+        if (IsDispatchRecoveryPolicyDiagnostic(verification))
         {
             return false;
         }
@@ -120,6 +173,11 @@ public static class DispatchFailureClassifier
 
         return true;
     }
+
+    private static bool IsDispatchRecoveryPolicyDiagnostic(TaskVerificationRecord verification) =>
+        verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
     private static bool HasZeroByteStandardOutput(TaskVerificationRecord verification)
     {
@@ -170,6 +228,19 @@ public static class DispatchFailureClassifier
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
     {
+        return Classify(task, verification, verification.ProviderFailureKind, workerResultPresent, hasCommittedChanges);
+    }
+
+    public static DispatchOutcome Classify(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        ProviderFailureKind providerFailureKind,
+        bool workerResultPresent = false,
+        bool hasCommittedChanges = false)
+    {
+        providerFailureKind = providerFailureKind == ProviderFailureKind.Unknown
+            ? verification.ProviderFailureKind
+            : providerFailureKind;
         workerResultPresent = workerResultPresent || verification.WorkerResultPresent;
         hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges;
         var exitCode = verification.ExitCode;
@@ -189,7 +260,17 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
-        if (IsRecoverableSubscriptionLimitFailure(verification))
+        if (providerFailureKind != ProviderFailureKind.Unknown)
+        {
+            return ClassifyProviderFailure(
+                providerFailureKind,
+                exitCode,
+                hasZeroByteOutput,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (IsSubscriptionProviderCliDispatch(task) &&
+            IsRecoverableSubscriptionLimitFailure(verification))
         {
             TimeSpan? retryAfter = null;
             if (TryGetSubscriptionLimitRetryAfter(verification, out var retryAfterAbs))
@@ -573,6 +654,11 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (verification.ProviderFailureKind == ProviderFailureKind.Connectivity)
+        {
+            return true;
+        }
+
         var output = string.Join(
             Environment.NewLine,
             verification.StandardOutput,
@@ -820,15 +906,16 @@ public static class DispatchFailureClassifier
     private static bool IsSubscriptionProviderCliDispatch(TaskSpec task)
     {
         var dispatch = task.LastDispatch;
-        return ContainsSubscriptionProviderCliName(dispatch?.WorkerName) ||
-            ContainsSubscriptionProviderCliName(dispatch?.Command) ||
-            ContainsSubscriptionProviderCliName(task.LastVerification?.Command);
-    }
+        if (dispatch is null)
+        {
+            return false;
+        }
 
-    private static bool ContainsSubscriptionProviderCliName(string? text)
-    {
-        return text?.Contains("codex-cli", StringComparison.OrdinalIgnoreCase) == true ||
-            text?.Contains("claude-cli", StringComparison.OrdinalIgnoreCase) == true;
+        return dispatch.WorkerProviderKind is
+            ProviderKind.OpenAICodexCli or
+            ProviderKind.AnthropicClaudeCli or
+            ProviderKind.OpenAICodexSpark or
+            ProviderKind.OllamaQwenCodeCli;
     }
 
     private static bool ContainsRecoverableProviderConnectivityText(string text)

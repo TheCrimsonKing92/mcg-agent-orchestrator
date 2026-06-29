@@ -249,6 +249,11 @@ internal sealed class ConductorDriver
                 return;
             }
 
+            if (goal.SourceBacklogItemId is null)
+            {
+                return;
+            }
+
             GoalOperationJournal.Begin(dir, goal, "conductor:backlog-close", "Closing linked source backlog item.");
             var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, workspace.BacklogStorePath, Console.WriteLine);
             GoalOperationJournal.Completed(dir, goal, "conductor:backlog-close",
@@ -385,6 +390,26 @@ internal sealed class ConductorDriver
         // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
+            var staleRecoveryTask = goal.Tasks.FirstOrDefault(t =>
+                t.Status == WorkTaskStatus.Failed &&
+                TryGetDispatchRecoveryAction(t.LastVerification, out var action) &&
+                action is DispatchRecoveryAction.RetryStale or DispatchRecoveryAction.BudgetExhausted or DispatchRecoveryAction.MarkStale);
+            if (staleRecoveryTask is not null)
+            {
+                var action = GetDispatchRecoveryAction(staleRecoveryTask.LastVerification!);
+                if (IsRetryableStaleRecovery(staleRecoveryTask.LastVerification!))
+                {
+                    var note = $"Auto-retry stale dispatch recovery for task {staleRecoveryTask.Id.Value[..8]}; " +
+                        ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!);
+                    _retryTask(goal.Id, staleRecoveryTask.Id, note);
+                    return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+                }
+
+                return Escalate(goal, goalPrefix, policy, state,
+                    $"Task {staleRecoveryTask.Id.Value[..8]} blocked by stale dispatch recovery; " +
+                    ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!));
+            }
+
             var preflightFailedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 t.LastVerification is { } latest &&
@@ -629,6 +654,59 @@ internal sealed class ConductorDriver
         return TimeSpan.FromSeconds(Math.Min(seconds, policy.EmptyOutputRetryMaxDelaySeconds));
     }
 
+    private static bool TryGetDispatchRecoveryAction(TaskVerificationRecord? verification, out DispatchRecoveryAction action)
+    {
+        action = default;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        var diagnostic = ExtractDispatchRecoveryDiagnostic(verification);
+        if (diagnostic.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var candidate in Enum.GetValues<DispatchRecoveryAction>())
+        {
+            if (diagnostic.Contains($"action='{DispatchRecoveryPolicy.ToActionName(candidate)}'", StringComparison.Ordinal))
+            {
+                action = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DispatchRecoveryAction GetDispatchRecoveryAction(TaskVerificationRecord verification) =>
+        TryGetDispatchRecoveryAction(verification, out var action)
+            ? action
+            : throw new InvalidOperationException("Verification does not contain a dispatch recovery action.");
+
+    private static bool IsRetryableStaleRecovery(TaskVerificationRecord verification)
+    {
+        if (!TryGetDispatchRecoveryAction(verification, out var action))
+            return false;
+
+        if (action == DispatchRecoveryAction.RetryStale)
+            return true;
+
+        var diagnostic = ExtractDispatchRecoveryDiagnostic(verification);
+        return action == DispatchRecoveryAction.MarkStale &&
+            diagnostic.Contains("stale retry budget remaining=", StringComparison.Ordinal) &&
+            !diagnostic.Contains("blocker='", StringComparison.Ordinal);
+    }
+
+    private static string ExtractDispatchRecoveryDiagnostic(TaskVerificationRecord verification)
+    {
+        var lines = verification.StandardError.Split(
+            ["\r\n", "\n"],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.LastOrDefault(line => line.Contains("Dispatch recovery policy action='", StringComparison.Ordinal)) ?? string.Empty;
+    }
+
     // Appends a bounded tail of the acceptance build/test output to an escalation/journal line so an
     // operator (or the conductor's own retry diagnostics) can see WHY acceptance failed — the detail
     // was previously dropped, leaving only a generic "Acceptance verification failed".
@@ -709,11 +787,7 @@ internal sealed class ConductorDriver
             _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
-        // Gate 3: advisory semantic acceptance runs only after deterministic acceptance passed. It
-        // records judge receipts for observability but never gates landing.
-        _runAdvisorySemanticAcceptance(goal, acceptance);
-
-        // Gate 4: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
+        // Gate 3: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
         var changeRisk = _classifyChangeRisk(goal);
         if (changeRisk.HasValue)
         {
@@ -725,7 +799,7 @@ internal sealed class ConductorDriver
             }
         }
 
-        // Gate 5: land via integration branch (the branch is already rebased onto main by Gate 1).
+        // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
@@ -734,6 +808,9 @@ internal sealed class ConductorDriver
 
         if (landResult.MainAdvanced)
         {
+            // Gate 5: advisory semantic acceptance runs only after deterministic acceptance and
+            // successful landing. It records judge receipts for observability but never gates landing.
+            _runAdvisorySemanticAcceptance(goal, acceptance);
             _afterSuccessfulLanding(goal, landResult);
         }
 

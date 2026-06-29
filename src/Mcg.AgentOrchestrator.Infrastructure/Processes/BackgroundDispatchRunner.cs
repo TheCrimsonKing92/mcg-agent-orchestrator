@@ -5,7 +5,12 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record DispatchRefreshOutcome(TaskProcessRecord ProcessRecord, TaskVerificationRecord? Verification, string? ResultCommit = null);
+public sealed record DispatchRefreshOutcome(
+    TaskProcessRecord ProcessRecord,
+    TaskVerificationRecord? Verification,
+    string? ResultCommit = null,
+    DispatchRecoveryDecision? RecoveryDecision = null,
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
 
 public sealed class BackgroundDispatchRunner
 {
@@ -33,6 +38,8 @@ public sealed class BackgroundDispatchRunner
     private readonly Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>> _findBuildDaemons;
     private readonly Func<int, bool> _tryKillBuildDaemon;
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
+    private readonly DispatchRecoveryPolicy _recoveryPolicy;
+    private readonly WorkerProviderCatalog _workerProviders;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -44,7 +51,9 @@ public sealed class BackgroundDispatchRunner
         Func<int, bool>? tryKillBuildDaemon = null,
         TimeSpan? progressStallTimeout = null,
         IDispatchDiagnosticWriter? diagnosticWriter = null,
-        TimeSpan? startupHangTimeout = null)
+        TimeSpan? startupHangTimeout = null,
+        DispatchRecoveryPolicy? recoveryPolicy = null,
+        WorkerProviderCatalog? workerProviders = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -56,6 +65,8 @@ public sealed class BackgroundDispatchRunner
         _findBuildDaemons = findBuildDaemons ?? FindBuildDaemons;
         _tryKillBuildDaemon = tryKillBuildDaemon ?? TryKillBuildDaemonProcess;
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
+        _recoveryPolicy = recoveryPolicy ?? new DispatchRecoveryPolicy(_clock);
+        _workerProviders = workerProviders ?? WorkerProviderCatalog.Default();
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -183,25 +194,20 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
+    private WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
-        if (dispatch.ProviderName?.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) == true ||
-            dispatch.WorkerName.Contains("claude", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.Contains("claude", StringComparison.OrdinalIgnoreCase))
+        var provider = ResolveWorkerProvider(dispatch);
+        if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
         {
             return WorkerSandboxProvider.Claude;
         }
 
-        if (dispatch.ProviderName?.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) == true ||
-            dispatch.WorkerName.Contains("codex", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.Contains("codex", StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
         {
             return WorkerSandboxProvider.Codex;
         }
 
-        if (dispatch.ProviderName?.Equals("Ollama", StringComparison.OrdinalIgnoreCase) == true ||
-            dispatch.WorkerName.Contains("qwen", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.Command.Contains("qwen", StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind == ProviderKind.OllamaQwenCodeCli)
         {
             return WorkerSandboxProvider.Ollama;
         }
@@ -224,10 +230,11 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is null || task.LastVerification is not null)
+                if (process is null || process.WasCancelled || task.LastVerification is not null)
                     continue;
 
-                if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, out var outcome))
+                var recoveryDecision = _recoveryPolicy.Evaluate(process, AnyTrackedProcessStillRunning(process));
+                if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, recoveryDecision, out var outcome))
                     continue;
 
                 ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
@@ -251,12 +258,30 @@ public sealed class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
+        var hasLiveProcess = AnyTrackedProcessStillRunning(processRecord);
+        var hasDirtyWorktreeEvidence =
+            !hasLiveProcess &&
+            !File.Exists(processRecord.ExitCodePath) &&
+            task.LastDispatch is not null &&
+            RequiresFileChangeEvidence(task) &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch.DispatchedAt, out var staleWorktreeEvidence) &&
+            !staleWorktreeEvidence.IsClean;
+        var recoveryDecision = _recoveryPolicy.Evaluate(
+            processRecord,
+            hasLiveProcess,
+            DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task),
+            hasDirtyWorktreeEvidence);
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
-        if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, out var completion))
+        if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, recoveryDecision, out var completion))
             return completion;
 
-        if (_isStillRunning(processRecord.ProcessId))
+        if (hasLiveProcess)
         {
+            if (IsAuthoritativeHold(recoveryDecision))
+            {
+                return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+            }
+
             if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
             {
                 TryKillTrackedProcesses(processRecord, waitForExit: true);
@@ -269,11 +294,11 @@ public sealed class BackgroundDispatchRunner
                         $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote);
+                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote));
                 }
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, diagnostic));
             }
 
             if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
@@ -288,37 +313,38 @@ public sealed class BackgroundDispatchRunner
                         $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote);
+                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote));
                 }
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, wrapperDiagnostic));
             }
 
             if (TryDetectStartupHang(processRecord, out var startupHangDiagnostic))
             {
                 TryKillTrackedProcesses(processRecord, waitForExit: true);
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, startupHangDiagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, startupHangDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, startupHangDiagnostic));
             }
 
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
             {
                 TryKillTrackedProcesses(processRecord, waitForExit: true);
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, stallDiagnostic);
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, stallDiagnostic, WithAction(DispatchRecoveryAction.ClassifyBlocker, recoveryDecision, stallDiagnostic));
             }
 
-            return new DispatchRefreshOutcome(processRecord, null);
+            return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
         }
 
         if (exitFileExists)
         {
-            return new DispatchRefreshOutcome(processRecord, null);
+            return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
         }
 
         TryKillTrackedProcesses(processRecord, waitForExit: false);
-        return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1);
+        var staleDiagnostic = BuildRecoveryDiagnostic(recoveryDecision);
+        return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, staleDiagnostic, recoveryDecision);
     }
 
     private bool TryCompleteFromExitFile(
@@ -326,29 +352,24 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         TaskProcessRecord processRecord,
+        DispatchRecoveryDecision recoveryDecision,
         out DispatchRefreshOutcome outcome)
     {
         IReadOnlyList<int>? ownedProcessIds = null;
         if (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
         {
-            if (heartbeat.ChildProcessId is not null)
-            {
-                outcome = new DispatchRefreshOutcome(processRecord, null);
-                return false;
-            }
-
             ownedProcessIds = heartbeat.OwnedProcessIds;
         }
 
         if (ownedProcessIds?.Any(_isStillRunning) == true)
         {
-            outcome = new DispatchRefreshOutcome(processRecord, null);
+            outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
             return false;
         }
 
         if (!TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
-            outcome = new DispatchRefreshOutcome(processRecord, null);
+            outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
             return false;
         }
 
@@ -357,7 +378,14 @@ public sealed class BackgroundDispatchRunner
             TryKillTrackedProcesses(processRecord, waitForExit: true);
         }
 
-        outcome = BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, exitCode);
+        outcome = BuildCompletedProcessOutcome(
+            kernel,
+            goalId,
+            taskId,
+            processRecord,
+            exitCode,
+            BuildRecoveryDiagnostic(recoveryDecision),
+            recoveryDecision);
         return true;
     }
 
@@ -367,7 +395,7 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         DispatchRefreshOutcome outcome)
     {
-        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification);
+        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification, outcome.ProviderFailureKind);
         if (outcome.ResultCommit is not null)
             kernel.RecordDispatchResultCommit(goalId, taskId, outcome.ResultCommit);
     }
@@ -378,12 +406,14 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         TaskProcessRecord processRecord,
         int exitCode,
-        string? standardErrorDiagnostic = null)
+        string? standardErrorDiagnostic = null,
+        DispatchRecoveryDecision? recoveryDecision = null)
     {
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         ReleaseTrackedProcessJobs(processRecord);
         var task = kernel.GetTask(goalId, taskId);
+        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
         var hasCommittedChanges = false;
         if (RequiresFileChangeEvidence(task) &&
@@ -394,34 +424,48 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var orchestratorCommitted = false;
-            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(processRecord, standardOutput, standardError);
+            var commitAttempted = false;
+            var commitAttempt = default(CommitWorktreeEditsResult);
+            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
+                task,
+                processRecord,
+                standardOutput,
+                standardError,
+                providerFailureKind);
+            var providerCannotSelfCommit = task.LastDispatch is { } dispatch &&
+                !ResolveWorkerProvider(dispatch).Capabilities.CanSelfCommit;
             var shouldCommitDirtyWorktree =
-                worktreeEvidence.HasRelevantCommitAfterDispatch ||
-                (task.LastDispatch.SandboxLowIntegrity &&
-                 (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                  sandboxCommitBlocked));
+                (exitCode == 0 && worktreeEvidence.HasCommitAfterDispatch) ||
+                ((task.LastDispatch.SandboxLowIntegrity || providerCannotSelfCommit) &&
+                  (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
+                   sandboxCommitBlocked));
 
             if (!worktreeEvidence.IsClean &&
-                shouldCommitDirtyWorktree &&
-                TryCommitWorktreeEdits(
-                    processRecord.WorkingDirectory,
-                    BuildOrchestratorCommitSubject(task, standardOutput, standardError)) &&
-                TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
-                worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
+                shouldCommitDirtyWorktree)
             {
-                orchestratorCommitted = true;
-                hasCommittedChanges = true;
-                exitCode = 0;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    "Orchestrator committed the worker's verified worktree edits. " +
-                    $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
-                if (sandboxCommitBlocked)
+                commitAttempt = TryCommitWorktreeEdits(
+                    processRecord.WorkingDirectory,
+                    BuildOrchestratorCommitSubject(task, standardOutput, standardError),
+                    worktreeEvidence.DirtyPaths);
+                commitAttempted = true;
+                if (commitAttempt.Succeeded &&
+                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+                    worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
                 {
+                    orchestratorCommitted = true;
+                    hasCommittedChanges = true;
+                    exitCode = 0;
                     standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic,
-                        "Classified worker git metadata write failure as non-fatal; orchestrator commit-on-behalf is the commit path. " +
-                        $"index_lock={TryResolveIndexLockPath(processRecord.WorkingDirectory)}.");
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Orchestrator committed the worker's verified worktree edits. " +
+                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}.");
+                    if (sandboxCommitBlocked)
+                    {
+                        standardErrorDiagnostic = AppendDiagnostic(
+                            standardErrorDiagnostic,
+                            "Classified worker git metadata write failure as non-fatal; orchestrator commit-on-behalf is the commit path. " +
+                            $"index_lock={TryResolveIndexLockPath(processRecord.WorkingDirectory)}.");
+                    }
                 }
             }
 
@@ -430,6 +474,13 @@ public sealed class BackgroundDispatchRunner
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
+                if (commitAttempted && !commitAttempt.Succeeded && commitAttempt.Diagnostic.Length > 0)
+                {
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        commitAttempt.Diagnostic);
+                }
+
                 standardErrorDiagnostic = AppendDiagnostic(
                     standardErrorDiagnostic ?? string.Empty,
                     "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
@@ -516,10 +567,11 @@ public sealed class BackgroundDispatchRunner
             StandardErrorPath: processRecord.StandardErrorPath,
             WorkerResultPresent: workerResultPresent,
             HasCommittedChanges: hasCommittedChanges,
-            HeartbeatStandardOutputBytes: heartbeatStdoutBytes);
+            HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
+            ProviderFailureKind: providerFailureKind);
 
         TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
-        return new DispatchRefreshOutcome(completed, verification, resultCommit);
+        return new DispatchRefreshOutcome(completed, verification, resultCommit, recoveryDecision, providerFailureKind);
     }
 
     private static string? TryGetWorktreeHead(string workingDirectory)
@@ -589,9 +641,11 @@ public sealed class BackgroundDispatchRunner
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
+        TaskSpec task,
         TaskProcessRecord processRecord,
         string standardOutput,
-        string standardError)
+        string standardError,
+        ProviderFailureKind providerFailureKind)
     {
         var verification = new TaskVerificationRecord(
             processRecord.Command,
@@ -600,7 +654,24 @@ public sealed class BackgroundDispatchRunner
             standardOutput,
             standardError,
             DateTimeOffset.UtcNow);
-        return DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification);
+        return DispatchFailureClassifier.Classify(task, verification, providerFailureKind).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
+    }
+
+    private ProviderFailureKind ParseProviderFailureKind(
+        TaskDispatchRecord? dispatch,
+        int exitCode,
+        string standardOutput,
+        string standardError)
+    {
+        if (dispatch is null)
+        {
+            return ProviderFailureKind.Unknown;
+        }
+
+        return ResolveWorkerProvider(dispatch).ParseOutcome(new WorkerProviderOutcome(
+            exitCode,
+            standardOutput,
+            standardError));
     }
 
     private static string TryResolveIndexLockPath(string workingDirectory)
@@ -676,20 +747,23 @@ public sealed class BackgroundDispatchRunner
     }
 
     // Commits the worker's uncommitted worktree edits from the orchestrator after verification guards
-    // pass. Workers edit the worktree; this path deterministically stages and commits the diff. The
-    // sandbox scratch dir (.mcg-sandbox) is kept out of the commit via the worktree's local git
-    // exclude (ExcludeSandboxFromGit), so a plain `add -A` honours that exclusion. We must NOT pass an
-    // explicit ":(exclude).mcg-sandbox" pathspec here: combined with the ignore entry, git treats the
-    // ignored path as explicitly requested and exits non-zero ("paths are ignored ... Use -f") AFTER
-    // partially staging the real files — which previously left edits staged-but-uncommitted.
-    private static bool TryCommitWorktreeEdits(string workingDirectory, string subject)
+    // pass. The dirty path list is filtered from git status so generated/noise paths are not absorbed
+    // into the recovery commit.
+    private static CommitWorktreeEditsResult TryCommitWorktreeEdits(string workingDirectory, string subject, IReadOnlyList<string> dirtyPaths)
     {
         try
         {
-            var add = GitCli.Run(workingDirectory, "add", "-A");
+            if (dirtyPaths.Count == 0)
+            {
+                return CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf skipped: no commit-worthy dirty paths.");
+            }
+
+            var addArgs = new List<string>(dirtyPaths.Count + 3) { "add", "-A", "--" };
+            addArgs.AddRange(dirtyPaths);
+            var add = GitCli.Run(workingDirectory, addArgs.ToArray());
             if (!add.Succeeded)
             {
-                return false;
+                return CommitWorktreeEditsResult.FromGitFailure("add", addArgs, add);
             }
 
             var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--name-only");
@@ -697,15 +771,21 @@ public sealed class BackgroundDispatchRunner
             {
                 // Nothing to commit (e.g. only the excluded sandbox scratch was dirty) — leave the
                 // dispatch to fail/report rather than create an empty commit.
-                return false;
+                return staged.ExitCode == 0
+                    ? CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no staged changes after git add.")
+                    : CommitWorktreeEditsResult.FromGitFailure("diff", ["diff", "--cached", "--name-only"], staged);
             }
 
-            var commit = GitCli.Run(workingDirectory, "commit", "-m", subject);
-            return commit.Succeeded;
+            var commitArgs = new[] { "commit", "-m", subject };
+            var commit = GitCli.Run(workingDirectory, commitArgs);
+            return commit.Succeeded
+                ? CommitWorktreeEditsResult.Success
+                : CommitWorktreeEditsResult.FromGitFailure("commit", commitArgs, commit);
         }
-        catch
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            return false;
+            return CommitWorktreeEditsResult.Failed(
+                $"Orchestrator commit-on-behalf failed with {ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
         }
     }
 
@@ -797,7 +877,7 @@ public sealed class BackgroundDispatchRunner
                 .ToArray()
             : [];
 
-        var filteredStatusOutput = FilterWorkerResultArtifacts(status.Output);
+        var filteredStatusOutput = FilterCommitWorthyStatus(status.Output);
         evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
@@ -805,7 +885,8 @@ public sealed class BackgroundDispatchRunner
             status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
             FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
             commitsAfterDispatch,
-            pathsChangedAfterDispatch);
+            pathsChangedAfterDispatch,
+            ParseStatusPaths(filteredStatusOutput));
         return true;
     }
 
@@ -833,7 +914,7 @@ public sealed class BackgroundDispatchRunner
             !normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string FilterWorkerResultArtifacts(string statusOutput)
+    private static string FilterCommitWorthyStatus(string statusOutput)
     {
         if (string.IsNullOrWhiteSpace(statusOutput))
         {
@@ -842,23 +923,54 @@ public sealed class BackgroundDispatchRunner
 
         var lines = statusOutput
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(line => !IsWorkerResultArtifactStatusLine(line));
+            .Where(IsCommitWorthyStatusLine);
         return string.Join("\n", lines);
     }
 
-    private static bool IsWorkerResultArtifactStatusLine(string line)
+    private static bool IsCommitWorthyStatusLine(string line)
     {
-        // Untracked WORKER_RESULT.md/.txt show as "?? WORKER_RESULT.md" in git status --short.
-        // We ignore these as result artifacts, not real work artifacts.
-        var trimmed = line.TrimStart();
-        if (!trimmed.StartsWith("??", StringComparison.Ordinal))
+        var paths = ParseStatusLinePaths(line);
+        return paths.Length > 0 && paths.Any(IsRelevantSourcePath);
+    }
+
+    private static string[] ParseStatusPaths(string statusOutput)
+    {
+        if (string.IsNullOrWhiteSpace(statusOutput))
         {
-            return false;
+            return [];
         }
 
-        var filename = trimmed[2..].Trim();
-        return string.Equals(filename, "WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(filename, "WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase);
+        return statusOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(ParseStatusLinePaths)
+            .Where(IsRelevantSourcePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string[] ParseStatusLinePaths(string line)
+    {
+        if (line.Length < 4)
+        {
+            return [];
+        }
+
+        var path = line[3..].Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return [];
+        }
+
+        var renameSeparator = path.IndexOf(" -> ", StringComparison.Ordinal);
+        if (renameSeparator >= 0)
+        {
+            var source = path[..renameSeparator].Trim();
+            var destination = path[(renameSeparator + 4)..].Trim();
+            return [source, destination];
+        }
+
+        return [path];
     }
 
     private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
@@ -1444,8 +1556,28 @@ public sealed class BackgroundDispatchRunner
         return values;
     }
 
-    private static bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
-        WorkerProviderResolver.Resolve(dispatch?.WorkerName).UsesCodexExitFileBehavior;
+    private bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
+        dispatch is not null && ResolveWorkerProvider(dispatch).Identity.UsesCodexExitFileBehavior;
+
+    private IWorkerProvider ResolveWorkerProvider(TaskDispatchRecord dispatch)
+    {
+        if (dispatch.WorkerProviderKind != ProviderKind.Unknown)
+        {
+            var typedProvider = _workerProviders.Resolve(dispatch.WorkerProviderKind);
+            if (typedProvider.Identity.Kind != ProviderKind.Unknown)
+            {
+                return typedProvider;
+            }
+        }
+
+        var provider = _workerProviders.ResolveProfile(dispatch.WorkerName);
+        if (provider.Identity.Kind != ProviderKind.Unknown)
+        {
+            return provider;
+        }
+
+        return provider;
+    }
 
     private static bool ContainsCodexFinalOutput(string value)
     {
@@ -1464,6 +1596,44 @@ public sealed class BackgroundDispatchRunner
             ? diagnostic
             : standardError.TrimEnd() + Environment.NewLine + diagnostic;
     }
+
+    private static string NormalizeDiagnosticText(string value)
+    {
+        var normalized = string.Join(
+            " ",
+            value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return string.IsNullOrWhiteSpace(normalized) ? "none" : normalized;
+    }
+
+    private static string BuildRecoveryDiagnostic(DispatchRecoveryDecision? decision)
+    {
+        if (decision is null)
+        {
+            return string.Empty;
+        }
+
+        var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
+            ? string.Empty
+            : $" blocker='{decision.Blocker}'";
+        return $"Dispatch recovery policy action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.";
+    }
+
+    private static DispatchRecoveryDecision WithAction(
+        DispatchRecoveryAction action,
+        DispatchRecoveryDecision basis,
+        string reason) =>
+        new(
+            action,
+            DispatchRecoveryPolicy.ToActionName(action),
+            basis.EvidencePath,
+            string.IsNullOrWhiteSpace(reason) ? basis.Reason : reason,
+            basis.Blocker);
+
+    private static bool IsAuthoritativeHold(DispatchRecoveryDecision decision) =>
+        decision.Action == DispatchRecoveryAction.Hold &&
+        (decision.Reason.Contains("recent heartbeat", StringComparison.OrdinalIgnoreCase) ||
+         decision.Reason.Contains("CPU activity", StringComparison.OrdinalIgnoreCase) ||
+         decision.Reason.Contains("output progress", StringComparison.OrdinalIgnoreCase));
 
     private DateTimeOffset GetLastOutputWriteTime(TaskProcessRecord processRecord)
     {
@@ -1677,12 +1847,41 @@ public sealed class BackgroundDispatchRunner
         string WorktreeStatus,
         string StatusShort,
         int CommitsAfterDispatch,
-        IReadOnlyList<string> ChangedPaths)
+        IReadOnlyList<string> ChangedPaths,
+        IReadOnlyList<string> DirtyPaths)
     {
         public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
         public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(IsRelevantSourcePath);
         public string ChangedPathsSummary => FormatChangedPaths(ChangedPaths);
 
-        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, []);
+        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
+    }
+
+    private readonly record struct CommitWorktreeEditsResult(bool Succeeded, string Diagnostic)
+    {
+        public static CommitWorktreeEditsResult Success { get; } = new(true, string.Empty);
+
+        public static CommitWorktreeEditsResult Failed(string diagnostic) => new(false, diagnostic);
+
+        public static CommitWorktreeEditsResult FromGitFailure(
+            string operation,
+            IReadOnlyList<string> arguments,
+            GitCli.GitResult result)
+        {
+            var detail = string.IsNullOrWhiteSpace(result.Error)
+                ? result.Output
+                : result.Error;
+            return Failed(
+                "Orchestrator commit-on-behalf git command failed. " +
+                $"operation={operation}; command=git {FormatGitArguments(arguments)}; exit_code={result.ExitCode}; " +
+                $"error={NormalizeDiagnosticText(detail)}.");
+        }
+
+        private static string FormatGitArguments(IReadOnlyList<string> arguments)
+        {
+            return string.Join(
+                ' ',
+                arguments.Select(argument => argument.Contains(' ', StringComparison.Ordinal) ? $"\"{argument}\"" : argument));
+        }
     }
 }

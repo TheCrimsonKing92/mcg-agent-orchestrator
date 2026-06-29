@@ -17,6 +17,7 @@ public static class DispatchProcessHost
     public const string StartGatePathVariable = "MCG_DISPATCH_HOST_START_GATE";
     internal const string LowIntegritySetupArtifactName = "low-integrity-setup.json";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
+    private static readonly IcaclsIntegrityLabeler IntegrityLabeler = new();
 
     // Dispatch supervision: an unbounded wait lets a hung worker — or a stuck grandchild such as a
     // git process wedged on an index.lock — hold the owned job open indefinitely, which blocks the
@@ -63,6 +64,12 @@ public static class DispatchProcessHost
     // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
     // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
     internal static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
+        => ApplyWorkerSandbox(startInfo, parameters, WorkerSandboxPreparer.CreateDefault());
+
+    internal static void ApplyWorkerSandbox(
+        ProcessStartInfo startInfo,
+        DispatchRunParameters parameters,
+        WorkerSandboxPreparer preparer)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
@@ -75,40 +82,28 @@ public static class DispatchProcessHost
         // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
-        if (!SetLowIntegrity(parameters.WorkingDirectory, recursive: true))
-        {
-            throw new InvalidOperationException($"Failed to apply Low integrity label to worktree '{parameters.WorkingDirectory}'.");
-        }
+        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
         ProtectGitMetadata(parameters.WorkingDirectory);
 
-        // Per-dispatch Low-labeled writable set: codex's home (seeded with the operator's auth so codex
-        // stays authenticated) and a temp scratch. The sandbox root is labeled before child paths are
+        // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
+        // provider-specific home/config directories. The sandbox root is labeled before child paths are
         // materialized so they inherit Low without a second recursive icacls traversal.
-        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
-        Directory.CreateDirectory(sandboxRoot);
-        if (!SetLowIntegrity(sandboxRoot, recursive: false, inheritToChildren: true))
-        {
-            throw new InvalidOperationException($"Failed to apply inheritable Low integrity label to sandbox root '{sandboxRoot}'.");
-        }
-
-        var codexHome = Path.Combine(sandboxRoot, "codex-home");
         var tempDir = Path.Combine(sandboxRoot, "temp");
         var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
-        Directory.CreateDirectory(codexHome);
         Directory.CreateDirectory(tempDir);
         WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
 
-        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, codexHome, parameters.StderrPath);
+        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
 
         // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
         // the worktree must read as clean after the orchestrator commits the worker's real edits.
         ExcludeSandboxFromGit(parameters.WorkingDirectory);
 
-        startInfo.Environment["CODEX_HOME"] = codexHome;
         startInfo.Environment["TEMP"] = tempDir;
         startInfo.Environment["TMP"] = tempDir;
         startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
-        WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory);
+        WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, preparation);
 
         // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
         // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
@@ -125,16 +120,24 @@ public static class DispatchProcessHost
         ProcessStartInfo startInfo,
         WorkerSandboxProvider provider,
         string sandboxRoot,
-        string codexHome,
         string? stderrPath = null)
     {
-        if (provider == WorkerSandboxProvider.Claude)
+        startInfo.Environment.Remove("CODEX_HOME");
+        startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+
+        if (provider == WorkerSandboxProvider.Codex)
         {
-            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+            var codexHome = Path.Combine(sandboxRoot, "codex-home");
+            Directory.CreateDirectory(codexHome);
+            SeedCodexAuth(codexHome);
+            startInfo.Environment["CODEX_HOME"] = codexHome;
             return;
         }
 
-        SeedCodexAuth(codexHome);
+        if (provider == WorkerSandboxProvider.Claude)
+        {
+            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+        }
     }
 
     private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath)
@@ -469,14 +472,14 @@ public static void DropToLow() {
 [P.N]::DropToLow()
 ";
 
-    private static bool SetLowIntegrity(string path, bool recursive, bool inheritToChildren = true)
-    {
-        return SetIntegrity(path, inheritToChildren ? "(OI)(CI)L" : "L", recursive);
-    }
-
     private static void ProtectGitMetadata(string worktree)
     {
         var checkoutGitFile = Path.Combine(worktree, ".git");
+        if (!File.Exists(checkoutGitFile) && !Directory.Exists(checkoutGitFile))
+        {
+            return;
+        }
+
         if (File.Exists(checkoutGitFile))
         {
             if (!SetMediumIntegrity(checkoutGitFile))
@@ -513,45 +516,7 @@ public static void DropToLow() {
 
     private static bool SetMediumIntegrity(string path)
     {
-        return SetIntegrity(path, Directory.Exists(path) ? "(OI)(CI)M" : "M", recursive: false);
-    }
-
-    private static bool SetIntegrity(string path, string level, bool recursive)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "icacls",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            psi.ArgumentList.Add(path);
-            psi.ArgumentList.Add("/setintegritylevel");
-            psi.ArgumentList.Add(level);
-            if (recursive)
-            {
-                psi.ArgumentList.Add("/T");
-            }
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return false;
-            }
-
-            var copyOut = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
-            var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
-            var completed = WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
-            try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return completed;
-        }
-        catch
-        {
-            return false;
-        }
+        return IntegrityLabeler.SetIntegrity(path, Directory.Exists(path) ? "(OI)(CI)M" : "M", recursive: false);
     }
 
     internal static bool WaitForIntegrityLabeler(Process process, TimeSpan timeout)
@@ -566,13 +531,16 @@ public static void DropToLow() {
         return false;
     }
 
-    private static void WriteLowIntegritySetupArtifact(string sandboxRoot, string worktree)
+    private static void WriteLowIntegritySetupArtifact(
+        string sandboxRoot,
+        string worktree,
+        WorkerSandboxPreparationResult preparation)
     {
         var artifact = new
         {
-            strategy = "worktree-recursive-sandbox-inherited",
-            worktreeRecursiveRelabel = true,
-            sandboxRecursiveRelabel = false,
+            strategy = "prepared-root-inherited-low-integrity",
+            worktreeRecursiveRelabel = preparation.WorktreeRecursiveRelabel,
+            sandboxRecursiveRelabel = preparation.SandboxRecursiveRelabel,
             sandboxRoot,
             worktree
         };
@@ -677,28 +645,10 @@ public static void DropToLow() {
 
         try
         {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = WorkerShell.Executable,
-                WorkingDirectory = parameters.WorkingDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                // Redirect stdin so we can close it immediately: CLI workers (e.g. claude-cli, a
-                // node shim) otherwise inherit the orchestrator's stdin. Under a background/detached
-                // launch that handle is an open pipe that never reaches EOF, so the worker blocks
-                // indefinitely waiting for stdin (the CLI's 3s "no stdin" skip only applies to a
-                // TTY, not an inherited pipe). Closing stdin gives an immediate EOF and prevents
-                // the startup hang.
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            foreach (var argument in WorkerShell.BaseArguments())
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            startInfo.ArgumentList.Add(parameters.Command);
+            // Redirect stdin so we can close it immediately: CLI workers otherwise inherit the
+            // orchestrator's stdin. Under a background/detached launch that handle is an open pipe
+            // that never reaches EOF, so the worker blocks indefinitely waiting for stdin.
+            var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(parameters.Command, parameters.WorkingDirectory);
 
             if (parameters.DisableSharedCompilation)
             {
@@ -708,7 +658,10 @@ public static void DropToLow() {
             }
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
+            var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
+            WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
             ApplyWorkerSandbox(startInfo, parameters);
+            WriteSandboxPrepEvent(parameters, "complete", sandboxPrepStartedAt, DateTimeOffset.UtcNow - sandboxPrepStartedAt);
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             RunLowIntegrityLaunchPreflight(startInfo, parameters);
@@ -913,6 +866,40 @@ public static void DropToLow() {
         catch
         {
             // Best-effort; the orchestrator treats a missing exit file as still-running.
+        }
+    }
+
+    private static void WriteSandboxPrepEvent(
+        DispatchRunParameters parameters,
+        string phase,
+        DateTimeOffset startedAt,
+        TimeSpan? elapsed)
+    {
+        if (!parameters.SandboxLowIntegrity)
+        {
+            return;
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["event"] = "sandbox-prep",
+            ["phase"] = phase,
+            ["timestamp"] = DateTimeOffset.UtcNow.ToString("o"),
+            ["startedAt"] = startedAt.ToString("o"),
+            ["workingDirectory"] = parameters.WorkingDirectory
+        };
+        if (elapsed is { } value)
+        {
+            payload["elapsedMs"] = (long)value.TotalMilliseconds;
+        }
+
+        try
+        {
+            AppendDispatchStderrDiagnostic(parameters.StderrPath, JsonSerializer.Serialize(payload, JsonOptions));
+        }
+        catch
+        {
+            // Sandbox progress is diagnostic only; setup failures are reported separately.
         }
     }
 

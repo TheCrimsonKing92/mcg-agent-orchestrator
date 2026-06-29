@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -16,7 +17,13 @@ public static class WorkerProfileDiagnostics
 
     public static bool IsPatchCapableCommand(string commandTemplate)
     {
-        return EvaluatePatchCapability(commandTemplate).IsPatchCapable;
+        var normalized = commandTemplate.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) && !IsEchoOnlyCommand(normalized);
+    }
+
+    public static bool IsPatchCapableCommand(WorkerProfile profile, IWorkerProvider provider)
+    {
+        return EvaluatePatchCapability(profile, provider).IsPatchCapable;
     }
 
     public static bool UsesSubscriptionModelPlaceholder(string commandTemplate)
@@ -42,18 +49,36 @@ public static class WorkerProfileDiagnostics
             return new WorkerProfilePatchCapability(false, "Command only echoes the prompt path; it cannot patch source.");
         }
 
-        if (IsClaudeCommand(normalized))
+        return new WorkerProfilePatchCapability(
+            true,
+            "Untyped worker command capability cannot be inferred beyond executing the prompt.");
+    }
+
+    public static WorkerProfilePatchCapability EvaluatePatchCapability(WorkerProfile profile, IWorkerProvider provider)
+    {
+        var normalized = profile.CommandTemplate.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
         {
-            return EvaluateClaudePatchCapability(normalized);
+            return new WorkerProfilePatchCapability(false, "Command template is empty; it cannot patch source.");
         }
 
-        if (!IsCodexCommand(normalized))
+        if (IsEchoOnlyCommand(normalized))
         {
-            return new WorkerProfilePatchCapability(
+            return new WorkerProfilePatchCapability(false, "Command only echoes the prompt path; it cannot patch source.");
+        }
+
+        return provider.Identity.Kind switch
+        {
+            ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark => EvaluateCodexPatchCapability(normalized),
+            _ => new WorkerProfilePatchCapability(
                 true,
-                "Command is not a recognized Codex launcher; patch capability cannot be inferred beyond executing the prompt.");
-        }
+                "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")
+        };
+    }
 
+    private static WorkerProfilePatchCapability EvaluateCodexPatchCapability(string normalized)
+    {
         var hasWorkspaceWrite = normalized.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("--sandbox {sandboxMode}", StringComparison.OrdinalIgnoreCase);
         var hasWorkingDirectory = normalized.Contains("--cd {workingDirectory}", StringComparison.OrdinalIgnoreCase);
@@ -121,33 +146,6 @@ public static class WorkerProfileDiagnostics
             $"Claude launcher is not patch-capable; missing {string.Join(", ", missing)}.");
     }
 
-    private static bool IsCodexCommand(string commandTemplate)
-    {
-        return IsLauncherCommand(commandTemplate, "codex");
-    }
-
-    private static bool IsClaudeCommand(string commandTemplate)
-    {
-        return IsLauncherCommand(commandTemplate, "claude");
-    }
-
-    private static bool IsLauncherCommand(string commandTemplate, string launcher)
-    {
-        var trimmed = commandTemplate.TrimStart();
-        if (trimmed.StartsWith("& ", StringComparison.Ordinal))
-        {
-            trimmed = trimmed[2..].TrimStart();
-        }
-
-        if (trimmed.StartsWith($"\"{launcher}\"", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.StartsWith($"'{launcher}'", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return trimmed.StartsWith($"{launcher} ", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals(launcher, StringComparison.OrdinalIgnoreCase);
-    }
 }
 
 public sealed record WorkerProfilePatchCapability(bool IsPatchCapable, string Detail);
@@ -198,6 +196,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
             new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+            new WorkerProfile("codex-spark", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
             new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
             new WorkerProfile("claude-cli", "'' | claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})")
@@ -295,10 +294,16 @@ public static class WorkerProfileStore
     {
         var repaired = catalog;
         var defaults = WorkerProfileCatalog.Default();
-        foreach (var profileName in new[] { "codex-cli", "claude-cli" })
+        var providers = WorkerProviderCatalog.Default();
+        foreach (var profileName in new[]
+                  {
+                      WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
+                      providers.Resolve(ProviderKind.OpenAICodexSpark).ProfileName,
+                      WorkerProfileDispatcher.AnthropicSubscriptionProfileName
+                  })
         {
             var current = repaired.GetRequired(profileName);
-            if (ShouldRepairBuiltInSubscriptionProfile(current))
+            if (ShouldRepairBuiltInSubscriptionProfile(current, providers.ResolveProfile(profileName)))
             {
                 repaired = repaired.Upsert(defaults.GetRequired(profileName));
             }
@@ -307,14 +312,14 @@ public static class WorkerProfileStore
         return repaired;
     }
 
-    private static bool ShouldRepairBuiltInSubscriptionProfile(WorkerProfile profile)
+    private static bool ShouldRepairBuiltInSubscriptionProfile(WorkerProfile profile, IWorkerProvider provider)
     {
         if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
         {
             return true;
         }
 
-        if (profile.Name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase))
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli)
         {
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
@@ -322,9 +327,9 @@ public static class WorkerProfileStore
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
         }
 
-        return profile.Name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) &&
+        return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&
             (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("{permissionMode}", StringComparison.OrdinalIgnoreCase) ||
-                !WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate).IsPatchCapable);
+                !WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider).IsPatchCapable);
     }
 }

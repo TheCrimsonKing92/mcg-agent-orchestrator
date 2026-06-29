@@ -32,6 +32,11 @@ internal static class CliPersistentStateRunner
             return false;
         }
 
+        if (IsGoalSubscriptionCommand(args))
+        {
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         // Long-running conductor loops persist per tick and must NOT run inside the single wrapping
         // state transaction: that transaction only commits when the command returns, so a watch loop
         // (which may never return) never persists its dispatches, and a killed loop rolls back every
@@ -103,6 +108,13 @@ internal static class CliPersistentStateRunner
     internal static bool IsMetadataOnlyListing(IReadOnlyList<string> args)
     {
         return args.Count == 1 && args[0].Equals("goals", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsGoalSubscriptionCommand(IReadOnlyList<string> args)
+    {
+        return args.Count > 1 &&
+            args[0].Equals("goals", StringComparison.OrdinalIgnoreCase) &&
+            args[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool IsModelOutcomesScorecard(IReadOnlyList<string> args)

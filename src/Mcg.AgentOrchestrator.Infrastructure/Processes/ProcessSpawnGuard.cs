@@ -12,6 +12,8 @@ public static class ProcessSpawnGuard
     private const int SystemExtendedHandleInformation = 64;
     private const int InitialHandleBufferSize = 0x10000;
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
+    private const int StatusBufferTooSmall = unchecked((int)0xC0000023);
+    private const int StatusBufferOverflow = unchecked((int)0x80000005);
 
     public static int ClearInheritableStateDatabaseHandles()
     {
@@ -33,17 +35,22 @@ public static class ProcessSpawnGuard
         var cleared = 0;
         foreach (var handle in EnumerateCurrentProcessHandles())
         {
-            if (!TryGetDiskHandlePath(handle, out var path) ||
-                !fileNames.Any(fileName => path.EndsWith(fileName, StringComparison.OrdinalIgnoreCase)) ||
-                !GetHandleInformation(handle, out var flags) ||
+            if (!GetHandleInformation(handle, out var flags) ||
                 (flags & HandleFlagInherit) == 0)
+            {
+                continue;
+            }
+
+            var hasResolvedTargetPath = TryGetDiskHandlePath(handle, out var path) && fileNames.Length > 0;
+            if (hasResolvedTargetPath &&
+                !fileNames.Any(fileName => path.EndsWith(fileName, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
 
             if (!SetHandleInformation(handle, HandleFlagInherit, 0))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to clear inheritable flag for {path}.");
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to clear inheritable flag for disk handle.");
             }
 
             cleared++;
@@ -84,7 +91,9 @@ public static class ProcessSpawnGuard
 
                 Marshal.FreeHGlobal(buffer);
                 buffer = IntPtr.Zero;
-                if (status != StatusInfoLengthMismatch)
+                if (status != StatusInfoLengthMismatch &&
+                    status != StatusBufferTooSmall &&
+                    status != StatusBufferOverflow)
                 {
                     yield break;
                 }

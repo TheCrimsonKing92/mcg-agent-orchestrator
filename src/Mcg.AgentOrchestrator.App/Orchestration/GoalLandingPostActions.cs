@@ -20,6 +20,12 @@ internal static class GoalLandingPostActions
             return;
         }
 
+        if (HasSemanticAcceptanceReceipt(workspace.SemanticAcceptanceLogPath, goal.Id.Value))
+        {
+            writeLine?.Invoke($"Semantic acceptance (advisory): receipt already exists for goal {goal.Id.Value[..8]}; skipping judges.");
+            return;
+        }
+
         var modelFunctions = ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath);
         var baseJudges = SemanticAcceptanceEvaluator.BuildJudges(modelFunctions, providers, workerProfiles);
         if (baseJudges.Count == 0)
@@ -76,11 +82,6 @@ internal static class GoalLandingPostActions
     {
         if (goal?.SourceBacklogItemId is null)
         {
-            if (goal is not null)
-            {
-                writeLine?.Invoke($"Warning: goal {goal.Id.Value[..8]} landed without a linked source backlog item; no backlog item closed.");
-            }
-
             return false;
         }
 
@@ -156,5 +157,37 @@ internal static class GoalLandingPostActions
         }
 
         File.AppendAllText(semanticAcceptanceLogPath, JsonSerializer.Serialize(receipt) + Environment.NewLine);
+    }
+
+    private static bool HasSemanticAcceptanceReceipt(string semanticAcceptanceLogPath, string goalId)
+    {
+        if (!File.Exists(semanticAcceptanceLogPath))
+        {
+            return false;
+        }
+
+        foreach (var line in File.ReadLines(semanticAcceptanceLogPath))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                if (document.RootElement.TryGetProperty("goalId", out var goalIdProperty)
+                    && string.Equals(goalIdProperty.GetString(), goalId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Legacy/manual edits should not prevent new receipts from being written.
+            }
+        }
+
+        return false;
     }
 }

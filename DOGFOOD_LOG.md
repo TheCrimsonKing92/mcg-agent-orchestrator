@@ -2074,3 +2074,66 @@ Goal 41c6e2a2: Backlog slice: Make latest Developer retry feedback first-class i
 
 - Operator gate: Planner: not-run; Planner inspection only, no repo files modified (exit 0); Researcher: not-run; read-only Researcher task, claims verified by repository-local source inspection (exit 0); Developer: pass; 3 passed, 0 failed (exit 0); Tester: pass; Infrastructure 4 passed, Core 2 passed; warnings only (exit 0); Reviewer: pass evidence from prior-task-evidence.md: Infrastructure 4 passed, Core 2 passed; not rerun due read-only filesystem (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - reviewer inspection of prompt-construction fix - enough context capacity for targeted review.
+
+## 2026-06-28 - Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f
+
+Goal 6f1fc5b0: Source backlog item: b0b9ccddfc814e3395b4ccc493e9c07f. Fix xUnit1031 blocking waits in tests/Mcg.AgentOrchestrator.In.... Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Developer: pass focused 1/1; full project attempted but blocked by lock/timeout (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - scoped test-only async cleanup - enough reasoning for safe edit and Windows test-lock handling.
+
+## 2026-06-28 - # GOAL: Typed DispatchOutcome + failure taxonomy, FIRST increment (roadmap st...
+
+Goal 34acf303: # GOAL: Typed DispatchOutcome + failure taxonomy, FIRST increment (roadmap step B / anchor abc85822)  ## Current stat.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 8e1adba). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 8e1adba3f402c49b504e1542766fbddf50035c22). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, no repository changes (exit 0); Researcher: not-run; Researcher task only, no repo changes (exit 0); Developer: pass - 11 DispatchOutcome filtered tests passed (exit 0); Tester: pass - 11 passed, 0 failed (exit 0); Reviewer: not-run by reviewer; prior evidence shows focused DispatchOutcome tests passed 11/0 (exit 0)
+- Model fit: Model fit: OpenAI/gpt-5.5 - adequate - planner decomposition - handled source-oriented planning and verification constraints without needing code edits.
+
+## 2026-06-28 - Backlog slice: Implement real --help for CLI commands  Observed backlog-list ...
+
+Goal 7244dd95: Backlog slice: Implement real --help for CLI commands  Observed backlog-list --help falling through to normal backlog.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 3d7f6ab6a023a6e08d6c3cdf11ba0a7376eb369b). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 3d7f6ab6a023a6e08d6c3cdf11ba0a7376eb369b). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, no repository edits (exit 0); Researcher: not-run; read-only Researcher task, verification is repository evidence above (exit 0); Developer: pass, 15 passed; existing NuGet vulnerability-cache access/analyzer warnings only (exit 0); Tester: pass, 15/15 focused tests passed; manual CLI help/invalid-flag checks passed (exit 0); Reviewer: not-run; prior Tester evidence says focused suite passed, 15 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - identified a spec coverage gap from code evidence.
+
+## 2026-06-28 - Backlog slice: Bound dispatch recovery by persisted artifacts and liveness st...
+
+Goal 3e32860f: Backlog slice: Bound dispatch recovery by persisted artifacts and liveness state  Problem: Dispatch recovery decision.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 12e59c613ea56b639132a530d176f656bf8eee63). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run Planner-only no code changes (exit 0); Researcher: not-run; read-only Researcher task, repository evidence inspected (exit 0); Developer: pass - DispatchRecoveryPolicyTests 10/10; broad class run had unrelated Windows path-length failure after 302/303 passed (exit 0); Tester: pass; isolated .NET test slice exited 0, 19 passed, 0 failed, 0 skipped; only existing analyzer/package warnings (exit 0); Reviewer: not-run by Reviewer; prior Tester isolated .NET slice passed 19/19; review found acceptance blocker (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - code-review verification - enough context to compare implementation against acceptance rows.
+
+## 2026-06-28 - Backlog slice: Conductor auto-landing skips the semantic acceptance judges an...
+
+Goal 2873c8b4: Backlog slice: Conductor auto-landing skips the semantic acceptance judges and does not auto-close the linked backlog.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 682b054). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 682b054dfa42ac60544e69a85c2c9e40581ebe7b). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, source inspection completed (exit 0); Researcher: not-run; read-only research task, source inspection only (exit 0); Developer: pass - 112 passed, 0 failed (exit 0); Tester: pass - 112 passed, 0 failed, 0 skipped (exit 0); Reviewer: pass evidence reviewed - prior isolated focused run reported 112 passed, 0 failed, 0 skipped; not rerun due read-only sandbox (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer/code-verification task - handled targeted repository review and evidence comparison.
+
+## 2026-06-28 - Backlog slice: ANCHOR - typed IWorkerProvider abstraction (the architecture d...
+
+Goal 70907530: Backlog slice: ANCHOR - typed IWorkerProvider abstraction (the architecture dance's biggest-miss): replaces string-sn.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Tester task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit none). Acceptance passed.
+
+- Operator gate: Planner: not-run; planning-only task, source/context inspection completed (exit 0); Researcher: not-run; research-only read pass, repository evidence cited above (exit 0); Reviewer: not-run locally; prior evidence says Core DispatchOutcomeClassify 11/11 and Infrastructure WorkerDispatchTests 167/167 passed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - sufficient for diff/evidence inspection.
+
+## 2026-06-28 - Backlog slice: Tests must MOCK the nested build/acceptance, not run a real one
+
+Goal b2af5e12: Backlog slice: Tests must MOCK the nested build/acceptance, not run a real one. GoalWorktreeTests.CliLifecycleSimpleG.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit 9ea245b375dc4732c8eb9d8c27fe768551689659). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 9ea245b375dc4732c8eb9d8c27fe768551689659). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner source inspection only (exit 0); Researcher: not-run - read-only research task; source evidence inspected (exit 0); Developer: pass; GoalWorktreeTests 4/4 in 963ms test duration / 2.56s wall-clock; GoalAcceptanceVerifierTests 37/37 in 139ms (exit 0); Tester: pass with caveat: all focused wrapper runs exited 0; no-build timing attempt invalid due missing test DLL (exit 0); Reviewer: not-run by reviewer; prior pass evidence reviewed (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - reviewer task - handled focused source/evidence comparison.
+
+## 2026-06-28 - Source backlog item 5362ba41: Fix commit-on-behalf residual dirty worktree re...
+
+Goal b2538750: Source backlog item 5362ba41: Fix commit-on-behalf residual dirty worktree regression blocking acceptance. Observed d.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit none). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit ab5462bef71d90a53870b0fa47329f668f3f9026). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner role only, no repository edits (exit 0); Researcher: not-run; Researcher task/read-only, repository evidence inspected only (exit 0); Developer: pass - residual commit failure regression 1/1, residual commit happy path 1/1, nonzero-exit residual dirty guard 1/1; git diff --check passed (exit 0); Tester: pass - main regression `BackgroundDispatchRunnerFileRoleWithCommitAndResidualDirtyWorktreeCommitsResidual` passed 1/1; adjacent guards passed 3/3: residual commit failure surfaces git error, nonzero exit with residual dirty fails, zero-prior-commit dirty worktree fails. One zero-prior run first hit CS2012 file lock, passed after build-server shutdown retry. Final `git status --short` clean. (exit 0); Reviewer: pass evidence from prior Developer/Tester focused WorkerDispatchTests; reviewer static verification pass; not rerun locally due read-only sandbox (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused Reviewer task - sufficient for diff/evidence review without broad repo exploration.
+
+## 2026-06-28 - Backlog slice: Expose headless goal-state subscription without dashboard UI  ...
+
+Goal fee6dd8f: Backlog slice: Expose headless goal-state subscription without dashboard UI  Problem: Operators and agent drivers sti.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none; workspace clean at HEAD f427479). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit none). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit 65354586c48cdea0899ec3fe06032cc90c2b07b3). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only task, no repository changes (exit 0); Researcher: not-run; Researcher role and read-only sandbox, no implementation changes (exit 0); Developer: pass - GoalMonitoringSubscriptionCommandTests 40 passed, 0 failed (exit 0); Tester: pass - 40/40 GoalMonitoringSubscriptionCommandTests and 1/1 headless no-paid-start WorkerDispatch test passed; broader WorkerDispatchTests timed out on unrelated case after lock retry (exit 0); Reviewer: not-run by Reviewer; reviewed prior pass evidence: 40/40 GoalMonitoringSubscriptionCommandTests and 1/1 headless no-paid-start WorkerDispatch test (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - code-review over focused C# CLI/event feed changes - enough local evidence and prior focused tests to assess acceptance.

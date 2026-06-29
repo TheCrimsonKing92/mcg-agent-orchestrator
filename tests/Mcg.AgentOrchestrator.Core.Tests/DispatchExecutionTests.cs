@@ -80,7 +80,8 @@ public sealed class DispatchExecutionTests
         "medium",
         TaskComplexity.Simple,
         1234,
-        UsesComplexModel: true));
+        UsesComplexModel: true,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
@@ -95,6 +96,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(TaskComplexity.Simple, restoredTask.LastDispatch.TaskComplexity);
     Assert.Equal(1234, restoredTask.LastDispatch.PromptCharacterCount);
     Assert.True(restoredTask.LastDispatch.UsesComplexModel);
+    Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch.WorkerProviderKind);
     Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_task_on_success")]
@@ -242,6 +244,51 @@ public sealed class DispatchExecutionTests
 
     kernel.RetryTask(goal.Id, task.Id, "Retry after provider window.");
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_typed_provider_rate_limit_without_output_text")]
+    public void RecordDispatchExecutionResultReopensTaskOnTypedProviderRateLimitWithoutOutputText()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry dispatch after typed provider rate limit");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            1,
+            string.Empty,
+            "provider exited before writing a recognizable rate-limit line",
+            clock.UtcNow),
+        ProviderFailureKind.RateLimit);
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Null(task.LastVerification);
+    Assert.Equal(ProviderFailureKind.RateLimit, task.VerificationHistory.Single().ProviderFailureKind);
+    Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+    Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch!.WorkerProviderKind);
+    Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.VerificationHistory.Single().ProviderFailureKind);
+    Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_powershell_wrapped_subscription_usage_limit")]
     public void RecordDispatchExecutionResultReopensTaskOnPowerShellWrappedSubscriptionUsageLimit()

@@ -390,7 +390,9 @@ public static class OrchestratorHealthInspector
         var exists = commandExists(executable);
         var optional = IsOptionalProfile(profile.Name);
         var echoOnly = WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate);
-        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile.CommandTemplate);
+        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(
+            profile,
+            WorkerProviderCatalog.Default().ResolveProfile(profile.Name));
         var diagnosticEcho = IsDiagnosticEchoProfile(profile.Name);
         return new WorkerProfileValidation(
             profile.Name,
@@ -412,6 +414,7 @@ public static class OrchestratorHealthInspector
     private static bool IsOptionalProfile(string name)
     {
         return name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("codex-spark", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase);

@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public enum WorkerSandboxProvider
@@ -6,6 +8,21 @@ public enum WorkerSandboxProvider
     Codex,
     Claude,
     Ollama
+}
+
+public interface IWorkerSandbox
+{
+    WorkerSandboxOptions Options { get; }
+
+    bool ShouldConfine(AgentRole role, bool isLocalDispatch);
+}
+
+public sealed class EnvironmentWorkerSandbox : IWorkerSandbox
+{
+    public WorkerSandboxOptions Options { get; } = WorkerSandboxOptions.FromEnvironment();
+
+    public bool ShouldConfine(AgentRole role, bool isLocalDispatch) =>
+        Options.Enabled && !isLocalDispatch && role is AgentRole.Developer or AgentRole.Tester;
 }
 
 /// <summary>

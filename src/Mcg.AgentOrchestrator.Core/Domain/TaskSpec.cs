@@ -90,7 +90,8 @@ public sealed class TaskSpec
                     LastVerification.CompletedAt,
                     LastVerification.ModelFitNote,
                     LastVerification.StandardOutputPath,
-                    LastVerification.StandardErrorPath),
+                    LastVerification.StandardErrorPath,
+                    LastVerification.ProviderFailureKind),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -101,7 +102,8 @@ public sealed class TaskSpec
                     verification.CompletedAt,
                     verification.ModelFitNote,
                     verification.StandardOutputPath,
-                    verification.StandardErrorPath))
+                    verification.StandardErrorPath,
+                    verification.ProviderFailureKind))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -118,7 +120,9 @@ public sealed class TaskSpec
                     LastDispatch.UsesComplexModel,
                     LastDispatch.BaseCommit,
                     LastDispatch.ResultCommit,
-                    LastDispatch.SandboxLowIntegrity),
+                    LastDispatch.SandboxLowIntegrity,
+                    LastDispatch.PromptPath,
+                    LastDispatch.WorkerProviderKind),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -183,7 +187,8 @@ public sealed class TaskSpec
                     verification.CompletedAt,
                     verification.ModelFitNote,
                     verification.StandardOutputPath,
-                    verification.StandardErrorPath));
+                    verification.StandardErrorPath,
+                    ProviderFailureKind: verification.ProviderFailureKind));
             }
         }
 
@@ -198,7 +203,8 @@ public sealed class TaskSpec
                 snapshot.LastVerification.CompletedAt,
                 snapshot.LastVerification.ModelFitNote,
                 snapshot.LastVerification.StandardOutputPath,
-                snapshot.LastVerification.StandardErrorPath);
+                snapshot.LastVerification.StandardErrorPath,
+                ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -222,7 +228,9 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.UsesComplexModel,
                 snapshot.LastDispatch.BaseCommit,
                 snapshot.LastDispatch.ResultCommit,
-                snapshot.LastDispatch.SandboxLowIntegrity));
+                snapshot.LastDispatch.SandboxLowIntegrity,
+                snapshot.LastDispatch.PromptPath,
+                snapshot.LastDispatch.WorkerProviderKind));
         }
 
         if (snapshot.LastProcess is not null)

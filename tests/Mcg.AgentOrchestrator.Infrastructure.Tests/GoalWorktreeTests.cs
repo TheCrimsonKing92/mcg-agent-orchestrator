@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-public sealed class GoalWorktreeTests
+public sealed class GoalWorktreeIntegrationTests
 {
     private static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),
@@ -37,6 +37,47 @@ public sealed class GoalWorktreeTests
     [
         new WorkerProfile("local", "git add -A; if ((git status --short).Length -gt 0) { git commit -m Lifecycle-work }; Write-Output {subscriptionModelName}")
     ]);
+
+    private static TimeSpan FastLifecyclePollInterval => TimeSpan.FromMilliseconds(1);
+
+    private static Task SkipLifecycleSleep(TimeSpan delay, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private static Func<Goal, Task<RunGoalService.RunGoalResult>> CreateFastLifecycleRunGoal(
+        AgentOrchestratorKernel kernel,
+        string repo)
+    {
+        return goal =>
+        {
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            var sourcePath = Path.Combine(worktreePath, "src", $"lifecycle-{goal.Id.Value[..8]}.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllText(sourcePath, "// fake lifecycle work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Lifecycle-work");
+
+            var completedTasks = new List<RunGoalService.RunGoalTaskSummary>();
+            foreach (var task in goal.Tasks)
+            {
+                kernel.RecordTaskVerification(
+                    goal.Id,
+                    task.Id,
+                    ManualVerificationRecorder.Create(true, "Fake lifecycle run-goal passed.", worktreePath, DateTimeOffset.UtcNow));
+                completedTasks.Add(new RunGoalService.RunGoalTaskSummary(
+                    TaskDisplayNumber.Resolve(goal, task.Id),
+                    task.Id.Value,
+                    task.Description,
+                    Succeeded: true,
+                    OutputTail: null));
+            }
+
+            return Task.FromResult(new RunGoalService.RunGoalResult(
+                Executed: true,
+                StopReason: "Goal completed.",
+                BlockingAction: null,
+                CompletedTasks: completedTasks,
+                StopEvidence: null));
+        };
+    }
 
     private static InMemoryModelProviderRegistry SeedSpecRefiner(OrchestratorWorkspace workspace)
     {
@@ -1603,25 +1644,42 @@ public sealed class GoalWorktreeTests
             kernel.ReportTaskProgress(goal.Id, completed.Id, WorkTaskStatus.Completed, "Already done.");
             RecordCancelledProcess(kernel, goal.Id, cancelledOne.Id, 111, repo);
             RecordCancelledProcess(kernel, goal.Id, cancelledTwo.Id, 222, repo);
+            using var runningProcess = StartLongRunningHelper();
             var runningStartedAt = DateTimeOffset.UtcNow;
-            kernel.RecordTaskDispatch(
-                goal.Id,
-                running.Id,
-                new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, runningStartedAt));
-            kernel.RecordTaskProcessStarted(
-                goal.Id,
-                running.Id,
-                new TaskProcessRecord(333, "codex exec prompt.md", repo, "out.log", "err.log", "exit.txt", runningStartedAt, null, null));
+            try
+            {
+                kernel.RecordTaskDispatch(
+                    goal.Id,
+                    running.Id,
+                    new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, runningStartedAt));
+                kernel.RecordTaskProcessStarted(
+                    goal.Id,
+                    running.Id,
+                    new TaskProcessRecord(
+                        runningProcess.Id,
+                        "codex exec prompt.md",
+                        repo,
+                        Path.Combine(repo, "running.out.log"),
+                        Path.Combine(repo, "running.err.log"),
+                        Path.Combine(repo, "running.exit.txt"),
+                        runningStartedAt,
+                        null,
+                        null));
 
-            var context = CreateAcceptanceContext(kernel, repo, goal);
-            CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "retry cancelled work"], context));
+                var context = CreateAcceptanceContext(kernel, repo, goal);
+                CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "retry cancelled work"], context));
 
-            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledOne.Id).Status);
-            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledTwo.Id).Status);
-            Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, completed.Id).Status);
-            var runningTask = kernel.GetTask(goal.Id, running.Id);
-            Assert.Equal(WorkTaskStatus.Running, runningTask.Status);
-            Assert.True(runningTask.LastProcess is { IsRunning: true });
+                Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledOne.Id).Status);
+                Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, cancelledTwo.Id).Status);
+                Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, completed.Id).Status);
+                var runningTask = kernel.GetTask(goal.Id, running.Id);
+                Assert.Equal(WorkTaskStatus.Running, runningTask.Status);
+                Assert.True(runningTask.LastProcess is { IsRunning: true });
+            }
+            finally
+            {
+                StopProcess(runningProcess);
+            }
         }
         finally
         {
@@ -2192,7 +2250,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(
@@ -2237,7 +2298,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(
@@ -2301,6 +2365,79 @@ public sealed class GoalWorktreeTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_help_does_not_create_goal_worktree")]
+    public void CliWorkspaceHelpDoesNotCreateGoalWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep workspace clean on help", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            var originalStatus = goal.Status;
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandHandlers.Execute(
+                    ["workspace", "create", goal.Id.Value[..8], "--help"],
+                    context);
+
+                Assert.False(changed);
+            });
+
+            Assert.Contains("Usage: workspace create", output);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".orchestrator-worktrees")));
+            Assert.Equal(originalStatus, goal.Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_help_does_not_create_backlog_or_goal_state")]
+    public void CliBacklogHelpDoesNotCreateBacklogOrGoalState()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            Goal? currentGoal = null;
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["backlog-list", "--help"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+
+                Assert.False(changed);
+            });
+
+            Assert.Contains("Usage: backlog-list", output);
+            Assert.False(File.Exists(workspace.BacklogStorePath));
+            Assert.Empty(kernel.Goals);
+            Assert.Null(currentGoal);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_safe_auto_stops_before_acceptance")]
     public void CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance()
     {
@@ -2315,7 +2452,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() =>
@@ -2400,7 +2540,10 @@ public sealed class GoalWorktreeTests
             var fakeVerifier = FakeAcceptanceVerifier.Failed("Focused tests failed");
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
-                AcceptanceVerifier = fakeVerifier
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
             var output = CaptureConsole(() =>
@@ -2416,6 +2559,42 @@ public sealed class GoalWorktreeTests
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
             Assert.True(output.Contains("Next: acceptance", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_keeps_workspace_when_acceptance_throws")]
+    public void CliLifecycleSimpleGoalKeepsWorkspaceWhenAcceptanceThrows()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = SeedSpecRefiner(workspace);
+            var profiles = EchoProfiles();
+            var fakeVerifier = FakeAcceptanceVerifier.Throws(new InvalidOperationException("fake verifier boom"));
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+            {
+                AcceptanceVerifier = fakeVerifier,
+                RunGoalPollInterval = FastLifecyclePollInterval,
+                RunGoalSleep = SkipLifecycleSleep,
+                RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
+            };
+
+            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["lifecycle-simple-goal", "Run but verifier throws", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                context));
+
+            var goal = context.CurrentGoal!;
+            Assert.Equal("fake verifier boom", ex.Message);
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
+            Assert.Equal(1, fakeVerifier.RunCount);
         }
         finally
         {
@@ -2664,7 +2843,8 @@ public sealed class GoalWorktreeTests
                 worktree,
                 DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
                 BaseCommit: "old-base",
-                ResultCommit: "old-result");
+                ResultCommit: "old-result",
+                PromptPath: Path.Combine(worktree, ".orchestrator", "prompts", "old-prompt.md"));
             kernel.RecordTaskDispatch(goal.Id, task.Id, oldDispatch);
             kernel.RecordTaskProcessStarted(
                 goal.Id,
@@ -2699,7 +2879,8 @@ public sealed class GoalWorktreeTests
                 "codex exec retry-prompt.md",
                 worktree,
                 DateTimeOffset.Parse("2026-06-26T12:05:00Z"),
-                BaseCommit: "retry-base");
+                BaseCommit: "retry-base",
+                PromptPath: Path.Combine(worktree, ".orchestrator", "prompts", "retry-prompt.md"));
             kernel.RecordTaskDispatch(goal.Id, task.Id, newDispatch);
 
             Assert.Equal(GoalStatus.Active, goal.Status);
@@ -2709,6 +2890,8 @@ public sealed class GoalWorktreeTests
             Assert.Equal(newDispatch, task.LastDispatch);
             Assert.Equal("codex exec retry-prompt.md", task.LastDispatch!.Command);
             Assert.Equal("retry-base", task.LastDispatch.BaseCommit);
+            Assert.NotEqual(oldDispatch.PromptPath, task.LastDispatch.PromptPath);
+            Assert.Equal(Path.Combine(worktree, ".orchestrator", "prompts", "retry-prompt.md"), task.LastDispatch.PromptPath);
             Assert.Null(task.LastDispatch.ResultCommit);
             Assert.Equal(worktree, GoalWorktrees.TryResolve(repo, goal.Id));
         }
@@ -2924,6 +3107,10 @@ public sealed class GoalWorktreeTests
         string workingDirectory)
     {
         var startedAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var artifactPrefix = Path.Combine(workingDirectory, $"cancelled-{taskId.Value[..8]}");
+        var standardOutputPath = artifactPrefix + ".out.log";
+        var standardErrorPath = artifactPrefix + ".err.log";
+        var exitCodePath = artifactPrefix + ".exit.txt";
         kernel.RecordTaskDispatch(
             goalId,
             taskId,
@@ -2931,11 +3118,49 @@ public sealed class GoalWorktreeTests
         kernel.RecordTaskProcessStarted(
             goalId,
             taskId,
-            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, null, null));
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, standardOutputPath, standardErrorPath, exitCodePath, startedAt, null, null));
         kernel.RecordTaskProcessCancelled(
             goalId,
             taskId,
-            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, "out.log", "err.log", "exit.txt", startedAt, DateTimeOffset.UtcNow, null, WasCancelled: true));
+            new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, standardOutputPath, standardErrorPath, exitCodePath, startedAt, DateTimeOffset.UtcNow, null, WasCancelled: true));
+    }
+
+    private static Process StartLongRunningHelper()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "ping.exe" : "sleep",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("-n");
+            startInfo.ArgumentList.Add("30");
+            startInfo.ArgumentList.Add("127.0.0.1");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("30");
+        }
+
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start long-running helper process.");
+    }
+
+    private static void StopProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            process.WaitForExit(5000);
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private sealed class RecordingGoalLifecycleEventWriter(List<string> order) : IGoalLifecycleEventWriter
@@ -2957,8 +3182,9 @@ public sealed class GoalWorktreeTests
     }
 
     private sealed class FakeAcceptanceVerifier(
-        AcceptanceVerificationResult result,
-        Action? onRun = null) : IGoalAcceptanceVerifier
+        AcceptanceVerificationResult? result,
+        Action? onRun = null,
+        Exception? exception = null) : IGoalAcceptanceVerifier
     {
         public int RunCount { get; private set; }
 
@@ -2970,7 +3196,11 @@ public sealed class GoalWorktreeTests
         {
             RunCount++;
             onRun?.Invoke();
-            return Task.FromResult(AddPolicyRequiredChecks(result, changedFiles ?? []));
+            if (exception is not null)
+                throw exception;
+
+            var configuredResult = Assert.IsType<AcceptanceVerificationResult>(result);
+            return Task.FromResult(AddPolicyRequiredChecks(configuredResult, changedFiles ?? []));
         }
 
         private static AcceptanceVerificationResult AddPolicyRequiredChecks(
@@ -3020,6 +3250,9 @@ public sealed class GoalWorktreeTests
                     OutputTail: outputTail,
                     Checks: [new AcceptanceCheckResult("fake acceptance", false, 1, outputTail)]),
                 onRun);
+
+        public static FakeAcceptanceVerifier Throws(Exception exception, Action? onRun = null) =>
+            new(null, onRun, exception);
     }
 
     private static bool BranchExists(string workingDirectory, string branch)

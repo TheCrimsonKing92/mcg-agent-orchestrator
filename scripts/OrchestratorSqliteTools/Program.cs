@@ -28,6 +28,7 @@ internal static class OrchestratorSqliteTools
         {
             "list-goals" => await ListGoalsAsync(args[1..]),
             "set-goal-status" => await SetGoalStatusAsync(args[1..]),
+            "requeue-task" => await RequeueTaskAsync(args[1..]),
             _ => Fail($"Unknown command: {args[0]}")
         };
     }
@@ -215,6 +216,144 @@ internal static class OrchestratorSqliteTools
         return 0;
     }
 
+    private static async Task<int> RequeueTaskAsync(string[] args)
+    {
+        var repoRoot = Environment.CurrentDirectory;
+        string? dbPath = null;
+        string? goalPrefix = null;
+        string? note = null;
+        int? taskNumber = null;
+        var dryRun = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            switch (arg)
+            {
+                case "--repo-root":
+                    repoRoot = RequireValue(args, ref i, arg);
+                    break;
+                case "--db":
+                    dbPath = RequireValue(args, ref i, arg);
+                    break;
+                case "--task-number":
+                    if (!int.TryParse(RequireValue(args, ref i, arg), out var parsedTaskNumber) || parsedTaskNumber < 1)
+                        return Fail("--task-number must be a positive integer.");
+                    taskNumber = parsedTaskNumber;
+                    break;
+                case "--note":
+                    note = RequireValue(args, ref i, arg);
+                    break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
+                case "--help":
+                case "-h":
+                    PrintRequeueTaskUsage();
+                    return 0;
+                default:
+                    if (arg.StartsWith("-", StringComparison.Ordinal))
+                        return Fail($"Unknown option: {arg}");
+                    if (goalPrefix is not null)
+                        return Fail("Provide exactly one goal prefix.");
+                    goalPrefix = arg;
+                    break;
+            }
+        }
+
+        if (goalPrefix is null)
+            return Fail("Missing goal prefix.");
+        if (taskNumber is null)
+            return Fail("Missing required --task-number <n>.");
+        if (string.IsNullOrWhiteSpace(note))
+            return Fail("Missing required --note <text>.");
+
+        repoRoot = Path.GetFullPath(repoRoot);
+        dbPath = Path.GetFullPath(dbPath ?? Path.Combine(repoRoot, ".orchestrator", "state.db"));
+        if (!File.Exists(dbPath))
+            return Fail($"State database not found: {dbPath}");
+
+        await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False;");
+        await conn.OpenAsync();
+        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+
+        var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
+        if (rows.Count == 0)
+            return 0;
+
+        var row = rows[0];
+        var snapshot = JsonNode.Parse(row.SnapshotJson) as JsonObject
+            ?? throw new InvalidOperationException($"Goal {row.Id} has invalid snapshot JSON.");
+        var tasks = snapshot["Tasks"] as JsonArray
+            ?? throw new InvalidOperationException($"Goal {row.Id} snapshot has no Tasks array.");
+        if (taskNumber.Value > tasks.Count)
+            return Fail($"Task number {taskNumber.Value} is out of range; goal has {tasks.Count} task(s).");
+
+        var task = tasks[taskNumber.Value - 1] as JsonObject
+            ?? throw new InvalidOperationException($"Task {taskNumber.Value} snapshot is not an object.");
+        var taskId = task["Id"]?.GetValue<string>()
+            ?? throw new InvalidOperationException($"Task {taskNumber.Value} has no Id.");
+        var previousStatus = task["Status"]?.GetValue<string>() ?? "<unknown>";
+        var nextStatus = string.IsNullOrWhiteSpace(task["AssignedAgentId"]?.GetValue<string>())
+            ? "Pending"
+            : "Assigned";
+
+        if (dryRun)
+        {
+            Console.WriteLine($"DRY-RUN {Short(row.Id)} task {taskNumber.Value}: {previousStatus} -> {nextStatus}; clear LastExecution/LastVerification/LastDispatch/LastProcess.");
+            return 0;
+        }
+
+        task["Status"] = nextStatus;
+        task["LastExecution"] = null;
+        task["LastVerification"] = null;
+        task["LastDispatch"] = null;
+        task["LastProcess"] = null;
+        task["SubscriptionRetryAfter"] = null;
+        snapshot["Status"] = "Active";
+
+        var timeline = snapshot["Timeline"] as JsonArray
+            ?? throw new InvalidOperationException($"Goal {row.Id} snapshot has no Timeline array.");
+        var occurredAt = DateTimeOffset.UtcNow.ToString("O");
+        timeline.Add(new JsonObject
+        {
+            ["GoalId"] = row.Id,
+            ["TaskId"] = taskId,
+            ["Kind"] = "TaskRetried",
+            ["Message"] = note.Trim(),
+            ["OccurredAt"] = occurredAt
+        });
+
+        var updatedJson = snapshot.ToJsonString();
+        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE");
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE goals
+                SET status = 'Active',
+                    snapshot_json = $snapshot_json,
+                    updated_at = $updated_at,
+                    version = COALESCE(version, 0) + 1
+                WHERE id = $id
+                """;
+            cmd.Parameters.AddWithValue("$id", row.Id);
+            cmd.Parameters.AddWithValue("$snapshot_json", updatedJson);
+            cmd.Parameters.AddWithValue("$updated_at", occurredAt);
+            await cmd.ExecuteNonQueryAsync();
+
+            await RunNonQueryAsync(conn, "COMMIT");
+        }
+        catch
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK"); } catch { }
+            throw;
+        }
+
+        Console.WriteLine($"REQUEUED {Short(row.Id)} task {taskNumber.Value}: {previousStatus} -> {nextStatus}");
+        return 0;
+    }
+
     private static async Task<List<GoalRow>> ResolveGoalsAsync(SqliteConnection conn, List<string> prefixes)
     {
         var rows = new List<GoalRow>();
@@ -304,6 +443,7 @@ internal static class OrchestratorSqliteTools
         Console.WriteLine("Usage:");
         Console.WriteLine("  list-goals [--repo-root <path>] [--db <path>] [--status <Status>] [--limit <n>]");
         Console.WriteLine("  set-goal-status [--repo-root <path>] [--db <path>] [--dry-run] --status <Status> <goal-prefix>...");
+        Console.WriteLine("  requeue-task [--repo-root <path>] [--db <path>] [--dry-run] --task-number <n> --note <text> <goal-prefix>");
     }
 
     private static void PrintListGoalsUsage()
@@ -313,6 +453,12 @@ internal static class OrchestratorSqliteTools
         Console.WriteLine();
         Console.WriteLine("Statuses:");
         Console.WriteLine($"  {string.Join(", ", AllowedGoalStatuses)}");
+    }
+
+    private static void PrintRequeueTaskUsage()
+    {
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  requeue-task [--repo-root <path>] [--db <path>] [--dry-run] --task-number <n> --note <text> <goal-prefix>");
     }
 
     private static void PrintSetGoalStatusUsage()

@@ -391,7 +391,15 @@ private static object? ExecuteSubscriptionAutomation(
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>
-            ExecuteSubscriptionStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart),
+            ExecuteSubscriptionStartRecordedDispatch(
+                kernel,
+                agents,
+                profiles,
+                workspace,
+                goal,
+                automation.TaskId!,
+                allowLargePaidSubscriptionStart,
+                providers),
         NextActionAutomationKind.DelegatePendingTask =>
             DashboardResponseMapper.ToDelegationPlanDto(RefineAndActivateGoal(
                 kernel,
@@ -449,17 +457,24 @@ private static ProfileDispatchDto ExecuteSubscriptionRunAssignedTask(
 
 private static TaskDetailDto ExecuteSubscriptionStartRecordedDispatch(
     AgentOrchestratorKernel kernel,
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles,
     OrchestratorWorkspace workspace,
     Goal goal,
     TaskId taskId,
-    bool allowLargePaidSubscriptionStart)
+    bool allowLargePaidSubscriptionStart,
+    IModelProviderRegistry? providers = null)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
     SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
         SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
         allowLargePaidSubscriptionStart);
+    RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, task, agents, profiles, providers);
+    SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
+        SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task),
+        allowLargePaidSubscriptionStart);
 
-    return AdvanceStartRecordedDispatch(kernel, workspace, goal, taskId);
+    return AdvanceStartRecordedDispatch(kernel, workspace, goal, taskId, refreshBeforeStart: false);
 }
 
 private static bool CanFallBackToApiAfterSubscriptionFailure(TaskSpec task)
@@ -496,8 +511,18 @@ public static TaskDetailDto AdvanceRefreshRunningProcess(AgentOrchestratorKernel
     return DashboardResponseMapper.ToTaskDetailDto(goal, goal.Tasks.Single(task => task.Id == taskId));
 }
 
-public static TaskDetailDto AdvanceStartRecordedDispatch(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, TaskId taskId)
+public static TaskDetailDto AdvanceStartRecordedDispatch(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskId taskId,
+    bool refreshBeforeStart = true)
 {
+    if (refreshBeforeStart)
+    {
+        RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, goal.Tasks.Single(task => task.Id == taskId));
+    }
+
     new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory);
     return DashboardResponseMapper.ToTaskDetailDto(goal, goal.Tasks.Single(task => task.Id == taskId));
 }
