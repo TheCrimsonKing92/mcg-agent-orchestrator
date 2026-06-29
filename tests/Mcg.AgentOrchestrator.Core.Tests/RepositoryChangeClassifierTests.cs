@@ -98,6 +98,75 @@ public sealed class RepositoryChangeClassifierTests
         Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_cli_filter_for_cli_only_changes")]
+    public void RepositoryTestImpactPlannerSelectsFocusedCliFilterForCliOnlyChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"
+        ]);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused CLI infrastructure tests", check.Name);
+        Assert.Contains("--filter", check.Command);
+        Assert.Contains(check.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_dashboard_filter_for_dashboard_only_changes")]
+    public void RepositoryTestImpactPlannerSelectsFocusedDashboardFilterForDashboardOnlyChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused dashboard infrastructure tests", check.Name);
+        Assert.Contains("--filter", check.Command);
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
+    public void RepositoryTestImpactPlannerFallsBackToFullInfrastructureTestsForSharedInfrastructure()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
+        Assert.DoesNotContain("--filter", check.Command);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_multiple_app_subsystems")]
+    public void RepositoryTestImpactPlannerFallsBackToFullInfrastructureTestsForMultipleAppSubsystems()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.DoesNotContain("--filter", check.Command);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_infrastructure_test_class_filter")]
+    public void RepositoryTestImpactPlannerSelectsTouchedInfrastructureTestClassFilter()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused changed infrastructure tests", check.Name);
+        Assert.Contains("--filter", check.Command);
+        Assert.Contains(check.Command, argument => argument.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]
     public void RepositoryTestImpactPlannerSelectsCoreTestsForCoreChanges()
     {

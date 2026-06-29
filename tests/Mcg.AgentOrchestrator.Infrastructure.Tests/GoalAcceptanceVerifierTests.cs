@@ -232,6 +232,68 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("infrastructure tests", check.Name);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_focused_infrastructure_filter_for_cli_only_changes")]
+    public async Task GoalAcceptanceVerifierRunsFocusedInfrastructureFilterForCliOnlyChanges()
+    {
+        var root = CreateStandardManifestWorkspace();
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Focused CLI tests passed.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, calls.Count);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+        Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("--filter", calls[2]);
+        Assert.Contains(calls[2], argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Equal(["git diff whitespace", "focused CLI infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_full_infrastructure_suite_for_multiple_app_subsystems")]
+    public async Task GoalAcceptanceVerifierRunsFullInfrastructureSuiteForMultipleAppSubsystems()
+    {
+        var root = CreateStandardManifestWorkspace();
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Full Infrastructure tests passed.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles:
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
+                "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
+            ]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, calls.Count);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+        Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("--filter", calls[2]);
+        Assert.Equal(["git diff whitespace", "infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_manifest_command_checks_before_dotnet_tests")]
     public async Task GoalAcceptanceVerifierRunsManifestCommandChecksBeforeDotnetTests()
     {

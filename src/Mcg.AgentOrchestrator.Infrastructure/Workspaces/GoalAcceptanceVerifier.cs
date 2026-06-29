@@ -793,15 +793,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             args.Add(check.Project);
         }
 
-        args.AddRange(check.Arguments);
+        var explicitFilter = ExtractFilterArguments(check.Arguments, args);
 
         // Exclude host-integration tests that spawn a real Kestrel dashboard server (binds a port,
         // needs an interactive firewall allow) — they hang in the unattended, relocated gate. Match
         // both by class name (works on a worktree built before the trait existed) and by the
         // [Trait("Category","HostIntegration")] tag (covers any future such tests). They run in a
         // dedicated lane instead.
-        args.Add("--filter");
-        args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+        if (string.IsNullOrWhiteSpace(explicitFilter) && IsSolutionWideDotnetCheck(check))
+        {
+            args.Add("--filter");
+            args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+        }
 
         // Fail a hung test fast and by name instead of silently eating CommandTimeout. A test that
         // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
@@ -812,6 +815,39 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         args.Add("--blame-hang-dump-type");
         args.Add("none");
         return [.. args];
+    }
+
+    private static bool IsSolutionWideDotnetCheck(AcceptanceManifestCheck check) =>
+        string.IsNullOrWhiteSpace(check.Project) ||
+        check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase);
+
+    private static string? ExtractFilterArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
+    {
+        string? filter = null;
+        for (var index = 0; index < sourceArguments.Count; index++)
+        {
+            var argument = sourceArguments[index];
+            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 < sourceArguments.Count)
+                {
+                    filter = sourceArguments[index + 1];
+                    index++;
+                }
+
+                continue;
+            }
+
+            destinationArguments.Add(argument);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            destinationArguments.Add("--filter");
+            destinationArguments.Add(filter);
+        }
+
+        return filter;
     }
 
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment)

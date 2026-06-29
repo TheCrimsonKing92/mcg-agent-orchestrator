@@ -334,6 +334,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.ArgumentList.Add("test");
             startInfo.ArgumentList.Add("Fake.Tests.csproj");
             startInfo.ArgumentList.Add("--no-restore");
+            startInfo.ArgumentList.Add("--filter");
+            startInfo.ArgumentList.Add("FullyQualifiedName~FocusedTests");
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
@@ -352,7 +354,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --artifacts-path ", StringComparison.Ordinal));
+            Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --filter FullyQualifiedName~FocusedTests --artifacts-path ", StringComparison.Ordinal));
             Assert.True(log.Contains("-maxcpucount:", StringComparison.Ordinal));
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
