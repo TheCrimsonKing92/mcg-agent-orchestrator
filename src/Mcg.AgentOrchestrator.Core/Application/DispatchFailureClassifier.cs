@@ -844,10 +844,20 @@ public static class DispatchFailureClassifier
                  text.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase) ||
                  text.Contains("resets in", StringComparison.OrdinalIgnoreCase))) ||
             text.Contains("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("rate-limit", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("rate-limited", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("ratelimit", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("rate limit exceeded", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("rate limit reached", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("http 429", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
     }
@@ -1052,9 +1062,18 @@ public static class DispatchFailureClassifier
         line.StartsWith("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
         line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("rate-limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("rate-limited", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("ratelimit", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("exceeded retry limit", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("http 429", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
 
