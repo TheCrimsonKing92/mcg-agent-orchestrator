@@ -39,6 +39,7 @@ publish/
 
 # Local agent/tool settings
 .claude/settings.local.json
+.mcg-low-integrity-v1
 
 # Logs and local diagnostics
 *.log

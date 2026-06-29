@@ -3753,7 +3753,7 @@ public sealed class CliCommandTests
                 ref profiles,
                 ref currentGoal));
 
-            Xunit.Assert.Equal($"Note added to task {taskNumber}{Environment.NewLine}", output);
+            Xunit.Assert.Equal($"Note added to task {goal.Tasks[index].Id}{Environment.NewLine}", output);
             Xunit.Assert.Equal(expectedStatuses[index], goal.Tasks[index].Status);
             Xunit.Assert.Contains(goal.Timeline, evt =>
                 evt.TaskId == goal.Tasks[index].Id &&
