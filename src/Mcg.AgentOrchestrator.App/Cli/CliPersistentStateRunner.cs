@@ -227,7 +227,7 @@ internal static class CliPersistentStateRunner
     {
         var kernel = LoadConductLoopKernel(stateRepository);
         var sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
-        ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: false);
+        ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
@@ -685,6 +685,41 @@ internal static class CliPersistentStateRunner
         }
 
         return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, args[1]).Id;
+    }
+
+    private static bool ConductLoopWillExitBeforeFirstTick(IReadOnlyList<string> args, string executionDirectory)
+    {
+        if (args.Count == 0 ||
+            !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
+            !args.Any(arg => arg.Equals("--loop", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (int.TryParse(GetFlagValue(args, "--max-iterations"), out var maxIterations) && maxIterations <= 0)
+        {
+            return true;
+        }
+
+        if (int.TryParse(GetFlagValue(args, "--max-duration"), out var maxDurationSeconds) && maxDurationSeconds <= 0)
+        {
+            return true;
+        }
+
+        return File.Exists(Path.Combine(executionDirectory, ConductorBatchLoop.StopFileName));
+    }
+
+    private static string? GetFlagValue(IReadOnlyList<string> args, string flag)
+    {
+        for (var i = 0; i < args.Count - 1; i++)
+        {
+            if (args[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i + 1];
+            }
+        }
+
+        return null;
     }
 
     private sealed record ProcessRefreshIdentity(

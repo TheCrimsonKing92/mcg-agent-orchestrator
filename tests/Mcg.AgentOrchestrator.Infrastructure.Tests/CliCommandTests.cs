@@ -6210,6 +6210,64 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_early_exits_print_blocker")]
+    public void TerminalGoalSweepConductLoopEarlyExitsPrintBlocker()
+    {
+        var cases = new[]
+        {
+            new { Name = "max-iterations-zero", Args = new[] { "conduct", "--loop", "--max-iterations", "0" }, StopFile = false },
+            new { Name = "zero-duration", Args = new[] { "conduct", "--loop", "--max-duration", "0" }, StopFile = false },
+            new { Name = "stop-file", Args = new[] { "conduct", "--loop" }, StopFile = true }
+        };
+
+        foreach (var testCase in cases)
+        {
+            var root = CreateAcceptanceRepository();
+            GoalId? cleanupGoalId = null;
+            try
+            {
+                var kernel = new AgentOrchestratorKernel();
+                var task = new TaskSpec(TaskId.New(), $"Do work for {testCase.Name}", AgentRole.Developer);
+                var goal = kernel.CreateGoal($"Completed but unmerged {testCase.Name}", [task]);
+                cleanupGoalId = goal.Id;
+                kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+                CommitGoalWork(root, goal.Id, $"src/{testCase.Name}.txt", "goal work");
+                if (testCase.StopFile)
+                {
+                    File.WriteAllText(Path.Combine(root, ConductorBatchLoop.StopFileName), "stop");
+                }
+
+                var workspace = CreateRefinedWorkspace(root);
+                IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+                var providers = new InMemoryModelProviderRegistry([]);
+                var profiles = WorkerProfileCatalog.Default();
+                Goal? currentGoal = goal;
+
+                var output = CaptureConsole(() =>
+                {
+                    var repository = new InMemoryTransactionalStateRepository(kernel);
+                    CliPersistentStateRunner.ExecuteCommand(
+                        testCase.Args,
+                        repository,
+                        workspace,
+                        ref agents,
+                        providers,
+                        ref profiles,
+                        ref currentGoal);
+                });
+
+                var expected = $"SWEEP_BLOCKER goal={goal.Id.Value[..8]} kind=completed-branch-unmerged";
+                Xunit.Assert.Contains(expected, output);
+                Xunit.Assert.Equal(1, CountLinesContaining(output, expected));
+            }
+            finally
+            {
+                CleanupAcceptanceRepository(root, cleanupGoalId);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_merged_branch_cleans_worktree_and_branch")]
     public void TerminalGoalSweepCompletedMergedBranchCleansWorktreeAndBranch()
     {
