@@ -106,13 +106,20 @@ internal static class OrchestratorSqliteTools
         if (status is not null)
             cmd.Parameters.AddWithValue("$status", status);
 
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
+        try
         {
-            var id = reader.GetString(0);
-            var rowStatus = reader.GetString(1);
-            var snapshotJson = reader.GetString(2);
-            Console.WriteLine($"{Short(id)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var id = reader.GetString(0);
+                var rowStatus = reader.GetString(1);
+                var snapshotJson = reader.GetString(2);
+                Console.WriteLine($"{Short(id)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
+            }
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 14)
+        {
+            return FailOpen(dbPath, ex);
         }
 
         return 0;
