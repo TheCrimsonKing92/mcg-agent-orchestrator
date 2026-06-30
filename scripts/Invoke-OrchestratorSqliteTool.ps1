@@ -27,7 +27,7 @@ if ($Arguments.Count -gt 1) {
     $toolArguments = $Arguments[1..($Arguments.Count - 1)]
 }
 
-$dotnetArguments = @("run", "--project", $projectPath, "--", $toolCommand, "--repo-root", $repoRoot) + $toolArguments
+$dotnetArguments = @("run", "--project", $projectPath, "--", $toolCommand) + $toolArguments
 & dotnet @dotnetArguments
 if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

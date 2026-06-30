@@ -2266,11 +2266,33 @@ public sealed class GoalWorktreeIntegrationTests
                 Path.Combine(linkedWorktree, ".git"),
                 $"gitdir: {Path.Combine(repo, ".git", "worktrees", "sqlite-tool-test").Replace('\\', '/')}");
 
+            var localWorkspace = OrchestratorWorkspace.ForDirectory(linkedWorktree);
+            var localKernel = new AgentOrchestratorKernel();
+            localKernel.CreateGoal("SQLite helper linked local state");
+            var localStateRepository = new SqliteOrchestratorStateRepository(localWorkspace.SqliteStatePath);
+            localStateRepository.SaveAsync(localKernel).GetAwaiter().GetResult();
+
             var result = RunOrchestratorSqliteTool(linkedWorktree, null, "list-goals", "--limit", "10");
 
             Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
             Assert.Contains("SQLite helper primary state", result.Stdout);
+            Assert.DoesNotContain("SQLite helper linked local state", result.Stdout);
+
+            var explicitResult = RunOrchestratorSqliteTool(
+                linkedWorktree,
+                null,
+                "list-goals",
+                "--repo-root",
+                linkedWorktree,
+                "--limit",
+                "10");
+
+            Assert.True(
+                explicitResult.ExitCode == 0,
+                $"exit={explicitResult.ExitCode}; stdout={explicitResult.Stdout}; stderr={explicitResult.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(explicitResult.Stderr), explicitResult.Stderr);
+            Assert.Contains("SQLite helper linked local state", explicitResult.Stdout);
         }
         finally
         {
@@ -3307,6 +3329,8 @@ public sealed class GoalWorktreeIntegrationTests
         };
         if (repositoryRootEnvironment is not null)
             startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = repositoryRootEnvironment;
+        else
+            startInfo.Environment.Remove(OrchestratorWorkspace.RepoRootEnvironmentVariable);
         startInfo.ArgumentList.Add("run");
         startInfo.ArgumentList.Add("--project");
         startInfo.ArgumentList.Add(Path.Combine(sourceRoot, "scripts", "OrchestratorSqliteTools"));

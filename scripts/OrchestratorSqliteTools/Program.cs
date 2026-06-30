@@ -37,7 +37,7 @@ internal static class OrchestratorSqliteTools
 
     private static async Task<int> ListGoalsAsync(string[] args)
     {
-        var repoRoot = Environment.CurrentDirectory;
+        string? repoRoot = null;
         string? dbPath = null;
         string? status = null;
         var limit = 20;
@@ -120,7 +120,7 @@ internal static class OrchestratorSqliteTools
 
     private static async Task<int> SetGoalStatusAsync(string[] args)
     {
-        var repoRoot = Environment.CurrentDirectory;
+        string? repoRoot = null;
         string? dbPath = null;
         string? status = null;
         var dryRun = false;
@@ -232,7 +232,7 @@ internal static class OrchestratorSqliteTools
 
     private static async Task<int> RequeueTaskAsync(string[] args)
     {
-        var repoRoot = Environment.CurrentDirectory;
+        string? repoRoot = null;
         string? dbPath = null;
         string? goalPrefix = null;
         string? note = null;
@@ -458,7 +458,7 @@ internal static class OrchestratorSqliteTools
     private static string ResolveRepoRoot(string? repoRoot)
     {
         if (!string.IsNullOrWhiteSpace(repoRoot))
-            return NormalizeStateRoot(Path.GetFullPath(repoRoot));
+            return Path.GetFullPath(repoRoot);
 
         var configuredRoot = Environment.GetEnvironmentVariable(RepoRootEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(configuredRoot))
@@ -494,12 +494,12 @@ internal static class OrchestratorSqliteTools
 
     private static string NormalizeStateRoot(string repoRoot)
     {
-        if (File.Exists(Path.Combine(repoRoot, ".orchestrator", "state.db")))
-            return repoRoot;
-
         var primaryRoot = TryResolvePrimaryRootFromLinkedWorktree(repoRoot);
         if (primaryRoot is not null && File.Exists(Path.Combine(primaryRoot, ".orchestrator", "state.db")))
             return primaryRoot;
+
+        if (File.Exists(Path.Combine(repoRoot, ".orchestrator", "state.db")))
+            return repoRoot;
 
         return repoRoot;
     }
