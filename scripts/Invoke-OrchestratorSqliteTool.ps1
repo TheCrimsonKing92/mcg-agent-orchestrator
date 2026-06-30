@@ -10,14 +10,10 @@
 
   over ad-hoc `dotnet run --project ...` commands in Codex.
 #>
-[CmdletBinding()]
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Arguments
-)
-
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$Arguments = @($args | ForEach-Object { [string]$_ })
 
 if ($Arguments.Count -eq 0) {
     throw "Usage: .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 <sqlite-tool-args...>"
@@ -25,8 +21,13 @@ if ($Arguments.Count -eq 0) {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $projectPath = Join-Path $repoRoot "scripts\OrchestratorSqliteTools"
+$toolCommand = $Arguments[0]
+$toolArguments = @()
+if ($Arguments.Count -gt 1) {
+    $toolArguments = $Arguments[1..($Arguments.Count - 1)]
+}
 
-& dotnet run --project $projectPath -- @($Arguments)
+& dotnet run --project $projectPath -- $toolCommand --repo-root $repoRoot @($toolArguments)
 if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
