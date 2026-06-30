@@ -2299,6 +2299,90 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTool_list_goals_reads_repo_state_while_write_lock_is_held")]
+    public void OrchestratorSqliteToolListGoalsReadsRepoStateWhileWriteLockIsHeld()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            kernel.CreateGoal("SQLite helper read-only smoke");
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
+            lockConnection.Open();
+            using var lockCommand = lockConnection.CreateCommand();
+            lockCommand.CommandText = "BEGIN IMMEDIATE";
+            lockCommand.ExecuteNonQuery();
+
+            var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--limit", "10");
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains("SQLite helper read-only smoke", result.Stdout);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTool_list_goals_from_linked_worktree_reads_primary_state")]
+    public void OrchestratorSqliteToolListGoalsFromLinkedWorktreeReadsPrimaryState()
+    {
+        var repo = CreateSeededRepository();
+        var linkedWorktree = Path.Combine(Path.GetTempPath(), $"sqlite-tool-linked-worktree-{Guid.NewGuid():N}");
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            kernel.CreateGoal("SQLite helper primary state");
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            Directory.CreateDirectory(Path.Combine(repo, ".git", "worktrees", "sqlite-tool-test"));
+            Directory.CreateDirectory(linkedWorktree);
+            File.WriteAllText(
+                Path.Combine(linkedWorktree, ".git"),
+                $"gitdir: {Path.Combine(repo, ".git", "worktrees", "sqlite-tool-test").Replace('\\', '/')}");
+
+            var localWorkspace = OrchestratorWorkspace.ForDirectory(linkedWorktree);
+            var localKernel = new AgentOrchestratorKernel();
+            localKernel.CreateGoal("SQLite helper linked local state");
+            var localStateRepository = new SqliteOrchestratorStateRepository(localWorkspace.SqliteStatePath);
+            localStateRepository.SaveAsync(localKernel).GetAwaiter().GetResult();
+
+            var result = RunOrchestratorSqliteTool(linkedWorktree, null, "list-goals", "--limit", "10");
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains("SQLite helper primary state", result.Stdout);
+            Assert.DoesNotContain("SQLite helper linked local state", result.Stdout);
+
+            var explicitResult = RunOrchestratorSqliteTool(
+                linkedWorktree,
+                null,
+                "list-goals",
+                "--repo-root",
+                linkedWorktree,
+                "--limit",
+                "10");
+
+            Assert.True(
+                explicitResult.ExitCode == 0,
+                $"exit={explicitResult.ExitCode}; stdout={explicitResult.Stdout}; stderr={explicitResult.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(explicitResult.Stderr), explicitResult.Stderr);
+            Assert.Contains("SQLite helper linked local state", explicitResult.Stdout);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+            DeleteDirectory(linkedWorktree);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_rejects_stale_goal_state_before_merge_commit")]
     public void CliAcceptanceRejectsStaleGoalStateBeforeMergeCommit()
     {
@@ -3307,6 +3391,41 @@ public sealed class GoalWorktreeIntegrationTests
         }
 
         return Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start long-running helper process.");
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) RunOrchestratorSqliteTool(
+        string workingDirectory,
+        string? repositoryRootEnvironment,
+        params string[] arguments)
+    {
+        var sourceRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable)
+            ?? InfrastructureTestSupport.FindRepositoryRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        if (repositoryRootEnvironment is not null)
+            startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = repositoryRootEnvironment;
+        else
+            startInfo.Environment.Remove(OrchestratorWorkspace.RepoRootEnvironmentVariable);
+        startInfo.ArgumentList.Add("run");
+        startInfo.ArgumentList.Add("--project");
+        startInfo.ArgumentList.Add(Path.Combine(sourceRoot, "scripts", "OrchestratorSqliteTools"));
+        startInfo.ArgumentList.Add("--");
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start OrchestratorSqliteTools.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(90)), "OrchestratorSqliteTools did not exit within 90 seconds.");
+        return (process.ExitCode, stdout, stderr);
     }
 
     private static void StopProcess(Process process)

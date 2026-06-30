@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -139,6 +140,38 @@ public sealed class LauncherScriptTests
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         AssertForwardedArguments(result.Stdout, ["alpha", " ", " gamma "]);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_orchestrator_sqlite_tool_list_goals_smoke")]
+    public void InvokeRepoScriptOrchestratorSqliteToolListGoalsSmoke()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var dbPath = CreateSqliteToolSmokeDb();
+        try
+        {
+            var wrapperPath = Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1");
+            var result = RunPowerShellCommand(repoRoot, $"""
+                $ErrorActionPreference = 'Stop'
+                & '{EscapePowerShellSingleQuoted(wrapperPath)}' 'scripts\Invoke-OrchestratorSqliteTool.ps1' list-goals --db '{EscapePowerShellSingleQuoted(dbPath)}' --limit 10
+                """);
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains("SQLite wrapper smoke", result.Stdout);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_emits_json_pid_and_log_path_through_repo_script")]
@@ -615,8 +648,31 @@ public sealed class LauncherScriptTests
             ?? throw new InvalidOperationException($"Failed to start {description}.");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30000), $"{description} did not exit within 30 seconds.");
+        Assert.True(process.WaitForExit(90000), $"{description} did not exit within 90 seconds.");
         return new ProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static string CreateSqliteToolSmokeDb()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"sqlite-tool-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var dbPath = Path.Combine(directory, "state.db");
+        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;");
+        connection.Open();
+        using var create = connection.CreateCommand();
+        create.CommandText = """
+            CREATE TABLE goals (
+                id TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO goals (id, status, snapshot_json, updated_at, version)
+            VALUES ('11111111111111111111111111111111', 'Active', '{"Objective":"SQLite wrapper smoke"}', '2026-06-30T00:00:00.0000000Z', 1);
+            """;
+        create.ExecuteNonQuery();
+        return dbPath;
     }
 
     private static void WaitForFile(string path, TimeSpan timeout)

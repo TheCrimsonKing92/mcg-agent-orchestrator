@@ -33,7 +33,6 @@ if ($NewestProcesses -lt 1) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$sqliteProject = Join-Path $repoRoot "scripts\OrchestratorSqliteTools"
 $appDll = Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
 $GoalPrefix = @($GoalPrefix) + @($AdditionalGoalPrefix)
 
@@ -99,7 +98,7 @@ function Is-OrchestratorLockHolder {
 
 Write-Section "Active Goals"
 try {
-    & dotnet run --project $sqliteProject -- list-goals --status Active --limit $ActiveLimit
+    & (Join-Path $repoRoot "scripts\Invoke-OrchestratorSqliteTool.ps1") list-goals --status Active --limit $ActiveLimit
     if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
         Write-Output "sqlite-tool exit=$LASTEXITCODE"
     }
