@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -118,7 +120,7 @@ public sealed class GoalWorktreeIntegrationTests
     [Xunit.Fact(DisplayName = "InvokeRepoScript_runs_FindOrchestratorLocks_without_synthetic_argument")]
     public void InvokeRepoScriptRunsFindOrchestratorLocksWithoutSyntheticArgument()
     {
-        var repoRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var repoRoot = FindCurrentSourceRoot();
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -145,6 +147,86 @@ public sealed class GoalWorktreeIntegrationTests
             process.ExitCode is 0 or 2,
             $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_StartOrchestratorCommand_emits_parseable_launch_json")]
+    public void InvokeRepoScriptStartOrchestratorCommandEmitsParseableLaunchJson()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var sandboxPath = Path.Combine(Path.GetTempPath(), $"start-orchestrator-command-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(sandboxPath);
+        try
+        {
+            var hostPath = Path.Combine(sandboxPath, "fake-dotnet.cmd");
+            File.WriteAllText(hostPath, """
+                @echo off
+                powershell.exe -NoProfile -ExecutionPolicy Bypass -File %*
+                """);
+
+            var appScriptPath = Path.Combine(sandboxPath, "fake-app.ps1");
+            File.WriteAllText(appScriptPath, """
+                param(
+                    [Parameter(ValueFromRemainingArguments = $true)]
+                    [string[]]$Arguments
+                )
+
+                Start-Sleep -Milliseconds 250
+                $Arguments | ConvertTo-Json -Compress
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = repoRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = hostPath;
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+            startInfo.ArgumentList.Add("scripts\\Start-OrchestratorCommand.ps1");
+            startInfo.ArgumentList.Add("-Name");
+            startInfo.ArgumentList.Add("goal-worktree-launch-json-test");
+            startInfo.ArgumentList.Add("-AppDll");
+            startInfo.ArgumentList.Add(appScriptPath);
+            startInfo.ArgumentList.Add("conduct");
+            startInfo.ArgumentList.Add("--loop");
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(30000), "Start-OrchestratorCommand.ps1 did not exit within 30 seconds.");
+            Assert.Equal(0, process.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+
+            var outputLines = stdout.Split(
+                ["\r\n", "\n"],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Single(outputLines);
+
+            using var document = JsonDocument.Parse(outputLines[0]);
+            var root = document.RootElement;
+            var pid = root.GetProperty("pid").GetInt32();
+            var stdoutPath = root.GetProperty("stdoutPath").GetString();
+            var stderrPath = root.GetProperty("stderrPath").GetString();
+            var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+
+            Assert.True(pid > 0);
+            Assert.False(string.IsNullOrWhiteSpace(stdoutPath));
+            Assert.False(string.IsNullOrWhiteSpace(stderrPath));
+            Assert.Equal(new[] { appScriptPath, "conduct", "--loop" }, args);
+            Assert.True(DateTimeOffset.TryParse(root.GetProperty("startedAt").GetString(), out _));
+        }
+        finally
+        {
+            DeleteDirectory(sandboxPath);
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalWorktrees_git_metadata_access_resolves_linked_index_lock_path")]
@@ -3455,6 +3537,25 @@ public sealed class GoalWorktreeIntegrationTests
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private static string FindCurrentSourceRoot([CallerFilePath] string sourceFilePath = "")
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath))
+            ?? throw new DirectoryNotFoundException($"Could not resolve source directory from '{sourceFilePath}'."));
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "mcg-orchestrator.cmd")) &&
+                File.Exists(Path.Combine(directory.FullName, "scripts", "Start-OrchestratorCommand.ps1")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            $"Could not locate launcher source files from source file path '{sourceFilePath}'.");
     }
 
     private sealed class RecordingSandboxAclHelper : ISandboxAclHelper

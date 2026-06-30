@@ -7,8 +7,7 @@ using System.Text.Json;
 public sealed class LauncherScriptTests
 {
     private static readonly string[] JsonLineSeparators = ["\r\n", "\n"];
-    private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "stderrPath", "stdoutPath"];
-    private static readonly string?[] ExpectedGoalsArgument = ["goals"];
+    private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "startedAt", "stderrPath", "stdoutPath"];
     private static readonly string?[] ExpectedAcceptanceGoalArguments = ["acceptance", "goal"];
     private static readonly string?[] ExpectedDoubleDashArguments =
     [
@@ -195,13 +194,15 @@ public sealed class LauncherScriptTests
         var stdoutPath = root.GetProperty("stdoutPath").GetString();
         var stderrPath = root.GetProperty("stderrPath").GetString();
         var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        var startedAt = root.GetProperty("startedAt").GetString();
 
         Assert.True(pid > 0);
         Assert.False(string.IsNullOrWhiteSpace(stdoutPath));
         Assert.False(string.IsNullOrWhiteSpace(stderrPath));
         Assert.True(Path.IsPathFullyQualified(stdoutPath!));
         Assert.True(Path.IsPathFullyQualified(stderrPath!));
-        Assert.Equal(ExpectedGoalsArgument, args);
+        Assert.Equal(new[] { appDll, "goals" }, args);
+        Assert.True(DateTimeOffset.TryParse(startedAt, out _), $"Expected parseable startedAt, got '{startedAt}'.");
 
         try
         {
@@ -279,7 +280,7 @@ public sealed class LauncherScriptTests
         var stderrPath = launcherRoot.GetProperty("stderrPath").GetString()
             ?? throw new InvalidOperationException("Launcher did not emit stderrPath.");
         var emittedArgs = launcherRoot.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
-        Assert.Equal(ExpectedDoubleDashArguments, emittedArgs);
+        Assert.Equal(new[] { sandbox.EchoScriptPath }.Concat(ExpectedDoubleDashArguments).ToArray(), emittedArgs);
 
         try
         {
@@ -298,6 +299,58 @@ public sealed class LauncherScriptTests
         using var childDocument = JsonDocument.Parse(File.ReadAllText(stdoutPath));
         var childArgs = childDocument.RootElement.EnumerateArray().Select(argument => argument.GetString()).ToArray();
         Assert.Equal(ExpectedDoubleDashArguments, childArgs);
+    }
+
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_launch_failure_exits_nonzero_with_error_json_on_stderr")]
+    public void StartOrchestratorCommandLaunchFailureExitsNonzeroWithErrorJsonOnStderr()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = Path.Combine(
+            Path.GetTempPath(),
+            $"missing-dotnet-{Guid.NewGuid():N}.exe");
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Start-OrchestratorCommand.ps1");
+        startInfo.ArgumentList.Add("-Name");
+        startInfo.ArgumentList.Add("launcher-failure-test");
+        startInfo.ArgumentList.Add("-AppDll");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        startInfo.ArgumentList.Add("goals");
+
+        using var launcher = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start launcher script.");
+        var stdout = launcher.StandardOutput.ReadToEnd();
+        var stderr = launcher.StandardError.ReadToEnd();
+        Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        Assert.NotEqual(0, launcher.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
+
+        var errorLines = stderr.Split(
+            JsonLineSeparators,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(errorLines);
+
+        using var document = JsonDocument.Parse(errorLines[0]);
+        var root = document.RootElement;
+        var reason = root.GetProperty("reason").GetString() ?? string.Empty;
+        Assert.True(reason.Contains("cannot find", StringComparison.OrdinalIgnoreCase), reason);
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("stdoutPath").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("stderrPath").GetString()));
+        Assert.Equal(
+            new[] { Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"), "goals" },
+            root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_keeps_AppDll_named_only_and_forwards_remaining_arguments")]
