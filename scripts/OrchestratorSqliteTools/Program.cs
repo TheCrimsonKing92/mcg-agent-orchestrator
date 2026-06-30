@@ -74,7 +74,7 @@ internal static class OrchestratorSqliteTools
 
         dbPath = ResolveStateDbPath(dbPath, repoRoot);
 
-        await using var conn = CreateConnection(dbPath, readOnly: true);
+        await using var conn = CreateConnection(dbPath, readOnly: false);
         try
         {
             await conn.OpenAsync();
