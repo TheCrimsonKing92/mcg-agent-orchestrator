@@ -502,7 +502,7 @@ internal static class OrchestratorSqliteTools
     private static string NormalizeStateRoot(string repoRoot)
     {
         var primaryRoot = TryResolvePrimaryRootFromLinkedWorktree(repoRoot);
-        if (primaryRoot is not null && File.Exists(Path.Combine(primaryRoot, ".orchestrator", "state.db")))
+        if (primaryRoot is not null)
             return primaryRoot;
 
         if (File.Exists(Path.Combine(repoRoot, ".orchestrator", "state.db")))
