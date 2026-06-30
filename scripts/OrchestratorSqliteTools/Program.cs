@@ -78,6 +78,7 @@ internal static class OrchestratorSqliteTools
         {
             await conn.OpenAsync();
             await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+            await RunNonQueryAsync(conn, "PRAGMA temp_store=MEMORY");
             await RunNonQueryAsync(conn, "PRAGMA query_only=ON");
         }
         catch (SqliteException ex)
