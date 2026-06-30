@@ -89,7 +89,7 @@ function Get-IsolatedRootBase {
         return $env:MCG_DOTNET_ISOLATED_ROOT
     }
 
-    return (Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated")
+    return (Join-Path (Join-Path (Get-Location).Path ".mcg-sandbox\temp") "mcg-dotnet-isolated")
 }
 
 function Test-OwnerMarkerMatches {
@@ -141,6 +141,7 @@ $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 $isolatedRoot = Get-IsolatedRootBase
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
     $slotRoot = Join-Path $isolatedRoot "slots\manual"
+    $runRoot = Join-Path $isolatedRoot "manual"
     $artifactsPath = Join-Path $slotRoot "artifacts"
     $leaseId = "run-slot-manual"
     $ownerToken = "manual"
@@ -193,7 +194,12 @@ $isolatedArguments = @(
     "-maxcpucount:$(Get-BuildMaxCpuCount)"
 )
 
+$processTempPath = Join-Path $runRoot "temp"
+New-Item -ItemType Directory -Force -Path $processTempPath | Out-Null
+
 $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
+$env:TEMP = $processTempPath
+$env:TMP = $processTempPath
 Remove-Item Env:MCG_WORKER_SANDBOX -ErrorAction SilentlyContinue
 Remove-Item Env:MCG_WORKER_ACCOUNT -ErrorAction SilentlyContinue
 Remove-Item Env:MCG_WORKER_CREDENTIAL_TARGET -ErrorAction SilentlyContinue
