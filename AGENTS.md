@@ -111,7 +111,7 @@ Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the
 
 **Default: drive goals with the autonomous conductor (`conduct --loop`), not the manual verbs.** The full operate / observe / recover guide — golden path, the `conduct` flag matrix, the three policies, the state model, and the **stuck-goal playbook** (symptom → first command) — lives in [`docs/operator-runbook.md`](docs/operator-runbook.md); read it first. A few notes that complement it:
 
-- **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so a raw `dotnet test` in a worktree no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
+- **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so raw `dotnet test` is safe in a worktree and no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
 - At a landing, the conductor records the `DOGFOOD_LOG` entry itself; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
 - Daemon mode is for a small, curated active-goal set. Do not point it at a stale/open backlog wholesale; use `backlog-list` and filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal`, then keep the first daemon runs bounded with `--max-duration`.
 
