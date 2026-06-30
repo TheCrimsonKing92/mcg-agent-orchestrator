@@ -51,6 +51,7 @@ internal static class OrchestratorSqliteTools
                     repoRoot = RequireValue(args, ref i, arg);
                     break;
                 case "--db":
+                case "--db-path":
                     dbPath = RequireValue(args, ref i, arg);
                     break;
                 case "--status":
@@ -134,6 +135,7 @@ internal static class OrchestratorSqliteTools
                     repoRoot = RequireValue(args, ref i, arg);
                     break;
                 case "--db":
+                case "--db-path":
                     dbPath = RequireValue(args, ref i, arg);
                     break;
                 case "--status":
@@ -246,6 +248,7 @@ internal static class OrchestratorSqliteTools
                     repoRoot = RequireValue(args, ref i, arg);
                     break;
                 case "--db":
+                case "--db-path":
                     dbPath = RequireValue(args, ref i, arg);
                     break;
                 case "--task-number":
