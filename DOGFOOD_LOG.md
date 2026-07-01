@@ -2209,3 +2209,10 @@ Goal 6799e8fd: Fresh current-main replacement for stale goal fd579231.  Objectiv
 
 - Operator gate: Planner: not-run; Planner task only, no file changes (exit 0); Researcher: not-run research-only; evidence from source inspection and git commands above (exit 0); Developer: pass; initial broad WorkerDispatchTests class run hit path-length `$GIT_DIR too big`, focused isolated reruns passed (exit 0); Reviewer: prior pass evidence reviewed; independent rerun blocked by read-only filesystem lease-lock removal denial (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer verification - enough context for diff and evidence review.
+
+## 2026-07-01 - Backlog slice: Get-OrchestratorSnapshot must reap child status processes on t...
+
+Goal 2448b931: Backlog slice: Get-OrchestratorSnapshot must reap child status processes on timeout  Observed 2026-06-30: a multi-goa.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit none). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit a6d5b96db714aad143d39508b0fb7dbde49bf199). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit (no receipt)). Acceptance passed.
+
+- Operator gate: Planner: not-run; planner-only source inspection completed (exit 0); Researcher: not-run; Researcher task only, repository evidence gathered by focused inspections (exit 0); Developer: pass; snapshot timeout regression passed in 2s and verifies partial output plus killed child status process; isolated-dotnet env regression passed with repo root pinned. NU1900 cache access warnings observed. (exit 0); Tester: pass. Snapshot timeout/reap test passed 1/1; isolated dotnet wrapper regression passed 1/1; lifecycle worktree acceptance/removal test passed 1/1. Initial `--no-restore` attempts failed with NETSDK1004 missing isolated `project.assets.json`; reruns with restore passed. Final `git status --short` clean; no matching leftover `dotnet` snapshot/status child processes found. (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - matched code/evidence inspection needs.
