@@ -2329,6 +2329,69 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTool_list_goals_prints_source_backlog_title_label")]
+    public async Task OrchestratorSqliteToolListGoalsPrintsSourceBacklogTitleLabel()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+            var item = await backlogStore.AddAsync("Snapshot backlog title");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("SQLite helper labeled goal");
+            kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+            using (var conn = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadOnly;Pooling=False;"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT source_backlog_item_id FROM goals WHERE id = $id";
+                cmd.Parameters.AddWithValue("$id", goal.Id.Value);
+                Assert.Equal(item.Id, cmd.ExecuteScalar() as string);
+            }
+            Assert.Equal("Snapshot backlog title", (await backlogStore.GetByExactIdAsync(item.Id))?.Title);
+
+            var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--repo-root", repo, "--status", "Active", "--limit", "10");
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains($"{goal.Id.Value[..8]} (Snapshot backlog title) [Active] SQLite helper labeled goal", result.Stdout);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTool_list_goals_omits_label_without_source_backlog_title")]
+    public async Task OrchestratorSqliteToolListGoalsOmitsLabelWithoutSourceBacklogTitle()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("SQLite helper unlabeled goal");
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+
+            var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--repo-root", repo, "--status", "Active", "--limit", "10");
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains($"{goal.Id.Value[..8]} [Active] SQLite helper unlabeled goal", result.Stdout);
+            Assert.DoesNotContain($"{goal.Id.Value[..8]} (", result.Stdout);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OrchestratorSqliteTool_list_goals_from_linked_worktree_reads_primary_state")]
     public void OrchestratorSqliteToolListGoalsFromLinkedWorktreeReadsPrimaryState()
     {
@@ -3398,8 +3461,7 @@ public sealed class GoalWorktreeIntegrationTests
         string? repositoryRootEnvironment,
         params string[] arguments)
     {
-        var sourceRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable)
-            ?? InfrastructureTestSupport.FindRepositoryRoot();
+        var sourceRoot = InfrastructureTestSupport.FindRepositoryRoot();
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
