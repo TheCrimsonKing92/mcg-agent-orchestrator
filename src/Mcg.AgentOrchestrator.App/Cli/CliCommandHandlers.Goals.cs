@@ -658,10 +658,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 TimeSpan? watchInterval = null;
                 if (HasCliConfirmation(parts, "--watch"))
                 {
-                    var intervalSec = GetFlagValue(parts, "--poll-seconds") ?? GetFlagValue(parts, "--watch-interval");
-                    var seconds = intervalSec is not null
-                        ? int.Parse(intervalSec, System.Globalization.CultureInfo.InvariantCulture)
-                        : ConductorBatchLoop.DefaultWatchIntervalSeconds;
+                    var seconds = ResolveConductPollSeconds(parts);
                     watchInterval = TimeSpan.FromSeconds(seconds);
                     Console.WriteLine($"[conduct --loop --watch] Watch mode active; will sleep {seconds}s between ticks when all goals are held.");
                 }
@@ -783,9 +780,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (HasCliConfirmation(parts, "--watch"))
             {
                 var watchGoalId = context.CurrentGoal.Id.Value;
-                var watchPollSeconds = int.TryParse(
-                    GetFlagValue(parts, "--poll-seconds") ?? GetFlagValue(parts, "--watch-interval"),
-                    out var wps) && wps > 0 ? wps : ConductorBatchLoop.DefaultWatchIntervalSeconds;
+                var watchPollSeconds = ResolveConductPollSeconds(parts);
                 TimeSpan? watchMax = int.TryParse(GetFlagValue(parts, "--max-duration"), out var wmd)
                     ? TimeSpan.FromSeconds(wmd) : null;
                 var watchReaper = new BackgroundDispatchRunner();
@@ -817,6 +812,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     persistGoalTick: context.PersistGoalCheckpoint);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
+            }
+            if (HasCliConfirmation(parts, "--poll-seconds") || HasCliConfirmation(parts, "--watch-interval"))
+            {
+                throw new ArgumentException("--poll-seconds requires --watch.");
             }
 
             var conductResult = conductDriver.AdvanceOnce(context.CurrentGoal, conductPolicy);
@@ -1984,6 +1983,31 @@ private static TimeSpan? ResolveWatchStallWarningThreshold(IReadOnlyList<string>
     }
 
     return null;
+}
+
+private static int ResolveConductPollSeconds(IReadOnlyList<string> parts)
+{
+    if (GetFlagValue(parts, "--poll-seconds") is { } pollSeconds)
+    {
+        return ParsePositiveInteger(pollSeconds, "--poll-seconds");
+    }
+
+    if (HasCliConfirmation(parts, "--poll-seconds"))
+    {
+        throw new ArgumentException("--poll-seconds requires a positive integer value.");
+    }
+
+    if (GetFlagValue(parts, "--watch-interval") is { } watchInterval)
+    {
+        return ParsePositiveInteger(watchInterval, "--poll-seconds");
+    }
+
+    if (HasCliConfirmation(parts, "--watch-interval"))
+    {
+        throw new ArgumentException("--poll-seconds requires a positive integer value.");
+    }
+
+    return ConductorBatchLoop.DefaultWatchIntervalSeconds;
 }
 
 private static int ParsePositiveInteger(string value, string flag)
