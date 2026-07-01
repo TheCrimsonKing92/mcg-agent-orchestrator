@@ -1004,7 +1004,12 @@ internal static class CliPersistentStateRunner
 
         if (parts[0].Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase))
         {
-            return GetOptionalArgument(parts);
+            if (parts.Count > 1 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+            {
+                return parts.Count > 2 ? parts[2] : null;
+            }
+
+            return parts.Count > 1 && !parts[1].StartsWith("--", StringComparison.Ordinal) ? parts[1] : null;
         }
 
         if (!parts[0].Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase))

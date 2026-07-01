@@ -7334,6 +7334,55 @@ public sealed class CliCommandTests
         Xunit.Assert.NotNull(restoredTask.LastVerification);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatches_goal_flag_uses_requested_goal_scoped_state")]
+    public async Task PersistentRunnerRefreshDispatchesGoalFlagUsesRequestedGoalScopedState()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var currentTask = new TaskSpec(TaskId.New(), "Current work", AgentRole.Developer);
+        var targetTask = new TaskSpec(TaskId.New(), "Target work", AgentRole.Developer);
+        var current = kernel.CreateGoal("Current refresh", [currentTask]);
+        var target = kernel.CreateGoal("Target refresh", [targetTask]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = current;
+        kernel.ActivateGoal(current.Id, agents);
+        kernel.ActivateGoal(target.Id, agents);
+        RecordRunningProcess(kernel, target, targetTask, root);
+        File.WriteAllText(targetTask.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(targetTask.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatches", "--goal", target.Id.Value[..8]],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+        Xunit.Assert.Equal([target.Id.Value], repository.LoadedGoalIds);
+        Xunit.Assert.Equal(target.Id, currentGoal!.Id);
+
+        var currentSnapshot = await repository.LoadGoalAsync(current.Id);
+        var targetSnapshot = await repository.LoadGoalAsync(target.Id);
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([currentSnapshot!, targetSnapshot!], []));
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(current.Id, currentTask.Id).Status);
+        var restoredTargetTask = restored.GetTask(target.Id, targetTask.Id);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTargetTask.Status);
+        Xunit.Assert.Equal(0, restoredTargetTask.LastProcess!.ExitCode);
+        Xunit.Assert.NotNull(restoredTargetTask.LastVerification);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_discards_stale_process_identity")]
     public async Task PersistentRunnerReconcileDiscardsStaleProcessIdentity()
     {
