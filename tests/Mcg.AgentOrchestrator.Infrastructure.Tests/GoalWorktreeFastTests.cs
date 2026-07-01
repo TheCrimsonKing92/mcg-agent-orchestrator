@@ -235,7 +235,11 @@ public sealed class GoalWorktreeTests
         public string? TryResolve(string executionDirectory, GoalId goalId) =>
             worktrees.TryGetValue(goalId, out var path) ? path : null;
 
-        public GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null)
+        public GoalWorktreeRemoveResult Remove(
+            string executionDirectory,
+            GoalId goalId,
+            AgentOrchestratorKernel? kernel = null,
+            int? gitTimeoutMilliseconds = null)
         {
             RemoveCount++;
             if (worktrees.Remove(goalId, out var path))

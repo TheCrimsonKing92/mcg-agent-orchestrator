@@ -310,15 +310,22 @@ public static class GoalWorktrees
         }
     }
 
-    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null)
+    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
+        Remove(executionDirectory, goalId, kernel, GitCli.DefaultTimeoutMilliseconds);
+
+    public static GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel,
+        int gitTimeoutMilliseconds)
     {
-        RequireGitWorkTree(executionDirectory);
+        RequireGitWorkTree(executionDirectory, gitTimeoutMilliseconds);
 
         var path = WorktreePath(executionDirectory, goalId);
-        var hasRegisteredWorktree = IsRegisteredWorktree(executionDirectory, path);
+        var hasRegisteredWorktree = IsRegisteredWorktree(executionDirectory, path, gitTimeoutMilliseconds);
         var hasLeftoverDirectory = Directory.Exists(path);
         var branch = BranchName(goalId);
-        var hasBranch = BranchExists(executionDirectory, branch);
+        var hasBranch = BranchExists(executionDirectory, branch, gitTimeoutMilliseconds);
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
@@ -329,8 +336,8 @@ public static class GoalWorktrees
 
         if (hasRegisteredWorktree)
         {
-            var removal = GitCli.Run(executionDirectory, "worktree", "remove", path);
-            if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path))
+            var removal = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "worktree", "remove", path);
+            if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path, gitTimeoutMilliseconds))
             {
                 throw new InvalidOperationException(
                     $"Failed to remove goal workspace '{path}': {removal.Error} Commit or discard its changes, or remove it manually with: git worktree remove --force \"{path}\"");
@@ -340,7 +347,7 @@ public static class GoalWorktrees
         {
             // Worktree already unregistered; prune any stale tracking entries left by a prior
             // partial removal so git's internal state is consistent before we finish cleanup.
-            GitCli.Run(executionDirectory, "worktree", "prune");
+            GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "worktree", "prune");
         }
 
         if (Directory.Exists(path))
@@ -355,7 +362,7 @@ public static class GoalWorktrees
             WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."));
         }
 
-        if (!BranchExists(executionDirectory, branch))
+        if (!BranchExists(executionDirectory, branch, gitTimeoutMilliseconds))
         {
             _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             return new GoalWorktreeRemoveResult(Directory.Exists(path)
@@ -363,7 +370,7 @@ public static class GoalWorktrees
                 : "Removed workspace.", null, [], null);
         }
 
-        var branchRemoval = GitCli.Run(executionDirectory, "branch", "-d", branch);
+        var branchRemoval = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "branch", "-d", branch);
         _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         return branchRemoval.ExitCode == 0
             ? new GoalWorktreeRemoveResult(Directory.Exists(path)
@@ -608,7 +615,12 @@ public static class GoalWorktrees
 
     private static bool BranchExists(string executionDirectory, string branch)
     {
-        return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
+        return BranchExists(executionDirectory, branch, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static bool BranchExists(string executionDirectory, string branch, int gitTimeoutMilliseconds)
+    {
+        return GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
     }
 
     private static GitCli.GitResult AddWorktree(string executionDirectory, string path, string branch, bool branchExists)
@@ -653,7 +665,12 @@ public static class GoalWorktrees
 
     private static bool IsRegisteredWorktree(string executionDirectory, string path)
     {
-        return RegisteredWorktreePaths(executionDirectory).Contains(NormalizePath(path));
+        return IsRegisteredWorktree(executionDirectory, path, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static bool IsRegisteredWorktree(string executionDirectory, string path, int gitTimeoutMilliseconds)
+    {
+        return RegisteredWorktreePaths(executionDirectory, gitTimeoutMilliseconds).Contains(NormalizePath(path));
     }
 
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
@@ -716,7 +733,12 @@ public static class GoalWorktrees
 
     private static HashSet<string> RegisteredWorktreePaths(string executionDirectory)
     {
-        var result = GitCli.Run(executionDirectory, "worktree", "list", "--porcelain");
+        return RegisteredWorktreePaths(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static HashSet<string> RegisteredWorktreePaths(string executionDirectory, int gitTimeoutMilliseconds)
+    {
+        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "worktree", "list", "--porcelain");
         if (result.ExitCode != 0)
         {
             return [];
@@ -780,13 +802,23 @@ public static class GoalWorktrees
     /// </summary>
     public static bool IsGitWorkTree(string executionDirectory)
     {
-        var result = GitCli.Run(executionDirectory, "rev-parse", "--is-inside-work-tree");
+        return IsGitWorkTree(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static bool IsGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
+    {
+        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree");
         return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RequireGitWorkTree(string executionDirectory)
     {
-        if (!IsGitWorkTree(executionDirectory))
+        RequireGitWorkTree(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
+    {
+        if (!IsGitWorkTree(executionDirectory, gitTimeoutMilliseconds))
         {
             throw new InvalidOperationException(
                 $"Goal workspaces require '{executionDirectory}' to be inside a git work tree.");

@@ -2663,8 +2663,20 @@ public sealed class GoalWorktreeIntegrationTests
                 ref profiles,
                 ref currentGoal));
 
-            Assert.True(output.Contains("CleanedUp", StringComparison.Ordinal));
+            var outputLines = output.Split(
+                ["\r\n", "\n"],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal(
+                [
+                    "Goal landed cleanup:",
+                    "cleanup: worktree removed",
+                    "cleanup: branch deleted",
+                    "cleanup: app-host lock released",
+                    "cleanup: goal marked CleanedUp"
+                ],
+                outputLines);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
             var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
             Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
         }
@@ -3365,7 +3377,10 @@ public sealed class GoalWorktreeIntegrationTests
 
     private static string CreateSeededRepository()
     {
-        var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));
+        var tempRoot = OperatingSystem.IsWindows()
+            ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
+            : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
+        var root = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
         RunGit(root, "init");
         RunGit(root, "config", "user.email", "tests@example.com");
