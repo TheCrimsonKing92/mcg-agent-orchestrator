@@ -18,6 +18,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks)
         {
+            var gate = BuildTaskVerificationGate(task);
             if (task.Status == WorkTaskStatus.Failed)
             {
                 attention.Add(new TaskAttentionItem(
@@ -26,12 +27,12 @@ public sealed partial class AgentOrchestratorKernel
                     $"{task.RequiredRole}: {task.Description}"));
             }
 
-            if (task.LastVerification is { Succeeded: false })
+            if (gate.GateStatus == VerificationGateStatus.FailedVerification)
             {
                 attention.Add(new TaskAttentionItem(
                     TaskAttentionKind.FailedVerification,
                     task.Id,
-                    $"exit={task.LastVerification.ExitCode}: {task.LastVerification.Command}"));
+                    BuildFailedVerificationAttentionMessage(task, gate)));
             }
 
             if (task.Status == WorkTaskStatus.Running && task.LastDispatch is not null)
@@ -76,6 +77,13 @@ public sealed partial class AgentOrchestratorKernel
             goal.Timeline.OrderBy(evt => evt.OccurredAt).LastOrDefault()?.OccurredAt);
     }
 
+    private static string BuildFailedVerificationAttentionMessage(TaskSpec task, TaskVerificationGate gate)
+    {
+        return task.LastVerification is { Succeeded: false }
+            ? $"exit={task.LastVerification.ExitCode}: {task.LastVerification.Command}"
+            : gate.Message;
+    }
+
     public GoalNextActions BuildNextActions(GoalId goalId)
     {
         var goal = GetGoal(goalId);
@@ -103,6 +111,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks)
         {
+            var gate = BuildTaskVerificationGate(task);
             if (task.Status == WorkTaskStatus.Failed)
             {
                 var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
@@ -115,11 +124,11 @@ public sealed partial class AgentOrchestratorKernel
                     message));
             }
 
-            if (task.LastVerification is { Succeeded: false })
+            if (gate.GateStatus == VerificationGateStatus.FailedVerification)
             {
                 var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
                     ? BuildDirtyDispatchRecoveryMessage(recovery)
-                    : $"Last verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}";
+                    : gate.Message;
                 items.Add(new NextActionItem(
                     NextActionKind.FixFailedVerification,
                     task.Id,
