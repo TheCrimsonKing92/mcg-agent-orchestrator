@@ -7113,6 +7113,26 @@ public sealed class CliCommandTests
         return root;
     }
 
+    private static string CreateShortAcceptanceRepository()
+    {
+        var baseDirectory = Path.Combine(
+            Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory(),
+            ".mcg-sandbox",
+            "temp",
+            "short-tests");
+        Directory.CreateDirectory(baseDirectory);
+        var root = Path.Combine(baseDirectory, Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(root);
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.com");
+        RunGit(root, "config", "user.name", "CLI Tests");
+        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "-A");
+        RunGit(root, "commit", "-m", "Seed");
+        return root;
+    }
+
     private static string CommitGoalWork(string root, GoalId goalId, string relativePath, string content)
     {
         var worktree = GoalWorktrees.Ensure(root, goalId);
@@ -7309,6 +7329,8 @@ public sealed class CliCommandTests
 
         public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
 
+        public Action<CancellationToken>? BeforeSaveCommit { get; set; }
+
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
             LoadCount++;
@@ -7394,6 +7416,7 @@ public sealed class CliCommandTests
                 var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
                 if (shouldSave)
                 {
+                    BeforeSaveCommit?.Invoke(cancellationToken);
                     _kernel = Clone(transactionKernel);
                 }
 
@@ -7444,6 +7467,62 @@ public sealed class CliCommandTests
                 "Passed.",
                 ArtifactsPath: Path.Combine(worktreePath, "artifacts"),
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.")]));
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_carries_prompt_budget_through_state_commit")]
+    public void PersistentRunnerGoalMarkLandedCarriesPromptBudgetThroughStateCommit()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Already landed persistent cleanup", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+            var observedCommitBudget = false;
+            repository.BeforeSaveCommit = token =>
+            {
+                observedCommitBudget = token.CanBeCanceled;
+                Xunit.Assert.True(token.CanBeCanceled);
+                Xunit.Assert.False(token.IsCancellationRequested);
+            };
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                    repository,
+                    CreateRefinedWorkspace(root),
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.True(changed);
+            });
+
+            Xunit.Assert.True(observedCommitBudget);
+            Xunit.Assert.Equal(1, repository.TransactionCount);
+            Xunit.Assert.Contains("cleanup: branch deleted", output);
+            Xunit.Assert.Contains("cleanup: goal marked CleanedUp", output);
+            Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
 

@@ -6,6 +6,7 @@ public enum ProviderKind
     OpenAICodexCli,
     AnthropicClaudeCli,
     OpenAICodexSpark,
+    OpenAICodexOssCli,
     OllamaQwenCodeCli
 }
 

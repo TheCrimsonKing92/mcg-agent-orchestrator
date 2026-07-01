@@ -962,7 +962,7 @@ public static class WorkerProfileDispatcher
             return false;
         }
 
-        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark &&
+        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
