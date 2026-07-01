@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CliHelpTests
 {
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]
-    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--all")]
+    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
     [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--reason-file")]
@@ -45,6 +45,59 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains(optionToken, output);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
         Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_help_command_prints_command_usage_without_executing")]
+    public void CliHelpCommandPrintsCommandUsageWithoutExecuting()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["help", "backlog-list"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Usage: backlog-list", output);
+        Xunit.Assert.Contains("--limit <n>", output);
+        Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_help_unknown_command_suggests_nearest_command")]
+    public void CliHelpUnknownCommandSuggestsNearestCommand()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["help", "backlog-lits"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Unknown command 'backlog-lits'. Did you mean: backlog-list?", ex.Message);
     }
 
     [Xunit.Fact(DisplayName = "Cli_conduct_help_documents_poll_seconds")]
@@ -86,7 +139,7 @@ public sealed class CliHelpTests
     }
 
     [Xunit.Theory(DisplayName = "Cli_help_startup_exits_zero_before_state_creation")]
-    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--all")]
+    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
     public void CliHelpStartupExitsZeroBeforeStateCreation(string[] args, string synopsisToken, string optionToken)
     {
@@ -100,6 +153,18 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains(optionToken, result.StandardOutput);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
         Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_help_unknown_command_startup_exits_one_with_suggestion")]
+    public void CliHelpUnknownCommandStartupExitsOneWithSuggestion()
+    {
+        var root = CreateTempDirectory();
+
+        var result = RunAppCli(root, ["help", "backlog-lits"]);
+
+        Xunit.Assert.Equal(1, result.ExitCode);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardOutput), result.StandardOutput);
+        Xunit.Assert.Contains("Error: Unknown command 'backlog-lits'. Did you mean: backlog-list?", result.StandardError);
     }
 
     [Xunit.Theory(DisplayName = "Cli_invalid_flags_fail_before_handler_execution")]
@@ -144,7 +209,7 @@ public sealed class CliHelpTests
         Xunit.Assert.Equal(1, result.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardOutput), result.StandardOutput);
         Xunit.Assert.Contains("Error: Unknown option '--frobnitz'.", result.StandardError);
-        Xunit.Assert.Contains("Usage: backlog-list [--all]", result.StandardError);
+        Xunit.Assert.Contains("Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]", result.StandardError);
     }
 
     [Xunit.Fact(DisplayName = "Cli_backlog_list_valid_flags_still_execute")]
@@ -161,7 +226,7 @@ public sealed class CliHelpTests
         var output = CaptureConsole(() =>
         {
             var changed = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-list", "--all"],
+                ["backlog-list", "--all", "--limit", "10", "--status", "open", "--text", "foo"],
                 kernel,
                 workspace,
                 ref agents,
@@ -172,7 +237,7 @@ public sealed class CliHelpTests
             Xunit.Assert.False(changed);
         });
 
-        Xunit.Assert.Contains("No backlog items.", output);
+        Xunit.Assert.Contains("No matching backlog items.", output);
     }
 
     private static string CaptureConsole(Action action)
