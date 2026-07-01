@@ -97,6 +97,7 @@ public static TaskDetailDto ToTaskDetailDto(Goal goal, TaskSpec task)
 
 public static ProcessDto? ToProcessDto(TaskProcessRecord? process)
 {
+    var heartbeat = process is null ? null : ProcessLogReader.ReadHeartbeat(process);
     return process is null
         ? null
         : new ProcessDto(
@@ -110,7 +111,12 @@ public static ProcessDto? ToProcessDto(TaskProcessRecord? process)
             process.StandardOutputPath,
             process.StandardErrorPath,
             process.ExitCodePath,
-            ToDispatchHeartbeatDto(ProcessLogReader.ReadHeartbeat(process)));
+            ToHeartbeatAgeSeconds(heartbeat),
+            ToHeartbeatIdleDurationSeconds(heartbeat),
+            ToHeartbeatStdoutBytes(heartbeat),
+            ToHeartbeatStderrBytes(heartbeat),
+            ToHeartbeatPath(heartbeat),
+            ToDispatchHeartbeatDto(heartbeat));
 }
 
 public static ProcessLogDto ToProcessLogDto(Goal goal, TaskSpec task)
@@ -131,6 +137,11 @@ public static ProcessLogDto ToProcessLogDto(Goal goal, TaskSpec task)
         logs.StandardError,
         logs.ExitCodePath,
         logs.ExitCode,
+        ToHeartbeatAgeSeconds(logs.Heartbeat),
+        ToHeartbeatIdleDurationSeconds(logs.Heartbeat),
+        ToHeartbeatStdoutBytes(logs.Heartbeat),
+        ToHeartbeatStderrBytes(logs.Heartbeat),
+        ToHeartbeatPath(logs.Heartbeat),
         ToDispatchHeartbeatDto(logs.Heartbeat));
 }
 
@@ -171,8 +182,9 @@ private static string[] ExtractWorkerResultSkills(TaskVerificationRecord? verifi
         .ToArray();
 }
 
-private static DispatchHeartbeatDto ToDispatchHeartbeatDto(DispatchHeartbeatStatus heartbeat)
+private static DispatchHeartbeatDto ToDispatchHeartbeatDto(DispatchHeartbeatStatus? heartbeat)
 {
+    heartbeat ??= new DispatchHeartbeatStatus(string.Empty, false, "missing", 0, null, [], "unknown", null, null, null, null, 0, 0);
     return new DispatchHeartbeatDto(
         heartbeat.Path,
         heartbeat.IsAvailable,
@@ -188,6 +200,21 @@ private static DispatchHeartbeatDto ToDispatchHeartbeatDto(DispatchHeartbeatStat
         heartbeat.StandardOutputBytes,
         heartbeat.StandardErrorBytes);
 }
+
+private static double? ToHeartbeatAgeSeconds(DispatchHeartbeatStatus? heartbeat) =>
+    heartbeat is { IsAvailable: true, HeartbeatAge: { } age } ? age.TotalSeconds : null;
+
+private static double? ToHeartbeatIdleDurationSeconds(DispatchHeartbeatStatus? heartbeat) =>
+    heartbeat is { IsAvailable: true, IdleDuration: { } idle } ? idle.TotalSeconds : null;
+
+private static long? ToHeartbeatStdoutBytes(DispatchHeartbeatStatus? heartbeat) =>
+    heartbeat is { IsAvailable: true } ? heartbeat.StandardOutputBytes : null;
+
+private static long? ToHeartbeatStderrBytes(DispatchHeartbeatStatus? heartbeat) =>
+    heartbeat is { IsAvailable: true } ? heartbeat.StandardErrorBytes : null;
+
+private static string? ToHeartbeatPath(DispatchHeartbeatStatus? heartbeat) =>
+    heartbeat is { IsAvailable: true } ? heartbeat.Path : null;
 
 public static TaskVerificationHistoryDto ToVerificationHistoryDto(Goal goal, TaskSpec task)
 {

@@ -25,13 +25,18 @@ internal static class ProcessHeartbeatText
         {
             return
             [
+                "Heartbeat Status:",
                 $"heartbeat: unavailable ({heartbeat.UnavailableReason ?? "unknown"})",
-                $"heartbeat path: {heartbeat.Path}"
+                $"heartbeat path: {heartbeat.Path}",
+                "last observed: n/a age=n/a",
+                "last progress: n/a idle=n/a",
+                "log bytes: stdout=n/a stderr=n/a"
             ];
         }
 
         return
         [
+            "Heartbeat Status:",
             $"heartbeat: available state={heartbeat.State} pid={heartbeat.ProcessId} child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"} owned_pids={FormatOwnedPids(heartbeat.OwnedProcessIds)}",
             $"heartbeat path: {heartbeat.Path}",
             $"last observed: {FormatTimestamp(heartbeat.LastObservedAt)} age={FormatDuration(heartbeat.HeartbeatAge)}",
