@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -22,7 +23,8 @@ internal static class GoalMonitoringStream
             goal,
             sinceEventId,
             DashboardResponseMapper.ToOperatorInboxReportDto(inbox),
-            DashboardResponseMapper.ToSubscriptionPlanDto(subscriptionPlan).CapacitySchedule);
+            DashboardResponseMapper.ToSubscriptionPlanDto(subscriptionPlan).CapacitySchedule,
+            CliCommandHandlers.ResolveGoalDisplayLabel(goal, workspace.BacklogStorePath));
     }
 
     public static async Task StreamAsync(

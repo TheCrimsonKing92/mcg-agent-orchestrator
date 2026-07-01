@@ -72,7 +72,12 @@ internal static class OrchestratorSqliteTools
             }
         }
 
-        dbPath = ResolveStateDbPath(dbPath, repoRoot);
+        var resolvedRepoRoot = ResolveRepoRoot(repoRoot);
+        dbPath = ResolveStateDbPath(dbPath, resolvedRepoRoot);
+        var stateDirectory = Path.GetDirectoryName(dbPath);
+        var backlogTitles = string.IsNullOrWhiteSpace(stateDirectory)
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : LoadBacklogTitles(Path.Combine(stateDirectory, "backlog.db"));
 
         await using var conn = CreateConnection(dbPath, readOnly: true);
         try
@@ -87,21 +92,26 @@ internal static class OrchestratorSqliteTools
             return FailOpen(dbPath, ex);
         }
 
+        var hasSourceBacklogColumn = await HasColumnAsync(conn, "goals", "source_backlog_item_id");
         await using var cmd = conn.CreateCommand();
+        var projection = hasSourceBacklogColumn
+            ? "id, status, source_backlog_item_id, snapshot_json"
+            : "id, status, snapshot_json";
         cmd.CommandText = status is null
             ? """
-              SELECT id, status, snapshot_json
+              SELECT {0}
               FROM goals
               ORDER BY updated_at DESC, id
               LIMIT $limit
               """
             : """
-              SELECT id, status, snapshot_json
+              SELECT {0}
               FROM goals
               WHERE status = $status
               ORDER BY updated_at DESC, id
               LIMIT $limit
               """;
+        cmd.CommandText = string.Format(cmd.CommandText, projection);
         cmd.Parameters.AddWithValue("$limit", limit);
         if (status is not null)
             cmd.Parameters.AddWithValue("$status", status);
@@ -113,8 +123,10 @@ internal static class OrchestratorSqliteTools
             {
                 var id = reader.GetString(0);
                 var rowStatus = reader.GetString(1);
-                var snapshotJson = reader.GetString(2);
-                Console.WriteLine($"{Short(id)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
+                var sourceBacklogItemId = hasSourceBacklogColumn && !reader.IsDBNull(2) ? reader.GetString(2) : null;
+                var snapshotJson = reader.GetString(hasSourceBacklogColumn ? 3 : 2);
+                sourceBacklogItemId ??= ExtractSourceBacklogItemId(snapshotJson);
+                Console.WriteLine($"{Short(id)}{FormatDisplayLabel(sourceBacklogItemId, backlogTitles)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
             }
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 14)
@@ -454,6 +466,15 @@ internal static class OrchestratorSqliteTools
         await cmd.ExecuteNonQueryAsync();
     }
 
+    private static async Task<bool> HasColumnAsync(SqliteConnection conn, string table, string column)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $name";
+        cmd.Parameters.AddWithValue("$name", column);
+        var count = (long)(await cmd.ExecuteScalarAsync() ?? 0L);
+        return count > 0;
+    }
+
     private static string ResolveStateDbPath(string? dbPath, string? repoRoot)
     {
         if (!string.IsNullOrWhiteSpace(dbPath))
@@ -595,6 +616,58 @@ internal static class OrchestratorSqliteTools
         Console.WriteLine();
         Console.WriteLine("Statuses:");
         Console.WriteLine($"  {string.Join(", ", AllowedGoalStatuses)}");
+    }
+
+    private static IReadOnlyDictionary<string, string> LoadBacklogTitles(string backlogDbPath)
+    {
+        if (!File.Exists(backlogDbPath))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            using var conn = CreateConnection(backlogDbPath, readOnly: false);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT id, title FROM backlog";
+            using var reader = cmd.ExecuteReader();
+            var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                var title = reader.IsDBNull(1) ? null : reader.GetString(1);
+                if (!string.IsNullOrWhiteSpace(title))
+                    titles[reader.GetString(0)] = title;
+            }
+
+            return titles;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string FormatDisplayLabel(string? sourceBacklogItemId, IReadOnlyDictionary<string, string> backlogTitles)
+    {
+        if (string.IsNullOrWhiteSpace(sourceBacklogItemId) ||
+            !backlogTitles.TryGetValue(sourceBacklogItemId, out var title) ||
+            string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        return $" ({title.Trim().ReplaceLineEndings(" ")})";
+    }
+
+    private static string? ExtractSourceBacklogItemId(string snapshotJson)
+    {
+        try
+        {
+            return JsonNode.Parse(snapshotJson)?["SourceBacklogItemId"]?.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string Short(string id) => id.Length <= 8 ? id : id[..8];

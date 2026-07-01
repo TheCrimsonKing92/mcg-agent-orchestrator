@@ -38,10 +38,11 @@ internal static class DashboardMonitoringEvents
         Goal goal,
         long sinceEventId,
         OperatorInboxReportDto? operatorInbox,
-        ProviderCapacityScheduleDto? providerCapacity)
+        ProviderCapacityScheduleDto? providerCapacity,
+        string? displayLabel = null)
     {
         var allEvents = BuildTimelineEvents(goal);
-        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity);
+        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity, displayLabel);
         return new GoalMonitoringBatchDto(
             goal.Id.Value,
             Math.Max(0, sinceEventId),
@@ -110,13 +111,14 @@ internal static class DashboardMonitoringEvents
         Goal goal,
         long lastEventId,
         OperatorInboxReportDto? operatorInbox,
-        ProviderCapacityScheduleDto? providerCapacity)
+        ProviderCapacityScheduleDto? providerCapacity,
+        string? displayLabel)
     {
         return new GoalMonitoringSnapshotDto(
             goal.Id.Value,
             DateTimeOffset.UtcNow,
             lastEventId,
-            DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id)),
+            DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id), displayLabel),
             goal.Tasks.Select(task => new TaskMonitoringSnapshotDto(
                 ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
                 task.Id.Value,

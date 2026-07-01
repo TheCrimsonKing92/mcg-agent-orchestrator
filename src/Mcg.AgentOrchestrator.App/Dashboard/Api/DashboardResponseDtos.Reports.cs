@@ -63,7 +63,8 @@ internal sealed record MonitorDto(
     IReadOnlyList<StatusCountDto> StatusCounts,
     int PendingHumanInputCount,
     IReadOnlyList<AttentionDto> Attention,
-    DateTimeOffset? LastTimelineEventAt);
+    DateTimeOffset? LastTimelineEventAt,
+    string? DisplayLabel = null);
 
 internal sealed record GoalSupervisorPlanDto(
     string GoalId,

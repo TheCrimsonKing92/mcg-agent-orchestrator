@@ -273,6 +273,41 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Xunit.Assert.Contains("event 7 2026-06-13 01:00:00Z TaskCompleted task 1: Done", text);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_goal_label_when_present")]
+    public void MonitorGoalPrintsCompactSnapshotGoalLabelWhenPresent()
+    {
+        var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
+        var batch = new GoalMonitoringBatchDto(
+            "abc12345",
+            0,
+            7,
+            new GoalMonitoringSnapshotDto(
+                "abc12345",
+                observedAt,
+                7,
+                new MonitorDto(
+                    "abc12345",
+                    "Add monitoring",
+                    GoalStatus.Active,
+                    1,
+                    [],
+                    0,
+                    [],
+                    observedAt,
+                    "Friendly backlog title"),
+                [
+                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
+                ]),
+            [],
+            "/api/goals/abc12345/events/stream");
+        using var output = new StringWriter();
+
+        GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
+
+        var text = output.ToString();
+        Xunit.Assert.Contains("snapshot goal=abc12345 (Friendly backlog title) status=Active tasks=1 completed=1 running=0 failed=0", text);
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_reads_server_sent_events")]
     public async Task MonitorGoalReadsServerSentEvents()
     {

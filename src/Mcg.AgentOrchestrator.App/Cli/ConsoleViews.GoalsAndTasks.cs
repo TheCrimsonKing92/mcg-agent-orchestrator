@@ -28,10 +28,11 @@ public static void PrintHealth(OrchestratorHealthReport report)
     }
 }
 
-public static void PrintGoal(Goal goal)
+public static void PrintGoal(Goal goal, string? displayLabel = null)
 {
     Console.WriteLine();
-    Console.WriteLine($"Goal {goal.Id}");
+    var label = string.IsNullOrWhiteSpace(displayLabel) ? string.Empty : $" ({displayLabel.Trim().ReplaceLineEndings(" ")})";
+    Console.WriteLine($"Goal {goal.Id}{label}");
     Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
     Console.WriteLine($"Status: {goal.Status}");
     Console.WriteLine("Tasks:");
