@@ -23,10 +23,11 @@ public sealed class WorkerProfileTests
     Assert.Contains(codex.CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
     Assert.Contains(codex.CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-    Assert.Contains(codex.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
+    Assert.DoesNotContain("{promptPath}", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains(claude.CommandTemplate, text => text.Contains("claude --model {subscriptionModelName}", StringComparison.Ordinal));
-    Assert.Contains(claude.CommandTemplate, text => text.Contains("--permission-mode {permissionMode} -p", StringComparison.Ordinal));
-    Assert.Contains(claude.CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
+    Assert.Contains(claude.CommandTemplate, text => text.Contains("--permission-mode {permissionMode}", StringComparison.Ordinal));
+    Assert.DoesNotContain(" -p", claude.CommandTemplate, StringComparison.Ordinal);
+    Assert.DoesNotContain("{promptPath}", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude, claudeProvider).IsPatchCapable);
 }
 
@@ -42,7 +43,7 @@ public sealed class WorkerProfileTests
     Assert.Contains(capability.Detail, text => text.Contains("--permission-mode", StringComparison.Ordinal));
 
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(
-        new WorkerProfile("test-claude", "claude --model {subscriptionModelName} --permission-mode acceptEdits -p (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("test-claude", "claude --model {subscriptionModelName} --permission-mode acceptEdits"),
         provider).IsPatchCapable);
 }
 
@@ -151,7 +152,8 @@ public sealed class WorkerProfileTests
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
-    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode} -p", StringComparison.Ordinal));
+    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", StringComparison.Ordinal));
+    Assert.DoesNotContain("{promptPath}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_stale_default_subscription_profiles")]
     public void WorkerProfileStoreLoadRepairsStaleDefaultSubscriptionProfiles()
@@ -165,7 +167,7 @@ public sealed class WorkerProfileTests
     var restored = WorkerProfileStore.Load(path);
 
     Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
-    Assert.Contains(restored.GetRequired("claude-cli").CommandTemplate, text => text.Contains("Get-Content -Raw {promptPath}", StringComparison.Ordinal));
+    Assert.DoesNotContain("{promptPath}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_claude_profile_missing_permission_mode")]
     public void WorkerProfileStoreLoadRepairsClaudeProfileMissingPermissionMode()

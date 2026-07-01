@@ -82,13 +82,13 @@ public static class WorkerProfileDiagnostics
         var hasWorkspaceWrite = normalized.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("--sandbox {sandboxMode}", StringComparison.OrdinalIgnoreCase);
         var hasWorkingDirectory = normalized.Contains("--cd {workingDirectory}", StringComparison.OrdinalIgnoreCase);
-        var readsPromptContent = normalized.Contains("Get-Content -Raw {promptPath}", StringComparison.OrdinalIgnoreCase);
+        var readsPromptFromStdin = !normalized.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase);
 
-        if (hasWorkspaceWrite && hasWorkingDirectory && readsPromptContent)
+        if (hasWorkspaceWrite && hasWorkingDirectory && readsPromptFromStdin)
         {
             return new WorkerProfilePatchCapability(
                 true,
-                "Codex launcher is patch-capable: workspace-write sandbox, repository working directory, and prompt content are configured.");
+                "Codex launcher is patch-capable: workspace-write sandbox, repository working directory, and stdin prompt delivery are configured.");
         }
 
         var missing = new List<string>();
@@ -102,9 +102,9 @@ public static class WorkerProfileDiagnostics
             missing.Add("--cd {workingDirectory}");
         }
 
-        if (!readsPromptContent)
+        if (!readsPromptFromStdin)
         {
-            missing.Add("Get-Content -Raw {promptPath}");
+            missing.Add("stdin prompt delivery");
         }
 
         return new WorkerProfilePatchCapability(
@@ -119,13 +119,13 @@ public static class WorkerProfileDiagnostics
             normalized.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("--dangerously-skip-permissions", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("--permission-mode {permissionMode}", StringComparison.OrdinalIgnoreCase);
-        var readsPromptContent = normalized.Contains("Get-Content -Raw {promptPath}", StringComparison.OrdinalIgnoreCase);
+        var readsPromptFromStdin = !normalized.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase);
 
-        if (hasNonInteractivePermissionMode && readsPromptContent)
+        if (hasNonInteractivePermissionMode && readsPromptFromStdin)
         {
             return new WorkerProfilePatchCapability(
                 true,
-                "Claude launcher is patch-capable: non-interactive permission mode and prompt content are configured.");
+                "Claude launcher is patch-capable: non-interactive permission mode and stdin prompt delivery are configured.");
         }
 
         var missing = new List<string>();
@@ -136,9 +136,9 @@ public static class WorkerProfileDiagnostics
             missing.Add("--permission-mode acceptEdits|bypassPermissions");
         }
 
-        if (!readsPromptContent)
+        if (!readsPromptFromStdin)
         {
-            missing.Add("Get-Content -Raw {promptPath}");
+            missing.Add("stdin prompt delivery");
         }
 
         return new WorkerProfilePatchCapability(
@@ -195,11 +195,11 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         return new WorkerProfileCatalog(
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
-            new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("codex-spark", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+            new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
+            new WorkerProfile("codex-spark", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
+            new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox workspace-write --cd {workingDirectory}"),
             new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("claude-cli", "'' | claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})")
+            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode}")
         ]);
     }
 }
@@ -319,12 +319,13 @@ public static class WorkerProfileStore
             return true;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
         {
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
-                !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
+                !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase);
         }
 
         return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&

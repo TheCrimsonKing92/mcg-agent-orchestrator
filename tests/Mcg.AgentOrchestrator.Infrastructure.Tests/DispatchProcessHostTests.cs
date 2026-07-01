@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -22,7 +23,9 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "exit.txt"),
                 Path.Combine(dir, "heartbeat.json"),
                 ShutdownBuildServerOnExit: true,
-                DisableSharedCompilation: true);
+                DisableSharedCompilation: true,
+                Provider: WorkerSandboxProvider.Codex,
+                PromptPath: Path.Combine(dir, "prompt.md"));
 
             DispatchProcessHost.WriteParameters(path, parameters);
 
@@ -30,11 +33,50 @@ public sealed class DispatchProcessHostTests
             // The detached host reads this with a camelCase policy, so the keys must be camelCase.
             Assert.True(json.Contains("\"command\"", StringComparison.Ordinal));
             Assert.True(json.Contains("\"disableSharedCompilation\"", StringComparison.Ordinal));
+            Assert.True(json.Contains("\"promptPath\"", StringComparison.Ordinal));
 
             var roundTripped = JsonSerializer.Deserialize<DispatchProcessHost.DispatchRunParameters>(
                 json,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
             Assert.Equal(parameters, roundTripped);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_large_non_ascii_prompt_to_stdin_as_utf8_without_bom")]
+    public void DispatchProcessHostWritesPromptToStdinAsUtf8()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-stdin-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var promptPath = Path.Combine(dir, "prompt.md");
+            var prompt = new string('A', 32_000) + " CJK=漢字 emoji=🙂";
+            File.WriteAllText(promptPath, prompt, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var expected = File.ReadAllBytes(promptPath);
+            using var stdin = new MemoryStream();
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "codex exec --cd repo",
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Codex,
+                PromptPath: promptPath);
+
+            Assert.True(DispatchProcessHost.ShouldWritePromptToStdin(parameters));
+            DispatchProcessHost.WriteUtf8PromptToStream(promptPath, stdin);
+
+            var actual = stdin.ToArray();
+            Assert.Equal(expected, actual);
+            Assert.False(actual.Length >= 3 && actual[0] == 0xEF && actual[1] == 0xBB && actual[2] == 0xBF);
+            Assert.Equal(prompt, Encoding.UTF8.GetString(actual));
         }
         finally
         {

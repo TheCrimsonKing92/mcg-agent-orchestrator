@@ -151,7 +151,8 @@ public sealed class BackgroundDispatchRunner
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
             SandboxLowIntegrity: useSandbox,
-            Provider: ResolveSandboxProvider(dispatch)));
+            Provider: ResolveSandboxProvider(dispatch),
+            PromptPath: dispatch.PromptPath));
 
         if (useSandbox && OperatingSystem.IsWindows())
         {
