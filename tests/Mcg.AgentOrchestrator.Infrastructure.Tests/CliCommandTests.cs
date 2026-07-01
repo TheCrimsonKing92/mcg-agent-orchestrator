@@ -6418,6 +6418,9 @@ public sealed class CliCommandTests
         Xunit.Assert.True(verifierObservedUnlockedState);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
         Xunit.Assert.False(repository.IsInTransaction);
         Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
     }
@@ -7243,6 +7246,48 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(1, repository.TransactionCount);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatch_uses_goal_scoped_state")]
+    public async Task PersistentRunnerRefreshDispatchUsesGoalScopedState()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Explicit refresh", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatch", goal.Id.Value[..8], "1"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+        Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
+
+        var restoredSnapshot = await repository.LoadGoalAsync(goal.Id);
+        var restoredTask = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([restoredSnapshot!], [])).GetTask(goal.Id, task.Id);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
+        Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
+        Xunit.Assert.NotNull(restoredTask.LastVerification);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_reconcile_discards_stale_process_identity")]
     public async Task PersistentRunnerReconcileDiscardsStaleProcessIdentity()
     {
@@ -7674,6 +7719,10 @@ public sealed class CliCommandTests
 
         public int LoadGoalsCount { get; private set; }
 
+        public int LoadGoalCount { get; private set; }
+
+        public int SaveGoalSnapshotsCount { get; private set; }
+
         public List<string> LoadedGoalIds { get; } = [];
 
         public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
@@ -7714,6 +7763,7 @@ public sealed class CliCommandTests
             IReadOnlyCollection<GoalSnapshot> goals,
             CancellationToken cancellationToken = default)
         {
+            SaveGoalSnapshotsCount++;
             if (goals.Count == 0)
                 return Task.CompletedTask;
 
@@ -7800,6 +7850,8 @@ public sealed class CliCommandTests
 
         public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
         {
+            LoadGoalCount++;
+            LoadedGoalIds.Add(goalId.Value);
             var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
             return Task.FromResult<GoalSnapshot?>(snap);
         }
@@ -7809,9 +7861,29 @@ public sealed class CliCommandTests
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
+            TransactionCount++;
+            if (BeforeNextTransaction is { } before)
+            {
+                BeforeNextTransaction = null;
+                before(_kernel);
+            }
+
             var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
-            var (_, _, result) = await transaction(snap, cancellationToken);
-            return result;
+            IsInTransaction = true;
+            try
+            {
+                var (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
+                if (shouldSave && newSnapshot is not null)
+                {
+                    await SaveGoalSnapshotsAsync([newSnapshot], cancellationToken);
+                }
+
+                return result;
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
         }
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>

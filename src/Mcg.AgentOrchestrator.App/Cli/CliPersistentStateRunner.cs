@@ -565,21 +565,21 @@ internal static class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        var command = args[0].ToLowerInvariant();
+        if (command.Equals("reconcile", StringComparison.OrdinalIgnoreCase))
+        {
+            return ExecuteGlobalProcessReconcile(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveProcessRefreshGoalPrefix(args));
+        var kernel = LoadSingleGoalKernel(stateRepository, goalId);
+        currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
         var candidates = CaptureRunningProcessIdentities(kernel);
-        var command = args[0].ToLowerInvariant();
         var runner = new BackgroundDispatchRunner();
 
         switch (command)
         {
-            case "reconcile":
-                var reconciled = runner.SweepExitedProcesses(kernel);
-                GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
-                Console.WriteLine($"Reconciled dispatches: {reconciled}");
-                break;
-
             case "refresh-dispatch":
                 var refreshTarget = ResolveDispatchCommandTask(args, kernel, currentGoal, "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
                 currentGoal = refreshTarget.Goal;
@@ -597,6 +597,49 @@ internal static class CliPersistentStateRunner
             default:
                 throw new ArgumentException($"Unsupported process refresh command: {args[0]}");
         }
+
+        var results = CaptureRefreshResults(kernel, candidates);
+        if (results.Count == 0)
+        {
+            return false;
+        }
+
+        var transactionResult = stateRepository.TransactGoalAsync(
+                goalId,
+                (snapshot, _) =>
+                {
+                    if (snapshot is null)
+                    {
+                        throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry refresh.");
+                    }
+
+                    var transactionKernel = KernelFromGoalSnapshot(snapshot);
+                    var appliedCount = ApplyRefreshResults(transactionKernel, results);
+                    GoalSnapshot? updatedSnapshot = appliedCount > 0 ? ExportGoalSnapshot(transactionKernel, goalId) : snapshot;
+                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (int Applied, GoalSnapshot Snapshot) Result)>(
+                        (appliedCount > 0, updatedSnapshot, (appliedCount, updatedSnapshot!)));
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        currentGoal = KernelFromGoalSnapshot(transactionResult.Snapshot).GetGoal(goalId);
+        return transactionResult.Applied > 0;
+    }
+
+    private static bool ExecuteGlobalProcessReconcile(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref Goal? currentGoal)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+
+        var candidates = CaptureRunningProcessIdentities(kernel);
+        var runner = new BackgroundDispatchRunner();
+        var reconciled = runner.SweepExitedProcesses(kernel);
+        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        Console.WriteLine($"Reconciled dispatches: {reconciled}");
 
         var results = CaptureRefreshResults(kernel, candidates);
         if (results.Count == 0)
@@ -629,11 +672,18 @@ internal static class CliPersistentStateRunner
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         bool persistOnlyCurrentGoal = false)
     {
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        if (args.Count > 0 && args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase))
+        {
+            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier);
+        }
+
+        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveAcceptanceGoalPrefix(args));
+        var kernel = LoadSingleGoalKernel(stateRepository, goalId);
+        currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
+        var initialGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
-            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+            PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
 
         void PersistCurrentGoal(AgentOrchestratorKernel checkpoint, GoalId goalId)
         {
@@ -644,9 +694,16 @@ internal static class CliPersistentStateRunner
 
         AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
         {
-            return stateRepository.TransactAsync(
-                    (transactionKernel, _) =>
+            return stateRepository.TransactGoalAsync(
+                    request.GoalId,
+                    (snapshot, _) =>
                     {
+                        if (snapshot is null)
+                        {
+                            throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
+                        }
+
+                        var transactionKernel = KernelFromGoalSnapshot(snapshot);
                         var transactionGoal = transactionKernel.Goals.FirstOrDefault(goal => goal.Id == request.GoalId)
                             ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
                         if (transactionGoal.Status != GoalStatus.Verified)
@@ -670,7 +727,7 @@ internal static class CliPersistentStateRunner
                         }
 
                         var result = request.Merge();
-                        return Task.FromResult((result.FastForwarded, result));
+                        return Task.FromResult((false, (GoalSnapshot?)snapshot, result));
                     })
                 .GetAwaiter()
                 .GetResult();
@@ -700,6 +757,52 @@ internal static class CliPersistentStateRunner
             {
                 Persist(kernel);
             }
+        }
+        else
+        {
+            var currentGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
+            if (!string.Equals(initialGoalJson, currentGoalJson, StringComparison.Ordinal))
+            {
+                Persist(kernel);
+            }
+        }
+
+        return shouldSave;
+    }
+
+    private static bool ExecuteAcceptanceQueueOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null,
+        IGoalAcceptanceVerifier? acceptanceVerifier = null)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+
+        void Persist(AgentOrchestratorKernel checkpoint) =>
+            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            Persist,
+            acceptanceVerifier: acceptanceVerifier);
+
+        if (shouldSave)
+        {
+            Persist(kernel);
         }
 
         return shouldSave;
@@ -867,6 +970,129 @@ internal static class CliPersistentStateRunner
         }
 
         return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, goalPrefix);
+    }
+
+    private static string? ResolveProcessRefreshGoalPrefix(IReadOnlyList<string> parts)
+    {
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        if (parts[0].Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase))
+        {
+            return GetOptionalArgument(parts);
+        }
+
+        if (!parts[0].Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (parts.Count > 2 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts[2];
+        }
+
+        if (parts.Count > 3 && parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts[3];
+        }
+
+        if (parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal))
+        {
+            return parts[1];
+        }
+
+        return null;
+    }
+
+    private static string? ResolveAcceptanceGoalPrefix(IReadOnlyList<string> parts) =>
+        GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
+
+    private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
+    {
+        for (var i = 1; i < parts.Count; i++)
+        {
+            var part = parts[i];
+            if (flags.Contains(part, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (IsCliValueFlag(part))
+            {
+                i++;
+                continue;
+            }
+
+            if (part.StartsWith("--", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return part;
+        }
+
+        return null;
+    }
+
+    private static bool IsCliValueFlag(string value) =>
+        value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--policy", StringComparison.OrdinalIgnoreCase);
+
+    private static GoalId ResolveSingleGoalCommandGoalId(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string? currentGoalId,
+        string? idOrPrefix)
+    {
+        if (!string.IsNullOrWhiteSpace(idOrPrefix))
+        {
+            var matches = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+                .Where(goal => goal.Id.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            return matches.Count switch
+            {
+                1 => new GoalId(matches[0].Id),
+                0 => throw new KeyNotFoundException($"Goal '{idOrPrefix}' was not found."),
+                _ => throw new InvalidOperationException($"Goal prefix '{idOrPrefix}' is ambiguous.")
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentGoalId))
+        {
+            return new GoalId(currentGoalId);
+        }
+
+        var latest = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult().FirstOrDefault()
+            ?? throw new InvalidOperationException("Create a goal first with: goal <objective>");
+        return new GoalId(latest.Id);
+    }
+
+    private static AgentOrchestratorKernel LoadSingleGoalKernel(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        GoalId goalId)
+    {
+        var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        return KernelFromGoalSnapshot(snapshot);
+    }
+
+    private static AgentOrchestratorKernel KernelFromGoalSnapshot(GoalSnapshot snapshot) =>
+        AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []));
+
+    private static GoalSnapshot ExportGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>
+        kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
+            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
+
+    private static void PersistSingleGoalSnapshot(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        AgentOrchestratorKernel kernel,
+        GoalId goalId)
+    {
+        var snapshot = ExportGoalSnapshot(kernel, goalId);
+        stateRepository.SaveGoalSnapshotsAsync([snapshot], CancellationToken.None).GetAwaiter().GetResult();
     }
 
     private static GoalId? ResolveConductWatchGoalId(
