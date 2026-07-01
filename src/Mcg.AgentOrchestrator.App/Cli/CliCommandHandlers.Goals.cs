@@ -197,7 +197,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var cleanupDeadline = GoalMarkLandedCleanupDeadline.Start(
                 GoalMarkLandedPromptTimeoutMilliseconds,
                 context.GoalMarkLandedElapsedMilliseconds);
-            if (!HasCliConfirmation(parts, "--force"))
+            var forceCleanup = HasCliConfirmation(parts, "--force");
+            if (!forceCleanup)
             {
                 var localBranch = RunGoalMarkLandedStep(
                     cleanupDeadline,
@@ -244,9 +245,32 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
             if (branchAfterCleanup.ExitCode == 0)
             {
-                throw new InvalidOperationException(
-                    $"goal-mark-landed cleanup removed the worktree but branch '{landedBranch}' still exists. " +
-                    "Retry with goal-mark-landed --force only after manually confirming ancestry.");
+                var branchStillExists = true;
+                if (forceCleanup)
+                {
+                    var forcedBranchRemoval = RunGoalMarkLandedStep(
+                        cleanupDeadline,
+                        "branch-force-delete",
+                        timeout => GitCli.Run(landedDir, timeout, "branch", "-D", landedBranch));
+                    if (forcedBranchRemoval.ExitCode != 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"goal-mark-landed cleanup could not force-delete branch '{landedBranch}': {forcedBranchRemoval.Error}");
+                    }
+
+                    branchAfterCleanup = RunGoalMarkLandedStep(
+                        cleanupDeadline,
+                        "branch-force-delete-check",
+                        timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
+                    branchStillExists = branchAfterCleanup.ExitCode == 0;
+                }
+
+                if (branchStillExists)
+                {
+                    throw new InvalidOperationException(
+                        $"goal-mark-landed cleanup removed the worktree but branch '{landedBranch}' still exists. " +
+                        "Retry with goal-mark-landed --force only after manually confirming ancestry.");
+                }
             }
 
             var leaseStatus = RunGoalMarkLandedStep(

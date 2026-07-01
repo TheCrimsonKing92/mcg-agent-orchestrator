@@ -2781,6 +2781,45 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_force_deletes_branch_kept_by_safe_worktree_remove")]
+    public void CliGoalMarkLandedForceDeletesBranchKeptBySafeWorktreeRemove()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Out-of-band landed force cleanup goal", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "force-landed.txt"), "force landed");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work not merged to main");
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Assert.True(output.Contains("cleanup: branch deleted", StringComparison.Ordinal));
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(Directory.Exists(worktreePath));
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_help_does_not_create_goal_worktree")]
     public void CliWorkspaceHelpDoesNotCreateGoalWorktree()
     {
