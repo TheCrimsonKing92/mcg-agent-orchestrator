@@ -29,6 +29,9 @@ public sealed class BacklogIntakeRecordStore
     public static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromMinutes(30);
 
     private readonly string _dbPath;
+    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+
+    private const int MaxBusyRetries = 6;
 
     public BacklogIntakeRecordStore(string dbPath)
     {
@@ -51,8 +54,7 @@ public sealed class BacklogIntakeRecordStore
         var now = DateTimeOffset.UtcNow;
         var stdoutPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH");
         var stderrPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH");
-        using var conn = OpenConnection();
-        RunNonQuery(conn, "BEGIN IMMEDIATE");
+        using var conn = BeginWrite();
         try
         {
             var existing = LoadRecord(conn, sourceBacklogItemId);
@@ -114,19 +116,23 @@ public sealed class BacklogIntakeRecordStore
             throw new ArgumentException("Value cannot be empty.", nameof(goalId));
 
         var now = DateTimeOffset.UtcNow.ToString("O");
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE backlog_intake_records
-            SET goal_id = $goal_id,
-                status = 'GoalCreated',
-                last_heartbeat_at = $last_heartbeat_at
-            WHERE source_backlog_item_id = $source_backlog_item_id
-            """;
-        cmd.Parameters.AddWithValue("$goal_id", goalId);
-        cmd.Parameters.AddWithValue("$last_heartbeat_at", now);
-        cmd.Parameters.AddWithValue("$source_backlog_item_id", sourceBacklogItemId);
-        cmd.ExecuteNonQuery();
+        WithBusyRetry(() =>
+        {
+            using var conn = OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE backlog_intake_records
+                SET goal_id = $goal_id,
+                    status = 'GoalCreated',
+                    last_heartbeat_at = $last_heartbeat_at
+                WHERE source_backlog_item_id = $source_backlog_item_id
+                """;
+            cmd.Parameters.AddWithValue("$goal_id", goalId);
+            cmd.Parameters.AddWithValue("$last_heartbeat_at", now);
+            cmd.Parameters.AddWithValue("$source_backlog_item_id", sourceBacklogItemId);
+            cmd.ExecuteNonQuery();
+            return true;
+        });
     }
 
     public BacklogIntakeRecord? Get(string sourceBacklogItemId)
@@ -144,36 +150,72 @@ public sealed class BacklogIntakeRecordStore
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = OpenConnection();
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS backlog_intake_records (
-                source_backlog_item_id TEXT PRIMARY KEY,
-                heading                TEXT NOT NULL,
-                status                 TEXT NOT NULL,
-                goal_id                TEXT NULL,
-                started_at             TEXT NOT NULL,
-                last_heartbeat_at      TEXT NOT NULL,
-                owner_process_id       INTEGER NULL,
-                stdout_path            TEXT NULL,
-                stderr_path            TEXT NULL
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_backlog_intake_records_goal_id ON backlog_intake_records(goal_id)");
+        WithBusyRetry(() =>
+        {
+            using var conn = OpenConnection();
+            RunNonQuery(conn, """
+                CREATE TABLE IF NOT EXISTS backlog_intake_records (
+                    source_backlog_item_id TEXT PRIMARY KEY,
+                    heading                TEXT NOT NULL,
+                    status                 TEXT NOT NULL,
+                    goal_id                TEXT NULL,
+                    started_at             TEXT NOT NULL,
+                    last_heartbeat_at      TEXT NOT NULL,
+                    owner_process_id       INTEGER NULL,
+                    stdout_path            TEXT NULL,
+                    stderr_path            TEXT NULL
+                )
+                """);
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_backlog_intake_records_goal_id ON backlog_intake_records(goal_id)");
+            return true;
+        });
     }
 
     private SqliteConnection OpenConnection()
     {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = _dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
-        };
-        var conn = new SqliteConnection(builder.ToString());
+        var conn = new SqliteConnection(ConnectionString);
         conn.Open();
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         return conn;
     }
+
+    private SqliteConnection BeginWrite()
+    {
+        return WithBusyRetry(() =>
+        {
+            var conn = OpenConnection();
+            try
+            {
+                RunNonQuery(conn, "BEGIN IMMEDIATE");
+                return conn;
+            }
+            catch
+            {
+                conn.Dispose();
+                throw;
+            }
+        });
+    }
+
+    private static T WithBusyRetry<T>(Func<T> operation)
+    {
+        var delayMs = 50;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return operation();
+            }
+            catch (SqliteException ex) when (attempt < MaxBusyRetries && IsTransientLock(ex))
+            {
+                Thread.Sleep(delayMs);
+                delayMs = Math.Min(delayMs * 2, 1000);
+            }
+        }
+    }
+
+    private static bool IsTransientLock(SqliteException ex) =>
+        ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
 
     private static BacklogIntakeRecord? LoadRecord(SqliteConnection conn, string sourceBacklogItemId)
     {

@@ -1102,6 +1102,56 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_lands_after_transient_state_write_lock_releases")]
+    public async Task CliAcceptanceLandsAfterTransientStateWriteLockReleases()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance transient lock test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "transient-lock.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
+            lockConnection.Open();
+            using var lockCommand = lockConnection.CreateCommand();
+            lockCommand.CommandText = "BEGIN IMMEDIATE";
+            lockCommand.ExecuteNonQuery();
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
+            };
+
+            var acceptanceTask = Task.Run(() => CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context)));
+            Assert.False(ReferenceEquals(acceptanceTask, await Task.WhenAny(acceptanceTask, Task.Delay(TimeSpan.FromMilliseconds(100)))));
+
+            using var releaseCommand = lockConnection.CreateCommand();
+            releaseCommand.CommandText = "COMMIT";
+            releaseCommand.ExecuteNonQuery();
+
+            var output = await acceptanceTask.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Contains("Acceptance evidence bundle: passed", output);
+            Assert.Contains("Fast-forwarded", output);
+            Assert.True(File.Exists(Path.Combine(repo, "transient-lock.txt")));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_accepted_routes_stop_host_merge_mark_landed_remove_worktree")]
     public void CliAcceptanceAcceptedRoutesStopHostMergeMarkLandedRemoveWorktree()
     {

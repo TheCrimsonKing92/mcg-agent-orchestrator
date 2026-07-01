@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 public sealed class GoalBacklogLinkTests
 {
@@ -280,6 +281,35 @@ public sealed class GoalBacklogLinkTests
         Assert.Contains("is InProgress", output);
         Assert.Contains("no new goal created", output);
         Assert.Contains("--force-reclaim", output);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_intake_reservation_waits_for_transient_state_write_lock")]
+    public async Task IntakeReservationWaitsForTransientStateWriteLock()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, "# Backlog\n\n## Locked Intake Feature\n\nFeature body.\n");
+        var workspace = CreateRefinedWorkspace(root);
+        var item = new BacklogStore(workspace.BacklogStorePath)
+            .ListAsync().GetAwaiter().GetResult()
+            .Single(entry => string.Equals(entry.Title, "Locked Intake Feature", StringComparison.Ordinal));
+        var store = new BacklogIntakeRecordStore(workspace.SqliteStatePath);
+
+        using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
+        lockConnection.Open();
+        using var lockCommand = lockConnection.CreateCommand();
+        lockCommand.CommandText = "BEGIN IMMEDIATE";
+        lockCommand.ExecuteNonQuery();
+
+        var reserveTask = Task.Run(() => store.Reserve(item.Id, item.Title));
+        Assert.False(ReferenceEquals(reserveTask, await Task.WhenAny(reserveTask, Task.Delay(TimeSpan.FromMilliseconds(100)))));
+
+        using var releaseCommand = lockConnection.CreateCommand();
+        releaseCommand.CommandText = "COMMIT";
+        releaseCommand.ExecuteNonQuery();
+
+        var reservation = await reserveTask.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(BacklogIntakeReservationKind.Acquired, reservation.Kind);
+        Assert.Equal(item.Id, reservation.Record.SourceBacklogItemId);
     }
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_in_progress_intake_reports_launcher_log_paths")]
