@@ -10,7 +10,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
-private const int GoalMarkLandedPromptTimeoutMilliseconds = 10_000;
+internal const int GoalMarkLandedPromptTimeoutMilliseconds = 10_000;
 
 private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
     new Dictionary<string, AgentRole>(StringComparer.OrdinalIgnoreCase)

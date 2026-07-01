@@ -71,6 +71,11 @@ internal static class CliPersistentStateRunner
             return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalMarkLandedCommand(args))
+        {
+            return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -207,6 +212,73 @@ internal static class CliPersistentStateRunner
     internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args)
     {
         return args.Count > 0 && args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsGoalMarkLandedCommand(IReadOnlyList<string> args)
+    {
+        return args.Count > 0 && args[0].Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ExecuteGoalMarkLandedWithPromptBudget(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var nextAgents = agents;
+        var nextWorkerProfiles = workerProfiles;
+        var currentGoalId = currentGoal?.Id.Value;
+        Goal? nextCurrentGoal = currentGoal;
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var slowStep = "state-load";
+        using var cancellation = new CancellationTokenSource(CliCommandHandlers.GoalMarkLandedPromptTimeoutMilliseconds);
+
+        try
+        {
+            var changed = stateRepository.TransactAsync(
+                    (kernel, token) =>
+                    {
+                        slowStep = "command-handler";
+                        var commandAgents = nextAgents;
+                        var commandProfiles = nextWorkerProfiles;
+                        var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
+                        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+                            args,
+                            kernel,
+                            workspace,
+                            ref commandAgents,
+                            providers,
+                            ref commandProfiles,
+                            ref commandGoal,
+                            channel,
+                            () => stateRepository.LoadAsync(token).GetAwaiter().GetResult(),
+                            goalMarkLandedElapsedMilliseconds: () => elapsed.ElapsedMilliseconds);
+
+                        nextAgents = commandAgents;
+                        nextWorkerProfiles = commandProfiles;
+                        nextCurrentGoal = commandGoal;
+                        slowStep = "state-save-commit";
+                        return Task.FromResult((shouldSave, shouldSave));
+                    },
+                    cancellation.Token)
+                .GetAwaiter()
+                .GetResult();
+
+            agents = nextAgents;
+            workerProfiles = nextWorkerProfiles;
+            currentGoal = nextCurrentGoal;
+            return changed;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            Console.Error.WriteLine($"goal-mark-landed slow substep: {slowStep} elapsedMs={elapsed.ElapsedMilliseconds}");
+            throw new TimeoutException(
+                $"goal-mark-landed cleanup exceeded {CliCommandHandlers.GoalMarkLandedPromptTimeoutMilliseconds}ms during substep '{slowStep}'.");
+        }
     }
 
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
