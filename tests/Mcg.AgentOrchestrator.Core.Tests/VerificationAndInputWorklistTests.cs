@@ -161,6 +161,7 @@ public sealed class VerificationAndInputWorklistTests
     var monitor = kernel.BuildMonitor(goal.Id);
 
     Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
     Assert.Equal(VerificationGateStatus.FailedVerification, gate.GateStatus);
     Assert.Equal(VerificationGateReason.ReviewerWorkerResultBlocker, gate.Reason);
     Assert.Contains(gate.Message, text => text.Contains("Finding A blocks acceptance", StringComparison.Ordinal));
@@ -174,6 +175,101 @@ public sealed class VerificationAndInputWorklistTests
         item.Kind == TaskAttentionKind.FailedVerification &&
         item.TaskId == reviewer.Id &&
         item.Message.Contains("Finding A blocks acceptance", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Reviewer_markdown_decorated_WORKER_RESULT_blockers_fail_gate")]
+    public void ReviewerMarkdownDecoratedWorkerResultBlockersFailGate()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Decorated review result must block acceptance",
+        [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
+    kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Reviewer)]);
+    var reviewer = goal.Tasks.Single();
+    var stdout = string.Join(Environment.NewLine,
+        "Review complete.",
+        "## WORKER_RESULT:",
+        "**files**: none",
+        "**commands**: none",
+        "**tests**: review found a blocker",
+        "**commit**: none",
+        "**blockers**: decorated blocker survives markdown",
+        "**model_fit**: OpenAI/gpt-5.5 - adequate - review",
+        "**skills**: none",
+        "**confidence**: high",
+        "END_WORKER_RESULT");
+    kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
+
+    kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+        "reviewer stdout",
+        "C:\\repo",
+        0,
+        stdout,
+        string.Empty,
+        clock.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
+    var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+    Assert.Equal(VerificationGateStatus.FailedVerification, gate.GateStatus);
+    Assert.Equal(VerificationGateReason.ReviewerWorkerResultBlocker, gate.Reason);
+    Assert.Contains(gate.Message, text => text.Contains("decorated blocker survives markdown", StringComparison.Ordinal));
+    Assert.Contains(reviewer.LastVerification!.StandardOutput, text => text.Contains("decorated blocker survives markdown", StringComparison.Ordinal));
+    Assert.False(acceptance.IsAccepted);
+}
+
+    [Xunit.Fact(DisplayName = "Reviewer_WORKER_RESULT_blocker_detection_uses_most_recent_block")]
+    public void ReviewerWorkerResultBlockerDetectionUsesMostRecentBlock()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Latest review result controls acceptance",
+        [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
+    kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Reviewer)]);
+    var reviewer = goal.Tasks.Single();
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: none",
+        "tests: old review",
+        "commit: none",
+        "blockers: stale blocker should be ignored",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "skills: none",
+        "confidence: medium",
+        "END_WORKER_RESULT",
+        "Review retried cleanly.",
+        "**WORKER_RESULT**:",
+        "**files**: none",
+        "**commands**: none",
+        "**tests**: clean retry",
+        "**commit**: none",
+        "**blockers**: none",
+        "**model_fit**: OpenAI/gpt-5.5 - adequate - review",
+        "**skills**: none",
+        "**confidence**: high",
+        "END_WORKER_RESULT");
+    kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
+
+    kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+        "reviewer stdout",
+        "C:\\repo",
+        0,
+        stdout,
+        string.Empty,
+        clock.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
+    var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(VerificationGateStatus.Passed, gate.GateStatus);
+    Assert.True(acceptance.IsAccepted);
+    Assert.Empty(acceptance.Blockers);
 }
 
     [Xunit.Fact(DisplayName = "Reviewer_WORKER_RESULT_without_blockers_can_pass_acceptance_gate")]

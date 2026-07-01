@@ -26,22 +26,27 @@ internal static class ReviewerWorkerResultBlockers
     {
         var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
         var lines = combined.Replace("\r\n", "\n").Split('\n');
+        List<string>? latestBlock = null;
+        var currentBlock = new List<string>();
         var inBlock = false;
 
         foreach (var rawLine in lines)
         {
             var line = NormalizeWorkerResultLine(rawLine);
-            if (string.Equals(line, "WORKER_RESULT:", StringComparison.OrdinalIgnoreCase))
+            if (IsWorkerResultOpener(line))
             {
                 inBlock = true;
+                currentBlock.Clear();
                 continue;
             }
 
-            if (string.Equals(line, "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase))
+            if (IsWorkerResultEndMarker(line))
             {
                 if (inBlock)
                 {
-                    yield break;
+                    latestBlock = [.. currentBlock];
+                    currentBlock.Clear();
+                    inBlock = false;
                 }
 
                 continue;
@@ -49,8 +54,23 @@ internal static class ReviewerWorkerResultBlockers
 
             if (inBlock && line.Length > 0)
             {
-                yield return line;
+                currentBlock.Add(line);
             }
+        }
+
+        if (inBlock)
+        {
+            latestBlock = [.. currentBlock];
+        }
+
+        if (latestBlock is null)
+        {
+            yield break;
+        }
+
+        foreach (var line in latestBlock)
+        {
+            yield return line;
         }
     }
 
@@ -63,7 +83,7 @@ internal static class ReviewerWorkerResultBlockers
             return false;
         }
 
-        var key = line[..sep].Trim();
+        var key = NormalizeWorkerResultKey(line[..sep]);
         if (!string.Equals(key, "blockers", StringComparison.OrdinalIgnoreCase))
         {
             return false;
@@ -135,12 +155,39 @@ internal static class ReviewerWorkerResultBlockers
 
     private static string NormalizeWorkerResultLine(string line)
     {
-        var trimmed = line.Trim();
-        while (trimmed.StartsWith('#'))
+        return line.Trim();
+    }
+
+    private static bool IsWorkerResultOpener(string line)
+    {
+        var normalized = NormalizeWorkerResultMarker(line).TrimEnd(':').Trim();
+        return string.Equals(normalized, "WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWorkerResultEndMarker(string line)
+    {
+        var normalized = NormalizeWorkerResultMarker(line);
+        return string.Equals(normalized, "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeWorkerResultKey(string key)
+    {
+        return NormalizeWorkerResultMarker(key).TrimStart('-', ' ').Trim();
+    }
+
+    private static string NormalizeWorkerResultMarker(string text)
+    {
+        var trimmed = text.Trim();
+        var buffer = new char[trimmed.Length];
+        var length = 0;
+        foreach (var ch in trimmed)
         {
-            trimmed = trimmed[1..].TrimStart();
+            if (ch is not ('#' or '*' or '`'))
+            {
+                buffer[length++] = ch;
+            }
         }
 
-        return trimmed.Trim('*', '_', '`', ' ');
+        return new string(buffer, 0, length).Trim();
     }
 }
