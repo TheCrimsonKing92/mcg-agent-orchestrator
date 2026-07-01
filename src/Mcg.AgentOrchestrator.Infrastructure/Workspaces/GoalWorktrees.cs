@@ -321,9 +321,17 @@ public static class GoalWorktrees
         int gitTimeoutMilliseconds)
     {
         var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, CleanupElapsedMilliseconds);
-        RequireGitWorkTree(executionDirectory, cleanupBudget.RemainingMilliseconds);
-
         var path = WorktreePath(executionDirectory, goalId);
+        if (!IsGitWorkTree(executionDirectory, cleanupBudget.RemainingMilliseconds))
+        {
+            if (!Directory.Exists(path))
+            {
+                return new GoalWorktreeRemoveResult("Workspace already clean; nothing to remove.", null, [], null);
+            }
+
+            RequireGitWorkTree(executionDirectory, cleanupBudget.RemainingMilliseconds);
+        }
+
         var hasRegisteredWorktree = IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds);
         var hasLeftoverDirectory = Directory.Exists(path);
         var branch = BranchName(goalId);

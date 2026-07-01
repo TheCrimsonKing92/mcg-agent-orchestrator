@@ -7106,11 +7106,7 @@ public sealed class CliCommandTests
 
     private static string CreateShortAcceptanceRepository()
     {
-        var baseDirectory = Path.Combine(
-            Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory(),
-            ".mcg-sandbox",
-            "temp",
-            "short-tests");
+        var baseDirectory = Path.Combine(Path.GetTempPath(), "mcg-short-tests");
         Directory.CreateDirectory(baseDirectory);
         var root = Path.Combine(baseDirectory, Guid.NewGuid().ToString("N")[..12]);
         Directory.CreateDirectory(root);
