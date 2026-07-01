@@ -174,6 +174,61 @@ public sealed class LauncherScriptTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GetOrchestratorSnapshot_status_timeout_kills_owned_status_process_and_reports_partial_data")]
+    public void GetOrchestratorSnapshotStatusTimeoutKillsOwnedStatusProcessAndReportsPartialData()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var sandbox = CreateSnapshotStatusSandbox();
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = sandbox.RepositoryRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath;
+            startInfo.Environment["DOTNET_STATUS_SENTINEL"] = sandbox.SentinelPath;
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(sandbox.RepositoryRoot, "scripts", "Get-OrchestratorSnapshot.ps1"));
+            startInfo.ArgumentList.Add("-StatusTimeoutSeconds");
+            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("hang");
+            startInfo.ArgumentList.Add("ok");
+
+            var stopwatch = Stopwatch.StartNew();
+            var result = RunProcess(startInfo, "Get-OrchestratorSnapshot.ps1");
+            stopwatch.Stop();
+
+            Assert.True(
+                result.ExitCode == 0,
+                $"exit={result.ExitCode}{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}");
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"Snapshot took {stopwatch.Elapsed}.");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains("partial hang", result.Stdout);
+            Assert.Contains("status timed out after 1s; killed pid=", result.Stdout);
+            Assert.Contains("status ok ok", result.Stdout);
+            WaitForFile(sandbox.SentinelPath, TimeSpan.FromSeconds(5));
+            var childPid = int.Parse(File.ReadAllText(sandbox.SentinelPath).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(!IsProcessRunning(childPid), $"Expected hung status child pid {childPid} to be reaped.");
+        }
+        finally
+        {
+            sandbox.KillRecordedChild();
+        }
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_emits_json_pid_and_log_path_through_repo_script")]
     public void StartOrchestratorCommandEmitsJsonPidAndLogPathThroughRepoScript()
     {
@@ -574,6 +629,44 @@ public sealed class LauncherScriptTests
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
 
+    private static SnapshotStatusSandbox CreateSnapshotStatusSandbox()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"snapshot-status-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var appPath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0");
+        var shimPath = Path.Combine(repositoryRoot, "shim");
+        Directory.CreateDirectory(scriptsPath);
+        Directory.CreateDirectory(appPath);
+        Directory.CreateDirectory(shimPath);
+
+        File.Copy(
+            Path.Combine(FindLauncherSourceRoot(), "scripts", "Get-OrchestratorSnapshot.ps1"),
+            Path.Combine(scriptsPath, "Get-OrchestratorSnapshot.ps1"));
+        File.WriteAllText(
+            Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1"),
+            "Write-Output 'No active goals in snapshot sandbox.'\r\nexit 0\r\n");
+        File.WriteAllText(Path.Combine(appPath, "Mcg.AgentOrchestrator.App.dll"), "dummy");
+
+        var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
+        File.WriteAllText(
+            dotnetShimPath,
+            """
+            @echo off
+            if "%~3"=="hang" (
+              echo partial hang
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
+              exit /b 0
+            )
+            echo status ok %~3
+            exit /b 0
+            """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+        return new SnapshotStatusSandbox(
+            repositoryRoot,
+            dotnetShimPath,
+            Path.Combine(repositoryRoot, "status-child.pid"));
+    }
+
     private static LandVerifiedGoalSandbox CreateLandVerifiedGoalSandbox(string launcherBody)
     {
         const string goalPrefix = "abcdef12";
@@ -684,6 +777,72 @@ public sealed class LauncherScriptTests
         }
 
         Assert.True(File.Exists(path), $"Expected file to exist: {path}");
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private sealed class SnapshotStatusSandbox(
+        string repositoryRoot,
+        string dotnetShimPath,
+        string sentinelPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string DotnetShimPath { get; } = dotnetShimPath;
+        public string SentinelPath { get; } = sentinelPath;
+
+        public void KillRecordedChild()
+        {
+            if (!File.Exists(SentinelPath))
+            {
+                return;
+            }
+
+            if (!int.TryParse(File.ReadAllText(SentinelPath).Trim(), out var pid))
+            {
+                return;
+            }
+
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            KillRecordedChild();
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private sealed class DoubleDashLauncherSandbox(

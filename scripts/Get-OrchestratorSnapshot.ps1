@@ -16,6 +16,7 @@ param(
     [string[]]$GoalPrefix = @(),
     [int]$ActiveLimit = 8,
     [int]$NewestProcesses = 12,
+    [int]$StatusTimeoutSeconds = 20,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$AdditionalGoalPrefix = @()
@@ -30,6 +31,10 @@ if ($ActiveLimit -lt 1) {
 
 if ($NewestProcesses -lt 1) {
     throw "-NewestProcesses must be at least 1."
+}
+
+if ($StatusTimeoutSeconds -lt 1) {
+    throw "-StatusTimeoutSeconds must be at least 1."
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -94,6 +99,163 @@ function Is-OrchestratorLockHolder {
         $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf("DispatchProcessHost", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
+function Quote-ProcessArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Get-DescendantProcessIds {
+    param([int]$RootProcessId)
+
+    $descendants = New-Object System.Collections.Generic.List[int]
+    try {
+        $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    }
+    catch {
+        return $descendants
+    }
+
+    $childrenByParent = @{}
+    foreach ($process in $allProcesses) {
+        $parentId = [int]$process.ParentProcessId
+        if (-not $childrenByParent.ContainsKey($parentId)) {
+            $childrenByParent[$parentId] = New-Object System.Collections.Generic.List[int]
+        }
+
+        $childrenByParent[$parentId].Add([int]$process.ProcessId)
+    }
+
+    $pending = New-Object System.Collections.Generic.Queue[int]
+    $pending.Enqueue($RootProcessId)
+    while ($pending.Count -gt 0) {
+        $parentId = $pending.Dequeue()
+        if (-not $childrenByParent.ContainsKey($parentId)) {
+            continue
+        }
+
+        foreach ($childId in $childrenByParent[$parentId]) {
+            $descendants.Add($childId)
+            $pending.Enqueue($childId)
+        }
+    }
+
+    return $descendants
+}
+
+function Stop-OwnedProcessTree {
+    param([int]$RootProcessId)
+
+    $processIds = @((Get-DescendantProcessIds -RootProcessId $RootProcessId))
+    [array]::Reverse($processIds)
+    $processIds += $RootProcessId
+
+    foreach ($processId in $processIds) {
+        try {
+            Stop-Process -Id $processId -Force -ErrorAction Stop
+        }
+        catch [System.Management.Automation.ItemNotFoundException] {
+        }
+        catch [System.InvalidOperationException] {
+        }
+        catch {
+        }
+    }
+}
+
+function Invoke-BoundedGoalStatus {
+    param(
+        [string]$DotnetPath,
+        [string]$AppDllPath,
+        [string]$Goal,
+        [int]$TimeoutSeconds
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $DotnetPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    $startInfo.Arguments = @(
+        (Quote-ProcessArgument $AppDllPath),
+        "status",
+        (Quote-ProcessArgument $Goal)
+    ) -join " "
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $killed = $false
+    $started = $false
+    try {
+        [void]$process.Start()
+        $started = $true
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $killed = $true
+            $statusProcessId = $process.Id
+            try {
+                Stop-OwnedProcessTree -RootProcessId $statusProcessId
+            }
+            catch {
+                Write-Output "status timed out after ${TimeoutSeconds}s; failed to kill pid=${statusProcessId}: $($_.Exception.Message)"
+            }
+
+            try {
+                [void]$process.WaitForExit(5000)
+            }
+            catch {
+                Write-Output "status timed out after ${TimeoutSeconds}s; pid=${statusProcessId} did not confirm exit: $($_.Exception.Message)"
+            }
+
+            Write-Output "status timed out after ${TimeoutSeconds}s; killed pid=${statusProcessId}"
+        }
+        else {
+            $process.WaitForExit()
+        }
+
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Output ($stdout.TrimEnd())
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            Write-Output ("status stderr: " + $stderr.TrimEnd())
+        }
+
+        if (-not $killed -and $process.ExitCode -ne 0) {
+            Write-Output "status exit=$($process.ExitCode)"
+        }
+    }
+    catch {
+        Write-Output "status unavailable: $($_.Exception.Message)"
+    }
+    finally {
+        if ($started -and $null -ne $process -and -not $process.HasExited) {
+            $statusProcessId = $process.Id
+            try {
+                Stop-OwnedProcessTree -RootProcessId $statusProcessId
+                [void]$process.WaitForExit(5000)
+                Write-Output "status cancelled; killed pid=${statusProcessId}"
+            }
+            catch {
+                Write-Output "status cleanup failed for pid=${statusProcessId}: $($_.Exception.Message)"
+            }
+        }
+
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+    }
 }
 
 Write-Section "Active Goals"
@@ -176,15 +338,8 @@ if ($GoalPrefix.Count -gt 0) {
 
             Write-Output ""
             Write-Output "### $goal"
-            try {
-                & dotnet $appDll status $goal
-                if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
-                    Write-Output "status exit=$LASTEXITCODE"
-                }
-            }
-            catch {
-                Write-Output "status unavailable: $($_.Exception.Message)"
-            }
+            $dotnetPath = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_DOTNET_PATH)) { "dotnet" } else { $env:MCG_ORCHESTRATOR_DOTNET_PATH }
+            Invoke-BoundedGoalStatus -DotnetPath $dotnetPath -AppDllPath $appDll -Goal $goal -TimeoutSeconds $StatusTimeoutSeconds
         }
     }
 }
