@@ -5783,6 +5783,62 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(bodyContent, item.Body);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_status_prints_source_backlog_title_as_goal_label")]
+    public async Task CliStatusPrintsSourceBacklogTitleAsGoalLabel()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Friendly backlog title");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Objective preview remains");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["status", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains($"Goal {goal.Id.Value} (Friendly backlog title)", output);
+        Xunit.Assert.Contains("Objective: Objective preview remains", output);
+        Xunit.Assert.Contains("Status: Draft", output);
+        Xunit.Assert.Contains("Tasks:", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_status_omits_goal_label_without_source_backlog_title")]
+    public void CliStatusOmitsGoalLabelWithoutSourceBacklogTitle()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("No linked backlog");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["status", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains($"Goal {goal.Id.Value}{Environment.NewLine}", output);
+        Xunit.Assert.DoesNotContain("()", output);
+        Xunit.Assert.Contains("Objective: No linked backlog", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_missing_gives_clear_error")]
     public async Task CliBacklogAddBodyFileMissingGivesClearError()
     {

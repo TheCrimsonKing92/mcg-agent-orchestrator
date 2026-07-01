@@ -342,7 +342,8 @@ internal sealed record GoalMonitoringSnapshotDto(
     MonitorDto Monitor,
     IReadOnlyList<TaskMonitoringSnapshotDto> Tasks,
     OperatorInboxReportDto? OperatorInbox = null,
-    ProviderCapacityScheduleDto? ProviderCapacity = null);
+    ProviderCapacityScheduleDto? ProviderCapacity = null,
+    string? GoalLabel = null);
 
 internal sealed record TaskMonitoringSnapshotDto(
     int TaskNumber,

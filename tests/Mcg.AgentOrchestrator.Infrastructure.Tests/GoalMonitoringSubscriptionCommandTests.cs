@@ -273,6 +273,102 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Xunit.Assert.Contains("event 7 2026-06-13 01:00:00Z TaskCompleted task 1: Done", text);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_goal_label_when_present")]
+    public void MonitorGoalPrintsCompactSnapshotGoalLabelWhenPresent()
+    {
+        var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
+        var batch = new GoalMonitoringBatchDto(
+            "abc12345",
+            0,
+            7,
+            new GoalMonitoringSnapshotDto(
+                "abc12345",
+                observedAt,
+                7,
+                new MonitorDto(
+                    "abc12345",
+                    "Add monitoring",
+                    GoalStatus.Active,
+                    1,
+                    [],
+                    0,
+                    [],
+                    observedAt),
+                [
+                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
+                ]),
+            [],
+            "/api/goals/abc12345/events/stream");
+        using var output = new StringWriter();
+
+        GoalMonitoringSubscriptionCommand.PrintBatch(batch, output, "Friendly backlog title");
+
+        var text = output.ToString();
+        Xunit.Assert.Contains("snapshot goal=abc12345 (Friendly backlog title) status=Active tasks=1 completed=1 running=0 failed=0", text);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_production_snapshot_prints_source_backlog_label")]
+    public async Task MonitorGoalProductionSnapshotPrintsSourceBacklogLabel()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement labeled snapshot", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor labeled goal", [task]);
+        var backlogItem = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Production backlog title");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
+        kernel.ActivateGoal(goal.Id, []);
+        var batch = GoalMonitoringStream.BuildBatch(
+            kernel,
+            kernel.GetGoal(goal.Id),
+            0,
+            [],
+            WorkerProfileCatalog.Default(),
+            workspace);
+        using var output = new StringWriter();
+
+        GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
+
+        var text = output.ToString();
+        Xunit.Assert.Contains($"snapshot goal={goal.Id.Value[..8]} (Production backlog title)", text);
+        Xunit.Assert.Contains("tasks=1 completed=0 running=0 failed=0", text);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_without_goal_label_when_absent")]
+    public void MonitorGoalPrintsCompactSnapshotWithoutGoalLabelWhenAbsent()
+    {
+        var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
+        var batch = new GoalMonitoringBatchDto(
+            "abc12345",
+            0,
+            7,
+            new GoalMonitoringSnapshotDto(
+                "abc12345",
+                observedAt,
+                7,
+                new MonitorDto(
+                    "abc12345",
+                    "Add monitoring",
+                    GoalStatus.Active,
+                    1,
+                    [],
+                    0,
+                    [],
+                    observedAt),
+                [
+                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
+                ]),
+            [],
+            "/api/goals/abc12345/events/stream");
+        using var output = new StringWriter();
+
+        GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
+
+        var text = output.ToString();
+        Xunit.Assert.Contains("snapshot goal=abc12345 status=Active tasks=1 completed=1 running=0 failed=0", text);
+        Xunit.Assert.DoesNotContain("snapshot goal=abc12345 (", text);
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_reads_server_sent_events")]
     public async Task MonitorGoalReadsServerSentEvents()
     {
