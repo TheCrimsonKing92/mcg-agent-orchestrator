@@ -2455,11 +2455,7 @@ public sealed class GoalWorktreeIntegrationTests
             var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
-            Directory.CreateDirectory(Path.Combine(repo, ".git", "worktrees", "sqlite-tool-test"));
-            Directory.CreateDirectory(linkedWorktree);
-            File.WriteAllText(
-                Path.Combine(linkedWorktree, ".git"),
-                $"gitdir: {Path.Combine(repo, ".git", "worktrees", "sqlite-tool-test").Replace('\\', '/')}");
+            RunGit(repo, "worktree", "add", "-b", "sqlite-tool-test", linkedWorktree);
 
             var localWorkspace = OrchestratorWorkspace.ForDirectory(linkedWorktree);
             var localKernel = new AgentOrchestratorKernel();

@@ -561,10 +561,31 @@ internal static class OrchestratorSqliteTools
             gitDir = Path.Combine(repoRoot, gitDir);
 
         gitDir = Path.GetFullPath(gitDir);
-        var worktreesDirectory = Path.GetDirectoryName(gitDir);
-        var commonGitDirectory = worktreesDirectory is null ? null : Path.GetDirectoryName(worktreesDirectory);
+        var commonGitDirectory = TryReadCommonGitDirectory(gitDir) ?? TryInferCommonGitDirectory(gitDir);
         var primaryRoot = commonGitDirectory is null ? null : Path.GetDirectoryName(commonGitDirectory);
         return string.IsNullOrWhiteSpace(primaryRoot) ? null : primaryRoot;
+    }
+
+    private static string? TryReadCommonGitDirectory(string gitDir)
+    {
+        var commonDirPath = Path.Combine(gitDir, "commondir");
+        if (!File.Exists(commonDirPath))
+            return null;
+
+        var commonDir = File.ReadAllText(commonDirPath).Trim();
+        if (string.IsNullOrWhiteSpace(commonDir))
+            return null;
+
+        if (!Path.IsPathRooted(commonDir))
+            commonDir = Path.Combine(gitDir, commonDir);
+
+        return Path.GetFullPath(commonDir);
+    }
+
+    private static string? TryInferCommonGitDirectory(string gitDir)
+    {
+        var worktreesDirectory = Path.GetDirectoryName(gitDir);
+        return worktreesDirectory is null ? null : Path.GetDirectoryName(worktreesDirectory);
     }
 
     private static SqliteConnection CreateConnection(string dbPath, bool readOnly)
