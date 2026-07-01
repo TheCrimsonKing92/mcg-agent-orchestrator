@@ -63,17 +63,17 @@ public static class DispatchProcessHost
     // never the medium-integrity profile or main repo. The host runs at medium and cannot launch a Low
     // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
     // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
-    internal static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
+    internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
         => ApplyWorkerSandbox(startInfo, parameters, WorkerSandboxPreparer.CreateDefault());
 
-    internal static void ApplyWorkerSandbox(
+    internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(
         ProcessStartInfo startInfo,
         DispatchRunParameters parameters,
         WorkerSandboxPreparer preparer)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
-            return;
+            return new WorkerSandboxPreparationResult(false, false);
         }
 
         // Label ONLY the worktree Low so the Low worker can edit it. The shared git common dir is
@@ -84,6 +84,11 @@ public static class DispatchProcessHost
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
         var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
+        if (preparation.RecoveryAction is { } action)
+        {
+            throw new InvalidOperationException(action.Reason);
+        }
+
         ProtectGitMetadata(parameters.WorkingDirectory);
 
         // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
@@ -114,6 +119,8 @@ public static class DispatchProcessHost
         {
             startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+
+        return preparation;
     }
 
     internal static void SeedProviderEnvironment(

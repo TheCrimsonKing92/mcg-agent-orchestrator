@@ -438,6 +438,7 @@ private static ProcessBatchExecutionResult StartDispatches(
     var logRoot = workspace.LogDirectory;
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var started = new List<TaskSpec>();
+    var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
 
@@ -460,11 +461,17 @@ private static ProcessBatchExecutionResult StartDispatches(
                 providers);
         }
 
-        runner.StartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
+        var startResult = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
+        if (startResult.RecoveryAction is { } action)
+        {
+            recoveryActions.Add(action);
+            continue;
+        }
+
         started.Add(task);
     }
 
-    return new ProcessBatchExecutionResult(plan, started);
+    return new ProcessBatchExecutionResult(plan, started, recoveryActions);
 }
 
 public static ProcessBatchExecutionResult RefreshDispatches(AgentOrchestratorKernel kernel, Goal goal)

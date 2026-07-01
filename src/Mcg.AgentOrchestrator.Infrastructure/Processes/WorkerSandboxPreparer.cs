@@ -3,9 +3,33 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public sealed record WorkerSandboxPrepRecoverableAction(
+    string Worktree,
+    string SandboxRoot,
+    string FailedRoot,
+    string Reason,
+    bool RequiresRecursiveRemediation)
+{
+    public bool Execute()
+    {
+        var labeler = new IcaclsIntegrityLabeler();
+        if (!labeler.SetIntegrity(FailedRoot, WorkerSandboxPreparer.LowInheritableLevel, RequiresRecursiveRemediation))
+        {
+            return false;
+        }
+
+        WorkerSandboxPreparer.WriteMarker(FailedRoot);
+        return true;
+    }
+}
+
 internal sealed record WorkerSandboxPreparationResult(
     bool WorktreeRecursiveRelabel,
-    bool SandboxRecursiveRelabel);
+    bool SandboxRecursiveRelabel,
+    WorkerSandboxPrepRecoverableAction? RecoveryAction = null)
+{
+    public bool RequiresRecovery => RecoveryAction is not null;
+}
 
 internal interface IWorkerIntegrityLabeler
 {
@@ -19,7 +43,7 @@ internal sealed record IntegrityLabelState(bool Exists, bool Low, bool Inheritab
 internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
     internal const string MarkerFileName = ".mcg-low-integrity-v1";
-    private const string LowInheritableLevel = "(OI)(CI)L";
+    internal const string LowInheritableLevel = "(OI)(CI)L";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -32,26 +56,41 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         Directory.CreateDirectory(worktree);
         Directory.CreateDirectory(sandboxRoot);
 
-        var worktreeRecursive = EnsureLowIntegrityRoot(worktree, allowRecursiveMigration: true);
-        var sandboxRecursive = EnsureLowIntegrityRoot(sandboxRoot, allowRecursiveMigration: false);
-        return new WorkerSandboxPreparationResult(worktreeRecursive, sandboxRecursive);
+        var worktreeResult = EnsureLowIntegrityRoot(worktree, sandboxRoot, allowRecursiveMigration: true);
+        if (worktreeResult.RecoveryAction is not null)
+        {
+            return worktreeResult;
+        }
+
+        var sandboxResult = EnsureLowIntegrityRoot(sandboxRoot, sandboxRoot, allowRecursiveMigration: false);
+        return sandboxResult.RecoveryAction is not null
+            ? sandboxResult
+            : new WorkerSandboxPreparationResult(worktreeResult.WorktreeRecursiveRelabel, sandboxResult.SandboxRecursiveRelabel);
     }
 
-    private bool EnsureLowIntegrityRoot(string path, bool allowRecursiveMigration)
+    private WorkerSandboxPreparationResult EnsureLowIntegrityRoot(string path, string sandboxRoot, bool allowRecursiveMigration)
     {
         if (IsPrepared(path))
         {
-            return false;
+            return new WorkerSandboxPreparationResult(false, false);
         }
 
         var recursive = allowRecursiveMigration;
         if (!labeler.SetIntegrity(path, LowInheritableLevel, recursive))
         {
-            throw new InvalidOperationException($"Failed to apply inheritable Low integrity label to '{path}'.");
+            var action = new WorkerSandboxPrepRecoverableAction(
+                Worktree: path == sandboxRoot ? Path.GetDirectoryName(sandboxRoot) ?? sandboxRoot : path,
+                SandboxRoot: sandboxRoot,
+                FailedRoot: path,
+                Reason: $"Failed to apply inheritable Low integrity label to '{path}'.",
+                RequiresRecursiveRemediation: recursive);
+            return new WorkerSandboxPreparationResult(false, false, action);
         }
 
         WriteMarker(path);
-        return recursive;
+        return path == sandboxRoot
+            ? new WorkerSandboxPreparationResult(false, recursive)
+            : new WorkerSandboxPreparationResult(recursive, false);
     }
 
     private bool IsPrepared(string path)
@@ -67,7 +106,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 
     private static string MarkerPath(string path) => Path.Combine(path, MarkerFileName);
 
-    private static void WriteMarker(string path)
+    internal static void WriteMarker(string path)
     {
         var marker = new
         {

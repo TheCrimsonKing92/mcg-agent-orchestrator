@@ -263,6 +263,60 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_second_prepare_on_same_worktree_is_bounded_and_idempotent")]
+    public void WorkerSandboxPreparerSecondPrepareOnSameWorktreeIsBoundedAndIdempotent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-reuse-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        try
+        {
+            var preparer = new WorkerSandboxPreparer(labeler);
+            var first = preparer.Prepare(worktree, sandboxRoot);
+            labeler.SetCalls.Clear();
+
+            var second = preparer.Prepare(worktree, sandboxRoot);
+
+            Assert.True(first.WorktreeRecursiveRelabel);
+            Assert.False(first.SandboxRecursiveRelabel);
+            Assert.False(second.WorktreeRecursiveRelabel);
+            Assert.False(second.SandboxRecursiveRelabel);
+            Assert.Empty(labeler.SetCalls);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_reused_worktree_acl_failure_returns_typed_recovery_action")]
+    public void WorkerSandboxPreparerReusedWorktreeAclFailureReturnsTypedRecoveryAction()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-recovery-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        Directory.CreateDirectory(sandboxRoot);
+        File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        var labeler = new RecordingIntegrityLabeler(
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: false),
+            setResult: false);
+        try
+        {
+            var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+            var action = Assert.IsType<WorkerSandboxPrepRecoverableAction>(result.RecoveryAction!);
+            Assert.Equal(worktree, action.FailedRoot);
+            Assert.Equal(worktree, action.Worktree);
+            Assert.Equal(sandboxRoot, action.SandboxRoot);
+            Assert.True(action.RequiresRecursiveRemediation);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_handles_partial_sandbox_root_without_recursive_relabel")]
     public void WorkerSandboxPreparerHandlesPartialSandboxRootWithoutRecursiveRelabel()
     {
@@ -766,7 +820,7 @@ public sealed class DispatchProcessHostTests
             """);
     }
 
-    private sealed class RecordingIntegrityLabeler(IntegrityLabelState queryState) : IWorkerIntegrityLabeler
+    private sealed class RecordingIntegrityLabeler(IntegrityLabelState queryState, bool setResult = true) : IWorkerIntegrityLabeler
     {
         public List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
 
@@ -775,7 +829,7 @@ public sealed class DispatchProcessHostTests
         public bool SetIntegrity(string path, string level, bool recursive)
         {
             SetCalls.Add((path, level, recursive));
-            return true;
+            return setResult;
         }
     }
 

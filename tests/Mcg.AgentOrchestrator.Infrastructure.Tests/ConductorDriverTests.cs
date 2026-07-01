@@ -94,7 +94,8 @@ public sealed class ConductorDriverTests
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
-        Func<Goal, string, bool>? normalizeLifecycleState = null)
+        Func<Goal, string, bool>? normalizeLifecycleState = null,
+        Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -121,7 +122,8 @@ public sealed class ConductorDriverTests
             classifyRisk ?? (_ => null),
             emptyOutputBackoffDelay,
             evaluateReadiness,
-            normalizeLifecycleState: normalizeLifecycleState);
+            normalizeLifecycleState: normalizeLifecycleState,
+            recoverSandboxPrep: recoverSandboxPrep);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -1248,6 +1250,58 @@ public sealed class ConductorDriverTests
         Assert.Equal(1, dispatchStartCalls);
         Assert.Equal(1, recordedStartCalls);
         Assert.True(shutdownCalled);
+        Assert.False(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_recoverable_sandbox_prep_action_is_remediated_and_start_retried")]
+    public void ConductorDriverRecoverableSandboxPrepActionIsRemediatedAndStartRetried()
+    {
+        var (_, goal) = SimpleGoal();
+        var action = new WorkerSandboxPrepRecoverableAction(
+            Worktree: @"C:\repo\.orchestrator-worktrees\abc12345",
+            SandboxRoot: @"C:\repo\.orchestrator-worktrees\abc12345\.mcg-sandbox",
+            FailedRoot: @"C:\repo\.orchestrator-worktrees\abc12345",
+            Reason: "Failed to apply inheritable Low integrity label.",
+            RequiresRecursiveRemediation: true);
+        var dispatchStartCalls = 0;
+        var recordedStartCalls = 0;
+        var recoveryCalls = 0;
+        var retryTaskCalls = 0;
+        var escalated = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => 0,
+            dispatchAndStart: _ =>
+            {
+                dispatchStartCalls++;
+                return DispatchStartOutcome.RecoverableSandboxPrep(action);
+            },
+            startRecordedDispatches: _ =>
+            {
+                recordedStartCalls++;
+                return DispatchStartOutcome.Started();
+            },
+            retryTask: (goalId, taskId, note) =>
+            {
+                retryTaskCalls++;
+                return goal.Tasks.Single();
+            },
+            recoverSandboxPrep: received =>
+            {
+                Assert.True(ReferenceEquals(action, received));
+                recoveryCalls++;
+                return true;
+            },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(1, dispatchStartCalls);
+        Assert.Equal(1, recordedStartCalls);
+        Assert.Equal(1, recoveryCalls);
+        Assert.Equal(0, retryTaskCalls);
         Assert.False(escalated);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
