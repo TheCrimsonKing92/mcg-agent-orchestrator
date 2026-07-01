@@ -52,6 +52,8 @@ public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktree
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
+public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }
+
 public TimeSpan? RunGoalPollInterval { get; init; }
 
 public RunGoalService.SleepFunc? RunGoalSleep { get; init; }

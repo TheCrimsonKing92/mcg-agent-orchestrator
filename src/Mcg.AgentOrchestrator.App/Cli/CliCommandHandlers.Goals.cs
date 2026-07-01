@@ -194,24 +194,30 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "Active or InProgress goals self-heal via the conductor; only Completed (force-landed) goals need this command.");
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
+            var cleanupDeadline = GoalMarkLandedCleanupDeadline.Start(
+                GoalMarkLandedPromptTimeoutMilliseconds,
+                context.GoalMarkLandedElapsedMilliseconds);
             if (!HasCliConfirmation(parts, "--force"))
             {
                 var localBranch = RunGoalMarkLandedStep(
+                    cleanupDeadline,
                     "branch-local-check",
-                    () => GitCli.Run(landedDir, GoalMarkLandedPromptTimeoutMilliseconds, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
+                    timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
                 var localExists = localBranch.ExitCode == 0;
                 var remoteExists = !localExists &&
                     RunGoalMarkLandedStep(
+                        cleanupDeadline,
                         "branch-remote-check",
-                        () => GitCli.Run(landedDir, GoalMarkLandedPromptTimeoutMilliseconds, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
+                        timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
                 if (!localExists && !remoteExists)
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' was not found locally or remotely; ancestry check cannot run. " +
                         "Use --force if you have manually confirmed the work is in main.");
                 var branchRef = localExists ? landedBranch : $"origin/{landedBranch}";
                 var ancestry = RunGoalMarkLandedStep(
+                    cleanupDeadline,
                     "branch-ancestry-check",
-                    () => GitCli.Run(landedDir, GoalMarkLandedPromptTimeoutMilliseconds, "merge-base", "--is-ancestor", branchRef, "HEAD"));
+                    timeout => GitCli.Run(landedDir, timeout, "merge-base", "--is-ancestor", branchRef, "HEAD"));
                 if (ancestry.ExitCode != 0)
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' is not an ancestor of the current HEAD; " +
@@ -219,12 +225,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
             var removeResult = RunGoalMarkLandedStep(
+                cleanupDeadline,
                 "worktree-and-branch-cleanup",
-                () => context.Worktrees.Remove(
+                timeout => context.Worktrees.Remove(
                     landedDir,
                     landedId,
                     context.Kernel,
-                    GoalMarkLandedPromptTimeoutMilliseconds));
+                    timeout));
             if (!removeResult.IsComplete)
             {
                 PrintWorkspaceRemoveResult(removeResult);
@@ -232,8 +239,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             var branchAfterCleanup = RunGoalMarkLandedStep(
+                cleanupDeadline,
                 "branch-cleanup-check",
-                () => GitCli.Run(landedDir, GoalMarkLandedPromptTimeoutMilliseconds, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
+                timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
             if (branchAfterCleanup.ExitCode == 0)
             {
                 throw new InvalidOperationException(
@@ -242,8 +250,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             var leaseStatus = RunGoalMarkLandedStep(
+                cleanupDeadline,
                 "app-host-lock-inspect",
-                () => DotnetBuildEnvironmentManager.InspectGoalLease(landedId));
+                _ => DotnetBuildEnvironmentManager.InspectGoalLease(landedId));
             if (leaseStatus.OwnerProcessAlive)
             {
                 throw new InvalidOperationException(
@@ -252,29 +261,36 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (leaseStatus.CanCleanup)
             {
                 var leaseCleaned = RunGoalMarkLandedStep(
+                    cleanupDeadline,
                     "app-host-lock-release",
-                    () => DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(landedId, out _, out _));
+                    _ => DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(
+                        landedId,
+                        out DotnetBuildLeaseStatus _,
+                        out string _));
                 if (!leaseCleaned)
                     throw new InvalidOperationException($"goal-mark-landed could not release app-host lock {leaseStatus.LeaseId}.");
             }
 
             RunGoalMarkLandedStep(
+                cleanupDeadline,
                 "cleanup-journal-begin",
-                () =>
+                _ =>
                 {
                     GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:cleanup", "Out-of-band landing recorded via goal-mark-landed.");
                     return true;
                 });
             RunGoalMarkLandedStep(
+                cleanupDeadline,
                 "cleanup-journal-completed",
-                () =>
+                _ =>
                 {
                     GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:cleanup", $"Goal {landedGp} marked as landed out-of-band; workspace removed.");
                     return true;
                 });
             RunGoalMarkLandedStep(
+                cleanupDeadline,
                 "goal-cleaned-up-event",
-                () =>
+                _ =>
                 {
                     context.EventWriter.AppendCleanedUp(landedId);
                     return true;
@@ -2910,19 +2926,26 @@ private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
     }
 }
 
-private static T RunGoalMarkLandedStep<T>(string stepName, Func<T> step)
+private static T RunGoalMarkLandedStep<T>(GoalMarkLandedCleanupDeadline deadline, string stepName, Func<int, T> step)
 {
+    var remainingBeforeStep = deadline.RemainingMilliseconds;
+    if (deadline.IsExpired)
+    {
+        Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
+        throw new TimeoutException($"goal-mark-landed cleanup exceeded {GoalMarkLandedPromptTimeoutMilliseconds}ms before substep '{stepName}'.");
+    }
+
     var startedAt = System.Diagnostics.Stopwatch.StartNew();
     var reportedSlowStep = false;
     try
     {
-        var result = step();
+        var result = step(remainingBeforeStep);
         startedAt.Stop();
-        if (startedAt.ElapsedMilliseconds > GoalMarkLandedPromptTimeoutMilliseconds)
+        if (deadline.IsExpired)
         {
-            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={startedAt.ElapsedMilliseconds}");
+            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
             reportedSlowStep = true;
-            throw new TimeoutException($"goal-mark-landed substep '{stepName}' exceeded {GoalMarkLandedPromptTimeoutMilliseconds}ms.");
+            throw new TimeoutException($"goal-mark-landed cleanup exceeded {deadline.TotalMilliseconds}ms during substep '{stepName}'.");
         }
 
         return result;
@@ -2930,10 +2953,33 @@ private static T RunGoalMarkLandedStep<T>(string stepName, Func<T> step)
     catch
     {
         startedAt.Stop();
-        if (!reportedSlowStep && startedAt.ElapsedMilliseconds >= GoalMarkLandedPromptTimeoutMilliseconds)
-            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={startedAt.ElapsedMilliseconds}");
+        if (!reportedSlowStep && deadline.IsExpired)
+            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
         throw;
     }
+}
+
+private sealed class GoalMarkLandedCleanupDeadline
+{
+    private readonly System.Diagnostics.Stopwatch stopwatch;
+    private readonly Func<long>? elapsedMilliseconds;
+
+    private GoalMarkLandedCleanupDeadline(int totalMilliseconds, Func<long>? elapsedMilliseconds)
+    {
+        TotalMilliseconds = totalMilliseconds;
+        this.elapsedMilliseconds = elapsedMilliseconds;
+        stopwatch = System.Diagnostics.Stopwatch.StartNew();
+    }
+
+    public int TotalMilliseconds { get; }
+
+    public long ElapsedMilliseconds => elapsedMilliseconds?.Invoke() ?? stopwatch.ElapsedMilliseconds;
+
+    public int RemainingMilliseconds => Math.Max(1, TotalMilliseconds - (int)Math.Min(int.MaxValue, ElapsedMilliseconds));
+    public bool IsExpired => ElapsedMilliseconds >= TotalMilliseconds;
+
+    public static GoalMarkLandedCleanupDeadline Start(int totalMilliseconds, Func<long>? elapsedMilliseconds) =>
+        new(totalMilliseconds, elapsedMilliseconds);
 }
 
 private static void PrintGoalMarkLandedSummary(bool worktreeRemoved)

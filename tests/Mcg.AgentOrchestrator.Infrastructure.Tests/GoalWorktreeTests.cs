@@ -2686,6 +2686,51 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_passes_remaining_cleanup_budget_to_worktree_remove")]
+    public void CliGoalMarkLandedPassesRemainingCleanupBudgetToWorktreeRemove()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Out-of-band landed budget goal", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "landed.txt"), "landed");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            RunGit(repo, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var worktrees = new CapturingGoalWorktreeService();
+            var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+            kernel.SetEventWriter(eventWriter);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                EventWriter = eventWriter,
+                Worktrees = worktrees,
+                GoalMarkLandedElapsedMilliseconds = () => 9_000
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                context));
+
+            Assert.True(output.Contains("cleanup: goal marked CleanedUp", StringComparison.Ordinal));
+            Assert.Equal(1_000, worktrees.RemoveTimeoutMilliseconds);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_help_does_not_create_goal_worktree")]
     public void CliWorkspaceHelpDoesNotCreateGoalWorktree()
     {
@@ -3537,6 +3582,68 @@ public sealed class GoalWorktreeIntegrationTests
         }
 
         public void AppendCleanedUp(GoalId goalId) => order.Add("remove-worktree");
+    }
+
+    private sealed class CapturingGoalWorktreeService : ICliGoalWorktreeService
+    {
+        public int? RemoveTimeoutMilliseconds { get; private set; }
+
+        public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
+
+        public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
+
+        public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
+
+        public GoalWorktreeRemoveResult Remove(
+            string executionDirectory,
+            GoalId goalId,
+            AgentOrchestratorKernel? kernel = null,
+            int? gitTimeoutMilliseconds = null)
+        {
+            RemoveTimeoutMilliseconds = gitTimeoutMilliseconds;
+            return gitTimeoutMilliseconds is { } timeout
+                ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
+                : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+        }
+
+        public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
+
+        public GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.TryFastForwardMerge(executionDirectory, goalId);
+
+        public GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.TryRebaseOntoMain(executionDirectory, goalId);
+
+        public bool NeedsRebaseOntoMain(string executionDirectory, GoalId goalId) =>
+            GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", BranchName(goalId)).ExitCode != 0;
+
+        public bool IsWorktreeClean(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.IsWorktreeClean(executionDirectory, goalId);
+
+        public bool HasChangesAgainstMain(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.HasChangesAgainstMain(executionDirectory, goalId);
+
+        public string ResolveHead(string worktreePath)
+        {
+            var result = GitCli.Run(worktreePath, "rev-parse", "HEAD");
+            return result.Succeeded ? result.Output.Trim() : string.Empty;
+        }
+
+        public IReadOnlyList<string> GetChangedFiles(string worktreePath) =>
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+
+        public GoalAcceptanceEvidenceBundle BuildAcceptanceEvidence(
+            AgentOrchestratorKernel kernel,
+            Goal goal,
+            string? worktreePath,
+            AcceptanceVerificationResult? verification,
+            bool verificationSkipped) =>
+            DefaultCliGoalWorktreeService.Instance.BuildAcceptanceEvidence(
+                kernel,
+                goal,
+                worktreePath,
+                verification,
+                verificationSkipped);
     }
 
     private sealed class FakeAcceptanceVerifier(
