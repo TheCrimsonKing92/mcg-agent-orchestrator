@@ -317,6 +317,30 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_fresh_worktree_acl_failure_throws")]
+    public void WorkerSandboxPreparerFreshWorktreeAclFailureThrows()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-fresh-failure-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: false),
+            setResult: false);
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot));
+
+            Assert.True(exception.Message.Contains("Failed to apply inheritable Low integrity label", StringComparison.Ordinal));
+            Assert.Single(labeler.SetCalls);
+            Assert.True(labeler.SetCalls[0].Recursive);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_handles_partial_sandbox_root_without_recursive_relabel")]
     public void WorkerSandboxPreparerHandlesPartialSandboxRootWithoutRecursiveRelabel()
     {

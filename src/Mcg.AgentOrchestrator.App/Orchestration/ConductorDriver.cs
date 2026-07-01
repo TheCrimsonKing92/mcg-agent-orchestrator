@@ -107,25 +107,21 @@ internal sealed class ConductorDriver
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
             }
-            if (result.Processes.Tasks.Count > 0)
+            var outcome = ClassifySubscriptionStartForConductor(result);
+            if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
+            {
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch",
+                    $"Recoverable Low-IL sandbox prep action required: {outcome.Reason}");
+                return outcome;
+            }
+            if (outcome.Category == DispatchStartOutcomeCategory.Started)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
                     $"Dispatched {result.Dispatches.Count} tasks, started {result.Processes.Tasks.Count} processes.");
-                return DispatchStartOutcome.Started();
+                return outcome;
             }
-            if (result.Processes.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
-            {
-                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch",
-                    $"Recoverable Low-IL sandbox prep action required: {recoveryAction.Reason}");
-                return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
-            }
-            var reason = result.Dispatches.Count == 0
-                ? DescribeEmptyBatch(result.ParallelPlan)
-                : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
-            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
-            return result.Dispatches.Count == 0
-                ? DispatchStartOutcome.EmptyBatch(reason)
-                : DispatchStartOutcome.SpawnFailed(reason);
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", outcome.Reason!);
+            return outcome;
         };
 
         _startRecordedDispatches = (goal, _) =>
@@ -143,22 +139,22 @@ internal sealed class ConductorDriver
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
             }
 
-            if (result.Tasks.Count > 0)
+            var outcome = ClassifyRecordedDispatchStartForConductor(result);
+            if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
+            {
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start",
+                    $"Recoverable Low-IL sandbox prep action required: {outcome.Reason}");
+                return outcome;
+            }
+            if (outcome.Category == DispatchStartOutcomeCategory.Started)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch-start",
                     $"Started {result.Tasks.Count} recorded dispatch process(es).");
-                return DispatchStartOutcome.Started();
-            }
-            if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
-            {
-                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start",
-                    $"Recoverable Low-IL sandbox prep action required: {recoveryAction.Reason}");
-                return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
+                return outcome;
             }
 
-            var reason = FormatNoRecordedDispatchStartedReason(result.Plan);
-            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
-            return DispatchStartOutcome.EmptyBatch(reason);
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", outcome.Reason!);
+            return outcome;
         };
 
         _buildServerShutdown = () =>
@@ -383,6 +379,41 @@ internal sealed class ConductorDriver
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
+    }
+
+    internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
+    {
+        if (result.Processes.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
+        {
+            return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
+        }
+
+        if (result.Processes.Tasks.Count > 0)
+        {
+            return DispatchStartOutcome.Started();
+        }
+
+        var reason = result.Dispatches.Count == 0
+            ? DescribeEmptyBatch(result.ParallelPlan)
+            : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
+        return result.Dispatches.Count == 0
+            ? DispatchStartOutcome.EmptyBatch(reason)
+            : DispatchStartOutcome.SpawnFailed(reason);
+    }
+
+    internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
+    {
+        if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
+        {
+            return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
+        }
+
+        if (result.Tasks.Count > 0)
+        {
+            return DispatchStartOutcome.Started();
+        }
+
+        return DispatchStartOutcome.EmptyBatch(FormatNoRecordedDispatchStartedReason(result.Plan));
     }
 
     public ConductorAdvanceResult AdvanceOnce(Goal goal, ConductorAutonomyPolicy policy)
