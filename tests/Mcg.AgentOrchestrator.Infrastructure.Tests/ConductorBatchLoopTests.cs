@@ -1913,6 +1913,47 @@ public sealed class ConductorBatchLoopTests
         Assert.Empty(advancedGoalIds.Where(terminalGoalIds.Contains));
     }
 
+    [Xunit.Theory(DisplayName = "BatchLoop_stale_terminal_goals_with_assigned_work_are_excluded_from_processing_set")]
+    [Xunit.InlineData(GoalStatus.Completed)]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    public void BatchLoopStaleTerminalGoalsWithAssignedWorkAreExcludedFromProcessingSet(GoalStatus status)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var staleTask = new TaskSpec(TaskId.New(), "Stale assigned work", AgentRole.Developer);
+        var staleGoal = kernel.CreateGoal($"Stale {status}", [staleTask]);
+        var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
+        kernel.ActivateGoal(staleGoal.Id, DefaultAgents());
+        kernel = WithGoalStatus(kernel, staleGoal.Id, status);
+
+        var advancedGoalIds = new List<GoalId>();
+        var driver = MakeDriver(
+            createWorkspace: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return "/tmp/workspace";
+            },
+            dispatchAndStart: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Contains(activeGoal.Id, advancedGoalIds);
+        Assert.DoesNotContain(staleGoal.Id, advancedGoalIds);
+        Assert.Equal(status, kernel.GetGoal(staleGoal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(staleGoal.Id, staleTask.Id).Status);
+    }
+
     // ── Duration cap: loop exits when max-duration is reached ────────────
 
     [Xunit.Fact(DisplayName = "MaxDuration_ParameterAcceptedAndLoopExitsCleanly")]
@@ -1972,5 +2013,19 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(goalA.Id, persistedGoalIds);
         Assert.DoesNotContain(goalB.Id, persistedGoalIds);
         Assert.Single(persistedGoalIds);
+    }
+
+    private static AgentOrchestratorKernel WithGoalStatus(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        GoalStatus status)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goal => goal.Id == goalId.Value ? goal with { Status = status } : goal)
+                .ToArray()
+        });
     }
 }

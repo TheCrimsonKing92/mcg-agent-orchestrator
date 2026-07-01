@@ -558,6 +558,11 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver)
     {
+        if (IsStaleTerminalGoalWithAssignedWork(goal))
+        {
+            return false;
+        }
+
         if (goal.Status is GoalStatus.Cancelled or GoalStatus.Superseded)
         {
             return false;
@@ -579,6 +584,10 @@ internal sealed class ConductorBatchLoop
 
         return true;
     }
+
+    private static bool IsStaleTerminalGoalWithAssignedWork(Goal goal) =>
+        (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed) &&
+        goal.Tasks.Any(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman);
 
     private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Escalated esc

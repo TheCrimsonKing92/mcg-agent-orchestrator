@@ -44,6 +44,17 @@ internal static class TerminalGoalSweep
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
 
+            if (onlyGoalId is null &&
+                TryBuildGlobalStaleTerminalExclusionEvidence(originalGoal, out var preReconciliationExclusionEvidence))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "stale-terminal-excluded",
+                    preReconciliationExclusionEvidence,
+                    "excluded"));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
+
             var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
             if (reconciled > 0)
             {
@@ -153,6 +164,27 @@ internal static class TerminalGoalSweep
         return new TerminalGoalSweepResult(results);
     }
 
+    private static bool TryBuildGlobalStaleTerminalExclusionEvidence(Goal goal, out string evidence)
+    {
+        evidence = string.Empty;
+        if (!IsGlobalStaleTerminalStatus(goal.Status))
+        {
+            return false;
+        }
+
+        var dispatchableTasks = goal.Tasks
+            .Where(task => IsStaleTerminalAssignedTaskStatus(task.Status))
+            .Select(task => $"{task.Id.Value[..8]}:{task.Status}")
+            .ToArray();
+        if (dispatchableTasks.Length == 0)
+        {
+            return false;
+        }
+
+        evidence = $"goalId={goal.Id.Value}; goalState={goal.Status}; action=excluded; dispatchableTasks={string.Join(",", dispatchableTasks)}";
+        return true;
+    }
+
     private static bool TryBuildTerminalTaskDesyncEvidence(Goal goal, out string evidence)
     {
         evidence = string.Empty;
@@ -162,7 +194,7 @@ internal static class TerminalGoalSweep
         }
 
         var dispatchableTasks = goal.Tasks
-            .Where(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running)
+            .Where(task => IsStaleTerminalAssignedTaskStatus(task.Status))
             .Select(task => $"{task.Id.Value[..8]}:{task.Status}")
             .ToArray();
         if (dispatchableTasks.Length == 0)
@@ -245,6 +277,12 @@ internal static class TerminalGoalSweep
 
     private static bool IsTerminalSweepStatus(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded;
+
+    private static bool IsGlobalStaleTerminalStatus(GoalStatus status) =>
+        status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed;
+
+    private static bool IsStaleTerminalAssignedTaskStatus(WorkTaskStatus status) =>
+        status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman;
 
     private static bool IsProcessAlive(int processId)
     {

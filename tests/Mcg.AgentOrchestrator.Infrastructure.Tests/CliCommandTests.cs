@@ -6240,6 +6240,68 @@ public sealed class CliCommandTests
         Xunit.Assert.Empty(second.Goals);
     }
 
+    [Xunit.Theory(DisplayName = "TerminalGoalSweep_global_stale_terminal_goal_with_assigned_task_is_excluded_once")]
+    [Xunit.InlineData(GoalStatus.Completed)]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    public void TerminalGoalSweepGlobalStaleTerminalGoalWithAssignedTaskIsExcludedOnce(GoalStatus status)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal($"Stale {status}", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, status);
+
+        var first = TerminalGoalSweep.Run(kernel, root);
+        var second = TerminalGoalSweep.Run(kernel, root);
+
+        Xunit.Assert.False(first.Changed);
+        var result = first.Goals.Single();
+        Xunit.Assert.Empty(result.Repairs);
+        var blocker = result.Blockers.Single();
+        Xunit.Assert.Equal("stale-terminal-excluded", blocker.Kind);
+        Xunit.Assert.Equal("excluded", blocker.Command);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goalState={status}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action=excluded", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(status, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Single(second.Goals.Single().Blockers);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_excludes_before_human_input_process_reconcile")]
+    public void TerminalGoalSweepGlobalStaleTerminalExcludesBeforeHumanInputProcessReconcile()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Need operator", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Terminal process should stay terminal", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "HUMAN_INPUT: choose a recovery path");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var result = TerminalGoalSweep.Run(kernel, root);
+
+        var goalResult = result.Goals.Single();
+        var blocker = goalResult.Blockers.Single();
+        Xunit.Assert.False(result.Changed);
+        Xunit.Assert.Empty(goalResult.Repairs);
+        Xunit.Assert.Equal("stale-terminal-excluded", blocker.Kind);
+        Xunit.Assert.Equal("excluded", blocker.Command);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Running", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
+        Xunit.Assert.Null(kernel.GetTask(goal.Id, task.Id).LastVerification);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
     public void TerminalGoalSweepSupersededWithAssignedTaskReopensGoal()
     {
@@ -6402,8 +6464,8 @@ public sealed class CliCommandTests
             Xunit.Assert.Equal(1, repository.TransactionCount);
     }
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_conduct_surface_same_terminal_task_repair")]
-    public void TerminalGoalSweepNextAndConductSurfaceSameTerminalTaskRepair()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_repairs_but_global_conduct_excludes_terminal_task_desync")]
+    public void TerminalGoalSweepNextRepairsButGlobalConductExcludesTerminalTaskDesync()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -6447,12 +6509,18 @@ public sealed class CliCommandTests
         });
 
         var nextRepair = SingleLineContaining(nextOutput, "SWEEP_REPAIR");
-        var conductRepair = SingleLineContaining(conductOutput, "SWEEP_REPAIR");
-        Xunit.Assert.Equal(nextRepair, conductRepair);
         Xunit.Assert.Contains("kind=terminal-task-desync", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains("goalState=Completed", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains($"command=\"conduct {goal.Id.Value[..8]} --loop\"", nextRepair, StringComparison.Ordinal);
+
+        var conductExclusion = SingleLineContaining(conductOutput, "SWEEP_BLOCKER");
+        Xunit.Assert.Contains("kind=stale-terminal-excluded", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goalState=Completed", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action=excluded", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("SWEEP_REPAIR", conductOutput, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_readiness_prints_repair_before_preflight")]
