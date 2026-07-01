@@ -6877,19 +6877,11 @@ private static void WriteDispatchArtifact(string logsRoot, string prefix, string
 
 private static string FindRepositoryFile(params string[] relativeSegments)
 {
-    foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+    var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+    var candidate = Path.Combine(new[] { repositoryRoot }.Concat(relativeSegments).ToArray());
+    if (File.Exists(candidate))
     {
-        var directory = new DirectoryInfo(start);
-        while (directory is not null)
-        {
-            var candidate = Path.Combine(new[] { directory.FullName }.Concat(relativeSegments).ToArray());
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
+        return candidate;
     }
 
     throw new FileNotFoundException($"Could not find repository file '{Path.Combine(relativeSegments)}'.");
