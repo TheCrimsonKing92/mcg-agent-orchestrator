@@ -680,7 +680,9 @@ internal static class CliPersistentStateRunner
         var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveAcceptanceGoalPrefix(args));
         var kernel = LoadSingleGoalKernel(stateRepository, goalId);
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
+        var updatedCurrentGoal = currentGoal;
         var initialGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
+        var acceptanceFinalStatePersisted = false;
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
@@ -694,7 +696,7 @@ internal static class CliPersistentStateRunner
 
         AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
         {
-            return stateRepository.TransactGoalAsync(
+            var transactionResult = stateRepository.TransactGoalAsync(
                     request.GoalId,
                     (snapshot, _) =>
                     {
@@ -727,10 +729,24 @@ internal static class CliPersistentStateRunner
                         }
 
                         var result = request.Merge();
-                        return Task.FromResult((false, (GoalSnapshot?)snapshot, result));
+                        if (result.FastForwarded)
+                        {
+                            transactionKernel.ClearAcceptanceFailure(request.GoalId);
+                        }
+                        else if (result.Message is not null)
+                        {
+                            transactionKernel.RecordAcceptanceFailure(request.GoalId, ["merge"]);
+                        }
+
+                        var updatedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                            (true, updatedSnapshot, (result, updatedSnapshot)));
                     })
                 .GetAwaiter()
                 .GetResult();
+            acceptanceFinalStatePersisted = true;
+            updatedCurrentGoal = KernelFromGoalSnapshot(transactionResult.Snapshot).GetGoal(request.GoalId);
+            return transactionResult.Result;
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -746,6 +762,13 @@ internal static class CliPersistentStateRunner
             Persist,
             finalizeAcceptanceMerge: Finalize,
             acceptanceVerifier: acceptanceVerifier);
+
+        currentGoal = updatedCurrentGoal;
+
+        if (acceptanceFinalStatePersisted)
+        {
+            return shouldSave;
+        }
 
         if (shouldSave)
         {

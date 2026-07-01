@@ -6335,7 +6335,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]
     public void PersistentRunnerAcceptanceIgnoresVolatileSnapshotChurn()
     {
-        var root = CreateAcceptanceRepository();
+        var root = CreateShortAcceptanceRepository();
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
         var goal = kernel.CreateGoal("Land despite volatile metadata churn", [task]);
@@ -6383,7 +6383,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_verifier_runs_outside_state_write_transaction")]
     public void PersistentRunnerAcceptanceVerifierRunsOutsideStateWriteTransaction()
     {
-        var root = CreateAcceptanceRepository();
+        var root = CreateShortAcceptanceRepository();
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
         var goal = kernel.CreateGoal("Verify outside transaction", [task]);
@@ -6425,10 +6425,56 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_final_state_is_persisted_by_goal_cas")]
+    public async Task PersistentRunnerAcceptanceFinalStateIsPersistedByGoalCas()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Persist acceptance final state with CAS", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+            kernel.RecordAcceptanceFailure(goal.Id, ["previous acceptance failure"]);
+            CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var changed = false;
+            CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance", "--skip-verify", "--keep-workspace"],
+                repository,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Equal(1, repository.TransactionCount);
+            Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+            var storedGoal = (await repository.LoadAsync()).GetGoal(goal.Id);
+            Xunit.Assert.Null(storedGoal.LatestAcceptanceFailure);
+            Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_blocks_task_status_change")]
     public void PersistentRunnerAcceptanceBlocksTaskStatusChange()
     {
-        var root = CreateAcceptanceRepository();
+        var root = CreateShortAcceptanceRepository();
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
         var goal = kernel.CreateGoal("Block stale task state", [task]);
@@ -6884,7 +6930,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_conduct_surface_same_unmerged_branch_blocker")]
     public void TerminalGoalSweepNextAndConductSurfaceSameUnmergedBranchBlocker()
     {
-        var root = CreateAcceptanceRepository();
+        var root = CreateShortAcceptanceRepository();
         GoalId? cleanupGoalId = null;
         try
         {
