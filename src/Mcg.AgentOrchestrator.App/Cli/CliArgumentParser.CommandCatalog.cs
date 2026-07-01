@@ -2,118 +2,124 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
 {
-internal static bool IsRecognizedCommand(string command) => IsSimpleCommand(command);
+internal static IReadOnlyList<string> RecognizedCommands { get; } =
+[
+    "attention",
+    "status",
+    "doctor",
+    "project",
+    "provider-smoke",
+    "prototype",
+    "prototype-ui",
+    "serve-dashboard",
+    "hosted-dashboard",
+    "simple-hosted-dashboard",
+    "open-dashboard",
+    "transcript",
+    "monitor",
+    "monitor-goal",
+    "readiness",
+    "goal-recovery",
+    "dogfood-eval",
+    "record-goal",
+    "failure-triage",
+    "retention-plan",
+    "build-lease-cleanup",
+    "firewall-setup",
+    "stable-slot-dotnet",
+    "acceptance-queue",
+    "drain-goals",
+    "acceptance",
+    "evidence",
+    "stages",
+    "gates",
+    "verify-needed",
+    "input-needed",
+    "operator-inbox",
+    "operator-inbox-ack",
+    "operator-listen",
+    "next",
+    "subscription-plan",
+    "advance",
+    "advance-subscription",
+    "run-goal",
+    "lifecycle-simple-goal",
+    "lifecycle-goal",
+    "goal-depends",
+    "goal-plan",
+    "plan",
+    "ideate",
+    "intent-template",
+    "delegate",
+    "abandon-goal",
+    "goal-mark-landed",
+    "park-goal",
+    "rollback-goal",
+    "cancel-goal",
+    "supersede-goal",
+    "agents",
+    "agent-add",
+    "model-functions",
+    "model-function-add",
+    "timeline",
+    "task-timeline",
+    "worker-profiles",
+    "worker-profile-export",
+    "worker-profile-import",
+    "worker-profile-check",
+    "profile-dispatch",
+    "profile-dispatch-ready",
+    "subscription-dispatch",
+    "subscription-dispatch-ready",
+    "cross-goal-start-plan",
+    "start-subscription-ready-goals",
+    "start-subscription-ready",
+    "run",
+    "api-run",
+    "retry",
+    "reassign-agent",
+    "re-delegate",
+    "redelegate",
+    "note",
+    "verification-plan",
+    "brief",
+    "execute-dispatch",
+    "start-dispatch",
+    "start-dispatches",
+    "reconcile",
+    "refresh-dispatch",
+    "refresh-dispatches",
+    "logs",
+    "cancel-dispatch",
+    "verify-manual",
+    "verifications",
+    "tasks",
+    "task",
+    "workspace",
+    "model-outcomes",
+    "durations",
+    "loop-health",
+    "provenance",
+    "accept",
+    "config",
+    "land",
+    "conduct",
+    "backlog-list",
+    "backlog-add",
+    "backlog-show",
+    "backlog-close",
+    "backlog-reopen",
+    "backlog-view",
+    "goals-prune",
+    "operator-channel",
+    "goal-changes"
+];
+
+internal static bool IsRecognizedCommand(string command) =>
+    RecognizedCommands.Contains(command, StringComparer.OrdinalIgnoreCase);
 
 private static bool IsSimpleCommand(string command)
 {
-    return command.Equals("attention", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("status", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("doctor", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("project", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("provider-smoke", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("prototype", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("transcript", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("monitor", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("monitor-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("readiness", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("goal-recovery", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("dogfood-eval", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("record-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("failure-triage", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("build-lease-cleanup", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("firewall-setup", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("drain-goals", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("evidence", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("stages", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("gates", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("verify-needed", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("input-needed", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("operator-inbox", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("operator-inbox-ack", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("next", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("subscription-plan", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("advance", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("advance-subscription", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("run-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("lifecycle-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("goal-depends", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("goal-plan", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("plan", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("ideate", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("intent-template", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("delegate", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("agents", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("agent-add", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("model-functions", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("model-function-add", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("timeline", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("task-timeline", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("worker-profiles", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("worker-profile-export", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("worker-profile-import", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("worker-profile-check", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("profile-dispatch", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("profile-dispatch-ready", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("subscription-dispatch-ready", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("cross-goal-start-plan", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("start-subscription-ready-goals", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("start-subscription-ready", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("run", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("api-run", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("reassign-agent", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("re-delegate", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("redelegate", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("note", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("brief", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("execute-dispatch", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("start-dispatch", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("start-dispatches", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("reconcile", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("refresh-dispatches", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("logs", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("verifications", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("tasks", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("task", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("workspace", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("model-outcomes", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("durations", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("loop-health", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("provenance", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("accept", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("config", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("land", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-list", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-show", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("backlog-view", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("goals-prune", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("operator-channel", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("goal-changes", StringComparison.OrdinalIgnoreCase);
+    return IsRecognizedCommand(command);
 }
 }

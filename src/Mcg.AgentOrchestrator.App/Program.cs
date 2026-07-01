@@ -32,9 +32,17 @@ catch (Exception ex)
 var startupArgs = tenantSelection.CommandArgs.Count == 0
     ? []
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
-if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+try
 {
-    return 0;
+    if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+    {
+        return 0;
+    }
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
 }
 
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers

@@ -76,6 +76,79 @@ public sealed class CliCommandTests
             parts);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_splits_limit_status_and_text_flags")]
+    public void CliBacklogListSplitsLimitStatusAndTextFlags()
+    {
+        var interactive = CliArgumentParser.SplitCommand("backlog-list --limit 5 --status open --text Foo");
+        var oneShot = CliArgumentParser.NormalizeArgs(["backlog-list", "--limit", "5", "--status", "open", "--text", "Foo"]);
+
+        Xunit.Assert.Equal(["backlog-list", "--limit", "5", "--status", "open", "--text", "Foo"], interactive);
+        Xunit.Assert.Equal(interactive, oneShot);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_limit_filter_caps_results")]
+    public void CliBacklogListLimitFilterCapsResults()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("One"),
+            BacklogItemFor("Two"),
+            BacklogItemFor("Three")
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: null, text: null, limit: 2);
+
+        Xunit.Assert.Equal(["One", "Two"], filtered.Select(item => item.Title));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_status_filter_matches_case_insensitively")]
+    public void CliBacklogListStatusFilterMatchesCaseInsensitively()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("Open item", status: BacklogItemStatus.Open),
+            BacklogItemFor("Done item", status: BacklogItemStatus.Done)
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: "done", text: null, limit: null);
+
+        var item = Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("Done item", item.Title);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_text_filter_matches_title_and_body_case_insensitively")]
+    public void CliBacklogListTextFilterMatchesTitleAndBodyCaseInsensitively()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("Dashboard polish", body: "No matching detail"),
+            BacklogItemFor("Worker output", body: "Needs Foo evidence"),
+            BacklogItemFor("Other", body: "No match")
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: null, text: "foo", limit: null);
+
+        var item = Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("Worker output", item.Title);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_combines_limit_status_and_text_filters")]
+    public void CliBacklogListCombinesLimitStatusAndTextFilters()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("First Foo", status: BacklogItemStatus.Open),
+            BacklogItemFor("Done Foo", status: BacklogItemStatus.Done),
+            BacklogItemFor("Second Foo", status: BacklogItemStatus.Open),
+            BacklogItemFor("No match", status: BacklogItemStatus.Open)
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: "open", text: "foo", limit: 1);
+
+        var item = Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("First Foo", item.Title);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_conduct_help_prints_usage_without_resolving_goal")]
     public void CliConductHelpPrintsUsageWithoutResolvingGoal()
     {
@@ -5123,6 +5196,12 @@ public sealed class CliCommandTests
         ]));
         return workspace;
     }
+
+    private static BacklogItem BacklogItemFor(
+        string title,
+        string body = "",
+        BacklogItemStatus status = BacklogItemStatus.Open) =>
+        new(Guid.NewGuid().ToString("n"), title, body, status, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, null);
 
     private static string ExecuteCliAndCapture(
         IReadOnlyList<string> parts,
