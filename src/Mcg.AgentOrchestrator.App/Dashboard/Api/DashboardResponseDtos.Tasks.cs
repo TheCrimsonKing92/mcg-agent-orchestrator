@@ -73,6 +73,11 @@ internal sealed record ProcessDto(
     string StandardOutputPath,
     string StandardErrorPath,
     string ExitCodePath,
+    double? HeartbeatAgeSeconds,
+    double? HeartbeatIdleDurationSeconds,
+    long? HeartbeatStdoutBytes,
+    long? HeartbeatStderrBytes,
+    string? HeartbeatPath,
     DispatchHeartbeatDto Heartbeat);
 
 internal sealed record ProcessLogDto(
@@ -88,6 +93,11 @@ internal sealed record ProcessLogDto(
     string StandardError,
     string ExitCodePath,
     string ExitCodeText,
+    double? HeartbeatAgeSeconds,
+    double? HeartbeatIdleDurationSeconds,
+    long? HeartbeatStdoutBytes,
+    long? HeartbeatStderrBytes,
+    string? HeartbeatPath,
     DispatchHeartbeatDto Heartbeat);
 
 internal sealed record DispatchHeartbeatDto(

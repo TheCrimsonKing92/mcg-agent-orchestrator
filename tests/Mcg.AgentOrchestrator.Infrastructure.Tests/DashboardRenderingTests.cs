@@ -2718,8 +2718,18 @@ public sealed class DashboardRenderingTests
     Assert.Equal<int>([321, 987], detail.LastProcess.Heartbeat.OwnedProcessIds);
     Assert.Equal(99, detail.LastProcess.Heartbeat.StandardOutputBytes);
     Assert.Equal(11, detail.LastProcess.Heartbeat.StandardErrorBytes);
+    Assert.NotNull(detail.LastProcess.HeartbeatAgeSeconds);
+    Assert.NotNull(detail.LastProcess.HeartbeatIdleDurationSeconds);
+    Assert.Equal(99, detail.LastProcess.HeartbeatStdoutBytes);
+    Assert.Equal(11, detail.LastProcess.HeartbeatStderrBytes);
+    Assert.Equal(heartbeatPath, detail.LastProcess.HeartbeatPath);
     Assert.True(logs.Heartbeat.IsAvailable);
     Assert.Equal(heartbeatPath, logs.Heartbeat.Path);
+    Assert.NotNull(logs.HeartbeatAgeSeconds);
+    Assert.NotNull(logs.HeartbeatIdleDurationSeconds);
+    Assert.Equal(99, logs.HeartbeatStdoutBytes);
+    Assert.Equal(11, logs.HeartbeatStderrBytes);
+    Assert.Equal(heartbeatPath, logs.HeartbeatPath);
     Assert.Equal(heartbeatPath, workSummary.Tasks.Single().LastProcess!.Heartbeat.Path);
     Assert.Contains(html, text => text.Contains("heartbeat running", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("owned_pids=321,987", StringComparison.Ordinal));
@@ -2727,6 +2737,48 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains(heartbeatPath, StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("heartbeat: available state=running pid=321 child_pid=654 owned_pids=321,987", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("log bytes: stdout=99 stderr=11", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Dashboard_omits_dispatch_heartbeat_status_when_file_is_missing")]
+    public void DashboardOmitsDispatchHeartbeatStatusWhenFileIsMissing()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render missing heartbeat", [new TaskSpec(TaskId.New(), "Run process", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.Single();
+    var process = new TaskProcessRecord(
+        321,
+        "codex exec prompt.md",
+        root,
+        Path.Combine(root, "worker.out.log"),
+        Path.Combine(root, "worker.err.log"),
+        Path.Combine(root, "worker.exit.txt"),
+        DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
+        null,
+        null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
+
+    var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+    var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+
+    Assert.False(detail.LastProcess!.Heartbeat.IsAvailable);
+    Assert.Null(detail.LastProcess.HeartbeatAgeSeconds);
+    Assert.Null(detail.LastProcess.HeartbeatIdleDurationSeconds);
+    Assert.Null(detail.LastProcess.HeartbeatStdoutBytes);
+    Assert.Null(detail.LastProcess.HeartbeatStderrBytes);
+    Assert.Null(detail.LastProcess.HeartbeatPath);
+    Assert.False(logs.Heartbeat.IsAvailable);
+    Assert.Null(logs.HeartbeatAgeSeconds);
+    Assert.Null(logs.HeartbeatIdleDurationSeconds);
+    Assert.Null(logs.HeartbeatStdoutBytes);
+    Assert.Null(logs.HeartbeatStderrBytes);
+    Assert.Null(logs.HeartbeatPath);
+    Assert.DoesNotContain("heartbeat unavailable", html, StringComparison.Ordinal);
+    Assert.DoesNotContain(heartbeatPath, html, StringComparison.Ordinal);
 }
 
 static void AssertControl(
