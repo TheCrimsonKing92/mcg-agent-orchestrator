@@ -17,7 +17,7 @@ public static bool ExecuteCommand(
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
-    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null,
+    Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
     IGoalAcceptanceVerifier? acceptanceVerifier = null,
     Func<long>? goalMarkLandedElapsedMilliseconds = null)
 {
