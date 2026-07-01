@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardResponseMapper
 {
-public static MonitorDto ToMonitorDto(GoalMonitor monitor, string? displayLabel = null)
+public static MonitorDto ToMonitorDto(GoalMonitor monitor)
 {
     return new MonitorDto(
         monitor.GoalId.Value,
@@ -17,8 +17,7 @@ public static MonitorDto ToMonitorDto(GoalMonitor monitor, string? displayLabel 
         monitor.TaskStatusCounts.Select(count => new StatusCountDto(count.Status, count.Count)).ToList(),
         monitor.PendingHumanInputCount,
         monitor.AttentionItems.Select(item => new AttentionDto(item.Kind, item.TaskId?.Value, TimelineText(item.Message))).ToList(),
-        monitor.LastTimelineEventAt,
-        displayLabel);
+        monitor.LastTimelineEventAt);
 }
 
 public static BacklogGoalPlanDto ToBacklogGoalPlanDto(BacklogIntakePlan intake, GoalDependencyPlan plan)

@@ -317,7 +317,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "status":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintGoal(context.CurrentGoal, ResolveGoalDisplayLabel(context.CurrentGoal, context.Workspace.BacklogStorePath));
+            ConsoleViews.PrintGoal(context.CurrentGoal, ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath));
             return false;
 
         case "monitor":
@@ -1676,7 +1676,7 @@ private static void PersistBacklogIntakeGoal(CliExecutionContext context, Backlo
     new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).MarkGoalCreated(item.Id, goal.Id.Value);
 }
 
-internal static string? ResolveGoalDisplayLabel(Goal goal, string backlogStorePath)
+internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStorePath)
 {
     if (string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) ||
         string.IsNullOrWhiteSpace(backlogStorePath) ||

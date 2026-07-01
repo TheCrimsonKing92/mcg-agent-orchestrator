@@ -92,9 +92,31 @@ internal static class OrchestratorSqliteTools
             return FailOpen(dbPath, ex);
         }
 
-        var hasSourceBacklogColumn = await HasColumnAsync(conn, "goals", "source_backlog_item_id");
+        try
+        {
+            await PrintGoalRowsAsync(conn, status, limit, backlogTitles, includeSourceBacklogColumn: true);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 && ex.Message.Contains("source_backlog_item_id", StringComparison.OrdinalIgnoreCase))
+        {
+            await PrintGoalRowsAsync(conn, status, limit, backlogTitles, includeSourceBacklogColumn: false);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 14)
+        {
+            return FailOpen(dbPath, ex);
+        }
+
+        return 0;
+    }
+
+    private static async Task PrintGoalRowsAsync(
+        SqliteConnection conn,
+        string? status,
+        int limit,
+        IReadOnlyDictionary<string, string> backlogTitles,
+        bool includeSourceBacklogColumn)
+    {
         await using var cmd = conn.CreateCommand();
-        var projection = hasSourceBacklogColumn
+        var projection = includeSourceBacklogColumn
             ? "id, status, source_backlog_item_id, snapshot_json"
             : "id, status, snapshot_json";
         cmd.CommandText = status is null
@@ -116,25 +138,16 @@ internal static class OrchestratorSqliteTools
         if (status is not null)
             cmd.Parameters.AddWithValue("$status", status);
 
-        try
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
         {
-            await using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                var id = reader.GetString(0);
-                var rowStatus = reader.GetString(1);
-                var sourceBacklogItemId = hasSourceBacklogColumn && !reader.IsDBNull(2) ? reader.GetString(2) : null;
-                var snapshotJson = reader.GetString(hasSourceBacklogColumn ? 3 : 2);
-                sourceBacklogItemId ??= ExtractSourceBacklogItemId(snapshotJson);
-                Console.WriteLine($"{Short(id)}{FormatDisplayLabel(sourceBacklogItemId, backlogTitles)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
-            }
+            var id = reader.GetString(0);
+            var rowStatus = reader.GetString(1);
+            var sourceBacklogItemId = includeSourceBacklogColumn && !reader.IsDBNull(2) ? reader.GetString(2) : null;
+            var snapshotJson = reader.GetString(includeSourceBacklogColumn ? 3 : 2);
+            sourceBacklogItemId ??= ExtractSourceBacklogItemId(snapshotJson);
+            Console.WriteLine($"{Short(id)}{FormatFriendlyLabel(sourceBacklogItemId, backlogTitles)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 14)
-        {
-            return FailOpen(dbPath, ex);
-        }
-
-        return 0;
     }
 
     private static async Task<int> SetGoalStatusAsync(string[] args)
@@ -625,8 +638,14 @@ internal static class OrchestratorSqliteTools
 
         try
         {
-            using var conn = CreateConnection(backlogDbPath, readOnly: false);
+            using var conn = CreateConnection(backlogDbPath, readOnly: true);
             conn.Open();
+            using (var pragma = conn.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout=30000; PRAGMA query_only=ON";
+                pragma.ExecuteNonQuery();
+            }
+
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT id, title FROM backlog";
             using var reader = cmd.ExecuteReader();
@@ -646,7 +665,7 @@ internal static class OrchestratorSqliteTools
         }
     }
 
-    private static string FormatDisplayLabel(string? sourceBacklogItemId, IReadOnlyDictionary<string, string> backlogTitles)
+    private static string FormatFriendlyLabel(string? sourceBacklogItemId, IReadOnlyDictionary<string, string> backlogTitles)
     {
         if (string.IsNullOrWhiteSpace(sourceBacklogItemId) ||
             !backlogTitles.TryGetValue(sourceBacklogItemId, out var title) ||

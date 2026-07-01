@@ -23,8 +23,7 @@ internal static class GoalMonitoringStream
             goal,
             sinceEventId,
             DashboardResponseMapper.ToOperatorInboxReportDto(inbox),
-            DashboardResponseMapper.ToSubscriptionPlanDto(subscriptionPlan).CapacitySchedule,
-            CliCommandHandlers.ResolveGoalDisplayLabel(goal, workspace.BacklogStorePath));
+            DashboardResponseMapper.ToSubscriptionPlanDto(subscriptionPlan).CapacitySchedule);
     }
 
     public static async Task StreamAsync(

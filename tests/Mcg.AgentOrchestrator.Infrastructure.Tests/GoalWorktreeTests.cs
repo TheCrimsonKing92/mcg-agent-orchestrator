@@ -2354,11 +2354,37 @@ public sealed class GoalWorktreeIntegrationTests
             }
             Assert.Equal("Snapshot backlog title", (await backlogStore.GetByExactIdAsync(item.Id))?.Title);
 
-            var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--status", "Active", "--limit", "10");
+            var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--repo-root", repo, "--status", "Active", "--limit", "10");
 
             Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
             Assert.Contains($"{goal.Id.Value[..8]} (Snapshot backlog title) [Active] SQLite helper labeled goal", result.Stdout);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTool_list_goals_omits_label_without_source_backlog_title")]
+    public async Task OrchestratorSqliteToolListGoalsOmitsLabelWithoutSourceBacklogTitle()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("SQLite helper unlabeled goal");
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+
+            var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--repo-root", repo, "--status", "Active", "--limit", "10");
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains($"{goal.Id.Value[..8]} [Active] SQLite helper unlabeled goal", result.Stdout);
+            Assert.DoesNotContain($"{goal.Id.Value[..8]} (", result.Stdout);
         }
         finally
         {
@@ -3435,8 +3461,7 @@ public sealed class GoalWorktreeIntegrationTests
         string? repositoryRootEnvironment,
         params string[] arguments)
     {
-        var sourceRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable)
-            ?? InfrastructureTestSupport.FindRepositoryRoot();
+        var sourceRoot = InfrastructureTestSupport.FindRepositoryRoot();
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
