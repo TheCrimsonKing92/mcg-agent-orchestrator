@@ -2987,7 +2987,7 @@ public sealed class GoalWorktreeIntegrationTests
             string? shutdownPath = null;
             var directoryExistedAtShutdown = false;
 
-            GoalWorktrees.BuildServerShutdown = worktreePath =>
+            GoalWorktrees.BuildServerShutdown = (worktreePath, _) =>
             {
                 shutdownCalled = true;
                 shutdownPath = worktreePath;
@@ -3025,7 +3025,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var acl = new RecordingSandboxAclHelper();
             GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goalId);
 
@@ -3037,6 +3037,93 @@ public sealed class GoalWorktreeIntegrationTests
         {
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_threads_remaining_budget_into_nested_cleanup")]
+    public void GoalWorktreesRemoveThreadsRemainingBudgetIntoNestedCleanup()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            long elapsedMilliseconds = 2_500;
+            int? buildServerTimeout = null;
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
+            GoalWorktrees.BuildServerShutdown = (_, timeoutMilliseconds) =>
+            {
+                buildServerTimeout = timeoutMilliseconds;
+                elapsedMilliseconds = 9_700;
+            };
+            GoalWorktrees.SandboxAclHelper = acl;
+
+            var result = GoalWorktrees.Remove(repo, goalId, null, 10_000);
+
+            Assert.True(result.IsComplete);
+            Assert.Equal(7_500, buildServerTimeout);
+            Assert.True(acl.TimeoutMilliseconds.SequenceEqual([300]));
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_defers_when_build_server_cleanup_exhausts_budget")]
+    public void GoalWorktreesRemoveDefersWhenBuildServerCleanupExhaustsBudget()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            long elapsedMilliseconds = 2_500;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
+            GoalWorktrees.BuildServerShutdown = (_, _) => elapsedMilliseconds = 10_000;
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.Remove(repo, goalId, null, 10_000);
+
+            Assert.False(result.IsComplete);
+            Assert.Equal(path, result.LeftoverPath);
+            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Empty(acl.ResetPaths);
+            Assert.True(Directory.Exists(path));
+            var warning = Assert.Single(warnings);
+            Assert.Equal("remove:build-server-shutdown", warning.Operation);
+            Assert.IsType<TimeoutException>(warning.Exception);
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -3055,7 +3142,7 @@ public sealed class GoalWorktreeIntegrationTests
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
             GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
 
@@ -3087,7 +3174,7 @@ public sealed class GoalWorktreeIntegrationTests
             File.WriteAllText(Path.Combine(path, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
             GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var ensured = GoalWorktrees.Ensure(repo, goalId);
 
@@ -3122,7 +3209,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             GoalWorktrees.DeleteDirectory = _ => false;
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
             GoalWorktrees.CleanupWarningSink = warnings.Add;
 
             var result = GoalWorktrees.Remove(repo, goalId);
@@ -3175,7 +3262,7 @@ public sealed class GoalWorktreeIntegrationTests
                 return true;
             };
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
 
@@ -3303,7 +3390,7 @@ public sealed class GoalWorktreeIntegrationTests
                 return true;
             };
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
 
@@ -3354,7 +3441,7 @@ public sealed class GoalWorktreeIntegrationTests
                 return true;
             };
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
 
@@ -3864,10 +3951,12 @@ public sealed class GoalWorktreeIntegrationTests
     private sealed class RecordingSandboxAclHelper : ISandboxAclHelper
     {
         public List<string> ResetPaths { get; } = [];
+        public List<int> TimeoutMilliseconds { get; } = [];
 
-        public void ResetSandboxAcl(string worktreePath)
+        public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds)
         {
             ResetPaths.Add(worktreePath);
+            TimeoutMilliseconds.Add(timeoutMilliseconds);
         }
     }
 
