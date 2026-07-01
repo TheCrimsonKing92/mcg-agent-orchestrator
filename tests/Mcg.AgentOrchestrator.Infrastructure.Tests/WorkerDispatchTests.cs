@@ -5499,9 +5499,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.ActivateGoal(reviewerGoal.Id, [reviewerAgent]);
     var developerTask = developerGoal.Tasks.Single();
     var reviewerTask = reviewerGoal.Tasks.Single();
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null);
 
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
     Assert.Contains(developerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'bypassPermissions'", StringComparison.Ordinal));
     Assert.Contains(reviewerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'plan'", StringComparison.Ordinal));
