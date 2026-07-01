@@ -43,7 +43,7 @@ public static class ProcessSpawnGuard
 
             var hasResolvedTargetPath = TryGetDiskHandlePath(handle, out var path) && fileNames.Length > 0;
             if (hasResolvedTargetPath &&
-                !fileNames.Any(fileName => path.EndsWith(fileName, StringComparison.OrdinalIgnoreCase)))
+                !fileNames.Any(fileName => IsSameFileName(path, fileName)))
             {
                 continue;
             }
@@ -57,6 +57,14 @@ public static class ProcessSpawnGuard
         }
 
         return cleared;
+    }
+
+    private static bool IsSameFileName(string path, string fileName)
+    {
+        var normalized = path.TrimEnd('\0', '\\', '/');
+        var actual = Path.GetFileName(normalized);
+        return string.Equals(actual, fileName, StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(fileName, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool IsHandleInheritable(IntPtr handle)

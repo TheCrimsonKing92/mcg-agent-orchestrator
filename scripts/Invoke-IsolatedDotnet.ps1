@@ -81,7 +81,7 @@ function Get-BuildMaxCpuCount {
         return $value
     }
 
-    return [Math]::Max(1, [int]([Environment]::ProcessorCount / 4))
+    return 1
 }
 
 function Get-IsolatedRootBase {
@@ -89,7 +89,33 @@ function Get-IsolatedRootBase {
         return $env:MCG_DOTNET_ISOLATED_ROOT
     }
 
-    return (Join-Path (Join-Path (Get-Location).Path ".mcg-sandbox\temp") "mcg-dotnet-isolated")
+    return (Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated")
+}
+
+function Get-HostTempBase {
+    $candidate = [System.IO.Path]::GetTempPath()
+    $repositoryRoot = (Get-Location).Path
+    $worktreeMarker = "$([System.IO.Path]::DirectorySeparatorChar).orchestrator-worktrees$([System.IO.Path]::DirectorySeparatorChar)"
+    $worktreeIndex = $repositoryRoot.IndexOf($worktreeMarker, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($worktreeIndex -ge 0) {
+        return (Join-Path $repositoryRoot.Substring(0, $worktreeIndex) ".t")
+    }
+
+    if ($candidate.StartsWith($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $localTemp = Join-Path $env:LOCALAPPDATA "Temp"
+        try {
+            $probe = Join-Path $localTemp "mcg-dotnet-probe"
+            New-Item -ItemType Directory -Force -Path $probe | Out-Null
+            Remove-Item -LiteralPath $probe -Force -Recurse
+            return $localTemp
+        }
+        catch {
+            return (Join-Path $repositoryRoot ".t")
+        }
+    }
+
+    return $candidate
 }
 
 function Test-OwnerMarkerMatches {
@@ -138,6 +164,7 @@ function Initialize-ArtifactsDirectory {
 }
 
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
+$hostTempBase = Get-HostTempBase
 $isolatedRoot = Get-IsolatedRootBase
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
     $slotRoot = Join-Path $isolatedRoot "slots\manual"
@@ -194,7 +221,7 @@ $isolatedArguments = @(
     "-maxcpucount:$(Get-BuildMaxCpuCount)"
 )
 
-$processTempPath = Join-Path $runRoot "temp"
+$processTempPath = Join-Path (Join-Path $hostTempBase "pt\$ownerToken") "$PID"
 New-Item -ItemType Directory -Force -Path $processTempPath | Out-Null
 
 $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path

@@ -8,9 +8,9 @@ using Microsoft.Extensions.Hosting;
 public sealed class AdvanceLoopTests
 {
     private const string BlockingCodexProfileCommand =
-        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output (Get-Content -Raw {promptPath}); Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
+        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
     private const string BlockingClaudeProfileCommand =
-        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output (Get-Content -Raw {promptPath}); Write-Output '--permission-mode {permissionMode}'";
+        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output '--permission-mode {permissionMode}'";
 
     [Xunit.Fact(DisplayName = "CreateActivateAndHandoffGoal_starts_first_subscription_dispatch")]
     public void CreateActivateAndHandoffGoalStartsFirstSubscriptionDispatch()
