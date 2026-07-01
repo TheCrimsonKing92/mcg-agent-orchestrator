@@ -2804,6 +2804,55 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_filters_do_not_change_goal_or_worktree_state")]
+    public async Task CliBacklogListFiltersDoNotChangeGoalOrWorktreeState()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var store = new BacklogStore(workspace.BacklogStorePath);
+            await store.AddAsync("Foo active one");
+            await store.AddAsync("Foo active two");
+            await store.AddAsync("Other active");
+            var closed = await store.AddAsync("Foo closed");
+            await store.CloseAsync(closed.Id, "done");
+
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep filtered backlog read-only", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            var originalStatus = goal.Status;
+            IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = EchoProfiles();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["backlog-list", "--limit", "1", "--status", "open", "--text", "foo"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+
+                Assert.False(changed);
+            });
+
+            Assert.Contains("Foo active one", output);
+            Assert.DoesNotContain("Foo active two", output);
+            Assert.DoesNotContain("Foo closed", output);
+            Assert.Equal(originalStatus, goal.Status);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".orchestrator-worktrees")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_safe_auto_stops_before_acceptance")]
     public void CliLifecycleSimpleGoalSafeAutoStopsBeforeAcceptance()
     {

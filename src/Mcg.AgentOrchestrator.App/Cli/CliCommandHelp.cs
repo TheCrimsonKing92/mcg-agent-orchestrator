@@ -8,7 +8,7 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path>";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>";
@@ -38,7 +38,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
         "List backlog items from the backlog store.",
-        ["--all", "--help", "-h"]);
+        ["--all", "--limit", "--status", "--text", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
@@ -70,6 +70,11 @@ internal static class CliCommandHelp
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
     {
+        if (TryPrintHelpCommand(args))
+        {
+            return true;
+        }
+
         if (!TryResolveEntry(args, out var entry) || !HasHelpFlag(args))
         {
             return false;
@@ -81,7 +86,7 @@ internal static class CliCommandHelp
 
     internal static bool IsCommandSpecificHelp(IReadOnlyList<string> args)
     {
-        return HasHelpFlag(args) && TryResolveEntry(args, out _);
+        return TryResolveHelpCommand(args, out _, out _) || (HasHelpFlag(args) && TryResolveEntry(args, out _));
     }
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
@@ -182,6 +187,96 @@ internal static class CliCommandHelp
         return true;
     }
 
+    private static bool TryPrintHelpCommand(IReadOnlyList<string> args)
+    {
+        if (!TryResolveHelpCommand(args, out var target, out var entry))
+        {
+            return false;
+        }
+
+        if (entry is { } resolved)
+        {
+            Print(resolved);
+            return true;
+        }
+
+        var suggestions = FindNearestCommands(target);
+        var suffix = suggestions.Count == 0
+            ? " Run help <command> for command usage."
+            : $" Did you mean: {string.Join(", ", suggestions)}?";
+        throw new ArgumentException($"Unknown command '{target}'.{suffix}");
+    }
+
+    private static bool TryResolveHelpCommand(
+        IReadOnlyList<string> args,
+        out string target,
+        out CommandHelpEntry? entry)
+    {
+        target = "";
+        entry = null;
+        if (args.Count < 2 || !args[0].Equals("help", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        target = args[1];
+        if (TryResolveEntry([target], out var resolved))
+        {
+            entry = resolved;
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<string> FindNearestCommands(string target)
+    {
+        var commands = CliArgumentParser.RecognizedCommands;
+        var prefixMatches = commands
+            .Where(command => command.StartsWith(target, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(command => command, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
+        if (prefixMatches.Length > 0)
+        {
+            return prefixMatches;
+        }
+
+        return commands
+            .Select(command => new { Command = command, Distance = EditDistance(target, command) })
+            .Where(candidate => candidate.Distance <= 2)
+            .OrderBy(candidate => candidate.Distance)
+            .ThenBy(candidate => candidate.Command, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(candidate => candidate.Command)
+            .ToArray();
+    }
+
+    private static int EditDistance(string left, string right)
+    {
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var j = 0; j <= right.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = char.ToUpperInvariant(left[i - 1]) == char.ToUpperInvariant(right[j - 1]) ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
+    }
+
     private static void Print(CommandHelpEntry entry)
     {
         Console.WriteLine(entry.Usage);
@@ -212,6 +307,18 @@ internal static class CliCommandHelp
             else if (flag.Equals("--watch-interval", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine($"  {flag} <n>    Legacy alias for --poll-seconds.");
+            }
+            else if (flag.Equals("--limit", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>");
+            }
+            else if (flag.Equals("--status", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <value>");
+            }
+            else if (flag.Equals("--text", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <pattern>");
             }
             else
             {

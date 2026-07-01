@@ -9,7 +9,8 @@ internal static partial class CliCommandHandlers
 
     internal static bool TryPrintStartupHelp(IReadOnlyList<string> parts)
     {
-        if (parts.Count == 0 || !IsHelpRequested(parts))
+        if (parts.Count == 0 ||
+            (!IsHelpRequested(parts) && !parts[0].Equals("help", StringComparison.OrdinalIgnoreCase)))
         {
             return false;
         }
