@@ -32,6 +32,7 @@ internal sealed class ConductorDriver
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
+    private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -106,19 +107,21 @@ internal sealed class ConductorDriver
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
             }
-            if (result.Processes.Tasks.Count > 0)
+            var outcome = ClassifySubscriptionStartForConductor(result);
+            if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
+            {
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch",
+                    $"Recoverable Low-IL sandbox prep action required: {outcome.Reason}");
+                return outcome;
+            }
+            if (outcome.Category == DispatchStartOutcomeCategory.Started)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch",
                     $"Dispatched {result.Dispatches.Count} tasks, started {result.Processes.Tasks.Count} processes.");
-                return DispatchStartOutcome.Started();
+                return outcome;
             }
-            var reason = result.Dispatches.Count == 0
-                ? DescribeEmptyBatch(result.ParallelPlan)
-                : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
-            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
-            return result.Dispatches.Count == 0
-                ? DispatchStartOutcome.EmptyBatch(reason)
-                : DispatchStartOutcome.SpawnFailed(reason);
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", outcome.Reason!);
+            return outcome;
         };
 
         _startRecordedDispatches = (goal, _) =>
@@ -136,16 +139,22 @@ internal sealed class ConductorDriver
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
             }
 
-            if (result.Tasks.Count > 0)
+            var outcome = ClassifyRecordedDispatchStartForConductor(result);
+            if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
+            {
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start",
+                    $"Recoverable Low-IL sandbox prep action required: {outcome.Reason}");
+                return outcome;
+            }
+            if (outcome.Category == DispatchStartOutcomeCategory.Started)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:dispatch-start",
                     $"Started {result.Tasks.Count} recorded dispatch process(es).");
-                return DispatchStartOutcome.Started();
+                return outcome;
             }
 
-            var reason = FormatNoRecordedDispatchStartedReason(result.Plan);
-            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
-            return DispatchStartOutcome.EmptyBatch(reason);
+            GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", outcome.Reason!);
+            return outcome;
         };
 
         _buildServerShutdown = () =>
@@ -307,6 +316,7 @@ internal sealed class ConductorDriver
             }
         };
         _emptyOutputBackoffDelay = Thread.Sleep;
+        _recoverSandboxPrep = action => action.Execute();
         _evaluateReadiness = goal =>
         {
             var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
@@ -337,7 +347,8 @@ internal sealed class ConductorDriver
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Action<Goal, IReadOnlyList<string>>? recordAcceptanceFailure = null,
         Action<Goal>? clearAcceptanceFailure = null,
-        Func<Goal, string, bool>? normalizeLifecycleState = null)
+        Func<Goal, string, bool>? normalizeLifecycleState = null,
+        Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -367,6 +378,42 @@ internal sealed class ConductorDriver
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
+        _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
+    }
+
+    internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
+    {
+        if (result.Processes.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
+        {
+            return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
+        }
+
+        if (result.Processes.Tasks.Count > 0)
+        {
+            return DispatchStartOutcome.Started();
+        }
+
+        var reason = result.Dispatches.Count == 0
+            ? DescribeEmptyBatch(result.ParallelPlan)
+            : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
+        return result.Dispatches.Count == 0
+            ? DispatchStartOutcome.EmptyBatch(reason)
+            : DispatchStartOutcome.SpawnFailed(reason);
+    }
+
+    internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
+    {
+        if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
+        {
+            return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
+        }
+
+        if (result.Tasks.Count > 0)
+        {
+            return DispatchStartOutcome.Started();
+        }
+
+        return DispatchStartOutcome.EmptyBatch(FormatNoRecordedDispatchStartedReason(result.Plan));
     }
 
     public ConductorAdvanceResult AdvanceOnce(Goal goal, ConductorAutonomyPolicy policy)
@@ -520,6 +567,19 @@ internal sealed class ConductorDriver
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
         var outcome = start(goal, policy);
+        if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
+        {
+            if (!TryRecoverSandboxPrep(outcome, goalPrefix, out var recoveryFailure))
+            {
+                return Escalate(goal, goalPrefix, policy, fromState, recoveryFailure);
+            }
+
+            var retryStart = fromState == GoalLifecycleState.WorkspaceReady
+                ? _startRecordedDispatches
+                : start;
+            outcome = retryStart(goal, policy);
+        }
+
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
             var firstFailure = outcome;
@@ -562,6 +622,32 @@ internal sealed class ConductorDriver
         }
 
         return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
+    }
+
+    private bool TryRecoverSandboxPrep(DispatchStartOutcome outcome, string goalPrefix, out string failureReason)
+    {
+        if (outcome.SandboxPrepRecoveryAction is not { } action)
+        {
+            failureReason = outcome.Reason ?? "Low-IL sandbox prep recovery action was missing.";
+            return false;
+        }
+
+        try
+        {
+            if (_recoverSandboxPrep(action))
+            {
+                failureReason = string.Empty;
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"Low-IL sandbox prep recovery failed for goal {goalPrefix}: {ex.Message}";
+            return false;
+        }
+
+        failureReason = $"Low-IL sandbox prep recovery failed for goal {goalPrefix}: {action.Reason}";
+        return false;
     }
 
     private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)

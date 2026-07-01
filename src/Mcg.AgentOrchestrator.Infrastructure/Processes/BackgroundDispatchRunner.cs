@@ -12,6 +12,15 @@ public sealed record DispatchRefreshOutcome(
     DispatchRecoveryDecision? RecoveryDecision = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
 
+public sealed record DispatchProcessStartResult(
+    TaskProcessRecord? ProcessRecord,
+    WorkerSandboxPrepRecoverableAction? RecoveryAction)
+{
+    public static DispatchProcessStartResult Started(TaskProcessRecord processRecord) => new(processRecord, null);
+
+    public static DispatchProcessStartResult RequiresRecovery(WorkerSandboxPrepRecoverableAction action) => new(null, action);
+}
+
 public sealed class BackgroundDispatchRunner
 {
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
@@ -77,6 +86,18 @@ public sealed class BackgroundDispatchRunner
 
     public TaskProcessRecord StartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
     {
+        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot);
+        if (result.RecoveryAction is { } action)
+        {
+            throw new InvalidOperationException(action.Reason);
+        }
+
+        return result.ProcessRecord
+            ?? throw new InvalidOperationException("Dispatch start did not produce a process record.");
+    }
+
+    public DispatchProcessStartResult TryStartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
+    {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
@@ -132,6 +153,16 @@ public sealed class BackgroundDispatchRunner
             SandboxLowIntegrity: useSandbox,
             Provider: ResolveSandboxProvider(dispatch)));
 
+        if (useSandbox && OperatingSystem.IsWindows())
+        {
+            var sandboxRoot = Path.Combine(dispatch.WorkingDirectory, ".mcg-sandbox");
+            var preparation = WorkerSandboxPreparer.CreateDefault().Prepare(dispatch.WorkingDirectory, sandboxRoot);
+            if (preparation.RecoveryAction is { } action)
+            {
+                return DispatchProcessStartResult.RequiresRecovery(action);
+            }
+        }
+
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
         var startInfo = new ProcessStartInfo
@@ -177,7 +208,7 @@ public sealed class BackgroundDispatchRunner
             OwnedProcessIds: [process.Id]);
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
-        return record;
+        return DispatchProcessStartResult.Started(record);
     }
 
     private static void ReleaseDispatchHostStartGate(string startGatePath)
