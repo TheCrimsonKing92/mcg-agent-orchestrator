@@ -99,6 +99,148 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_conduct_loop_watch_accepts_poll_seconds_and_default")]
+    public void CliConductLoopWatchAcceptsPollSecondsAndDefault()
+    {
+        foreach (var testCase in new[]
+        {
+            new { Args = new[] { "conduct", "--loop", "--watch", "--poll-seconds", "5", "--max-iterations", "0" }, ExpectedOutput = "sleep 5s" },
+            new { Args = new[] { "conduct", "--loop", "--watch", "--max-iterations", "0" }, ExpectedOutput = $"sleep {ConductorBatchLoop.DefaultWatchIntervalSeconds}s" }
+        })
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var output = CaptureConsole(() =>
+            {
+                CliCommandDispatcher.ExecuteCommand(
+                    testCase.Args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            });
+
+            Xunit.Assert.Contains(testCase.ExpectedOutput, output);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_conduct_scoped_watch_accepts_poll_seconds_and_default")]
+    public void CliConductScopedWatchAcceptsPollSecondsAndDefault()
+    {
+        foreach (var testCase in new (string? PollSeconds, string ExpectedOutput)[]
+        {
+            ("5", "poll 5s"),
+            (null, $"poll {ConductorBatchLoop.DefaultWatchIntervalSeconds}s")
+        })
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Watch one goal");
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            var args = new List<string> { "conduct", goal.Id.Value[..8], "--watch", "--max-duration", "0" };
+            if (testCase.PollSeconds is not null)
+            {
+                args.Add("--poll-seconds");
+                args.Add(testCase.PollSeconds);
+            }
+
+            var output = CaptureConsole(() =>
+            {
+                CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            });
+
+            Xunit.Assert.Contains(testCase.ExpectedOutput, output);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_conduct_poll_seconds_rejects_invalid_values")]
+    [Xunit.InlineData("0")]
+    [Xunit.InlineData("-1")]
+    [Xunit.InlineData("foo")]
+    public void CliConductPollSecondsRejectsInvalidValues(string invalidPollSeconds)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Invalid poll goal");
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var loopError = Xunit.Assert.Throws<ArgumentException>(() =>
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["conduct", "--loop", "--watch", "--poll-seconds", invalidPollSeconds, "--max-iterations", "0"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+        Xunit.Assert.Contains("--poll-seconds requires a positive integer value.", loopError.Message);
+
+        var scopedError = Xunit.Assert.Throws<ArgumentException>(() =>
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["conduct", goal.Id.Value[..8], "--watch", "--poll-seconds", invalidPollSeconds, "--max-duration", "0"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+        Xunit.Assert.Contains("--poll-seconds requires a positive integer value.", scopedError.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_conduct_scoped_poll_seconds_requires_watch")]
+    public void CliConductScopedPollSecondsRequiresWatch()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Poll without watch goal");
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var error = Xunit.Assert.Throws<ArgumentException>(() =>
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["conduct", goal.Id.Value[..8], "--poll-seconds", "5"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+
+        Xunit.Assert.Contains("--poll-seconds requires --watch.", error.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_help_prints_usage_without_resolving_goal")]
     public void CliWorkspaceHelpPrintsUsageWithoutResolvingGoal()
     {

@@ -1,8 +1,10 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliCommandHelp
 {
-    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon]";
+    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
@@ -16,7 +18,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
         "Drive one goal or run the autonomous conductor loop.",
-        ["--policy", "--loop", "--max-iterations", "--max-duration", "--watch", "--daemon", "--help", "-h"]);
+        ["--policy", "--loop", "--max-iterations", "--max-duration", "--watch", "--daemon", "--poll-seconds", "--watch-interval", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
@@ -203,7 +205,18 @@ internal static class CliCommandHelp
 
         foreach (var flag in flags)
         {
-            Console.WriteLine($"  {flag}");
+            if (flag.Equals("--poll-seconds", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>    Positive integer seconds between watch polls; default {ConductorBatchLoop.DefaultWatchIntervalSeconds}.");
+            }
+            else if (flag.Equals("--watch-interval", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>    Legacy alias for --poll-seconds.");
+            }
+            else
+            {
+                Console.WriteLine($"  {flag}");
+            }
         }
     }
 
@@ -215,7 +228,8 @@ internal static class CliCommandHelp
     }
 
     private static bool IsFlag(string arg) =>
-        arg.StartsWith("-", StringComparison.Ordinal);
+        arg.StartsWith("-", StringComparison.Ordinal) &&
+        !int.TryParse(arg, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _);
 
     private readonly record struct CommandHelpEntry(
         string Usage,

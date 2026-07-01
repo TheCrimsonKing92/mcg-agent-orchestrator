@@ -47,6 +47,44 @@ public sealed class CliHelpTests
         Xunit.Assert.Empty(kernel.Goals);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_conduct_help_documents_poll_seconds")]
+    public void CliConductHelpDocumentsPollSeconds()
+    {
+        foreach (var args in new[]
+        {
+            new[] { "conduct", "--help" },
+            new[] { "conduct", "--loop", "--help" },
+            new[] { "conduct", "--watch", "--help" }
+        })
+        {
+            var root = CreateTempDirectory();
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+
+                Xunit.Assert.False(changed);
+            });
+
+            Xunit.Assert.Contains("--poll-seconds <n>", output);
+            Xunit.Assert.Contains("Positive integer seconds between watch polls", output);
+            Xunit.Assert.Contains($"default {ConductorBatchLoop.DefaultWatchIntervalSeconds}", output);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "Cli_help_startup_exits_zero_before_state_creation")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--all")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
