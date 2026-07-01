@@ -46,7 +46,7 @@ internal sealed class ConductorBatchLoop
         string? onlyGoalId = null,
         Action<AgentOrchestratorKernel>? persistTick = null,
         bool keepAliveWhenIdle = false,
-        Action<AgentOrchestratorKernel, GoalId>? persistGoalTick = null,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick = null,
         bool quiet = false,
         TimeSpan? stallWarningThreshold = null)
     {
@@ -284,11 +284,12 @@ internal sealed class ConductorBatchLoop
             // long-running watch loop never persists and a killed loop loses every dispatch on rollback —
             // the goal then re-dispatches the same stage forever and can never advance.
             // When persistGoalTick is supplied, persist only the goals whose disposition changed this tick
-            // (short per-goal CAS writes). Fall back to whole-kernel persistTick if not supplied.
+            // in one bulk checkpoint. The per-goal loop above is justified because it runs each goal's
+            // state machine; the durable write is intentionally batched.
             if (persistGoalTick is not null)
             {
-                foreach (var changedGoalId in changedGoalIds)
-                    persistGoalTick(kernel, changedGoalId);
+                if (changedGoalIds.Count > 0)
+                    persistGoalTick(kernel, changedGoalIds.ToArray());
             }
             else
             {

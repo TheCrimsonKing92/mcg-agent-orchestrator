@@ -15,7 +15,7 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
-    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null,
+    Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
     Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
@@ -29,8 +29,8 @@ public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kerne
 /// </summary>
 public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persistKernel?.Invoke(checkpointKernel);
 
-public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, GoalId changedGoalId) =>
-    persistGoalKernel?.Invoke(checkpointKernel, changedGoalId);
+public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
+    persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 

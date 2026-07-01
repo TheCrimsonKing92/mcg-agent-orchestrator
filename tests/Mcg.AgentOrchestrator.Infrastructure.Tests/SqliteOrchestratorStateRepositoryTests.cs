@@ -527,6 +527,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(versionA > versionB, $"Goal A (v{versionA}) should have a higher version than goal B (v{versionB}) after TransactGoalAsync");
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_SaveGoalSnapshotsAsync_writes_changed_goals_in_one_transaction")]
+    public async Task SaveGoalSnapshotsAsync_WritesChangedGoalsInOneTransaction()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal("Goal A");
+        var goalB = kernel.CreateGoal("Goal B");
+        var untouched = kernel.CreateGoal("Untouched goal");
+        await repo.SaveAsync(kernel);
+
+        var changed = kernel.ExportSnapshot().Goals
+            .Where(goal => goal.Id == goalA.Id.Value || goal.Id == goalB.Id.Value)
+            .ToArray();
+
+        await repo.SaveGoalSnapshotsAsync(changed);
+
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        conn.Open();
+        var versions = QueryStrings(conn,
+            "SELECT id || ':' || version FROM goals ORDER BY objective");
+        Assert.Equal(2, versions.Count(v => v.EndsWith(":2", StringComparison.Ordinal)));
+        Assert.Contains($"{untouched.Id.Value}:1", versions);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_stale_version_retries_and_succeeds")]
     public async Task TransactGoalAsync_StaleVersionRetriesAndSucceeds()
     {

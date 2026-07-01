@@ -1980,13 +1980,13 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Advanced);
     }
 
-    // ── Per-tick write scope: persistGoalTick fires exactly for goals that changed ──
+    // ── Per-tick write scope: persistGoalTick fires once with exactly the goals that changed ──
 
-    [Xunit.Fact(DisplayName = "PersistGoalTick_FiresExactlyForGoalsThatChangedDisposition")]
-    public void PersistGoalTick_FiresExactlyForGoalsThatChangedDisposition()
+    [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]
+    public void PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition()
     {
         // Two goals: A advances (workspace creation), B is held by concurrent cap.
-        // persistGoalTick must be called exactly once for A and zero times for B.
+        // persistGoalTick must be called once with A and without B.
         var kernel = new AgentOrchestratorKernel();
         var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal A");
         var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal B");
@@ -2002,14 +2002,15 @@ public sealed class ConductorBatchLoopTests
                 : 0,
             createWorkspace: _ => { createWorkspaceCalls++; return "/tmp/ws"; });
 
-        var persistedGoalIds = new List<GoalId>();
+        var persistedGoalBatches = new List<IReadOnlyCollection<GoalId>>();
 
         new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
             maxIterations: 1,
-            persistGoalTick: (_, changedGoalId) => persistedGoalIds.Add(changedGoalId));
+            persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
 
         // A changed disposition (workspace created); B was held with no state change.
+        var persistedGoalIds = Assert.Single(persistedGoalBatches);
         Assert.Contains(goalA.Id, persistedGoalIds);
         Assert.DoesNotContain(goalB.Id, persistedGoalIds);
         Assert.Single(persistedGoalIds);

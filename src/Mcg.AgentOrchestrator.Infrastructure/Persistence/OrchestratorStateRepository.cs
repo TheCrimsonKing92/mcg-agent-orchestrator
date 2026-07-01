@@ -42,6 +42,14 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
     Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Writes the supplied goal snapshots as one storage transaction. Intended for callers that
+    /// already ran the per-goal state machines in memory and only need a durable checkpoint.
+    /// </summary>
+    Task SaveGoalSnapshotsAsync(
+        IReadOnlyCollection<GoalSnapshot> goals,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads the goal's current snapshot outside a transaction, calls the delegate to produce
     /// a new snapshot, then performs a short BEGIN IMMEDIATE compare-and-swap write of only
     /// that one goal row. Detects concurrent writes via an optimistic version field; a mismatch

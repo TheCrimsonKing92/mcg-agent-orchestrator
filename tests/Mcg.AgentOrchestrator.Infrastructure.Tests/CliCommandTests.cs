@@ -7357,6 +7357,23 @@ public sealed class CliCommandTests
             return Task.CompletedTask;
         }
 
+        public Task SaveGoalSnapshotsAsync(
+            IReadOnlyCollection<GoalSnapshot> goals,
+            CancellationToken cancellationToken = default)
+        {
+            if (goals.Count == 0)
+                return Task.CompletedTask;
+
+            var replacements = goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+            var snapshot = _kernel.ExportSnapshot();
+            var merged = snapshot.Goals
+                .Select(goal => replacements.TryGetValue(goal.Id, out var replacement) ? replacement : goal)
+                .ToList();
+            merged.AddRange(replacements.Values.Where(goal => snapshot.Goals.All(existing => existing.Id != goal.Id)));
+            _kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = merged });
+            return Task.CompletedTask;
+        }
+
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
                 .Select(goal => new GoalSummary(

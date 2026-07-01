@@ -306,14 +306,18 @@ internal static class CliPersistentStateRunner
         void Persist(AgentOrchestratorKernel checkpoint) =>
             stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
 
-        void PersistGoal(AgentOrchestratorKernel checkpoint, GoalId changedGoalId)
+        void PersistGoals(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
         {
-            var snap = checkpoint.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == changedGoalId.Value);
-            if (snap is null) return;
-            stateRepository.TransactGoalAsync(
-                changedGoalId,
-                (_, ct) => Task.FromResult((true, (GoalSnapshot?)snap, true)),
-                CancellationToken.None).GetAwaiter().GetResult();
+            if (changedGoalIds.Count == 0) return;
+
+            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            var snaps = checkpoint.ExportSnapshot().Goals
+                .Where(goal => changed.Contains(goal.Id))
+                .ToArray();
+
+            if (snaps.Length == 0) return;
+
+            stateRepository.SaveGoalSnapshotsAsync(snaps, CancellationToken.None).GetAwaiter().GetResult();
         }
 
         if (sweep.Changed)
@@ -332,7 +336,7 @@ internal static class CliPersistentStateRunner
             channel,
             () => LoadConductLoopKernel(stateRepository),
             Persist,
-            persistGoalKernel: PersistGoal);
+            persistGoalKernel: PersistGoals);
 
         // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
         Persist(kernel);
