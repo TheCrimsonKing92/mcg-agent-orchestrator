@@ -2663,10 +2663,67 @@ public sealed class GoalWorktreeIntegrationTests
                 ref profiles,
                 ref currentGoal));
 
-            Assert.True(output.Contains("CleanedUp", StringComparison.Ordinal));
+            var outputLines = output.Split(
+                ["\r\n", "\n"],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal(
+                [
+                    "Goal landed cleanup:",
+                    "cleanup: worktree removed",
+                    "cleanup: branch deleted",
+                    "cleanup: app-host lock released",
+                    "cleanup: goal marked CleanedUp"
+                ],
+                outputLines);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
             var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
             Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_passes_remaining_cleanup_budget_to_worktree_remove")]
+    public void CliGoalMarkLandedPassesRemainingCleanupBudgetToWorktreeRemove()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Out-of-band landed budget goal", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "landed.txt"), "landed");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            RunGit(repo, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var worktrees = new CapturingGoalWorktreeService();
+            var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+            kernel.SetEventWriter(eventWriter);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                EventWriter = eventWriter,
+                Worktrees = worktrees,
+                GoalMarkLandedElapsedMilliseconds = () => 9_000
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                context));
+
+            Assert.True(output.Contains("cleanup: goal marked CleanedUp", StringComparison.Ordinal));
+            Assert.Equal(1_000, worktrees.RemoveTimeoutMilliseconds);
+            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
         }
         finally
         {
@@ -2930,7 +2987,7 @@ public sealed class GoalWorktreeIntegrationTests
             string? shutdownPath = null;
             var directoryExistedAtShutdown = false;
 
-            GoalWorktrees.BuildServerShutdown = worktreePath =>
+            GoalWorktrees.BuildServerShutdown = (worktreePath, _) =>
             {
                 shutdownCalled = true;
                 shutdownPath = worktreePath;
@@ -2968,7 +3025,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var acl = new RecordingSandboxAclHelper();
             GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goalId);
 
@@ -2980,6 +3037,93 @@ public sealed class GoalWorktreeIntegrationTests
         {
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_threads_remaining_budget_into_nested_cleanup")]
+    public void GoalWorktreesRemoveThreadsRemainingBudgetIntoNestedCleanup()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            long elapsedMilliseconds = 2_500;
+            int? buildServerTimeout = null;
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
+            GoalWorktrees.BuildServerShutdown = (_, timeoutMilliseconds) =>
+            {
+                buildServerTimeout = timeoutMilliseconds;
+                elapsedMilliseconds = 9_700;
+            };
+            GoalWorktrees.SandboxAclHelper = acl;
+
+            var result = GoalWorktrees.Remove(repo, goalId, null, 10_000);
+
+            Assert.True(result.IsComplete);
+            Assert.Equal(7_500, buildServerTimeout);
+            Assert.True(acl.TimeoutMilliseconds.SequenceEqual([300]));
+            Assert.False(Directory.Exists(path));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_defers_when_build_server_cleanup_exhausts_budget")]
+    public void GoalWorktreesRemoveDefersWhenBuildServerCleanupExhaustsBudget()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            long elapsedMilliseconds = 2_500;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
+            GoalWorktrees.BuildServerShutdown = (_, _) => elapsedMilliseconds = 10_000;
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.Remove(repo, goalId, null, 10_000);
+
+            Assert.False(result.IsComplete);
+            Assert.Equal(path, result.LeftoverPath);
+            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Empty(acl.ResetPaths);
+            Assert.True(Directory.Exists(path));
+            var warning = Assert.Single(warnings);
+            Assert.Equal("remove:build-server-shutdown", warning.Operation);
+            Assert.IsType<TimeoutException>(warning.Exception);
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -2998,7 +3142,7 @@ public sealed class GoalWorktreeIntegrationTests
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
             GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
 
@@ -3030,7 +3174,7 @@ public sealed class GoalWorktreeIntegrationTests
             File.WriteAllText(Path.Combine(path, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
             GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var ensured = GoalWorktrees.Ensure(repo, goalId);
 
@@ -3065,7 +3209,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             GoalWorktrees.DeleteDirectory = _ => false;
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
             GoalWorktrees.CleanupWarningSink = warnings.Add;
 
             var result = GoalWorktrees.Remove(repo, goalId);
@@ -3118,7 +3262,7 @@ public sealed class GoalWorktreeIntegrationTests
                 return true;
             };
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
 
@@ -3246,7 +3390,7 @@ public sealed class GoalWorktreeIntegrationTests
                 return true;
             };
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
 
@@ -3297,7 +3441,7 @@ public sealed class GoalWorktreeIntegrationTests
                 return true;
             };
             GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = _ => { };
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.Remove(repo, goal.Id, kernel);
 
@@ -3365,7 +3509,10 @@ public sealed class GoalWorktreeIntegrationTests
 
     private static string CreateSeededRepository()
     {
-        var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-tests", Guid.NewGuid().ToString("n"));
+        var tempRoot = OperatingSystem.IsWindows()
+            ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
+            : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
+        var root = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
         RunGit(root, "init");
         RunGit(root, "config", "user.email", "tests@example.com");
@@ -3522,6 +3669,68 @@ public sealed class GoalWorktreeIntegrationTests
         }
 
         public void AppendCleanedUp(GoalId goalId) => order.Add("remove-worktree");
+    }
+
+    private sealed class CapturingGoalWorktreeService : ICliGoalWorktreeService
+    {
+        public int? RemoveTimeoutMilliseconds { get; private set; }
+
+        public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
+
+        public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
+
+        public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
+
+        public GoalWorktreeRemoveResult Remove(
+            string executionDirectory,
+            GoalId goalId,
+            AgentOrchestratorKernel? kernel = null,
+            int? gitTimeoutMilliseconds = null)
+        {
+            RemoveTimeoutMilliseconds = gitTimeoutMilliseconds;
+            return gitTimeoutMilliseconds is { } timeout
+                ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
+                : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+        }
+
+        public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
+
+        public GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.TryFastForwardMerge(executionDirectory, goalId);
+
+        public GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.TryRebaseOntoMain(executionDirectory, goalId);
+
+        public bool NeedsRebaseOntoMain(string executionDirectory, GoalId goalId) =>
+            GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", BranchName(goalId)).ExitCode != 0;
+
+        public bool IsWorktreeClean(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.IsWorktreeClean(executionDirectory, goalId);
+
+        public bool HasChangesAgainstMain(string executionDirectory, GoalId goalId) =>
+            GoalWorktrees.HasChangesAgainstMain(executionDirectory, goalId);
+
+        public string ResolveHead(string worktreePath)
+        {
+            var result = GitCli.Run(worktreePath, "rev-parse", "HEAD");
+            return result.Succeeded ? result.Output.Trim() : string.Empty;
+        }
+
+        public IReadOnlyList<string> GetChangedFiles(string worktreePath) =>
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+
+        public GoalAcceptanceEvidenceBundle BuildAcceptanceEvidence(
+            AgentOrchestratorKernel kernel,
+            Goal goal,
+            string? worktreePath,
+            AcceptanceVerificationResult? verification,
+            bool verificationSkipped) =>
+            DefaultCliGoalWorktreeService.Instance.BuildAcceptanceEvidence(
+                kernel,
+                goal,
+                worktreePath,
+                verification,
+                verificationSkipped);
     }
 
     private sealed class FakeAcceptanceVerifier(
@@ -3742,10 +3951,12 @@ public sealed class GoalWorktreeIntegrationTests
     private sealed class RecordingSandboxAclHelper : ISandboxAclHelper
     {
         public List<string> ResetPaths { get; } = [];
+        public List<int> TimeoutMilliseconds { get; } = [];
 
-        public void ResetSandboxAcl(string worktreePath)
+        public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds)
         {
             ResetPaths.Add(worktreePath);
+            TimeoutMilliseconds.Add(timeoutMilliseconds);
         }
     }
 

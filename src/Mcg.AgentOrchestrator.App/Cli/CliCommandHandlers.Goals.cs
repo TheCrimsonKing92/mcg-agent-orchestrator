@@ -10,6 +10,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
+internal const int GoalMarkLandedPromptTimeoutMilliseconds = 10_000;
+
 private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
     new Dictionary<string, AgentRole>(StringComparer.OrdinalIgnoreCase)
     {
@@ -192,40 +194,109 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "Active or InProgress goals self-heal via the conductor; only Completed (force-landed) goals need this command.");
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
+            var cleanupDeadline = GoalMarkLandedCleanupDeadline.Start(
+                GoalMarkLandedPromptTimeoutMilliseconds,
+                context.GoalMarkLandedElapsedMilliseconds);
             if (!HasCliConfirmation(parts, "--force"))
             {
-                var localExists = GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}").ExitCode == 0;
+                var localBranch = RunGoalMarkLandedStep(
+                    cleanupDeadline,
+                    "branch-local-check",
+                    timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
+                var localExists = localBranch.ExitCode == 0;
                 var remoteExists = !localExists &&
-                    GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}").ExitCode == 0;
+                    RunGoalMarkLandedStep(
+                        cleanupDeadline,
+                        "branch-remote-check",
+                        timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
                 if (!localExists && !remoteExists)
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' was not found locally or remotely; ancestry check cannot run. " +
                         "Use --force if you have manually confirmed the work is in main.");
                 var branchRef = localExists ? landedBranch : $"origin/{landedBranch}";
-                if (GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD").ExitCode != 0)
+                var ancestry = RunGoalMarkLandedStep(
+                    cleanupDeadline,
+                    "branch-ancestry-check",
+                    timeout => GitCli.Run(landedDir, timeout, "merge-base", "--is-ancestor", branchRef, "HEAD"));
+                if (ancestry.ExitCode != 0)
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' is not an ancestor of the current HEAD; " +
                         "verify the work was merged into main before using this command. Use --force to bypass this check.");
             }
-            Console.WriteLine($"Marking goal {landedGp} as landed out-of-band (branch: {landedBranch}).");
-            if (context.Worktrees.TryResolve(landedDir, landedId) is not null)
+            var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
+            var removeResult = RunGoalMarkLandedStep(
+                cleanupDeadline,
+                "worktree-and-branch-cleanup",
+                timeout => context.Worktrees.Remove(
+                    landedDir,
+                    landedId,
+                    context.Kernel,
+                    timeout));
+            if (!removeResult.IsComplete)
             {
-                var removeResult = context.Worktrees.Remove(landedDir, landedId, context.Kernel);
                 PrintWorkspaceRemoveResult(removeResult);
+                throw new InvalidOperationException($"goal-mark-landed cleanup did not complete: {removeResult.Message}");
             }
-            else
+
+            var branchAfterCleanup = RunGoalMarkLandedStep(
+                cleanupDeadline,
+                "branch-cleanup-check",
+                timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
+            if (branchAfterCleanup.ExitCode == 0)
             {
-                Console.WriteLine("No workspace to remove.");
+                throw new InvalidOperationException(
+                    $"goal-mark-landed cleanup removed the worktree but branch '{landedBranch}' still exists. " +
+                    "Retry with goal-mark-landed --force only after manually confirming ancestry.");
             }
-            if (DotnetBuildEnvironmentManager.InspectGoalLease(landedId).CanCleanup)
+
+            var leaseStatus = RunGoalMarkLandedStep(
+                cleanupDeadline,
+                "app-host-lock-inspect",
+                _ => DotnetBuildEnvironmentManager.InspectGoalLease(landedId));
+            if (leaseStatus.OwnerProcessAlive)
             {
-                DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(landedId, out _, out var leaseDetail);
-                Console.WriteLine($"Build lease: {leaseDetail}");
+                throw new InvalidOperationException(
+                    $"goal-mark-landed cannot complete while app-host lock {leaseStatus.LeaseId} is active; owner pid={leaseStatus.OwnerProcessId}.");
             }
-            GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:cleanup", "Out-of-band landing recorded via goal-mark-landed.");
-            GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:cleanup", $"Goal {landedGp} marked as landed out-of-band; workspace removed.");
-            context.EventWriter.AppendCleanedUp(landedId);
-            Console.WriteLine($"Goal {landedGp} is now in the terminal CleanedUp state; the conductor will not re-dispatch it.");
+            if (leaseStatus.CanCleanup)
+            {
+                var leaseCleaned = RunGoalMarkLandedStep(
+                    cleanupDeadline,
+                    "app-host-lock-release",
+                    _ => DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(
+                        landedId,
+                        out DotnetBuildLeaseStatus _,
+                        out string _));
+                if (!leaseCleaned)
+                    throw new InvalidOperationException($"goal-mark-landed could not release app-host lock {leaseStatus.LeaseId}.");
+            }
+
+            RunGoalMarkLandedStep(
+                cleanupDeadline,
+                "cleanup-journal-begin",
+                _ =>
+                {
+                    GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:cleanup", "Out-of-band landing recorded via goal-mark-landed.");
+                    return true;
+                });
+            RunGoalMarkLandedStep(
+                cleanupDeadline,
+                "cleanup-journal-completed",
+                _ =>
+                {
+                    GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:cleanup", $"Goal {landedGp} marked as landed out-of-band; workspace removed.");
+                    return true;
+                });
+            RunGoalMarkLandedStep(
+                cleanupDeadline,
+                "goal-cleaned-up-event",
+                _ =>
+                {
+                    context.EventWriter.AppendCleanedUp(landedId);
+                    return true;
+                });
+
+            PrintGoalMarkLandedSummary(hadWorktree);
             return true;
         }
 
@@ -2853,6 +2924,71 @@ private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
     {
         Console.WriteLine($"Resume: {result.ResumeCommand}");
     }
+}
+
+private static T RunGoalMarkLandedStep<T>(GoalMarkLandedCleanupDeadline deadline, string stepName, Func<int, T> step)
+{
+    var remainingBeforeStep = deadline.RemainingMilliseconds;
+    if (deadline.IsExpired)
+    {
+        Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
+        throw new TimeoutException($"goal-mark-landed cleanup exceeded {GoalMarkLandedPromptTimeoutMilliseconds}ms before substep '{stepName}'.");
+    }
+
+    var startedAt = System.Diagnostics.Stopwatch.StartNew();
+    var reportedSlowStep = false;
+    try
+    {
+        var result = step(remainingBeforeStep);
+        startedAt.Stop();
+        if (deadline.IsExpired)
+        {
+            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
+            reportedSlowStep = true;
+            throw new TimeoutException($"goal-mark-landed cleanup exceeded {deadline.TotalMilliseconds}ms during substep '{stepName}'.");
+        }
+
+        return result;
+    }
+    catch
+    {
+        startedAt.Stop();
+        if (!reportedSlowStep && deadline.IsExpired)
+            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
+        throw;
+    }
+}
+
+private sealed class GoalMarkLandedCleanupDeadline
+{
+    private readonly System.Diagnostics.Stopwatch stopwatch;
+    private readonly Func<long>? elapsedMilliseconds;
+
+    private GoalMarkLandedCleanupDeadline(int totalMilliseconds, Func<long>? elapsedMilliseconds)
+    {
+        TotalMilliseconds = totalMilliseconds;
+        this.elapsedMilliseconds = elapsedMilliseconds;
+        stopwatch = System.Diagnostics.Stopwatch.StartNew();
+    }
+
+    public int TotalMilliseconds { get; }
+
+    public long ElapsedMilliseconds => elapsedMilliseconds?.Invoke() ?? stopwatch.ElapsedMilliseconds;
+
+    public int RemainingMilliseconds => Math.Max(1, TotalMilliseconds - (int)Math.Min(int.MaxValue, ElapsedMilliseconds));
+    public bool IsExpired => ElapsedMilliseconds >= TotalMilliseconds;
+
+    public static GoalMarkLandedCleanupDeadline Start(int totalMilliseconds, Func<long>? elapsedMilliseconds) =>
+        new(totalMilliseconds, elapsedMilliseconds);
+}
+
+private static void PrintGoalMarkLandedSummary(bool worktreeRemoved)
+{
+    Console.WriteLine("Goal landed cleanup:");
+    Console.WriteLine(worktreeRemoved ? "cleanup: worktree removed" : "cleanup: worktree already absent");
+    Console.WriteLine("cleanup: branch deleted");
+    Console.WriteLine("cleanup: app-host lock released");
+    Console.WriteLine("cleanup: goal marked CleanedUp");
 }
 
 private static string FormatWorkspaceMerge(GoalWorktreeMergeResult merge)

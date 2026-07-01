@@ -63,12 +63,12 @@ public sealed record GoalWorktreeGitMetadataAccess(
 
 public interface ISandboxAclHelper
 {
-    void ResetSandboxAcl(string worktreePath);
+    void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds);
 }
 
 public sealed class WindowsSandboxAclHelper : ISandboxAclHelper
 {
-    public void ResetSandboxAcl(string worktreePath)
+    public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -101,7 +101,7 @@ public sealed class WindowsSandboxAclHelper : ISandboxAclHelper
             return;
         }
 
-        if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
+        if (!process.WaitForExit(timeoutMilliseconds))
         {
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
         }
@@ -110,7 +110,7 @@ public sealed class WindowsSandboxAclHelper : ISandboxAclHelper
 
 public sealed class NoOpSandboxAclHelper : ISandboxAclHelper
 {
-    public void ResetSandboxAcl(string worktreePath) { }
+    public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds) { }
 }
 
 public static class GoalWorktrees
@@ -124,12 +124,13 @@ public static class GoalWorktrees
 
     // Injectable for testing: called best-effort before directory deletion to release any
     // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
-    internal static Action<string> BuildServerShutdown = DefaultBuildServerShutdown;
+    internal static Action<string, int> BuildServerShutdown = DefaultBuildServerShutdown;
     internal static ISandboxAclHelper SandboxAclHelper { get; set; } =
         OperatingSystem.IsWindows() ? new WindowsSandboxAclHelper() : new NoOpSandboxAclHelper();
     internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
     internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
     internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
+    internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
 
     public static string BranchName(GoalId goalId) => $"goal/{Prefix(goalId)}";
 
@@ -310,15 +311,23 @@ public static class GoalWorktrees
         }
     }
 
-    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null)
+    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
+        Remove(executionDirectory, goalId, kernel, GitCli.DefaultTimeoutMilliseconds);
+
+    public static GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel,
+        int gitTimeoutMilliseconds)
     {
-        RequireGitWorkTree(executionDirectory);
+        var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, CleanupElapsedMilliseconds);
+        RequireGitWorkTree(executionDirectory, cleanupBudget.RemainingMilliseconds);
 
         var path = WorktreePath(executionDirectory, goalId);
-        var hasRegisteredWorktree = IsRegisteredWorktree(executionDirectory, path);
+        var hasRegisteredWorktree = IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds);
         var hasLeftoverDirectory = Directory.Exists(path);
         var branch = BranchName(goalId);
-        var hasBranch = BranchExists(executionDirectory, branch);
+        var hasBranch = BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds);
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
@@ -329,8 +338,8 @@ public static class GoalWorktrees
 
         if (hasRegisteredWorktree)
         {
-            var removal = GitCli.Run(executionDirectory, "worktree", "remove", path);
-            if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path))
+            var removal = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "remove", path);
+            if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
             {
                 throw new InvalidOperationException(
                     $"Failed to remove goal workspace '{path}': {removal.Error} Commit or discard its changes, or remove it manually with: git worktree remove --force \"{path}\"");
@@ -340,14 +349,21 @@ public static class GoalWorktrees
         {
             // Worktree already unregistered; prune any stale tracking entries left by a prior
             // partial removal so git's internal state is consistent before we finish cleanup.
-            GitCli.Run(executionDirectory, "worktree", "prune");
+            GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "prune");
         }
 
         if (Directory.Exists(path))
         {
             ReapRecordedWorkerProcesses(kernel, path);
-            BuildServerShutdown(path);
-            ResetSandboxAcl(path, "remove");
+            if (!RunBoundedCleanupStep(path, "remove:build-server-shutdown", cleanupBudget, timeout => BuildServerShutdown(path, timeout)) ||
+                !RunBoundedCleanupStep(path, "remove:acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove", timeout)))
+            {
+                return new GoalWorktreeRemoveResult(
+                    $"Workspace cleanup deferred because cleanup budget was exhausted before deleting {path}.",
+                    path,
+                    FindLockHolders(path),
+                    $"workspace remove {Prefix(goalId)}");
+            }
         }
 
         if (Directory.Exists(path) && !DeleteDirectory(path))
@@ -355,7 +371,7 @@ public static class GoalWorktrees
             WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."));
         }
 
-        if (!BranchExists(executionDirectory, branch))
+        if (!BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
         {
             _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             return new GoalWorktreeRemoveResult(Directory.Exists(path)
@@ -363,7 +379,7 @@ public static class GoalWorktrees
                 : "Removed workspace.", null, [], null);
         }
 
-        var branchRemoval = GitCli.Run(executionDirectory, "branch", "-d", branch);
+        var branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
         _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         return branchRemoval.ExitCode == 0
             ? new GoalWorktreeRemoveResult(Directory.Exists(path)
@@ -608,7 +624,12 @@ public static class GoalWorktrees
 
     private static bool BranchExists(string executionDirectory, string branch)
     {
-        return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
+        return BranchExists(executionDirectory, branch, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static bool BranchExists(string executionDirectory, string branch, int gitTimeoutMilliseconds)
+    {
+        return GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
     }
 
     private static GitCli.GitResult AddWorktree(string executionDirectory, string path, string branch, bool branchExists)
@@ -653,7 +674,12 @@ public static class GoalWorktrees
 
     private static bool IsRegisteredWorktree(string executionDirectory, string path)
     {
-        return RegisteredWorktreePaths(executionDirectory).Contains(NormalizePath(path));
+        return IsRegisteredWorktree(executionDirectory, path, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static bool IsRegisteredWorktree(string executionDirectory, string path, int gitTimeoutMilliseconds)
+    {
+        return RegisteredWorktreePaths(executionDirectory, gitTimeoutMilliseconds).Contains(NormalizePath(path));
     }
 
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
@@ -716,7 +742,12 @@ public static class GoalWorktrees
 
     private static HashSet<string> RegisteredWorktreePaths(string executionDirectory)
     {
-        var result = GitCli.Run(executionDirectory, "worktree", "list", "--porcelain");
+        return RegisteredWorktreePaths(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static HashSet<string> RegisteredWorktreePaths(string executionDirectory, int gitTimeoutMilliseconds)
+    {
+        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "worktree", "list", "--porcelain");
         if (result.ExitCode != 0)
         {
             return [];
@@ -732,6 +763,31 @@ public static class GoalWorktrees
     private static string NormalizePath(string path)
     {
         return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private sealed class GoalWorktreeCleanupBudget
+    {
+        private readonly Stopwatch stopwatch;
+        private readonly Func<long>? elapsedMilliseconds;
+
+        private GoalWorktreeCleanupBudget(int totalMilliseconds, Func<long>? elapsedMilliseconds)
+        {
+            TotalMilliseconds = Math.Max(1, totalMilliseconds);
+            this.elapsedMilliseconds = elapsedMilliseconds;
+            stopwatch = Stopwatch.StartNew();
+        }
+
+        public int TotalMilliseconds { get; }
+
+        public long ElapsedMilliseconds => elapsedMilliseconds?.Invoke() ?? stopwatch.ElapsedMilliseconds;
+
+        public int RemainingMilliseconds =>
+            Math.Max(1, TotalMilliseconds - (int)Math.Min(int.MaxValue, ElapsedMilliseconds));
+
+        public bool IsExpired => ElapsedMilliseconds >= TotalMilliseconds;
+
+        public static GoalWorktreeCleanupBudget Start(int totalMilliseconds, Func<long>? elapsedMilliseconds) =>
+            new(totalMilliseconds, elapsedMilliseconds);
     }
 
     private static void EnsureWorktreeRootIgnored(string executionDirectory)
@@ -780,13 +836,23 @@ public static class GoalWorktrees
     /// </summary>
     public static bool IsGitWorkTree(string executionDirectory)
     {
-        var result = GitCli.Run(executionDirectory, "rev-parse", "--is-inside-work-tree");
+        return IsGitWorkTree(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static bool IsGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
+    {
+        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree");
         return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RequireGitWorkTree(string executionDirectory)
     {
-        if (!IsGitWorkTree(executionDirectory))
+        RequireGitWorkTree(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
+    }
+
+    private static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
+    {
+        if (!IsGitWorkTree(executionDirectory, gitTimeoutMilliseconds))
         {
             throw new InvalidOperationException(
                 $"Goal workspaces require '{executionDirectory}' to be inside a git work tree.");
@@ -866,9 +932,14 @@ public static class GoalWorktrees
             return true;
         }
 
+        var cleanupBudget = GoalWorktreeCleanupBudget.Start(GitCli.DefaultTimeoutMilliseconds, CleanupElapsedMilliseconds);
         ReapRecordedWorkerProcesses(kernel, path);
-        BuildServerShutdown(path);
-        ResetSandboxAcl(path, operation);
+        if (!RunBoundedCleanupStep(path, operation + ":build-server-shutdown", cleanupBudget, timeout => BuildServerShutdown(path, timeout)) ||
+            !RunBoundedCleanupStep(path, operation + ":acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, operation, timeout)))
+        {
+            return false;
+        }
+
         if (DeleteDirectory(path))
         {
             return true;
@@ -878,11 +949,39 @@ public static class GoalWorktrees
         return !Directory.Exists(path);
     }
 
-    private static void ResetSandboxAcl(string worktreePath, string operation)
+    private static bool RunBoundedCleanupStep(
+        string worktreePath,
+        string operation,
+        GoalWorktreeCleanupBudget cleanupBudget,
+        Action<int> action)
+    {
+        if (cleanupBudget.IsExpired)
+        {
+            WarnCleanupFailure(
+                worktreePath,
+                operation,
+                new TimeoutException($"Cleanup budget exhausted before {operation}."));
+            return false;
+        }
+
+        action(cleanupBudget.RemainingMilliseconds);
+        if (!cleanupBudget.IsExpired)
+        {
+            return true;
+        }
+
+        WarnCleanupFailure(
+            worktreePath,
+            operation,
+            new TimeoutException($"Cleanup budget exhausted during {operation}."));
+        return false;
+    }
+
+    private static void ResetSandboxAcl(string worktreePath, string operation, int timeoutMilliseconds)
     {
         try
         {
-            SandboxAclHelper.ResetSandboxAcl(worktreePath);
+            SandboxAclHelper.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
         {
@@ -941,7 +1040,7 @@ public static class GoalWorktrees
         return ex is IOException or UnauthorizedAccessException;
     }
 
-    private static void DefaultBuildServerShutdown(string worktreePath)
+    private static void DefaultBuildServerShutdown(string worktreePath, int timeoutMilliseconds)
     {
         try
         {
@@ -959,7 +1058,8 @@ public static class GoalWorktrees
 
             using var process = Process.Start(startInfo);
             if (process is null) return;
-            if (!process.WaitForExit((int)BuildServerShutdownTimeout.TotalMilliseconds))
+            var boundedTimeout = Math.Min(timeoutMilliseconds, (int)BuildServerShutdownTimeout.TotalMilliseconds);
+            if (!process.WaitForExit(boundedTimeout))
             {
                 process.Kill(entireProcessTree: true);
             }

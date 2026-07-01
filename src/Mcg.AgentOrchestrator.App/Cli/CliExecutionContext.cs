@@ -52,6 +52,8 @@ public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktree
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
+public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }
+
 public TimeSpan? RunGoalPollInterval { get; init; }
 
 public RunGoalService.SleepFunc? RunGoalSleep { get; init; }
@@ -85,7 +87,11 @@ internal interface ICliGoalWorktreeService
 
     string? TryResolve(string executionDirectory, GoalId goalId);
 
-    GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null);
+    GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null,
+        int? gitTimeoutMilliseconds = null);
 
     bool IsGitWorkTree(string executionDirectory);
 
@@ -123,8 +129,14 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 
     public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
 
-    public GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
-        GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+    public GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null,
+        int? gitTimeoutMilliseconds = null) =>
+        gitTimeoutMilliseconds is { } timeout
+            ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
+            : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
 
     public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 
