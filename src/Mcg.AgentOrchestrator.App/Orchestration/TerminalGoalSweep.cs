@@ -44,6 +44,17 @@ internal static class TerminalGoalSweep
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
 
+            if (onlyGoalId is null &&
+                TryBuildGlobalStaleTerminalExclusionEvidence(originalGoal, out var preReconciliationExclusionEvidence))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "stale-terminal-excluded",
+                    preReconciliationExclusionEvidence,
+                    "excluded"));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
+
             var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
             if (reconciled > 0)
             {
@@ -54,17 +65,6 @@ internal static class TerminalGoalSweep
             }
 
             var goal = kernel.GetGoal(originalGoal.Id);
-            if (onlyGoalId is null &&
-                TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var exclusionEvidence))
-            {
-                blockers.Add(new TerminalGoalSweepBlocker(
-                    "stale-terminal-excluded",
-                    exclusionEvidence,
-                    "excluded"));
-                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
-                continue;
-            }
-
             var isCompletedGitGoal = goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory);
             var hasGoalBranchArtifact = isCompletedGitGoal &&
                 (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||

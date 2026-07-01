@@ -6215,6 +6215,37 @@ public sealed class CliCommandTests
         Xunit.Assert.Single(second.Goals.Single().Blockers);
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_excludes_before_human_input_process_reconcile")]
+    public void TerminalGoalSweepGlobalStaleTerminalExcludesBeforeHumanInputProcessReconcile()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Need operator", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Terminal process should stay terminal", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "HUMAN_INPUT: choose a recovery path");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var result = TerminalGoalSweep.Run(kernel, root);
+
+        var goalResult = result.Goals.Single();
+        var blocker = goalResult.Blockers.Single();
+        Xunit.Assert.False(result.Changed);
+        Xunit.Assert.Empty(goalResult.Repairs);
+        Xunit.Assert.Equal("stale-terminal-excluded", blocker.Kind);
+        Xunit.Assert.Equal("excluded", blocker.Command);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Running", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
+        Xunit.Assert.Null(kernel.GetTask(goal.Id, task.Id).LastVerification);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
     public void TerminalGoalSweepSupersededWithAssignedTaskReopensGoal()
     {
