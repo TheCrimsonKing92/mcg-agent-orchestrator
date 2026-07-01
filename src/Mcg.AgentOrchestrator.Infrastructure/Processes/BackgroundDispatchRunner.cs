@@ -468,13 +468,9 @@ public sealed class BackgroundDispatchRunner
                 standardOutput,
                 standardError,
                 providerFailureKind);
-            var providerCannotSelfCommit = task.LastDispatch is { } dispatch &&
-                !ResolveWorkerProvider(dispatch).Capabilities.CanSelfCommit;
             var shouldCommitDirtyWorktree =
                 (exitCode == 0 && worktreeEvidence.HasCommitAfterDispatch) ||
-                ((task.LastDispatch.SandboxLowIntegrity || providerCannotSelfCommit) &&
-                  (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                   sandboxCommitBlocked));
+                (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked);
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -935,6 +931,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         return !normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) &&

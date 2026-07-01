@@ -39,6 +39,17 @@ public sealed class SandboxCommitBlockedFailureTests
         Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification));
     }
 
+    [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_true_for_low_integrity_git_1312_evidence")]
+    public void TrueForLowIntegrityGit1312Evidence()
+    {
+        var verification = Verification(
+            1,
+            WorkerResultStdout,
+            "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
+
+        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification));
+    }
+
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_when_succeeded")]
     public void FalseWhenSucceeded()
     {

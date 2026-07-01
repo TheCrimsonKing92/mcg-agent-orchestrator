@@ -4589,8 +4589,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=?? dirty.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_with_verification_evidence_is_committed_by_orchestrator")]
-    public void BackgroundDispatchRunnerFileRoleDirtyWorktreeWithVerificationEvidenceIsCommittedByOrchestrator()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dirty_worktree_with_verification_evidence_only_stays_failed")]
+    public void BackgroundDispatchRunnerLowIntegrityDirtyWorktreeWithVerificationEvidenceOnlyStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4605,22 +4605,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    // The worker edited the worktree AND showed verification evidence but never committed. This is
-    // the default path: the orchestrator commits the verified diff so the worker never needs .git.
-    Assert.True(
-        task.Status == WorkTaskStatus.Completed,
-        task.LastVerification?.StandardError ?? "missing verification");
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    var subject = ReadGit(worktree, ["log", "-1", "--pretty=%s"]);
-    Assert.Equal("Developer task.: Implemented the feature and ran the focused tests.", subject);
-    Assert.True(subject.Length <= 72);
-    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
-    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_self_committing_provider_dirty_verified_without_low_integrity_evidence_stays_failed")]
@@ -4647,8 +4638,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_activates_orchestrator_commit_path")]
-    public void BackgroundDispatchRunnerCodexProviderCanSelfCommitFalseActivatesOrchestratorCommitPath()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_without_low_integrity_stays_failed")]
+    public void BackgroundDispatchRunnerCodexProviderCanSelfCommitFalseWithoutLowIntegrityStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4662,18 +4653,17 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_activates_orchestrator_commit_path")]
-    public void BackgroundDispatchRunnerTypedProviderCanSelfCommitFalseActivatesOrchestratorCommitPath()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_without_low_integrity_stays_failed")]
+    public void BackgroundDispatchRunnerTypedProviderCanSelfCommitFalseWithoutLowIntegrityStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4702,13 +4692,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_does_not_activate_commit_path_from_provider_display_name")]
@@ -4738,8 +4728,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
-    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedIsCommittedByOrchestrator()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_without_typed_sandbox_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedWithoutTypedSandboxEvidenceStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4752,19 +4742,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited but commit failed under low integrity"),
         sandboxLowIntegrity: true);
 
-    // A low-integrity worker edited the worktree and verified its work but could NOT write the medium
-    // .git to commit, so it exited non-zero. The worker's exit code is not authoritative: the
-    // orchestrator commits the verified edits and the dispatch advances. This is what makes the Low-IL
-    // sandbox autonomous without granting the worker write access to the shared .git.
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.Contains(
-        task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_git_metadata_permission_failure_is_nonfatal_with_dirty_worker_result")]
@@ -4836,6 +4821,42 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_git_1312_commits_work_without_sandbox_marker")]
+    public void BackgroundDispatchRunnerLowIntegrityGit1312CommitsWorkWithoutSandboxMarker()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the requested change." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "git status --short", "not-run"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git 1312 failure");
+            File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        },
+        sandboxLowIntegrity: true);
+    File.WriteAllText(
+        process.StandardErrorPath,
+        "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.DoesNotContain(WorkerSandboxPreparer.MarkerFileName, ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.MarkerFileName]));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
