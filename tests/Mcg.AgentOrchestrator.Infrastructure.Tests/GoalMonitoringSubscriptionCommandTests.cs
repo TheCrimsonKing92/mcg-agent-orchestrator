@@ -307,6 +307,33 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Xunit.Assert.Contains("snapshot goal=abc12345 (Friendly backlog title) status=Active tasks=1 completed=1 running=0 failed=0", text);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_production_snapshot_prints_source_backlog_label")]
+    public async Task MonitorGoalProductionSnapshotPrintsSourceBacklogLabel()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement labeled snapshot", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor labeled goal", [task]);
+        var backlogItem = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Production backlog title");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
+        kernel.ActivateGoal(goal.Id, []);
+        var batch = GoalMonitoringStream.BuildBatch(
+            kernel,
+            kernel.GetGoal(goal.Id),
+            0,
+            [],
+            WorkerProfileCatalog.Default(),
+            workspace);
+        using var output = new StringWriter();
+
+        GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
+
+        var text = output.ToString();
+        Xunit.Assert.Contains($"snapshot goal={goal.Id.Value[..8]} (Production backlog title)", text);
+        Xunit.Assert.Contains("tasks=1 completed=0 running=0 failed=0", text);
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_prints_compact_snapshot_without_goal_label_when_absent")]
     public void MonitorGoalPrintsCompactSnapshotWithoutGoalLabelWhenAbsent()
     {

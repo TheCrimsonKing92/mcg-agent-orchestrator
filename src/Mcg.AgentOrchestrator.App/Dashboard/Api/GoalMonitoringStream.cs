@@ -18,12 +18,19 @@ internal static class GoalMonitoringStream
     {
         var inbox = OperatorInbox.Build(kernel, agents, workerProfiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
         var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles);
-        return DashboardMonitoringEvents.BuildBatch(
+        var batch = DashboardMonitoringEvents.BuildBatch(
             kernel,
             goal,
             sinceEventId,
             DashboardResponseMapper.ToOperatorInboxReportDto(inbox),
             DashboardResponseMapper.ToSubscriptionPlanDto(subscriptionPlan).CapacitySchedule);
+        return batch with
+        {
+            Snapshot = batch.Snapshot with
+            {
+                GoalLabel = CliCommandHandlers.ResolveGoalFriendlyLabel(goal, workspace.BacklogStorePath)
+            }
+        };
     }
 
     public static async Task StreamAsync(

@@ -386,9 +386,12 @@ internal static class GoalMonitoringSubscriptionCommand
         var capacity = snapshot.ProviderCapacity is null
             ? string.Empty
             : $" capacity={snapshot.ProviderCapacity.Disposition} ready={snapshot.ProviderCapacity.ReadyNowCount} deferred={snapshot.ProviderCapacity.DeferredCount}";
-        var label = string.IsNullOrWhiteSpace(friendlyLabel)
+        var displayLabel = string.IsNullOrWhiteSpace(friendlyLabel)
+            ? snapshot.GoalLabel
+            : friendlyLabel;
+        var label = string.IsNullOrWhiteSpace(displayLabel)
             ? string.Empty
-            : $" ({friendlyLabel.Trim().ReplaceLineEndings(" ")})";
+            : $" ({displayLabel.Trim().ReplaceLineEndings(" ")})";
         output.WriteLine(
             $"snapshot goal={snapshot.GoalId[..Math.Min(8, snapshot.GoalId.Length)]}{label} status={snapshot.Monitor.Status} tasks={snapshot.Tasks.Count} completed={completed} running={running} failed={failed} lastEvent={snapshot.LastEventId} attention={snapshot.Monitor.Attention.Count} inbox={snapshot.OperatorInbox?.OpenCount ?? 0}{capacity}");
     }
