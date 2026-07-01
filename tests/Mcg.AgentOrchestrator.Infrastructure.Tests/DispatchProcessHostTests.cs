@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -22,7 +24,9 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "exit.txt"),
                 Path.Combine(dir, "heartbeat.json"),
                 ShutdownBuildServerOnExit: true,
-                DisableSharedCompilation: true);
+                DisableSharedCompilation: true,
+                Provider: WorkerSandboxProvider.Codex,
+                PromptPath: Path.Combine(dir, "prompt.md"));
 
             DispatchProcessHost.WriteParameters(path, parameters);
 
@@ -30,11 +34,127 @@ public sealed class DispatchProcessHostTests
             // The detached host reads this with a camelCase policy, so the keys must be camelCase.
             Assert.True(json.Contains("\"command\"", StringComparison.Ordinal));
             Assert.True(json.Contains("\"disableSharedCompilation\"", StringComparison.Ordinal));
+            Assert.True(json.Contains("\"promptPath\"", StringComparison.Ordinal));
 
             var roundTripped = JsonSerializer.Deserialize<DispatchProcessHost.DispatchRunParameters>(
                 json,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
             Assert.Equal(parameters, roundTripped);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_large_non_ascii_prompt_to_stdin_as_utf8_without_bom")]
+    public void DispatchProcessHostWritesPromptToStdinAsUtf8()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-stdin-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var promptPath = Path.Combine(dir, "prompt.md");
+            var prompt = new string('A', 32_000) + " CJK=漢字 emoji=🙂";
+            File.WriteAllText(promptPath, prompt, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var expected = File.ReadAllBytes(promptPath);
+            using var stdin = new MemoryStream();
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "codex exec --cd repo",
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Codex,
+                PromptPath: promptPath);
+
+            Assert.True(DispatchProcessHost.ShouldWritePromptToStdin(parameters));
+            DispatchProcessHost.WriteUtf8PromptToStream(promptPath, stdin);
+
+            var actual = stdin.ToArray();
+            Assert.Equal(expected, actual);
+            Assert.False(actual.Length >= 3 && actual[0] == 0xEF && actual[1] == 0xBB && actual[2] == 0xBF);
+            Assert.Equal(prompt, Encoding.UTF8.GetString(actual));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_child_receives_prompt_stdin_bytes_and_eof_without_paid_worker")]
+    public void DispatchProcessHostChildReceivesPromptStdinBytesAndEofWithoutPaidWorker()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-child-stdin-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var promptPath = Path.Combine(dir, "prompt.md");
+            var capturePath = Path.Combine(dir, "stdin-capture.json");
+            var stdoutPath = Path.Combine(dir, "out.log");
+            var stderrPath = Path.Combine(dir, "err.log");
+            var exitPath = Path.Combine(dir, "exit.txt");
+            var shimPath = Path.Combine(dir, "codex-stdin-shim.ps1");
+            var prompt = new string('X', 32_000) + " CJK=漢字 emoji=🙂 eof=done";
+            File.WriteAllText(promptPath, prompt, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            File.WriteAllText(
+                shimPath,
+                """
+                param([string]$CapturePath)
+                $inputStream = [Console]::OpenStandardInput()
+                $buffer = New-Object byte[] 8192
+                $memory = [System.IO.MemoryStream]::new()
+                while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $memory.Write($buffer, 0, $read)
+                }
+                $bytes = $memory.ToArray()
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+                $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+                $start = [Math]::Max(0, $text.Length - 64)
+                [pscustomobject]@{
+                    byteCount = $bytes.Length
+                    sha256 = $hash
+                    textTail = $text.Substring($start)
+                    eofObserved = $true
+                } | ConvertTo-Json -Compress | Set-Content -LiteralPath $CapturePath -Encoding UTF8
+                Write-Output "stdin-eof-observed"
+                """,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var expectedBytes = File.ReadAllBytes(promptPath);
+            var expectedHash = Convert.ToHexString(SHA256.HashData(expectedBytes)).ToLowerInvariant();
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                $"& '{shimPath}' '{capturePath}'",
+                dir,
+                stdoutPath,
+                stderrPath,
+                exitPath,
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Codex,
+                PromptPath: promptPath);
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters);
+
+            var result = DispatchProcessHost.Run(parametersPath);
+
+            Assert.Equal(0, result);
+            Assert.Equal("0", File.ReadAllText(exitPath).Trim());
+            var stdout = File.ReadAllText(stdoutPath);
+            Assert.True(stdout.Contains("stdin-eof-observed", StringComparison.Ordinal), stdout);
+            Assert.True(File.Exists(capturePath), File.ReadAllText(stderrPath));
+            using var capture = JsonDocument.Parse(File.ReadAllText(capturePath));
+            var root = capture.RootElement;
+            Assert.Equal(expectedBytes.Length, root.GetProperty("byteCount").GetInt32());
+            Assert.Equal(expectedHash, root.GetProperty("sha256").GetString());
+            var textTail = root.GetProperty("textTail").GetString();
+            Assert.NotNull(textTail);
+            Assert.True(textTail.Contains("CJK=漢字 emoji=🙂 eof=done", StringComparison.Ordinal), textTail);
+            Assert.True(root.GetProperty("eofObserved").GetBoolean());
         }
         finally
         {

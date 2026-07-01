@@ -177,6 +177,15 @@ public sealed class WorkerProviderCatalog
                 SupportsInteractiveSession: false,
                 SupportsPlanMode: true)),
         new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexOssCli, UsesCodexExitFileBehavior: true),
+            "codex-oss-cli",
+            "Ollama",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: false,
+                SupportsPlanMode: true)),
+        new StaticWorkerProvider(
             new WorkerProviderIdentity(ProviderKind.OllamaQwenCodeCli, UsesCodexExitFileBehavior: false),
             WorkerProfileDispatcher.OllamaSubscriptionProfileName,
             "Ollama",
