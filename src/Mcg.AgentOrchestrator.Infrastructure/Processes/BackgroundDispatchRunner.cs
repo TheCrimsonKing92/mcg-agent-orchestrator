@@ -228,13 +228,17 @@ public sealed class BackgroundDispatchRunner
 
     private WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
-        var provider = ResolveWorkerProvider(dispatch);
+        return ResolveSandboxProvider(ResolveWorkerProvider(dispatch));
+    }
+
+    internal static WorkerSandboxProvider ResolveSandboxProvider(IWorkerProvider provider)
+    {
         if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
         {
             return WorkerSandboxProvider.Claude;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli)
         {
             return WorkerSandboxProvider.Codex;
         }

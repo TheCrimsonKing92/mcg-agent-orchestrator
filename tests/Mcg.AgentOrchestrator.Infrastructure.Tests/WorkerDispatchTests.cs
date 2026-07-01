@@ -1941,6 +1941,74 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     Assert.Equal("Anthropic", developer.LastDispatch.ProviderName);
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_explicit_codex_oss_profile_uses_codex_stdin_delivery")]
+    public void SubscriptionDispatchExplicitCodexOssProfileUsesCodexStdinDelivery()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-01T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Dispatch Codex OSS write worker",
+        [new TaskSpec(TaskId.New(), "Implement the focused change.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profileOverride = new DispatchModelOverride("codex-oss-cli", "qwen3:8b", null);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        dispatchedAt,
+        profileOverride);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        profileOverride);
+    var provider = WorkerProviderCatalog.Default().ResolveProfile("codex-oss-cli");
+    var sandboxProvider = BackgroundDispatchRunner.ResolveSandboxProvider(provider);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Equal(ProviderKind.OpenAICodexOssCli, provider.Identity.Kind);
+    Assert.Equal(WorkerSandboxProvider.Codex, sandboxProvider);
+    Assert.Equal("codex-oss-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal(ProviderKind.OpenAICodexOssCli, task.LastDispatch.WorkerProviderKind);
+    Assert.Equal("Ollama", task.LastDispatch.ProviderName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("codex exec --skip-git-repo-check --oss --local-provider ollama", StringComparison.Ordinal));
+    Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(task.LastDispatch.PromptPath!, task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.True(DispatchProcessHost.ShouldWritePromptToStdin(new DispatchProcessHost.DispatchRunParameters(
+        task.LastDispatch.Command,
+        workingDirectory,
+        Path.Combine(root, "stdout.log"),
+        Path.Combine(root, "stderr.log"),
+        Path.Combine(root, "exit.txt"),
+        null,
+        ShutdownBuildServerOnExit: false,
+        DisableSharedCompilation: false,
+        Provider: sandboxProvider,
+        PromptPath: task.LastDispatch.PromptPath)));
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_escalates_default_openai_agents_for_complex_subscription_tasks")]
     public void WorkerProfileDispatcherEscalatesDefaultOpenAiAgentsForComplexSubscriptionTasks()
 {

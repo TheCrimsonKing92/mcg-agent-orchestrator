@@ -70,7 +70,7 @@ public static class WorkerProfileDiagnostics
         return provider.Identity.Kind switch
         {
             ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark => EvaluateCodexPatchCapability(normalized),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => EvaluateCodexPatchCapability(normalized),
             _ => new WorkerProfilePatchCapability(
                 true,
                 "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")
@@ -299,6 +299,7 @@ public static class WorkerProfileStore
                   {
                       WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
                       providers.Resolve(ProviderKind.OpenAICodexSpark).ProfileName,
+                      providers.Resolve(ProviderKind.OpenAICodexOssCli).ProfileName,
                       WorkerProfileDispatcher.AnthropicSubscriptionProfileName
                   })
         {
@@ -319,7 +320,7 @@ public static class WorkerProfileStore
             return true;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli)
         {
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
