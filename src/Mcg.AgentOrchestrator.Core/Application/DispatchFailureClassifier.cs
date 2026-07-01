@@ -929,6 +929,7 @@ public static class DispatchFailureClassifier
             ProviderKind.OpenAICodexCli or
             ProviderKind.AnthropicClaudeCli or
             ProviderKind.OpenAICodexSpark or
+            ProviderKind.OpenAICodexOssCli or
             ProviderKind.OllamaQwenCodeCli;
     }
 

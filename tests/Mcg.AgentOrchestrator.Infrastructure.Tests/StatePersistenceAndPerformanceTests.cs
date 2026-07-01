@@ -46,7 +46,8 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
         Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
         Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode} -p", StringComparison.Ordinal));
+        Assert.Contains(restoredWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", StringComparison.Ordinal));
+        Assert.DoesNotContain("{promptPath}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 
         File.Delete(workerPath);
         File.Delete(Path.Combine(workspace, ".orchestrator", "agents.json"));
@@ -63,7 +64,8 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
         Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
         Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-        Assert.Contains(repairedWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode} -p", StringComparison.Ordinal));
+        Assert.Contains(repairedWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", StringComparison.Ordinal));
+        Assert.DoesNotContain("{promptPath}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_uses_local_agent_fallback_when_supplied")]
     public void PrototypeWorkspaceSeederUsesLocalAgentFallbackWhenSupplied()
@@ -106,7 +108,7 @@ public sealed class StatePersistenceAndPerformanceTests
         var workspace = PrototypeWorkspaceSeeder.Create(root);
         var statePath = Path.Combine(workspace, ".orchestrator", "state.db");
         var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
-        const string customCodex = "codex exec --sandbox {sandboxMode} --cd {workingDirectory} --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} (Get-Content -Raw {promptPath})";
+        const string customCodex = "codex exec --sandbox {sandboxMode} --cd {workingDirectory} --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --custom-stdin-profile";
 
         var kernel = LoadState(statePath);
         kernel.CreateGoal("Keep custom subscription profile");
