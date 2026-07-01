@@ -9,6 +9,7 @@ public static class ProcessSpawnGuard
     private const uint HandleFlagInherit = 0x00000001;
     private const uint FileTypeDisk = 0x0001;
     private const uint FileNameNormalized = 0x0;
+    private const int ProcessHandleInformation = 51;
     private const int SystemExtendedHandleInformation = 64;
     private const int InitialHandleBufferSize = 0x10000;
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
@@ -83,6 +84,70 @@ public static class ProcessSpawnGuard
     }
 
     private static IEnumerable<IntPtr> EnumerateCurrentProcessHandles()
+    {
+        var processHandles = TryEnumerateCurrentProcessHandleSnapshot();
+        if (processHandles is not null)
+        {
+            return processHandles;
+        }
+
+        return EnumerateCurrentProcessHandlesFromSystemSnapshot();
+    }
+
+    private static List<IntPtr>? TryEnumerateCurrentProcessHandleSnapshot()
+    {
+        var bufferLength = InitialHandleBufferSize;
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            while (true)
+            {
+                buffer = Marshal.AllocHGlobal(bufferLength);
+                var status = NtQueryInformationProcess(
+                    new IntPtr(-1),
+                    ProcessHandleInformation,
+                    buffer,
+                    bufferLength,
+                    out var requiredLength);
+                if (status == 0)
+                {
+                    break;
+                }
+
+                Marshal.FreeHGlobal(buffer);
+                buffer = IntPtr.Zero;
+                if (status != StatusInfoLengthMismatch &&
+                    status != StatusBufferTooSmall &&
+                    status != StatusBufferOverflow)
+                {
+                    return null;
+                }
+
+                bufferLength = Math.Max(requiredLength, bufferLength * 2);
+            }
+
+            var handleCount = Marshal.ReadIntPtr(buffer).ToInt64();
+            var entryPointer = IntPtr.Add(buffer, IntPtr.Size * 2);
+            var entrySize = Marshal.SizeOf<ProcessHandleTableEntryInfo>();
+            var handles = new List<IntPtr>(checked((int)Math.Min(handleCount, int.MaxValue)));
+            for (long index = 0; index < handleCount; index++)
+            {
+                var entry = Marshal.PtrToStructure<ProcessHandleTableEntryInfo>(IntPtr.Add(entryPointer, checked((int)(index * entrySize))));
+                handles.Add(entry.HandleValue);
+            }
+
+            return handles;
+        }
+        finally
+        {
+            if (buffer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+    }
+
+    private static IEnumerable<IntPtr> EnumerateCurrentProcessHandlesFromSystemSnapshot()
     {
         var bufferLength = InitialHandleBufferSize;
         IntPtr buffer = IntPtr.Zero;
@@ -173,11 +238,31 @@ public static class ProcessSpawnGuard
         public uint Reserved;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessHandleTableEntryInfo
+    {
+        public IntPtr HandleValue;
+        public IntPtr HandleCount;
+        public IntPtr PointerCount;
+        public uint GrantedAccess;
+        public uint ObjectTypeIndex;
+        public uint HandleAttributes;
+        public uint Reserved;
+    }
+
     [DllImport("ntdll.dll")]
     private static extern int NtQuerySystemInformation(
         int systemInformationClass,
         IntPtr systemInformation,
         int systemInformationLength,
+        out int returnLength);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        IntPtr processInformation,
+        int processInformationLength,
         out int returnLength);
 
     [DllImport("kernel32.dll", SetLastError = true)]
