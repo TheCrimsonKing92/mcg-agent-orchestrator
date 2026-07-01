@@ -270,6 +270,19 @@ public sealed class WorkerProfileTests
     Assert.Contains(restored.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
     Assert.True(!restored.GetRequired("codex-cli").CommandTemplate.Contains("--sandbox workspace-write", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_preserves_valid_codex_oss_default_profile")]
+    public void WorkerProfileStoreLoadPreservesValidCodexOssDefaultProfile()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var saved = WorkerProfileCatalog.Default();
+    var expected = saved.GetRequired("codex-oss-cli").CommandTemplate;
+
+    WorkerProfileStore.Save(path, saved);
+    var restored = WorkerProfileStore.Load(path);
+
+    Assert.Equal(expected, restored.GetRequired("codex-oss-cli").CommandTemplate);
+}
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_claude_profile_with_hardcoded_permission_mode")]
     public void WorkerProfileStoreLoadRepairsClaudeProfileWithHardcodedPermissionMode()
 {

@@ -320,12 +320,22 @@ public static class WorkerProfileStore
             return true;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
         {
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexOssCli)
+        {
+            return !profile.CommandTemplate.Contains("--oss", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--local-provider ollama", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--sandbox workspace-write", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 profile.CommandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase);
         }
 
