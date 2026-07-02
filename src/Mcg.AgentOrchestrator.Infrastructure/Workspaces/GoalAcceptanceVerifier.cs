@@ -39,7 +39,14 @@ public interface IGoalAcceptanceVerifier
 
 public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
-    internal sealed record CommandResult(int ExitCode, string Output);
+    internal sealed record CommandResult(
+        int ExitCode,
+        string Output,
+        bool TimedOut = false,
+        string? CommandLine = null,
+        string? StdoutPath = null,
+        string? StderrPath = null,
+        TimeSpan? Timeout = null);
 
     // Hard ceiling for a single build/test process. The suite itself runs in ~90s even in the
     // throttled acceptance environment, so this only guards a genuinely runaway process. Output is
@@ -571,6 +578,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var result = await _runner(arguments, worktreePath, cancellationToken).ConfigureAwait(false);
+        if (result.TimedOut)
+        {
+            return (new AcceptanceCheckResult(
+                check.Name,
+                false,
+                result.ExitCode,
+                BuildTimeoutOutput(result),
+                ResultSummary: BuildTimeoutSummary(result),
+                Advisory: check.Advisory), false);
+        }
+
         return (new AcceptanceCheckResult(
             check.Name,
             result.ExitCode == 0,
@@ -608,7 +626,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(WithBuildEnvironmentArguments(arguments, environment), worktreePath, cancellationToken).ConfigureAwait(false);
 
         var retried = false;
-        if (result.ExitCode != 0 && (result.Output.Contains("CS2012", StringComparison.Ordinal) || IsTransientTesthostAbort(result.Output)))
+        if (!result.TimedOut &&
+            result.ExitCode != 0 &&
+            (result.Output.Contains("CS2012", StringComparison.Ordinal) || IsTransientTesthostAbort(result.Output)))
         {
             // CS2012 is a transient obj-dll file lock; a mid-run testhost abort ("host process exited
             // unexpectedly" / "Test Run Aborted" with no completed verdict) is an environmental crash
@@ -627,19 +647,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
         // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
         // block a green goal, while never masking a build/compile failure and still surfacing the tail.
-        var reportedAllPassed = result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-        var passed = result.ExitCode == 0 || reportedAllPassed;
+        var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+        var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
         return (new AcceptanceCheckResult(
             check.Name,
             passed,
             result.ExitCode,
-            passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
+            result.TimedOut
+                ? BuildTimeoutOutput(result)
+                : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
             environment.ArtifactsPath,
             "goal-acceptance-verifier",
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
             retried,
-            ExtractResultSummary(result.Output)), retried);
+            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output)), retried);
     }
 
     // A dotnet test run whose own summary banner is "Passed!" (zero failed) but which then exits non-zero
@@ -951,6 +973,38 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return tail.Length <= maxChars ? tail : tail[^maxChars..];
     }
 
+    private static string BuildTimeoutSummary(CommandResult result) =>
+        $"timed out after {FormatTimeout(result.Timeout ?? CommandTimeout)}";
+
+    private static string BuildTimeoutOutput(CommandResult result)
+    {
+        var details = new List<string>
+        {
+            $"Verification command timed out after {FormatTimeout(result.Timeout ?? CommandTimeout)}.",
+        };
+
+        if (!string.IsNullOrWhiteSpace(result.CommandLine))
+            details.Add($"Command: {result.CommandLine}");
+        if (!string.IsNullOrWhiteSpace(result.StdoutPath))
+            details.Add($"stdout: {result.StdoutPath}");
+        if (!string.IsNullOrWhiteSpace(result.StderrPath))
+            details.Add($"stderr: {result.StderrPath}");
+
+        var tail = TailOutput(result.Output);
+        if (!string.IsNullOrWhiteSpace(tail))
+        {
+            details.Add("Last output:");
+            details.Add(tail);
+        }
+
+        return string.Join(Environment.NewLine, details);
+    }
+
+    private static string FormatTimeout(TimeSpan timeout) =>
+        timeout.TotalSeconds >= 60
+            ? $"{timeout.TotalMinutes:0.#}m"
+            : $"{timeout.TotalSeconds:0.#}s";
+
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -966,6 +1020,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
 
+        var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
+        var timedOut = false;
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -1018,12 +1074,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                throw;
+                if (cancellationToken.IsCancellationRequested)
+                    throw;
+
+                timedOut = true;
             }
 
             var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
             var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
-            return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
+            var exitCode = timedOut ? -1 : process.ExitCode;
+            return new CommandResult(
+                exitCode,
+                (stdout + stderr).Trim(),
+                timedOut,
+                commandLine,
+                stdoutPath,
+                stderrPath,
+                CommandTimeout);
         }
         finally
         {
@@ -1032,10 +1099,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 WorkerProcessJobs.Release(processId);
             }
 
-            TryDeleteFile(stdoutPath);
-            TryDeleteFile(stderrPath);
+            if (!timedOut)
+            {
+                TryDeleteFile(stdoutPath);
+                TryDeleteFile(stderrPath);
+            }
         }
     }
+
+    private static string QuoteForDisplay(string value) =>
+        value.Contains(' ', StringComparison.Ordinal) || value.Contains('"', StringComparison.Ordinal)
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
 
     private static string BuildRedirectedCommand(
         string[] arguments,

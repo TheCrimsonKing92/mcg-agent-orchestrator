@@ -1253,6 +1253,55 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_verification_timeout_blocks_before_merge_with_diagnostics")]
+    public void CliAcceptanceVerificationTimeoutBlocksBeforeMergeWithDiagnostics()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Acceptance verification timeout blocker test", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var mergeCalled = false;
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal,
+                finalizeAcceptanceMerge: request =>
+                {
+                    mergeCalled = true;
+                    return request.Merge();
+                },
+                stopAcceptanceHosts: _ => AcceptanceHostStopResult.Success("Stop-host: none."))
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Timeout()
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.False(mergeCalled);
+            Assert.True(output.Contains("Verification check: failed - infrastructure tests (exit -1)", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("BLOCKER step=verification reason=timeout", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("artifacts=C:\\artifacts\\goal-acceptance", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("Command: dotnet test infrastructure", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("Last output:", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("still running", StringComparison.Ordinal), output);
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_merge_conflict_blocks_and_leaves_worktree")]
     public void CliAcceptanceMergeConflictBlocksAndLeavesWorktree()
     {
@@ -4135,6 +4184,26 @@ public sealed class GoalWorktreeIntegrationTests
                     ExitCode: 1,
                     OutputTail: outputTail,
                     Checks: [new AcceptanceCheckResult("fake acceptance", false, 1, outputTail)]),
+                onRun);
+
+        public static FakeAcceptanceVerifier Timeout(Action? onRun = null) =>
+            new(
+                new AcceptanceVerificationResult(
+                    Passed: false,
+                    Skipped: false,
+                    ExitCode: -1,
+                    OutputTail: "Verification command timed out after 10m.\nCommand: dotnet test infrastructure\nstdout: C:\\temp\\acc.out\nstderr: C:\\temp\\acc.err\nLast output:\nstill running",
+                    ArtifactsPath: "C:\\artifacts\\goal-acceptance",
+                    Checks:
+                    [
+                        new AcceptanceCheckResult(
+                            "infrastructure tests",
+                            false,
+                            -1,
+                            "Verification command timed out after 10m.\nCommand: dotnet test infrastructure\nLast output:\nstill running",
+                            "C:\\artifacts\\goal-acceptance",
+                            ResultSummary: "timed out after 10m")
+                    ]),
                 onRun);
 
         public static FakeAcceptanceVerifier Throws(Exception exception, Action? onRun = null) =>

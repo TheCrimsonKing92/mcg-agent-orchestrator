@@ -2501,6 +2501,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             Console.WriteLine($"Verification: failed (exit {verification.ExitCode}); merge blocked");
             Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
+            if (TryBuildVerificationTimeoutBlocker(verification) is { } timeoutBlocker)
+            {
+                Console.WriteLine(timeoutBlocker);
+            }
+
             if (!string.IsNullOrWhiteSpace(verification.OutputTail))
             {
                 Console.WriteLine(verification.OutputTail);
@@ -2593,6 +2598,25 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
     return true;
+}
+
+private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerificationResult verification)
+{
+    var timedOutCheck = verification.Checks?
+        .FirstOrDefault(check =>
+            !check.Advisory &&
+            !check.Passed &&
+            (check.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true ||
+             check.OutputTail?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true));
+
+    if (timedOutCheck is null)
+        return null;
+
+    var artifactPath = !string.IsNullOrWhiteSpace(timedOutCheck.ArtifactsPath)
+        ? timedOutCheck.ArtifactsPath
+        : verification.ArtifactsPath;
+    var artifactDetail = string.IsNullOrWhiteSpace(artifactPath) ? "none" : artifactPath;
+    return $"BLOCKER step=verification reason=timeout check=\"{timedOutCheck.Name}\" artifacts={artifactDetail} action=\"Inspect verification command, artifact path, and last output above; rerun acceptance after clearing the blocker.\"";
 }
 
 private static string ResolveWorktreeHead(string worktreePath)

@@ -152,6 +152,60 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[1]);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_failed_check_with_timeout_diagnostics")]
+    public async Task GoalAcceptanceVerifierReturnsFailedCheckWithTimeoutDiagnostics()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "focused CLI infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": [ "--filter", "CliHelpTests", "--verbosity", "minimal" ] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(calls.Count == 1
+                    ? new GoalAcceptanceVerifier.CommandResult(0, "")
+                    : new GoalAcceptanceVerifier.CommandResult(
+                        -1,
+                        "restore complete\nstill running infrastructure tests",
+                        TimedOut: true,
+                        CommandLine: "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                        StdoutPath: "C:\\temp\\acceptance.out",
+                        StderrPath: "C:\\temp\\acceptance.err",
+                        Timeout: TimeSpan.FromMinutes(10)));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcd1234abcd1234abcd1234abcd1234"));
+
+            Assert.False(result.Passed);
+            Assert.Equal(-1, result.ExitCode);
+            Assert.Equal(2, calls.Count);
+            var check = Assert.Single(result.Checks!.Where(check => !check.Passed));
+            Assert.Equal("focused CLI infrastructure tests", check.Name);
+            Assert.False(check.Passed);
+            Assert.Equal("timed out after 10m", check.ResultSummary);
+            Assert.Equal(result.ArtifactsPath, check.ArtifactsPath);
+            var outputTail = result.OutputTail ?? string.Empty;
+            Assert.True(outputTail.Contains("Command: dotnet test", StringComparison.Ordinal), outputTail);
+            Assert.True(outputTail.Contains("stdout: C:\\temp\\acceptance.out", StringComparison.Ordinal), outputTail);
+            Assert.True(outputTail.Contains("stderr: C:\\temp\\acceptance.err", StringComparison.Ordinal), outputTail);
+            Assert.True(outputTail.Contains("still running infrastructure tests", StringComparison.Ordinal), outputTail);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_passed_without_retry_on_first_time_pass")]
     public async Task GoalAcceptanceVerifierReturnsPassedWithoutRetryOnFirstTimePass()
     {
