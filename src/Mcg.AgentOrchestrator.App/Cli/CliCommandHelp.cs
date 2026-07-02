@@ -14,6 +14,7 @@ internal static class CliCommandHelp
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
+    public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -64,6 +65,11 @@ internal static class CliCommandHelp
         BacklogViewUsage,
         "Render all backlog items as markdown.",
         ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry DogfoodLog = new(
+        DogfoodLogUsage,
+        "Read or add dogfood goal-boundary entries in the SQLite dogfood log store.",
+        ["--limit", "--help", "-h"]);
 
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -163,6 +169,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-view", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogView;
+            return true;
+        }
+
+        if (args[0].Equals("dogfood-log", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = DogfoodLog;
             return true;
         }
 

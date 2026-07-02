@@ -1707,7 +1707,7 @@ public sealed class GoalWorktreeIntegrationTests
     }
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_auto_records_dogfood_entry")]
-    public void CliAcceptanceAutoRecordsDogfoodEntry()
+    public async Task CliAcceptanceAutoRecordsDogfoodEntry()
     {
         var repo = CreateSeededRepository();
         try
@@ -1726,10 +1726,13 @@ public sealed class GoalWorktreeIntegrationTests
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace"], context));
 
-            // Acceptance appends a rendered DOGFOOD entry from receipts (a "## " heading beyond the file header).
             Assert.True(output.Contains("Recorded DOGFOOD entry", StringComparison.Ordinal));
+            var record = await new DogfoodLogStore(context.Workspace.DogfoodLogStorePath)
+                .GetByGoalIdAsync(goal.Id.Value);
+            Assert.NotNull(record);
+            Assert.Contains("Autorecord distinctive objective", record!.RenderedMarkdown);
             var log = File.ReadAllText(Path.Combine(repo, "DOGFOOD_LOG.md"));
-            Assert.True(log.Contains("## ", StringComparison.Ordinal));
+            Assert.Equal("# Dogfood Log" + Environment.NewLine, log);
         }
         finally
         {
@@ -1738,7 +1741,7 @@ public sealed class GoalWorktreeIntegrationTests
     }
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_no_record_skips_dogfood_entry")]
-    public void CliAcceptanceNoRecordSkipsDogfoodEntry()
+    public async Task CliAcceptanceNoRecordSkipsDogfoodEntry()
     {
         var repo = CreateSeededRepository();
         try
@@ -1757,6 +1760,9 @@ public sealed class GoalWorktreeIntegrationTests
             var context = CreateAcceptanceContext(kernel, repo, goal);
             CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace", "--no-record"], context));
 
+            var record = await new DogfoodLogStore(context.Workspace.DogfoodLogStorePath)
+                .GetByGoalIdAsync(goal.Id.Value);
+            Assert.Null(record);
             var log = File.ReadAllText(Path.Combine(repo, "DOGFOOD_LOG.md"));
             Assert.False(log.Contains("## ", StringComparison.Ordinal));
         }

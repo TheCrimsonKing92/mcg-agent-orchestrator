@@ -1,6 +1,6 @@
 ---
 name: orchestrator-dogfood
-description: Operate mcg-agent-orchestrator self-improvement and dogfood goals. Use when creating or running simple-goal, goal, run-goal, lifecycle-simple-goal, workspace create/acceptance/remove, monitoring subscription validation, operator gates, DOGFOOD_LOG updates, BACKLOG updates, or Model fit evidence for this repository.
+description: Operate mcg-agent-orchestrator self-improvement and dogfood goals. Use when creating or running simple-goal, goal, run-goal, lifecycle-simple-goal, workspace create/acceptance/remove, monitoring subscription validation, operator gates, dogfood-log updates, BACKLOG updates, or Model fit evidence for this repository.
 ---
 
 # Orchestrator Dogfood
@@ -34,7 +34,7 @@ Before accepting a goal:
 
 ## Logs And Follow-Ups
 
-- Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or for durable product friction.
+- Record dogfood evidence with `dogfood-log add <goal-prefix>` and read it with `dogfood-log list --limit <n>`; durable entries live in `.orchestrator/dogfood-log.db`, not `DOGFOOD_LOG.md`.
 - Keep entries short: goal id, objective/result, verification, blocker/friction, and Model fit.
 - Close finished backlog items with `backlog-close` and add newly discovered follow-ups with `backlog-add` (the SQLite store, `.orchestrator/backlog.db`, is canonical).
 - Treat backlog items as candidates. Use filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal` for a small reviewed active set; do not feed a stale backlog wholesale into daemon mode.

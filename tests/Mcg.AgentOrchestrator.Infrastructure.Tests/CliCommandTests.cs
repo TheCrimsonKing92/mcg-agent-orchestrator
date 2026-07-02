@@ -6103,8 +6103,8 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_commits_dogfood_entry_after_recording")]
-    public void CliAcceptanceCommitsDogfoodEntryAfterRecording()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_records_dogfood_entry_in_sqlite_without_committing_log_file")]
+    public async Task CliAcceptanceRecordsDogfoodEntryInSqliteWithoutCommittingLogFile()
     {
         var root = CreateTempDirectory();
         RunGit(root, "init", "-b", "main");
@@ -6135,10 +6135,11 @@ public sealed class CliCommandTests
         RunGit(worktree, "commit", "-m", "Goal work");
 
         var goalPrefix = goal.Id.Value[..8];
+        var workspace = CreateRefinedWorkspace(root);
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             kernel,
-            CreateRefinedWorkspace(root),
+            workspace,
             ref agents,
             providers,
             ref profiles,
@@ -6146,9 +6147,49 @@ public sealed class CliCommandTests
 
         var statusOutput = RunGitOutput(root, "status", "--porcelain", "DOGFOOD_LOG.md");
         Xunit.Assert.Equal(string.Empty, statusOutput.Trim());
+        var record = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value);
+        Xunit.Assert.NotNull(record);
+        Xunit.Assert.Contains("Commit dogfood entry test", record!.RenderedMarkdown);
 
         var logOutput = RunGitOutput(root, "log", "--oneline", "-5");
-        Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
+        Xunit.Assert.DoesNotContain($"Record dogfood entry for goal {goalPrefix}", logOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_dogfood_log_add_and_list_use_sqlite_store")]
+    public async Task CliDogfoodLogAddAndListUseSqliteStore()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Dogfood command objective");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        var workspace = CreateRefinedWorkspace(root);
+
+        var addOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "add", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var listOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "list", "--limit", "5"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var record = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value);
+        Xunit.Assert.NotNull(record);
+        Xunit.Assert.Contains("Recorded to", addOutput);
+        Xunit.Assert.Contains("Dogfood command objective", listOutput);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]

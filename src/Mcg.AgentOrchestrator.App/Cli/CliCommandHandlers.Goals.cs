@@ -451,6 +451,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace));
             return false;
 
+        case "dogfood-log":
+            HandleDogfoodLog(context, parts);
+            return false;
+
         case "record-goal":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             HandleRecordGoal(context);
@@ -976,70 +980,81 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
         ComplexModelName: complexModelName));
 }
 
-// Deterministic recording: acceptance auto-appends a DOGFOOD_LOG entry rendered from the goal's
+// Deterministic recording: acceptance stores a dogfood entry rendered from the goal's
 // receipts, so a landed goal is journaled without the operator hand-writing prose. --no-record opts out.
 private static void AutoRecordDogfoodEntry(CliExecutionContext context)
 {
     var goal = context.CurrentGoal!;
-    var logPath = Path.Combine(context.Workspace.ExecutionDirectory, "DOGFOOD_LOG.md");
-    if (!File.Exists(logPath))
-    {
-        return;
-    }
-
-    var text = DogfoodLogRenderer.Render(goal).Render();
-    File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + text);
-    Console.WriteLine($"Recorded DOGFOOD entry for goal {goal.Id.Value[..8]} to {logPath}.");
-    CommitDogfoodEntry(context.Workspace.ExecutionDirectory, goal.Id.Value[..8]);
+    RecordDogfoodEntry(context.Workspace, goal);
+    Console.WriteLine($"Recorded DOGFOOD entry for goal {goal.Id.Value[..8]} to {context.Workspace.DogfoodLogStorePath}.");
 }
 
-// Closes the linked backlog item (if any) when a goal lands. Idempotent: already-closed or
-// absent items are a safe no-op. Swallows all store exceptions so acceptance never fails here.
-private static void CommitDogfoodEntry(string executionDirectory, string goalPrefix)
+private static DogfoodLogRecord RecordDogfoodEntry(OrchestratorWorkspace workspace, Goal goal)
 {
-    var add = GitCli.Run(executionDirectory, "add", "DOGFOOD_LOG.md");
-    if (add.ExitCode != 0)
-    {
-        Console.WriteLine($"Dogfood commit skipped: git add failed ({add.Error}).");
-        return;
-    }
-
-    var diff = GitCli.Run(executionDirectory, "diff", "--cached", "--quiet", "DOGFOOD_LOG.md");
-    if (diff.ExitCode == 0)
-    {
-        return;
-    }
-
-    var commit = GitCli.Run(executionDirectory, "commit", "-m", $"Record dogfood entry for goal {goalPrefix}");
-    if (commit.ExitCode == 0)
-    {
-        Console.WriteLine($"Committed DOGFOOD_LOG.md for goal {goalPrefix}.");
-    }
-    else
-    {
-        Console.WriteLine($"Dogfood commit failed: {commit.Error}");
-    }
+    var entry = DogfoodLogRenderer.Render(goal);
+    return new DogfoodLogStore(workspace.DogfoodLogStorePath)
+        .UpsertAsync(new DogfoodLogAppend(
+            goal.Id.Value,
+            entry.Header,
+            entry.Summary,
+            entry.OperatorGate,
+            entry.ModelFit,
+            entry.Render()))
+        .GetAwaiter()
+        .GetResult();
 }
-
 
 private static void HandleRecordGoal(CliExecutionContext context)
 {
     var goal = context.CurrentGoal!;
-    var entry = DogfoodLogRenderer.Render(goal);
-    var text = entry.Render();
-    Console.Write(text);
+    var record = RecordDogfoodEntry(context.Workspace, goal);
+    Console.Write(record.RenderedMarkdown);
+    Console.WriteLine();
+    Console.WriteLine($"Recorded to {context.Workspace.DogfoodLogStorePath}");
+}
 
-    var logPath = Path.Combine(context.Workspace.ExecutionDirectory, "DOGFOOD_LOG.md");
-    if (File.Exists(logPath))
+private static void HandleDogfoodLog(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var subcommand = parts.Count > 1 && !parts[1].StartsWith("--", StringComparison.Ordinal)
+        ? parts[1]
+        : "list";
+
+    switch (subcommand.ToLowerInvariant())
     {
-        File.AppendAllText(logPath, Environment.NewLine + Environment.NewLine + text);
-        Console.WriteLine();
-        Console.WriteLine($"Appended to {logPath}");
-    }
-    else
-    {
-        Console.WriteLine();
-        Console.WriteLine($"DOGFOOD_LOG.md not found at {logPath}; entry printed but not appended.");
+        case "list":
+        {
+            var limit = GetFlagValue(parts, "--limit") is { } value
+                ? ParsePositiveInteger(value, "--limit")
+                : 20;
+            var records = new DogfoodLogStore(context.Workspace.DogfoodLogStorePath)
+                .ListRecentAsync(limit)
+                .GetAwaiter()
+                .GetResult();
+            foreach (var record in records)
+            {
+                Console.WriteLine(record.RenderedMarkdown);
+                Console.WriteLine();
+            }
+            if (records.Count == 0)
+            {
+                Console.WriteLine($"No dogfood log entries in {context.Workspace.DogfoodLogStorePath}.");
+            }
+            return;
+        }
+
+        case "add":
+        case "record":
+        {
+            var goalPrefix = parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal)
+                ? parts[2]
+                : null;
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
+            HandleRecordGoal(context);
+            return;
+        }
+
+        default:
+            throw new ArgumentException(CliCommandHelp.DogfoodLogUsage);
     }
 }
 

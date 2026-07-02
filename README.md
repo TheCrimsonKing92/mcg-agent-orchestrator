@@ -482,7 +482,7 @@ When the goal reaches `Verified`, the conductor runs three gates before promotin
 2. **Change-risk gate** — classifies the changed files (`DocsOnly`, `Behavior`, `Build`, `Security`, or `Broad`) and compares the risk against the policy's `AutoPromoteRiskThreshold`. If the change is riskier than the threshold, the conductor escalates rather than auto-promoting.
 3. **Integration-branch merge** — `LandingExecutor` fast-forward merges the goal branch into `main` via the integration branch. If the engine decides `Escalate` (for example, because the branch cannot be fast-forwarded cleanly), the escalation reason is written to the operator inbox.
 
-When all three gates pass the goal moves to `Merged`, then to `Recorded` (appended to `DOGFOOD_LOG.md`), then to `CleanedUp` (worktree removed).
+When all three gates pass the goal moves to `Merged`, then to `Recorded` (written to `.orchestrator/dogfood-log.db`), then to `CleanedUp` (worktree removed).
 
 ### Operator pager (Discord)
 

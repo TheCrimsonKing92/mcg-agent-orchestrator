@@ -26,7 +26,7 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
 
-`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the `DOGFOOD_LOG` entry, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`).
+`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`).
 
 You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, or `accept` by hand. A single non-loop `conduct <goal-prefix>` advances exactly one step (useful for stepping/inspection).
 
@@ -180,7 +180,7 @@ Created
   → AwaitingVerification    # worker exited; acceptance suite queued
   → Verified                # acceptance suite green; change-risk gate evaluable
   → Merged                  # goal branch merged into main (landing action)
-  → Recorded                # DOGFOOD_LOG entry written
+  → Recorded                # SQLite dogfood-log entry written
   → CleanedUp               # worktree removed; goal is terminal
 ```
 
@@ -219,6 +219,7 @@ Durable state lives in stores, never in `.scratch`.
 |---|---|
 | `.orchestrator/state.db` | the kernel: goals, tasks, dispatches, verifications (SQLite, single-writer) |
 | `.orchestrator/backlog.db` | the backlog (use `backlog-list`/`backlog-add`/`backlog-show`/`backlog-close`; this is the source of truth, not `BACKLOG.md`) |
+| `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
 | `.orchestrator/agents.json` | the agent catalog (which model each role uses) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
@@ -226,6 +227,16 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator-context/<goal-id>` | worker context artifacts for a goal |
 
 `--brief-file`/`--body-file` are throwaway vehicles to pass long text past the command-length cap — the durable copy becomes the goal objective / backlog item, so **delete the scratch input** afterward.
+
+Dogfood goal-boundary evidence is durable SQLite state, not a tracked markdown append log.
+
+```powershell
+mcg-orchestrator.cmd dogfood-log list --limit 10
+mcg-orchestrator.cmd dogfood-log add <goal-prefix>
+mcg-orchestrator.cmd record-goal <goal-prefix>   # compatibility alias for add + render
+```
+
+`DOGFOOD_LOG.md` remains only as a pointer for operators and should not receive new durable entries.
 
 For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` updates both the indexed `goals.status` column and the serialized snapshot in `.orchestrator/state.db`. It is an operator recovery tool, not a normal workflow command; prefer `recover`, `retry`, and `conduct` first.
 

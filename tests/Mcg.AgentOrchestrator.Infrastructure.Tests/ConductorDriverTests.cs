@@ -200,7 +200,7 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_refresh_after_conductor_record")]
-    public void ConductorDriverRealFactsRefreshAfterConductorRecord()
+    public async Task ConductorDriverRealFactsRefreshAfterConductorRecord()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -225,6 +225,11 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Merged, executed.FromState);
         Assert.True(driver.GetFacts(goal).IsRecorded);
         Assert.Equal(ReadFactsPerGoal(workspace, goal), driver.GetFacts(goal));
+        var record = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value);
+        Assert.NotNull(record);
+        Assert.Contains("Record refresh goal", record!.RenderedMarkdown);
+        Assert.False(File.Exists(Path.Combine(root, "DOGFOOD_LOG.md")));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_operator_approval_reasons")]
