@@ -836,6 +836,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory);
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
+                    GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                 };
                 var loopReaper = new BackgroundDispatchRunner();
                 using var loopWakeSignal = watchInterval is not null

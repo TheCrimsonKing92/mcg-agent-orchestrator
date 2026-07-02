@@ -5,6 +5,7 @@ using System.Threading;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -3594,6 +3595,72 @@ public sealed class GoalWorktreeIntegrationTests
         }
         finally
         {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Conductor_cleanup_holds_recorded_leftover_and_retries_after_lock_release")]
+    public void ConductorCleanupHoldsRecordedLeftoverAndRetriesAfterLockRelease()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Conductor cleanup retry test", repo);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+
+            GoalOperationJournal.Completed(repo, goal, "conductor:land", "landed");
+            GoalOperationJournal.Completed(repo, goal, "conductor:record", "recorded");
+
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                FakeAcceptanceVerifier.Passed(),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                providers: new InMemoryModelProviderRegistry([]));
+
+            // Simulate a previous incomplete git worktree removal: git metadata is gone, but
+            // the directory is still present until the lock releases.
+            File.Delete(Path.Combine(worktreePath, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var deleteAttempts = 0;
+            GoalWorktrees.DeleteDirectory = path =>
+            {
+                deleteAttempts++;
+                if (deleteAttempts == 1)
+                {
+                    return false;
+                }
+
+                Directory.Delete(path, recursive: true);
+                return true;
+            };
+            GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+
+            var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
+            Assert.Equal(GoalLifecycleState.Recorded, held.State);
+            Assert.True(held.Reason.Contains("leftover=", StringComparison.Ordinal), held.Reason);
+            Assert.True(Directory.Exists(worktreePath));
+
+            var second = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+            var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(second.Outcome);
+            Assert.Equal(GoalLifecycleState.Recorded, executed.FromState);
+            Assert.False(Directory.Exists(worktreePath));
+            Assert.True(deleteAttempts >= 2);
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
             DeleteDirectory(repo);

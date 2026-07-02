@@ -98,7 +98,7 @@ public sealed class ConductorDriverTests
         Func<Goal, LandingResult>? land = null,
         Action<Goal, LandingResult>? afterSuccessfulLanding = null,
         Action<Goal>? record = null,
-        Action<Goal>? cleanup = null,
+        Func<Goal, GoalWorktreeRemoveResult>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
@@ -126,7 +126,7 @@ public sealed class ConductorDriverTests
                 : ((g, _) => land(g)),
             afterSuccessfulLanding,
             record ?? (_ => { }),
-            cleanup ?? (_ => { }),
+            cleanup ?? (_ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null)),
             writeEscalation ?? ((_, _, _) => { }),
             classifyRisk ?? (_ => null),
             emptyOutputBackoffDelay,
@@ -899,13 +899,46 @@ public sealed class ConductorDriverTests
 
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(IsMerged: true, IsRecorded: true),
-            cleanup: _ => { cleanedUp = true; });
+            cleanup: _ =>
+            {
+                cleanedUp = true;
+                return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
+            });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         Assert.True(cleanedUp);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(GoalLifecycleState.Recorded, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_incomplete_cleanup_returns_Held_with_diagnostics")]
+    public void ConductorDriverRecordedIncompleteCleanupReturnsHeldWithDiagnostics()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var cleanupCalls = 0;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(IsMerged: true, IsRecorded: true),
+            cleanup: _ =>
+            {
+                cleanupCalls++;
+                return new GoalWorktreeRemoveResult(
+                    "Removed workspace, but leftover directory cleanup is incomplete.",
+                    @"C:\repo\.orchestrator-worktrees\abc12345",
+                    [new WorktreeLockHolder(1234, "dotnet", "dotnet test")],
+                    "workspace remove abc12345");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Recorded, held.State);
+        Assert.Equal(1, cleanupCalls);
+        Assert.True(held.Reason.Contains("leftover=", StringComparison.Ordinal), held.Reason);
+        Assert.True(held.Reason.Contains("pid=1234", StringComparison.Ordinal), held.Reason);
+        Assert.True(held.Reason.Contains("workspace remove abc12345", StringComparison.Ordinal), held.Reason);
     }
 
     // ── CleanedUp state ───────────────────────────────────────────────────

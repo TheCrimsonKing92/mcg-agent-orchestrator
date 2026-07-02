@@ -26,7 +26,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
     private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
     private readonly Action<Goal> _record;
-    private readonly Action<Goal> _cleanup;
+    private readonly Func<Goal, GoalWorktreeRemoveResult> _cleanup;
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
@@ -299,6 +299,7 @@ internal sealed class ConductorDriver
             if (result.IsComplete)
                 worktreeSnapshot.Remove(goal.Id);
             RefreshJournal(goal.Id);
+            return result;
         };
 
         _writeEscalation = (goal, state, reason) =>
@@ -347,7 +348,7 @@ internal sealed class ConductorDriver
         Func<Goal, ConductorAutonomyPolicy, LandingResult> land,
         Action<Goal, LandingResult>? afterSuccessfulLanding,
         Action<Goal> record,
-        Action<Goal> cleanup,
+        Func<Goal, GoalWorktreeRemoveResult> cleanup,
         Action<Goal, GoalLifecycleState, string> writeEscalation,
         Func<Goal, ChangeRiskTier?> classifyChangeRisk,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
@@ -920,9 +921,17 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteCleanup(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        _cleanup(goal);
+        var cleanup = _cleanup(goal);
+        if (!cleanup.IsComplete)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Recorded,
+                    $"Workspace cleanup deferred; retry later. {FormatCleanupDiagnostic(cleanup)}"));
+        }
+
         return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Recorded, "Workspace cleaned up"));
+            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Recorded, cleanup.Message));
     }
 
     private ConductorAdvanceResult Escalate(
@@ -950,6 +959,32 @@ internal sealed class ConductorDriver
 
     private static string FormatUnmetCriteria(IReadOnlyList<AcceptanceCheckResult> criteria) =>
         string.Join("; ", criteria.Select(FormatUnmetCriterion));
+
+    private static string FormatCleanupDiagnostic(GoalWorktreeRemoveResult cleanup)
+    {
+        var parts = new List<string> { cleanup.Message };
+        if (!string.IsNullOrWhiteSpace(cleanup.LeftoverPath))
+        {
+            parts.Add($"leftover={cleanup.LeftoverPath}");
+        }
+
+        if (cleanup.LockHolders.Count > 0)
+        {
+            parts.Add("lockHolders=" + string.Join(", ", cleanup.LockHolders.Select(FormatLockHolder)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(cleanup.ResumeCommand))
+        {
+            parts.Add($"resume={cleanup.ResumeCommand}");
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    private static string FormatLockHolder(WorktreeLockHolder holder) =>
+        string.IsNullOrWhiteSpace(holder.CommandLine)
+            ? $"pid={holder.ProcessId} name={holder.ProcessName}"
+            : $"pid={holder.ProcessId} name={holder.ProcessName} command=\"{holder.CommandLine}\"";
 
     private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
     {

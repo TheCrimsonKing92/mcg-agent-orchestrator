@@ -41,7 +41,7 @@ public sealed class ConductorBatchLoopTests
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
         Action<Goal>? record = null,
-        Action<Goal>? cleanup = null,
+        Func<Goal, GoalWorktreeRemoveResult>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null) =>
@@ -65,7 +65,7 @@ public sealed class ConductorBatchLoopTests
                 : ((g, _) => land(g)),
             null,
             record ?? (_ => { }),
-            cleanup ?? (_ => { }),
+            cleanup ?? (_ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null)),
             writeEscalation ?? ((_, _, _) => { }),
             classifyRisk ?? (_ => null));
 
@@ -1272,7 +1272,7 @@ public sealed class ConductorBatchLoopTests
             runAcceptance: _ => true,
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok"),
             record: _ => { },
-            cleanup: _ => { });
+            cleanup: _ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null));
 
         var stopFile = NoStopPath();
         var summary = new ConductorBatchLoop().Run(
@@ -1897,7 +1897,11 @@ public sealed class ConductorBatchLoopTests
                 return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
             },
             record: goal => advancedGoalIds.Add(goal.Id),
-            cleanup: goal => advancedGoalIds.Add(goal.Id));
+            cleanup: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
+            });
 
         var summary = new ConductorBatchLoop().Run(
             kernel,
