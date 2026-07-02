@@ -159,6 +159,8 @@ internal static class TerminalGoalSweep
                         removeResult.Message,
                         $"workspace remove {prefix}"));
                 }
+
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
             }
 
             if (IsTerminalSweepStatus(goal.Status) && !blockers.Any(IsTerminalCleanupBlockingBlocker))
@@ -187,6 +189,22 @@ internal static class TerminalGoalSweep
         }
 
         return new TerminalGoalSweepResult(results);
+    }
+
+    private static void AddOwnedEphemeralCleanupRepair(
+        GoalOwnedEphemeralSweepResult? ephemeralCleanup,
+        string prefix,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        if (ephemeralCleanup is not { RemovedCount: > 0 })
+        {
+            return;
+        }
+
+        repairs.Add(new TerminalGoalSweepRepair(
+            "owned-ephemeral-cleanup",
+            $"removed {ephemeralCleanup.RemovedCount} owned ephemeral director{(ephemeralCleanup.RemovedCount == 1 ? "y" : "ies")}",
+            $"conduct {prefix} --loop"));
     }
 
     private static bool TryBuildGlobalStaleTerminalExclusionEvidence(Goal goal, out string evidence)

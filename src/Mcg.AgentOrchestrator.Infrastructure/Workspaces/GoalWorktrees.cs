@@ -38,7 +38,8 @@ public sealed record GoalWorktreeRemoveResult(
     string Message,
     string? LeftoverPath,
     IReadOnlyList<WorktreeLockHolder> LockHolders,
-    string? ResumeCommand)
+    string? ResumeCommand,
+    GoalOwnedEphemeralSweepResult? OwnedEphemeralCleanup = null)
 {
     public bool IsComplete => LeftoverPath is null;
 }
@@ -854,10 +855,11 @@ public static class GoalWorktrees
                     $"{completeMessage} Owned ephemeral cleanup is incomplete. Conductor retry: {ConductorRetryCommand(goalId)}",
                     leftover,
                     FindLockHoldersForCleanup(leftover),
-                    ConductorRetryCommand(goalId));
+                    ConductorRetryCommand(goalId),
+                    ownedEphemeralCleanup);
             }
 
-            return new GoalWorktreeRemoveResult(completeMessage, null, [], null);
+            return new GoalWorktreeRemoveResult(completeMessage, null, [], null, ownedEphemeralCleanup);
         }
 
         var resumeCommand = ConductorRetryCommand(goalId);
