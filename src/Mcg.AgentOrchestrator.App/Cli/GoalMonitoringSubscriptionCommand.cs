@@ -20,6 +20,7 @@ internal static class GoalMonitoringSubscriptionCommand
     private const string TaskFlag = "--task";
     private const string EventKindFlag = "--event-kind";
     private const string WaitTerminalFlag = "--wait-terminal";
+    private const string TimeoutFlag = "--timeout";
 
     public static GoalMonitoringSubscriptionOptions Parse(IReadOnlyList<string> parts)
     {
@@ -36,6 +37,7 @@ internal static class GoalMonitoringSubscriptionCommand
         string? fromCursor = null;
         var once = false;
         var waitTerminal = false;
+        TimeSpan? timeout = null;
         var format = isGoalsSubscribe ? GoalMonitoringOutputFormat.Ndjson : GoalMonitoringOutputFormat.Sse;
         string? goalPrefix = null;
         string? taskId = null;
@@ -148,6 +150,18 @@ internal static class GoalMonitoringSubscriptionCommand
                 continue;
             }
 
+            if (part.Equals(TimeoutFlag, StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 >= parts.Count || !TryParseTimeout(parts[index + 1], out var parsedTimeout))
+                {
+                    throw new ArgumentException(Usage);
+                }
+
+                timeout = parsedTimeout;
+                index++;
+                continue;
+            }
+
             throw new ArgumentException($"Unknown monitor-goal option '{part}'.");
         }
 
@@ -161,7 +175,8 @@ internal static class GoalMonitoringSubscriptionCommand
             goalPrefix,
             taskId,
             eventKinds.ToArray(),
-            fromCursor);
+            fromCursor,
+            timeout);
     }
 
     internal static IReadOnlyList<string> NormalizeCommandShape(IReadOnlyList<string> parts)
@@ -276,6 +291,11 @@ internal static class GoalMonitoringSubscriptionCommand
             reloadKernel,
             runEvents,
             cancellationToken).ConfigureAwait(false);
+        if (terminal is null)
+        {
+            throw new CliExitException(124);
+        }
+
         if (options.WaitTerminal &&
             terminal is GoalLifecycleState.Failed or GoalLifecycleState.Blocked or GoalLifecycleState.AwaitingClarification or GoalLifecycleState.AwaitingHumanInput)
         {
@@ -443,7 +463,7 @@ internal static class GoalMonitoringSubscriptionCommand
         "message"
     ];
 
-    private static async Task<GoalLifecycleState> RunHeadlessLocalAsync(
+    private static async Task<GoalLifecycleState?> RunHeadlessLocalAsync(
         GoalMonitoringSubscriptionOptions options,
         TextWriter output,
         AgentOrchestratorKernel kernel,
@@ -458,6 +478,9 @@ internal static class GoalMonitoringSubscriptionCommand
         var timelineCursor = resumeCursor.TimelineCursor;
         var runEventCursor = resumeCursor.RunEventCursor;
         var snapshotWritten = false;
+        var deadline = options.Timeout is { } timeout
+            ? DateTimeOffset.UtcNow.Add(timeout)
+            : (DateTimeOffset?)null;
         while (true)
         {
             var current = reloadKernel?.Invoke() ?? kernel;
@@ -506,7 +529,37 @@ internal static class GoalMonitoringSubscriptionCommand
                 return state;
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            if (deadline is { } dueAt && DateTimeOffset.UtcNow >= dueAt)
+            {
+                var timeoutEvent = new GoalStateSubscriptionEvent(
+                    1,
+                    Math.Max(timelineCursor, 0),
+                    DateTimeOffset.UtcNow,
+                    "monitor.timeout",
+                    goal.Id.Value,
+                    null,
+                    state.ToString(),
+                    workspace.RunEventStorePath,
+                    null,
+                    $"timeout={options.Timeout!.Value}");
+                PrintSubscriptionEvent(timeoutEvent with
+                {
+                    CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor).ToString()
+                }, options.Format, output);
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+
+            var delay = TimeSpan.FromSeconds(1);
+            if (deadline is { } nextDueAt)
+            {
+                delay = Min(delay, nextDueAt - DateTimeOffset.UtcNow);
+            }
+
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -544,6 +597,7 @@ internal static class GoalMonitoringSubscriptionCommand
     {
         var events = new List<GoalStateSubscriptionEvent> { BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, batch.LastEventId) };
         events.AddRange(batch.Events.Select(evt => BuildTimelineEnvelope(evt, goal, state, workspace)));
+        events.AddRange(BuildProcessEnvelopes(batch, state));
         events.AddRange(runRecords
             .Where(record => record.GoalId is null || string.Equals(record.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
             .Select(record => new GoalStateSubscriptionEvent(
@@ -561,6 +615,49 @@ internal static class GoalMonitoringSubscriptionCommand
                     CursorDomain = GoalStateCursorDomain.RunEvent
                 }));
         return events.OrderBy(evt => evt.CursorSequence).ThenBy(evt => evt.Timestamp).ToList();
+    }
+
+    private static IEnumerable<GoalStateSubscriptionEvent> BuildProcessEnvelopes(
+        GoalMonitoringBatchDto batch,
+        GoalLifecycleState state)
+    {
+        foreach (var task in batch.Snapshot.Tasks)
+        {
+            if (task.LastProcess is not { } process)
+            {
+                continue;
+            }
+
+            if (process.Heartbeat.IsAvailable)
+            {
+                yield return new GoalStateSubscriptionEvent(
+                    1,
+                    batch.LastEventId,
+                    process.Heartbeat.LastObservedAt ?? batch.Snapshot.ObservedAt,
+                    "dispatch.heartbeat",
+                    batch.GoalId,
+                    task.TaskId,
+                    task.Status.ToString(),
+                    process.HeartbeatPath ?? process.StandardOutputPath,
+                    process.ProcessId,
+                    $"state={process.Heartbeat.State} stdout={process.HeartbeatStdoutBytes ?? 0} stderr={process.HeartbeatStderrBytes ?? 0}");
+            }
+
+            if (!process.IsRunning && (process.CompletedAt is not null || process.ExitCode is not null))
+            {
+                yield return new GoalStateSubscriptionEvent(
+                    1,
+                    batch.LastEventId,
+                    process.CompletedAt ?? batch.Snapshot.ObservedAt,
+                    "dispatch.exit",
+                    batch.GoalId,
+                    task.TaskId,
+                    state.ToString(),
+                    process.ExitCodePath,
+                    process.ProcessId,
+                    $"exit={process.ExitCode?.ToString() ?? "unknown"} cancelled={process.WasCancelled}");
+            }
+        }
     }
 
     private static GoalStateSubscriptionEvent BuildSnapshotEvent(GoalMonitoringSnapshotDto snapshot, GoalLifecycleState state, string artifactPath, long cursor) =>
@@ -617,7 +714,14 @@ internal static class GoalMonitoringSubscriptionCommand
             entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed)
             || (!workspaceExists && goal.Status == GoalStatus.Completed);
         var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
-        return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
+        var isBlocked = goal.LatestAcceptanceFailure is not null ||
+            journal.LatestByOperation.Any(entry =>
+                entry.Status == GoalOperationStatus.Failed &&
+                (entry.Operation.Contains("acceptance", StringComparison.OrdinalIgnoreCase) ||
+                 entry.Operation.Contains("land", StringComparison.OrdinalIgnoreCase) ||
+                 entry.Operation.Contains("cleanup", StringComparison.OrdinalIgnoreCase) ||
+                 entry.Operation.Contains("workspace:remove", StringComparison.OrdinalIgnoreCase)));
+        return new GoalLifecycleFacts(workspaceExists, isBlocked, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }
 
     private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor)
@@ -698,6 +802,44 @@ internal static class GoalMonitoringSubscriptionCommand
         return false;
     }
 
+    private static bool TryParseTimeout(string value, out TimeSpan timeout)
+    {
+        timeout = TimeSpan.Zero;
+        if (TimeSpan.TryParse(value, out var parsed) && parsed > TimeSpan.Zero)
+        {
+            timeout = parsed;
+            return true;
+        }
+
+        if (value.EndsWith("ms", StringComparison.OrdinalIgnoreCase) &&
+            double.TryParse(value[..^2], out var milliseconds) &&
+            milliseconds > 0)
+        {
+            timeout = TimeSpan.FromMilliseconds(milliseconds);
+            return true;
+        }
+
+        if (value.EndsWith("s", StringComparison.OrdinalIgnoreCase) &&
+            double.TryParse(value[..^1], out var seconds) &&
+            seconds > 0)
+        {
+            timeout = TimeSpan.FromSeconds(seconds);
+            return true;
+        }
+
+        if (value.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
+            double.TryParse(value[..^1], out var minutes) &&
+            minutes > 0)
+        {
+            timeout = TimeSpan.FromMinutes(minutes);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static TimeSpan Min(TimeSpan left, TimeSpan right) => left <= right ? left : right;
+
     private static string? FindFlagValue(IReadOnlyList<string> parts, string flag)
     {
         for (var index = 0; index < parts.Count - 1; index++)
@@ -746,7 +888,7 @@ internal static class GoalMonitoringSubscriptionCommand
         return value.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(value + "/");
     }
 
-    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states.";
+    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states; timeout accepts TimeSpan, ms, s, or m.";
 
     private sealed class TextWriterStream(TextWriter writer) : Stream
     {
@@ -917,7 +1059,8 @@ internal sealed record GoalMonitoringSubscriptionOptions(
     string? GoalPrefix = null,
     string? TaskId = null,
     IReadOnlyList<string>? EventKinds = null,
-    string? FromCursor = null)
+    string? FromCursor = null,
+    TimeSpan? Timeout = null)
 {
     public bool IsLocal => DashboardUri is null;
 
