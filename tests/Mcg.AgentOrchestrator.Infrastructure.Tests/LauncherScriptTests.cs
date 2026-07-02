@@ -30,6 +30,7 @@ public sealed class LauncherScriptTests
     {
         using var sandbox = CreateLandVerifiedGoalSandbox("""
             @echo off
+            echo %*>> dotnet-args.txt
             if "%~1"=="build" exit /b 0
             if "%~3"=="" (
               echo Usage: goal-mark-landed ^<goal-prefix^> --confirm-goal-mark-landed
@@ -45,6 +46,10 @@ public sealed class LauncherScriptTests
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         Assert.Contains("[land] DONE", result.Stdout);
         Assert.True(File.Exists(Path.Combine(sandbox.RepositoryPath, "goal.txt")));
+        Assert.Contains(
+            "Mcg.AgentOrchestrator.App.dll goal-mark-landed abcdef12 --confirm-goal-mark-landed",
+            File.ReadAllText(Path.Combine(sandbox.RepositoryPath, "dotnet-args.txt")),
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "LandVerifiedGoal_goal_mark_landed_nonzero_exit_exits_nonzero_without_done")]
