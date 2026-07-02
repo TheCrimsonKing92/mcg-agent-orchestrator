@@ -1102,6 +1102,7 @@ public sealed class WorkerDispatchTests
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
@@ -1109,7 +1110,8 @@ public sealed class WorkerDispatchTests
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: sandbox);
     var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -1146,6 +1148,7 @@ public sealed class WorkerDispatchTests
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
@@ -1153,7 +1156,8 @@ public sealed class WorkerDispatchTests
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: sandbox);
 
     Assert.True(preflight.Allowed);
     Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
@@ -1184,9 +1188,26 @@ public sealed class WorkerDispatchTests
     var task = goal.Tasks.Single();
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var dispatchedAt = DateTimeOffset.Parse("2026-06-13T12:00:00Z");
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
-    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, [agent], profiles, worktree, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, goal, task, [agent], profiles, promptRoot, worktree, dispatchedAt);
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        profiles,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: sandbox);
     var result = RunPowerShellCommand(worktree, task.LastDispatch!.Command);
 
     Assert.True(preflight.Allowed);
@@ -1778,6 +1799,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
     kernel.ActivateGoal(goal.Id, [assignedAgent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -1787,7 +1809,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: sandbox);
 
     Assert.Equal(assignedAgent.Id, task.AssignedAgentId);
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -2237,6 +2260,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -2246,7 +2270,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: sandbox);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
     Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode 'plan'", StringComparison.Ordinal));

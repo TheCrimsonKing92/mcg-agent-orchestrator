@@ -3306,7 +3306,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_profile_dispatch_allows_complex_paid_subscription_start_under_size_threshold")]
     public void CliProfileDispatchAllowsComplexPaidSubscriptionStartUnderSizeThreshold()
     {
-        var root = CreateTempDirectory();
+        var root = CreateShortAcceptanceRepository();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
@@ -5197,6 +5197,21 @@ public sealed class CliCommandTests
         return workspace;
     }
 
+    private static IDisposable ClearWorkerSandboxEnv()
+    {
+        var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, null);
+        return new WorkerSandboxEnvRestore(previous);
+    }
+
+    private sealed class WorkerSandboxEnvRestore(string? previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
+        }
+    }
+
     private static BacklogItem BacklogItemFor(
         string title,
         string body = "",
@@ -5495,6 +5510,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
     public void CliSubscriptionDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
+        using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
@@ -5577,6 +5593,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_simple_goal_with_dispatch_creates_goal_and_launches_worker")]
     public void CliSimpleGoalWithDispatchCreatesGoalAndLaunchesWorker()
     {
+        using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         // Fake a git worktree at root so WorkerSandboxCapabilityPlanner passes the .git existence
         // check when no goal worktree has been created yet (EnsureGoalWorkspaceForDispatch is a
@@ -6006,6 +6023,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_profile_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
     public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
+        using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
