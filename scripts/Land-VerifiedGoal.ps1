@@ -49,6 +49,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $launcher = Join-Path $repo 'mcg-orchestrator.cmd'
+$appProject = Join-Path $repo 'src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj'
+$appDll = Join-Path $repo 'src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll'
 $branch = "goal/$GoalPrefix"
 
 function Abort([string]$m) { Write-Host "[land] ABORT: $m" -ForegroundColor Red; exit 1 }
@@ -60,15 +62,38 @@ function IsGoalMarkLandedUnavailable([string]$output) {
 function WriteGoalMarkLandedFailure([string]$detail) {
     [Console]::Error.WriteLine("[land] ABORT: goal-mark-landed failed. $detail")
 }
+function ResolveDotnetPath {
+    $configured = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+    if ([string]::IsNullOrWhiteSpace($configured)) {
+        return "dotnet"
+    }
+
+    return $configured
+}
+function BuildCurrentAppForBookkeeping {
+    $dotnetPath = ResolveDotnetPath
+    $output = (& $dotnetPath build $appProject --nologo -v quiet -clp:ErrorsOnly 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        WriteGoalMarkLandedFailure "Could not build current app before bookkeeping. Exit code: $exitCode. Output:`n$output"
+        exit 1
+    }
+}
+function InvokeCurrentAppForBookkeeping([string[]]$arguments) {
+    $dotnetPath = ResolveDotnetPath
+    return (& $dotnetPath $appDll @arguments 2>&1 | Out-String)
+}
 function InvokeGoalMarkLandedPreflight {
-    $output = (& $launcher goal-mark-landed 2>&1 | Out-String)
+    BuildCurrentAppForBookkeeping
+    $output = InvokeCurrentAppForBookkeeping -arguments @("goal-mark-landed")
     if (IsGoalMarkLandedUnavailable $output) {
         WriteGoalMarkLandedFailure "Command availability probe reported unavailable command output:`n$output"
         exit 1
     }
 }
 function InvokeGoalMarkLanded([string]$prefix) {
-    $output = (& $launcher goal-mark-landed $prefix --confirm-goal-mark-landed 2>&1 | Out-String)
+    BuildCurrentAppForBookkeeping
+    $output = InvokeCurrentAppForBookkeeping -arguments @("goal-mark-landed", $prefix, "--confirm-goal-mark-landed")
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -or (IsGoalMarkLandedUnavailable $output)) {
         WriteGoalMarkLandedFailure "Exit code: $exitCode. Output:`n$output"
