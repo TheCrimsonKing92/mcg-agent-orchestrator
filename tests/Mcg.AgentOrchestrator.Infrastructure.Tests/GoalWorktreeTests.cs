@@ -2159,17 +2159,22 @@ public sealed class GoalWorktreeIntegrationTests
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = goal;
 
-            var changed = CliPersistentStateRunner.ExecuteCommand(
-                ["acceptance-queue", "--apply", "--confirm-acceptance-queue"],
-                stateRepository,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal,
-                acceptanceVerifier: FakeAcceptanceVerifier.Passed());
+            var changed = false;
+            var output = CaptureConsole(() =>
+            {
+                changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["acceptance-queue", "--apply", "--confirm-acceptance-queue"],
+                    stateRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal,
+                    acceptanceVerifier: FakeAcceptanceVerifier.Passed());
+            });
 
             Assert.True(changed);
+            Assert.True(output.Contains("Acceptance evidence bundle: passed", StringComparison.Ordinal), output);
             Assert.True(File.Exists(Path.Combine(repo, "queue-persist.txt")));
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
 

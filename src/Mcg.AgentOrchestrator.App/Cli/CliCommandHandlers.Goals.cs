@@ -2493,6 +2493,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         }
     }
 
+    if (skipVerify || verification is { Passed: true })
+    {
+        context.Kernel.ClearAcceptanceFailure(goal.Id);
+    }
+
     var evidence = context.Worktrees.BuildAcceptanceEvidence(context.Kernel, goal, worktreePath, verification, skipVerify);
     ConsoleViews.PrintAcceptanceEvidenceBundle(evidence);
 
