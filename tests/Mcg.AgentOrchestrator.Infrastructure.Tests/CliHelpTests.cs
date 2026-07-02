@@ -166,7 +166,7 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("Usage: operator-commands", output);
         Xunit.Assert.Contains("Approved prefixes:", output);
         Xunit.Assert.Contains("scripts\\Get-OrchestratorSnapshot.ps1", output);
-        Xunit.Assert.Contains("scripts\\Wait-ForDispatch.ps1", output);
+        Xunit.Assert.Contains("scripts\\Wait-ForDispatch.ps1 -ExitFile <path>", output);
         Xunit.Assert.Contains("scripts\\Invoke-Git.ps1", output);
         Xunit.Assert.Contains("scripts\\Invoke-OrchestratorCommand.ps1 backlog-list", output);
         Xunit.Assert.Contains("scripts\\Get-RepoProcessInfo.ps1", output);

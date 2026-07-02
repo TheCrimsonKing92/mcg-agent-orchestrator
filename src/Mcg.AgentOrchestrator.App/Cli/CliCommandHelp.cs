@@ -87,7 +87,7 @@ internal static class CliCommandHelp
         [
             "Observe: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal>",
             "Wait: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Wait-RepoInterval.ps1 -Seconds <n>",
-            "Wait dispatch: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Wait-ForDispatch.ps1 <pid>",
+            "Wait dispatch: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Wait-ForDispatch.ps1 -ExitFile <path>",
             "Git/diff: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-Git.ps1 status --short",
             "Backlog/orchestrator: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 backlog-list --limit <n>",
             "Process inspect: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Get-RepoProcessInfo.ps1 -Id <pid>",
