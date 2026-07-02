@@ -986,7 +986,7 @@ private static void AutoRecordDogfoodEntry(CliExecutionContext context)
 {
     var goal = context.CurrentGoal!;
     RecordDogfoodEntry(context.Workspace, goal);
-    Console.WriteLine($"Recorded DOGFOOD entry for goal {goal.Id.Value[..8]} to {context.Workspace.DogfoodLogStorePath}.");
+    Console.WriteLine($"Recorded dogfood-log entry for goal {goal.Id.Value[..8]} to {context.Workspace.DogfoodLogStorePath}.");
 }
 
 private static DogfoodLogRecord RecordDogfoodEntry(OrchestratorWorkspace workspace, Goal goal)

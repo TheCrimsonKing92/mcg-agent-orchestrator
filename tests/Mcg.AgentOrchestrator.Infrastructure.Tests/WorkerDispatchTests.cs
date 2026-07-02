@@ -5673,7 +5673,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Directory.CreateDirectory(workingDirectory);
     File.WriteAllText(Path.Combine(workingDirectory, "AGENTS.md"), "Repo-local agent guidance.");
     File.WriteAllText(Path.Combine(workingDirectory, "BACKLOG.md"), "Open backlog item.");
-    File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Recent dogfood note.");
+    File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Compatibility pointer only.");
     File.WriteAllText(Path.Combine(workingDirectory, "TestRepo.sln"), ""); // mark as dotnet for toolchain detection
     var kernel = new AgentOrchestratorKernel();
     var priorTask = new TaskSpec(TaskId.New(), "Plan implementation.", AgentRole.Planner);
@@ -5712,7 +5712,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(Path.Combine(contextDirectory, "context-package.json")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "AGENTS.md")));
     Assert.False(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
-    Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
+    Assert.False(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
     var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
     var deterministic = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
@@ -5776,6 +5776,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(workflowBrokers, text => text.Contains("source-survey", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("diff-summary", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("acceptance-evidence", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains(".orchestrator/dogfood-log.db", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("dogfood-log list", StringComparison.Ordinal));
+    Assert.DoesNotContain("Artifact: DOGFOOD_LOG.md", workflowBrokers, StringComparison.Ordinal);
     Assert.Contains(workflowBrokers, text => text.Contains("Broker Output Contract", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("WORKER_RESULT blockers", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Changed files: Not reported.", StringComparison.Ordinal));

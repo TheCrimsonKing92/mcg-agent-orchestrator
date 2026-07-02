@@ -168,7 +168,7 @@ internal static class OperatorIntentTemplates
             [
                 "Acceptance queue output.",
                 "Focused and broadened test evidence.",
-                "Backlog and DOGFOOD_LOG delta."
+                "Backlog delta and SQLite dogfood-log evidence."
             ],
             [
                 "Run acceptance-queue dry run before apply.",

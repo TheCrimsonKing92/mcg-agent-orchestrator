@@ -478,9 +478,10 @@ internal sealed class WorkerArtifactWriter
             "  Use for: acceptance manifest status, verification history, model-fit evidence, and WORKER_RESULT completeness.",
             "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass.",
             "- backlog-log-evidence",
-            "  Artifact: DOGFOOD_LOG.md when present in artifact-registry.json",
+            "  Command: `dogfood-log list --limit <n>` / `dogfood-log add <goal-prefix>`",
+            "  Store: `.orchestrator/dogfood-log.db` is the durable dogfood evidence source; DOGFOOD_LOG.md is only an operator pointer when present.",
             "  Use for: closing backlog items, filing follow-ups, and recording Model fit at goal boundaries.",
-            "  Failure handling: missing backlog/log artifacts require a direct file read before editing those files.",
+            "  Failure handling: missing backlog/log evidence should be resolved with the SQLite-backed command surface, not file edits.",
             string.Empty,
             "## Broker Output Contract",
             "- Prefer broker artifact paths in your evidence over repeating full artifact contents.",
@@ -604,7 +605,7 @@ internal sealed class WorkerArtifactWriter
     private static List<string> CopyGuidanceFiles(string workingDirectory, string contextDirectory)
     {
         var copied = new List<string>();
-        foreach (var fileName in new[] { "AGENTS.md", "DOGFOOD_LOG.md" })
+        foreach (var fileName in new[] { "AGENTS.md" })
         {
             var sourcePath = Path.Combine(workingDirectory, fileName);
             if (!File.Exists(sourcePath))
@@ -789,7 +790,6 @@ internal sealed class WorkerArtifactWriter
             "context-package.json" => "Task-scoped context package metadata and missing-artifact fallback guidance.",
             "subscription-preflight.md" => "Subscription dispatch preflight findings.",
             "AGENTS.md" => "Repository-local agent instructions.",
-            "DOGFOOD_LOG.md" => "Recent dogfood evidence and friction.",
             _ => "Copied repository guidance artifact."
         };
     }
@@ -807,7 +807,7 @@ internal sealed class WorkerArtifactWriter
             "diff-summary.md" => "generated from git status and diff commands in the working directory at dispatch preparation",
             "context-package.json" => "generated with the current task package at dispatch preparation",
             "subscription-preflight.md" => "generated from subscription preflight immediately before dispatch preparation",
-            "AGENTS.md" or "DOGFOOD_LOG.md" => "copied from working directory at dispatch preparation",
+            "AGENTS.md" => "copied from working directory at dispatch preparation",
             _ => $"generated for {currentRole} at dispatch preparation"
         };
     }
@@ -820,7 +820,7 @@ internal sealed class WorkerArtifactWriter
             "diff-summary.md" => ["Developer", "Tester", "Reviewer"],
             "subscription-preflight.md" => ["Developer", "Tester", "Reviewer"],
             "prior-task-evidence.md" => ["Developer", "Tester", "Reviewer"],
-            "AGENTS.md" or "DOGFOOD_LOG.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
+            "AGENTS.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
             _ => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"]
         };
     }

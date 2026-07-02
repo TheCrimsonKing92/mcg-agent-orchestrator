@@ -99,6 +99,30 @@ public sealed class IdeationPlanTests
         Assert.True(IdeationProposalPlanner.HasEvidenceCitation("backlog item was never started"));
     }
 
+    [Xunit.Fact(DisplayName = "IdeationPlan_BuildEvidenceContext_ReadsDogfoodLogFromSqlite")]
+    public void IdeationPlan_BuildEvidenceContext_ReadsDogfoodLogFromSqlite()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "stale markdown evidence");
+        new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .UpsertAsync(new DogfoodLogAppend(
+                "goal-1",
+                "## SQLite dogfood evidence",
+                "summary",
+                "operator gate",
+                "Model fit: adequate",
+                "## SQLite dogfood evidence" + Environment.NewLine + "- Fresh durable note."))
+            .GetAwaiter()
+            .GetResult();
+
+        var context = IdeationProposalPlanner.BuildEvidenceContext(new AgentOrchestratorKernel(), workspace);
+
+        Assert.Contains("SQLite dogfood evidence", context);
+        Assert.DoesNotContain("stale markdown evidence", context);
+        Assert.Contains("Dogfood Log (SQLite recent entries", context);
+    }
+
     [Xunit.Fact(DisplayName = "IdeationPlan_HasEvidenceCitation_GenericText_ReturnsFalse")]
     public void IdeationPlan_HasEvidenceCitation_GenericText_ReturnsFalse()
     {

@@ -1726,7 +1726,7 @@ public sealed class GoalWorktreeIntegrationTests
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--keep-workspace"], context));
 
-            Assert.True(output.Contains("Recorded DOGFOOD entry", StringComparison.Ordinal));
+            Assert.True(output.Contains("Recorded dogfood-log entry", StringComparison.Ordinal));
             var record = await new DogfoodLogStore(context.Workspace.DogfoodLogStorePath)
                 .GetByGoalIdAsync(goal.Id.Value);
             Assert.NotNull(record);
