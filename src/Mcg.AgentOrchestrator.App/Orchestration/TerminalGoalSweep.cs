@@ -44,17 +44,6 @@ internal static class TerminalGoalSweep
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
 
-            if (onlyGoalId is null &&
-                TryBuildGlobalStaleTerminalExclusionEvidence(originalGoal, out var preReconciliationExclusionEvidence))
-            {
-                blockers.Add(new TerminalGoalSweepBlocker(
-                    "stale-terminal-excluded",
-                    preReconciliationExclusionEvidence,
-                    "excluded"));
-                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
-                continue;
-            }
-
             var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
             if (reconciled > 0)
             {
@@ -111,6 +100,16 @@ internal static class TerminalGoalSweep
                     "terminal-live-dispatch",
                     liveDispatchEvidence,
                     liveDispatchCommand));
+            }
+            else if (!blockedByDirtyWorktree &&
+                     !branchAlreadyLanded &&
+                     onlyGoalId is null &&
+                     TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var staleTerminalExclusionEvidence))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "stale-terminal-excluded",
+                    staleTerminalExclusionEvidence,
+                    "excluded"));
             }
             else if (!blockedByDirtyWorktree &&
                      !branchAlreadyLanded &&

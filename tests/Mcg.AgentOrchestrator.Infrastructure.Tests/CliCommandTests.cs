@@ -6423,8 +6423,8 @@ public sealed class CliCommandTests
         Xunit.Assert.Single(second.Goals.Single().Blockers);
     }
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_excludes_before_human_input_process_reconcile")]
-    public void TerminalGoalSweepGlobalStaleTerminalExcludesBeforeHumanInputProcessReconcile()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_reconciles_human_input_exit_before_exclusion")]
+    public void TerminalGoalSweepGlobalStaleTerminalReconcilesHumanInputExitBeforeExclusion()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -6439,19 +6439,14 @@ public sealed class CliCommandTests
         var result = TerminalGoalSweep.Run(kernel, root);
 
         var goalResult = result.Goals.Single();
-        var blocker = goalResult.Blockers.Single();
-        Xunit.Assert.False(result.Changed);
-        Xunit.Assert.Empty(goalResult.Repairs);
-        Xunit.Assert.Equal("stale-terminal-excluded", blocker.Kind);
-        Xunit.Assert.Equal("excluded", blocker.Command);
-        Xunit.Assert.Contains($"goalId={goal.Id.Value}", blocker.Evidence, StringComparison.Ordinal);
-        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Running", blocker.Evidence, StringComparison.Ordinal);
-        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
-        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
-        Xunit.Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
-        Xunit.Assert.Null(kernel.GetTask(goal.Id, task.Id).LastVerification);
-        Xunit.Assert.Empty(kernel.HumanInputRequests);
+        Xunit.Assert.True(result.Changed);
+        Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "dispatch-exit-reconciled");
+        Xunit.Assert.Empty(goalResult.Blockers);
+        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
+        Xunit.Assert.Equal(0, kernel.GetTask(goal.Id, task.Id).LastProcess!.ExitCode);
+        Xunit.Assert.Single(kernel.HumanInputRequests);
     }
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
@@ -6727,6 +6722,31 @@ public sealed class CliCommandTests
 
         Xunit.Assert.True(first.Changed);
         Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "dispatch-exit-reconciled");
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, sweptTask.Status);
+        Xunit.Assert.Equal(0, sweptTask.LastProcess!.ExitCode);
+        Xunit.Assert.Empty(second.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_completed_running_task_with_exit_file_reconciles_before_exclusion")]
+    public void TerminalGoalSweepGlobalCompletedRunningTaskWithExitFileReconcilesBeforeExclusion()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Global running exit completion", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var first = TerminalGoalSweep.Run(kernel, root);
+        var second = TerminalGoalSweep.Run(kernel, root);
+        var sweptTask = kernel.GetTask(goal.Id, task.Id);
+
+        Xunit.Assert.True(first.Changed);
+        Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "dispatch-exit-reconciled");
+        Xunit.Assert.Empty(first.Goals.Single().Blockers);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, sweptTask.Status);
         Xunit.Assert.Equal(0, sweptTask.LastProcess!.ExitCode);
         Xunit.Assert.Empty(second.Goals);
