@@ -93,8 +93,8 @@ internal static class CliCommandHelp
             "Process inspect: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Get-RepoProcessInfo.ps1 -Id <pid>",
             "Exact stop: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Stop-RepoProcess.ps1 -Id <pid>",
             "SQLite: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorSqliteTool.ps1 <args>",
-            "Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 <goal-prefix>",
-            "Land: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Land-VerifiedGoal.ps1 <goal-prefix>"
+            "Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]",
+            "Land: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Land-VerifiedGoal.ps1 -GoalPrefix <goal>"
         ]);
 
     private static readonly IReadOnlySet<string> GenericHelpFlags =
