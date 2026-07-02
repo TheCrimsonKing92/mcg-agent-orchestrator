@@ -1349,6 +1349,60 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_direct_merge_journals_landing_before_cleanup_for_later_missing_worktree_retry")]
+    public void CliAcceptanceDirectMergeJournalsLandingBeforeCleanupForLaterMissingWorktreeRetry()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Direct acceptance journal recovery", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8]], context));
+
+            Assert.Contains("Fast-forwarded", output);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "acceptance" &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+
+            var verifierRuns = 0;
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            var retryContext = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Failed("should not run", onRun: () => verifierRuns++)
+            };
+
+            var retryOutput = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8], "--keep-workspace"], retryContext));
+
+            Assert.Equal(0, verifierRuns);
+            Assert.Contains("Acceptance repaired:", retryOutput);
+            Assert.DoesNotContain("Acceptance evidence: blocked", retryOutput);
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_repair_clears_stale_failure_only_with_landing_and_cleanup_evidence")]
     public void CliAcceptanceRepairClearsStaleFailureOnlyWithLandingAndCleanupEvidence()
     {

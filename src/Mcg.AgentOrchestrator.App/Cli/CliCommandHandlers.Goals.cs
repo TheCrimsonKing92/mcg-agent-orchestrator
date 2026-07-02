@@ -2639,8 +2639,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
         {
-            context.Kernel.ClearAcceptanceFailure(goal.Id);
-            context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
+            RecordAcceptanceCompleted(context, goal);
         }
         else
         {
@@ -2652,9 +2651,19 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return mergeCommit.FastForwarded;
     }
 
+    RecordAcceptanceCompleted(context, goal);
+    return true;
+}
+
+private static void RecordAcceptanceCompleted(CliExecutionContext context, Goal goal)
+{
+    GoalOperationJournal.Completed(
+        context.Workspace.ExecutionDirectory,
+        goal,
+        "acceptance",
+        "Acceptance passed and merge completed.");
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
-    return true;
 }
 
 private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerificationResult verification)
