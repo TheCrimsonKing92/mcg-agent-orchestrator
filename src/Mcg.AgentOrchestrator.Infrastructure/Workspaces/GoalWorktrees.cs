@@ -381,7 +381,7 @@ public static class GoalWorktrees
             if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
             {
                 throw new InvalidOperationException(
-                    $"Failed to remove goal workspace '{path}': {removal.Error} Commit or discard its changes, or remove it manually with: git worktree remove --force \"{path}\"");
+                    $"Failed to remove goal workspace '{path}': {removal.Error} Commit, discard, or recover its changes; conductor cleanup will retry after the worktree is clean.");
             }
         }
         else
@@ -397,11 +397,12 @@ public static class GoalWorktrees
             if (!RunBoundedCleanupStep(path, "remove:build-server-shutdown", cleanupBudget, timeout => BuildServerShutdown(path, timeout)) ||
                 !RunBoundedCleanupStep(path, "remove:acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove", timeout)))
             {
+                RecordCleanupNeeded(path, "remove:cleanup-budget-exhausted");
                 return new GoalWorktreeRemoveResult(
                     $"Workspace cleanup deferred because cleanup budget was exhausted before deleting {path}.",
                     path,
                     FindLockHolders(path),
-                    $"workspace remove {Prefix(goalId)}");
+                    ConductorRetryCommand(goalId));
             }
         }
 
@@ -735,16 +736,20 @@ public static class GoalWorktrees
     {
         if (!Directory.Exists(path))
         {
+            ClearCleanupNeeded(path);
             return new GoalWorktreeRemoveResult(completeMessage, null, [], null);
         }
 
-        var resumeCommand = $"workspace remove {Prefix(goalId)}";
+        var resumeCommand = ConductorRetryCommand(goalId);
+        RecordCleanupNeeded(path, "remove:leftover-directory");
         return new GoalWorktreeRemoveResult(
-            $"{incompleteMessage} Resume with: {resumeCommand}",
+            $"{incompleteMessage} Conductor retry: {resumeCommand}",
             path,
             FindLockHolders(path),
             resumeCommand);
     }
+
+    private static string ConductorRetryCommand(GoalId goalId) => $"conduct {Prefix(goalId)} --loop";
 
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
     {
@@ -1012,7 +1017,7 @@ public static class GoalWorktrees
             WarnCleanupFailure(
                 path,
                 operation + ":skip-backoff",
-                new IOException(BuildManualCleanupMessage(path, backoff.Reason)));
+                new IOException(BuildCleanupRetryMessage(path, backoff.Reason)));
             return false;
         }
 
@@ -1028,7 +1033,7 @@ public static class GoalWorktrees
             WarnCleanupFailure(
                 path,
                 operation,
-                new IOException(BuildManualCleanupMessage(path, firstDelete.Message ?? "Directory deletion failed.")));
+                new IOException(BuildCleanupRetryMessage(path, firstDelete.Message ?? "Directory deletion failed.")));
             return !Directory.Exists(path);
         }
 
@@ -1049,7 +1054,7 @@ public static class GoalWorktrees
         WarnCleanupFailure(
             path,
             operation,
-            new IOException(BuildManualCleanupMessage(
+            new IOException(BuildCleanupRetryMessage(
                 path,
                 secondDelete.Message ?? "Directory deletion failed after ACL reset.")));
         return !Directory.Exists(path);
@@ -1151,11 +1156,8 @@ public static class GoalWorktrees
             ? GoalWorktreeDeleteFailureKind.AccessDenied
             : GoalWorktreeDeleteFailureKind.Transient;
 
-    private static string BuildManualCleanupMessage(string path, string reason) =>
-        $"{reason} Manual recovery: Remove-Item -LiteralPath '{EscapePowerShellSingleQuoted(path)}' -Recurse -Force";
-
-    private static string EscapePowerShellSingleQuoted(string value) =>
-        value.Replace("'", "''", StringComparison.Ordinal);
+    private static string BuildCleanupRetryMessage(string path, string reason) =>
+        $"{reason} Cleanup-needed record persisted in SQLite for conductor retry; path='{path}'.";
 
     private static string CleanupBackoffStorePath(string orphanPath)
     {
@@ -1202,7 +1204,13 @@ public static class GoalWorktrees
         return false;
     }
 
-    private static void RecordOrphanCleanupBackoff(string path, string reason)
+    private static void RecordCleanupNeeded(string path, string reason) =>
+        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed");
+
+    private static void ClearCleanupNeeded(string path) =>
+        ClearOrphanCleanupBackoff(path);
+
+    private static void RecordOrphanCleanupBackoff(string path, string reason, string warningOperation = "orphan-sweep:backoff")
     {
         try
         {
@@ -1219,7 +1227,7 @@ public static class GoalWorktrees
             command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(CleanupBackoffDuration).ToString("O"));
             command.Parameters.AddWithValue("$reason", reason);
             command.ExecuteNonQuery();
-            WarnCleanupFailure(path, "orphan-sweep:backoff", new TimeoutException(BuildManualCleanupMessage(path, reason)));
+            WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason)));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {

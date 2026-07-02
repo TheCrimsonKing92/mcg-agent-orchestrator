@@ -2959,8 +2959,8 @@ private static void CleanupGoalWorkspaceAfterMerge(
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
         context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-        Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
-        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
+        Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: conduct {goalPrefix} --loop");
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry conductor cleanup with conduct {goalPrefix} --loop.\"");
         return;
     }
 
@@ -2975,7 +2975,7 @@ private static void CleanupGoalWorkspaceAfterMerge(
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
         context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
+        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry conductor cleanup with conduct {goalPrefix} --loop.\"");
     }
 }
 

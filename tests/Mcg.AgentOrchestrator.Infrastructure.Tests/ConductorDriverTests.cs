@@ -928,7 +928,7 @@ public sealed class ConductorDriverTests
                     "Removed workspace, but leftover directory cleanup is incomplete.",
                     @"C:\repo\.orchestrator-worktrees\abc12345",
                     [new WorktreeLockHolder(1234, "dotnet", "dotnet test")],
-                    "workspace remove abc12345");
+                    "conduct abc12345 --loop");
             });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
@@ -938,7 +938,7 @@ public sealed class ConductorDriverTests
         Assert.Equal(1, cleanupCalls);
         Assert.True(held.Reason.Contains("leftover=", StringComparison.Ordinal), held.Reason);
         Assert.True(held.Reason.Contains("pid=1234", StringComparison.Ordinal), held.Reason);
-        Assert.True(held.Reason.Contains("workspace remove abc12345", StringComparison.Ordinal), held.Reason);
+        Assert.True(held.Reason.Contains("conduct abc12345 --loop", StringComparison.Ordinal), held.Reason);
     }
 
     // ── CleanedUp state ───────────────────────────────────────────────────

@@ -549,13 +549,15 @@ public sealed class GoalWorktreeIntegrationTests
                 // cleaned up while the leftover directory is reported as resumable cleanup.
                 Assert.False(partial.IsComplete);
                 Assert.Equal(path, partial.LeftoverPath);
-                Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", partial.ResumeCommand);
+                Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
                 Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
                 Assert.True(Directory.Exists(path));
+                Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
 
                 // Lock released; resume call deletes the directory and cleans up the branch.
                 var final = GoalWorktrees.Remove(repo, goalId);
                 Assert.True(final.IsComplete);
+                Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
             }
             else
             {
@@ -668,7 +670,7 @@ public sealed class GoalWorktreeIntegrationTests
                 Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
                 Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
                 Assert.Equal(path, partial.LeftoverPath);
-                Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", partial.ResumeCommand);
+                Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
             }
             else
             {
@@ -1695,10 +1697,10 @@ public sealed class GoalWorktreeIntegrationTests
             var worktrees = new CapturingGoalWorktreeService
             {
                 RemoveOverride = (_, goalId, _, _) => new GoalWorktreeRemoveResult(
-                    "Removed workspace, but leftover directory cleanup is incomplete. Resume with: workspace remove " + goalId.Value[..8],
+                    "Removed workspace, but leftover directory cleanup is incomplete. Conductor retry: conduct " + goalId.Value[..8] + " --loop",
                     worktreePath,
                     [],
-                    $"workspace remove {goalId.Value[..8]}")
+                    $"conduct {goalId.Value[..8]} --loop")
             };
             var context = new CliExecutionContext(
                 kernel,
@@ -3498,12 +3500,14 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
-            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
             Assert.Empty(acl.ResetPaths);
             Assert.True(Directory.Exists(path));
-            var warning = Assert.Single(warnings);
-            Assert.Equal("remove:build-server-shutdown", warning.Operation);
-            Assert.IsType<TimeoutException>(warning.Exception);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:cleanup-budget-exhausted"));
+            Assert.Contains(warnings, warning =>
+                warning.Operation == "remove:build-server-shutdown" &&
+                warning.Exception is TimeoutException);
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
         }
         finally
         {
@@ -3532,9 +3536,10 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
-            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
             Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(path));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
         }
         finally
         {
@@ -3787,7 +3792,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:acl-reset" && warning.Exception is TimeoutException);
             Assert.Contains(warnings, warning =>
                 warning.Operation == "orphan-sweep:backoff" &&
-                warning.Exception.Message.Contains("Remove-Item -LiteralPath", StringComparison.Ordinal) &&
+                warning.Exception.Message.Contains("Cleanup-needed record persisted in SQLite", StringComparison.Ordinal) &&
                 warning.Exception.Message.Contains(orphanPath, StringComparison.Ordinal));
             Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
             Assert.True(Directory.Exists(orphanPath));
@@ -3830,12 +3835,12 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
-            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
             Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(path));
-            var warning = Assert.Single(warnings);
-            Assert.Equal(path, warning.Path);
-            Assert.Equal("remove", warning.Operation);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+            Assert.Contains(warnings, warning => warning.Path == path && warning.Operation == "remove");
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
         }
         finally
         {
@@ -4136,6 +4141,31 @@ public sealed class GoalWorktreeIntegrationTests
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
         return root;
+    }
+
+    private static bool HasCleanupNeededRecord(string repo, string cleanupPath, string reason)
+    {
+        var statePath = Path.Combine(repo, ".orchestrator", "state.db");
+        if (!File.Exists(statePath))
+        {
+            return false;
+        }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = statePath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM worktree_cleanup_backoff
+            WHERE path = $path AND reason = $reason;
+            """;
+        command.Parameters.AddWithValue("$path", NormalizePath(cleanupPath));
+        command.Parameters.AddWithValue("$reason", reason);
+        return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
     private static Goal CreateCompletedGoal(AgentOrchestratorKernel kernel, string objective, string repo)
