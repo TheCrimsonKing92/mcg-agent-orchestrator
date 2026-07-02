@@ -1284,6 +1284,11 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("feature.txt", StringComparison.Ordinal));
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+            Assert.False(acceptance.IsAccepted);
+            Assert.Contains(acceptance.Blockers, blocker =>
+                blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
+                blocker.Message.Contains("merge", StringComparison.Ordinal));
         }
         finally
         {

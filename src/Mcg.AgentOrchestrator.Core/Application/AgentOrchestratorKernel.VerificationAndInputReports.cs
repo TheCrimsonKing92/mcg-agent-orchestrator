@@ -41,6 +41,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public GoalAcceptanceSummary BuildGoalAcceptanceSummary(GoalId goalId)
     {
+        var goal = GetGoal(goalId);
         var gate = BuildVerificationGate(goalId);
         var pendingInput = GetPendingHumanInput(goalId);
         var blockers = new List<GoalAcceptanceBlocker>();
@@ -65,11 +66,22 @@ public sealed partial class AgentOrchestratorKernel
                 BuildVerificationSuggestedAction(taskGate)));
         }
 
+        if (goal.LatestAcceptanceFailure is { } failure)
+        {
+            var failedChecks = string.Join(", ", failure.FailedChecks);
+            blockers.Add(new GoalAcceptanceBlocker(
+                GoalAcceptanceBlockerKind.AcceptanceFailed,
+                null,
+                null,
+                $"Latest acceptance failed at {failure.OccurredAt:u}: {failedChecks}.",
+                $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the blocker."));
+        }
+
         return new GoalAcceptanceSummary(
             gate.GoalId,
             gate.Objective,
             gate.Status,
-            gate.IsSatisfied && pendingInput.Count == 0,
+            gate.IsSatisfied && pendingInput.Count == 0 && blockers.Count == 0,
             gate.Tasks.Count,
             gate.Tasks.Count(task => task.GateStatus == VerificationGateStatus.Passed),
             gate.Tasks.Count(task => task.GateStatus != VerificationGateStatus.Passed),
