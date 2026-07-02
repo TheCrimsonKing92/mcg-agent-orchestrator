@@ -2735,7 +2735,8 @@ public sealed class GoalWorktreeIntegrationTests
                 explicitResult.ExitCode == 0,
                 $"exit={explicitResult.ExitCode}; stdout={explicitResult.Stdout}; stderr={explicitResult.Stderr}");
             Assert.True(string.IsNullOrWhiteSpace(explicitResult.Stderr), explicitResult.Stderr);
-            Assert.Contains("SQLite helper linked local state", explicitResult.Stdout);
+            Assert.Contains("SQLite helper primary state", explicitResult.Stdout);
+            Assert.DoesNotContain("SQLite helper linked local state", explicitResult.Stdout);
         }
         finally
         {
