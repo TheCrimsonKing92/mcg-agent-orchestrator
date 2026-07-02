@@ -1535,6 +1535,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(["stop-host", "merge", "mark-landed", "remove-worktree"], order);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
         }
         finally
         {
