@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
@@ -20,6 +21,13 @@ internal static class CliCommandHelp
         ConductUsage,
         "Drive one goal or run the autonomous conductor loop.",
         ["--policy", "--loop", "--max-iterations", "--max-duration", "--watch", "--daemon", "--poll-seconds", "--watch-interval", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Goal = new(
+        GoalUsage,
+        "Create a goal.",
+        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--brief-file", "--help", "-h" }
+            .ToHashSet(StringComparer.OrdinalIgnoreCase),
+        ValidateFlags: false);
 
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
@@ -127,6 +135,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
         {
             entry = Conduct;
+            return true;
+        }
+
+        if (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Goal;
             return true;
         }
 

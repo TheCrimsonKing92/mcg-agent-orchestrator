@@ -540,7 +540,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
             AutoVerifyFromGitEvidence(context, context.CurrentGoal);
-            ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
             if (RunAcceptanceWorkspaceMerge(context, skipVerify))
             {
                 if (!noRecord)
@@ -552,6 +551,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
+            ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
             return false;
 
         case "workspace":
@@ -1152,7 +1152,6 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     Console.WriteLine("Stage acceptance:");
-    ConsoleViews.PrintAcceptanceSummary(goal, context.Kernel.BuildGoalAcceptanceSummary(goal.Id));
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "acceptance", "Running acceptance evidence and merge.");
     if (!RunAcceptanceWorkspaceMerge(context))
     {
@@ -1182,6 +1181,8 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     catch (InvalidOperationException ex)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
         var next = $"workspace remove {goalPrefix}";
         Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
         throw new InvalidOperationException($"{commandName} stopped during workspace cleanup. Next: {next}", ex);
@@ -1191,6 +1192,8 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     if (!removeResult.IsComplete)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
         var next = removeResult.ResumeCommand ?? $"workspace remove {goalPrefix}";
         Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
         throw new InvalidOperationException($"{commandName} stopped during workspace cleanup. Next: {next}");
@@ -1253,7 +1256,6 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         Console.WriteLine($"Acceptance queue goal {goalPrefix}:");
 
         EnsurePolicyAllows(context, goal, policy, AutonomyAction.Acceptance, "acceptance queue merge");
-        ConsoleViews.PrintAcceptanceSummary(goal, context.Kernel.BuildGoalAcceptanceSummary(goal.Id));
         GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance queue running evidence and merge.");
         if (!RunAcceptanceWorkspaceMerge(context))
         {
@@ -1272,6 +1274,8 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         catch (InvalidOperationException ex)
         {
             GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
+            context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
+            context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
             throw new InvalidOperationException($"acceptance-queue stopped at {goalPrefix}: workspace cleanup failed.", ex);
         }
 
@@ -1279,6 +1283,8 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         if (!removeResult.IsComplete)
         {
             GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+            context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
+            context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
             throw new InvalidOperationException($"acceptance-queue stopped at {goalPrefix}: workspace cleanup incomplete. Next: {removeResult.ResumeCommand ?? $"workspace remove {goalPrefix}"}");
         }
 
@@ -2921,6 +2927,8 @@ private static void CleanupGoalWorkspaceAfterMerge(
     catch (InvalidOperationException ex)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
         Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: workspace remove {goalPrefix}");
         Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
         return;
@@ -2935,6 +2943,8 @@ private static void CleanupGoalWorkspaceAfterMerge(
     else
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
         Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry workspace remove {goalPrefix}.\"");
     }
 }

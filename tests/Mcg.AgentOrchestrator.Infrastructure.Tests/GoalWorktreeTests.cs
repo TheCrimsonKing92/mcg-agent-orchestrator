@@ -1193,6 +1193,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
+            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal));
             Assert.True(output.Contains("Stop-host: test stopped host.", StringComparison.Ordinal));
             Assert.Equal(["stop-host", "merge", "mark-landed", "remove-worktree"], order);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
@@ -1282,8 +1283,15 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.True(output.Contains("BLOCKER step=merge", StringComparison.Ordinal));
             Assert.True(output.Contains("feature.txt", StringComparison.Ordinal));
+            Assert.True(!output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal), output);
+            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+            Assert.False(acceptance.IsAccepted);
+            Assert.Contains(acceptance.Blockers, blocker =>
+                blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
+                blocker.Message.Contains("merge", StringComparison.Ordinal));
         }
         finally
         {
@@ -3285,6 +3293,38 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.BuildServerShutdown = (_, _) => { };
 
             var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal(1, result.RemovedCount);
+            Assert.Empty(result.LeftoverPaths);
+            Assert.False(Directory.Exists(orphanPath));
+            Assert.True(Directory.Exists(registeredPath));
+            Assert.Contains(acl.ResetPaths, resetPath => string.Equals(resetPath, orphanPath, StringComparison.Ordinal));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktreeOrphanSweepScheduler_sweep_now_deletes_orphaned_worktree_directory")]
+    public void GoalWorktreeOrphanSweepSchedulerSweepNowDeletesOrphanedWorktreeDirectory()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var registeredPath = GoalWorktrees.Ensure(repo, GoalId.New());
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-scheduler");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+
+            var result = GoalWorktreeOrphanSweepScheduler.SweepNow(repo);
 
             Assert.Equal(1, result.RemovedCount);
             Assert.Empty(result.LeftoverPaths);

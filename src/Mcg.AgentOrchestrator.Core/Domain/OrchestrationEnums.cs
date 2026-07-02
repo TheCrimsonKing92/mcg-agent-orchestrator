@@ -137,7 +137,8 @@ public enum GoalAcceptanceBlockerKind
     PendingHumanInput,
     VerificationNotReady,
     VerificationMissing,
-    VerificationFailed
+    VerificationFailed,
+    AcceptanceFailed
 }
 
 public enum TaskEvidenceKind

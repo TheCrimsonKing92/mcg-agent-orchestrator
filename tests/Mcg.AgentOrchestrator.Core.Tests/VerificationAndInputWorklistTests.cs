@@ -122,6 +122,18 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(0, accepted.OpenVerificationCount);
     Assert.Equal(0, accepted.PendingHumanInputCount);
     Assert.Empty(accepted.Blockers);
+
+    kernel.RecordAcceptanceFailure(goal.Id, ["merge"]);
+
+    var failedAcceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+
+    Assert.False(failedAcceptance.IsAccepted);
+    Assert.Equal(GoalStatus.Completed, failedAcceptance.Status);
+    var acceptanceBlocker = Assert.Single(failedAcceptance.Blockers);
+    Assert.Equal(GoalAcceptanceBlockerKind.AcceptanceFailed, acceptanceBlocker.Kind);
+    Assert.Null(acceptanceBlocker.TaskId);
+    Assert.True(acceptanceBlocker.Message.Contains("merge", StringComparison.Ordinal));
+    Assert.True(acceptanceBlocker.SuggestedAction.Contains($"acceptance for goal {goal.Id.Value[..8]}", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "Reviewer_WORKER_RESULT_blockers_fail_gate_and_keep_goal_out_of_acceptance")]

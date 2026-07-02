@@ -100,9 +100,12 @@ catch (ArgumentException ex)
     return 1;
 }
 
-WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
-WorkerProcessJobs.SweepStartupOrphans();
-GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
+if (RunsStartupCleanup(startupArgs))
+{
+    WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
+    WorkerProcessJobs.SweepStartupOrphans();
+    GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
+}
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
@@ -311,6 +314,9 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
+
+static bool RunsStartupCleanup(IReadOnlyList<string> startupArgs) =>
+    !CliPersistentStateRunner.SkipsKernelState(startupArgs);
 
 static int ExitCompletedStartupCommand(int exitCode)
 {
