@@ -3862,6 +3862,7 @@ public sealed class GoalWorktreeIntegrationTests
         var originalWarnings = GoalWorktrees.CleanupWarningSink;
         var originalNow = GoalWorktrees.CleanupUtcNow;
         var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var goalId = GoalId.New();
@@ -3883,6 +3884,9 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.CleanupWarningSink = warnings.Add;
             GoalWorktrees.CleanupUtcNow = () => now;
             GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => deleteAttempts == 0
+                ? []
+                : [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")];
 
             var first = GoalWorktrees.Remove(repo, goalId);
             var second = GoalWorktrees.Remove(repo, goalId);
@@ -3904,6 +3908,7 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.CleanupWarningSink = originalWarnings;
             GoalWorktrees.CleanupUtcNow = originalNow;
             GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }

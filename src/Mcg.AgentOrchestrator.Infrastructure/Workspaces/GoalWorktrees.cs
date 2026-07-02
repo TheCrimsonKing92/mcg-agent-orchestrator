@@ -158,6 +158,7 @@ public static class GoalWorktrees
     internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
     internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
     internal static Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; } = DeleteDirectoryWithReason;
+    internal static Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; } = FindLockHolders;
     internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
     internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
     internal static Func<DateTimeOffset> CleanupUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
@@ -377,15 +378,19 @@ public static class GoalWorktrees
 
         if (hasLeftoverDirectory && IsCleanupBackedOff(path, "remove", out var backoff))
         {
-            WarnCleanupFailure(
-                path,
-                "remove:skip-backoff",
-                new IOException(BuildCleanupRetryMessage(path, backoff.Reason)));
-            return new GoalWorktreeRemoveResult(
-                $"Workspace cleanup deferred by cleanup-needed backoff for {path}.",
-                path,
-                FindLockHolders(path),
-                ConductorRetryCommand(goalId));
+            var lockHolders = FindLockHoldersForCleanup(path);
+            if (lockHolders.Count > 0)
+            {
+                WarnCleanupFailure(
+                    path,
+                    "remove:skip-backoff",
+                    new IOException(BuildCleanupRetryMessage(path, backoff.Reason)));
+                return new GoalWorktreeRemoveResult(
+                    $"Workspace cleanup deferred by cleanup-needed backoff for {path}.",
+                    path,
+                    lockHolders,
+                    ConductorRetryCommand(goalId));
+            }
         }
 
         if (hasRegisteredWorktree)
@@ -414,7 +419,7 @@ public static class GoalWorktrees
                 return new GoalWorktreeRemoveResult(
                     $"Workspace cleanup deferred because cleanup budget was exhausted before deleting {path}.",
                     path,
-                    FindLockHolders(path),
+                    FindLockHoldersForCleanup(path),
                     ConductorRetryCommand(goalId));
             }
         }
@@ -758,7 +763,7 @@ public static class GoalWorktrees
         return new GoalWorktreeRemoveResult(
             $"{incompleteMessage} Conductor retry: {resumeCommand}",
             path,
-            FindLockHolders(path),
+            FindLockHoldersForCleanup(path),
             resumeCommand);
     }
 
