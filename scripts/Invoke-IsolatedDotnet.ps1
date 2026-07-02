@@ -103,7 +103,7 @@ function Get-HostTempBase {
     $worktreeMarker = "$([System.IO.Path]::DirectorySeparatorChar).orchestrator-worktrees$([System.IO.Path]::DirectorySeparatorChar)"
     $worktreeIndex = $repositoryRoot.IndexOf($worktreeMarker, [System.StringComparison]::OrdinalIgnoreCase)
     if ($worktreeIndex -ge 0) {
-        return (Join-Path $repositoryRoot.Substring(0, $worktreeIndex) ".t")
+        return (Join-Path (Get-IsolatedRootBase) "temp")
     }
 
     if ($candidate.StartsWith($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
@@ -116,7 +116,7 @@ function Get-HostTempBase {
             return $localTemp
         }
         catch {
-            return (Join-Path $repositoryRoot ".t")
+            return (Join-Path (Get-IsolatedRootBase) "temp")
         }
     }
 
@@ -326,6 +326,7 @@ finally {
     }
 
     & dotnet build-server shutdown *> $null
+    Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
 }
 
 exit $exitCode

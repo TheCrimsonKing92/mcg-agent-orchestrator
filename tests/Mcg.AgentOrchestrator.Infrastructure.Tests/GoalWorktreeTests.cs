@@ -363,6 +363,92 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_from_goal_worktree_leaves_repository_status_clean")]
+    public void InvokeIsolatedDotnetFromGoalWorktreeLeavesRepositoryStatusClean()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sourceRoot = FindCurrentSourceRoot();
+        var repo = CreateSeededRepository();
+        var sandboxPath = Path.Combine(Path.GetTempPath(), $"isolated-dotnet-worktree-{Guid.NewGuid():N}");
+        var shimDirectory = Path.Combine(sandboxPath, "shim");
+        var isolatedRoot = Path.Combine(sandboxPath, "isolated-root");
+        Directory.CreateDirectory(shimDirectory);
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, ".gitignore"), ".orchestrator-worktrees/" + Environment.NewLine);
+            RunGit(repo, "add", ".gitignore");
+            RunGit(repo, "commit", "-m", "Ignore local worktrees");
+            var goalId = new GoalId("feedbeeffeedbeeffeedbeeffeedbeef");
+            var worktreePath = GoalWorktrees.Ensure(repo, goalId);
+            Assert.Equal(string.Empty, RunGitOutput(repo, "status", "--short"));
+
+            var logPath = Path.Combine(sandboxPath, "dotnet.log");
+            var shimPath = Path.Combine(shimDirectory, "dotnet.cmd");
+            File.WriteAllText(
+                shimPath,
+                """
+                @echo off
+                >> "%DOTNET_SHIM_LOG%" echo args=%*
+                >> "%DOTNET_SHIM_LOG%" echo temp=%TEMP%
+                if not exist "%TEMP%" mkdir "%TEMP%"
+                > "%TEMP%\shim-scratch.tmp" echo scratch
+                exit /b 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = worktreePath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-InputFormat");
+            startInfo.ArgumentList.Add("None");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(sourceRoot, "scripts", "Invoke-IsolatedDotnet.ps1"));
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add(goalId.Value[..8]);
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add("Fake.Infrastructure.Tests.csproj");
+            startInfo.ArgumentList.Add("--filter");
+            startInfo.ArgumentList.Add("FullyQualifiedName~FocusedInfrastructure");
+            startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start Invoke-IsolatedDotnet.ps1.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(30000), "Invoke-IsolatedDotnet.ps1 did not exit within 30 seconds.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+
+            var log = File.ReadAllText(logPath);
+            var repoScratch = Path.Combine(repo, ".t");
+            Assert.True(!log.Contains(repoScratch, StringComparison.OrdinalIgnoreCase), log);
+            Assert.True(log.Contains(Path.Combine(isolatedRoot, "temp"), StringComparison.OrdinalIgnoreCase), log);
+            Assert.True(!Directory.Exists(repoScratch), $"Root scratch directory should not exist: {repoScratch}");
+            Assert.Equal(string.Empty, RunGitOutput(repo, "status", "--short"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+            DeleteDirectory(sandboxPath);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "InvokeRepoScript_StartOrchestratorCommand_emits_parseable_launch_json")]
     public void InvokeRepoScriptStartOrchestratorCommandEmitsParseableLaunchJson()
     {
