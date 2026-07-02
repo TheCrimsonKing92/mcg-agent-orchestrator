@@ -1193,6 +1193,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
+            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal));
             Assert.True(output.Contains("Stop-host: test stopped host.", StringComparison.Ordinal));
             Assert.Equal(["stop-host", "merge", "mark-landed", "remove-worktree"], order);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
@@ -1282,6 +1283,8 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.True(output.Contains("BLOCKER step=merge", StringComparison.Ordinal));
             Assert.True(output.Contains("feature.txt", StringComparison.Ordinal));
+            Assert.True(!output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal), output);
+            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
             var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
