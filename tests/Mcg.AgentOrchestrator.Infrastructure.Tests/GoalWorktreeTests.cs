@@ -1240,6 +1240,80 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_retry_treats_landed_cleaned_missing_worktree_as_accepted")]
+    public void CliAcceptanceRetryTreatsLandedCleanedMissingWorktreeAsAccepted()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Already landed cleaned acceptance retry", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
+            GoalOperationJournal.Completed(repo, goal, "workspace:remove", "Workspace removed.");
+
+            var verifierRuns = 0;
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Failed("should not run", onRun: () => verifierRuns++)
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8], "--keep-workspace"], context));
+
+            Assert.Equal(0, verifierRuns);
+            Assert.Contains("Acceptance repaired:", output);
+            Assert.DoesNotContain("Acceptance evidence: blocked", output);
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_repair_clears_stale_failure_only_with_landing_and_cleanup_evidence")]
+    public void CliAcceptanceRepairClearsStaleFailureOnlyWithLandingAndCleanupEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var blockedGoal = CreateCompletedGoal(kernel, "Repair blocked goal", repo);
+            kernel.RecordAcceptanceFailure(blockedGoal.Id, ["acceptance evidence blocked"]);
+            var blockedContext = CreateAcceptanceContext(kernel, repo, blockedGoal);
+
+            var blocked = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-repair", blockedGoal.Id.Value[..8], "--confirm-acceptance-repair"],
+                blockedContext));
+            Assert.Contains("no completed acceptance or conductor landing evidence", blocked.Message);
+            Assert.NotNull(kernel.GetGoal(blockedGoal.Id).LatestAcceptanceFailure);
+
+            var repairGoal = CreateCompletedGoal(kernel, "Repair landed cleaned goal", repo);
+            kernel.RecordAcceptanceFailure(repairGoal.Id, ["acceptance evidence blocked"]);
+            GoalOperationJournal.Completed(repo, repairGoal, "conductor:land", "landed");
+            GoalOperationJournal.Completed(repo, repairGoal, "conductor:cleanup", "cleaned");
+            var repairContext = CreateAcceptanceContext(kernel, repo, repairGoal);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["acceptance-repair", repairGoal.Id.Value[..8], "--confirm-acceptance-repair"],
+                repairContext));
+
+            Assert.Contains("Acceptance repaired:", output);
+            Assert.Null(kernel.GetGoal(repairGoal.Id).LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_lands_after_transient_state_write_lock_releases")]
     public async Task CliAcceptanceLandsAfterTransientStateWriteLockReleases()
     {
