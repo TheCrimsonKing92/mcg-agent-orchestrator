@@ -432,8 +432,27 @@ public sealed class BackgroundDispatchRunner
 
         if (!TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
-            outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-            return false;
+            if (!File.Exists(processRecord.ExitCodePath) || AnyTrackedProcessStillRunning(processRecord))
+            {
+                outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+                return false;
+            }
+
+            if (!TryReadExitCodeWithRetry(processRecord.ExitCodePath, out exitCode))
+            {
+                var diagnostic =
+                    "Dispatch exit file exists and no tracked process is alive, but the exit code could not be read; " +
+                    $"treating dispatch as failed. exit_path={processRecord.ExitCodePath}";
+                outcome = BuildCompletedProcessOutcome(
+                    kernel,
+                    goalId,
+                    taskId,
+                    processRecord,
+                    1,
+                    AppendDiagnostic(BuildRecoveryDiagnostic(recoveryDecision), diagnostic),
+                    recoveryDecision);
+                return true;
+            }
         }
 
         if (AnyTrackedProcessStillRunning(processRecord))
@@ -450,6 +469,26 @@ public sealed class BackgroundDispatchRunner
             BuildRecoveryDiagnostic(recoveryDecision),
             recoveryDecision);
         return true;
+    }
+
+    private static bool TryReadExitCodeWithRetry(string path, out int exitCode)
+    {
+        const int attempts = 3;
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            if (TryReadExitCode(path, out exitCode))
+            {
+                return true;
+            }
+
+            if (attempt < attempts - 1)
+            {
+                Thread.Sleep(TimeSpan.FromMilliseconds(50));
+            }
+        }
+
+        exitCode = 1;
+        return false;
     }
 
     public static void ApplyRefreshOutcome(

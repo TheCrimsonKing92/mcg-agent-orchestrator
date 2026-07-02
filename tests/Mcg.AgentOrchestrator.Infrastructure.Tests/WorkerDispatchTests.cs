@@ -4152,6 +4152,52 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_fails_dead_worker_when_exit_file_is_unreadable")]
+    public void BackgroundDispatchRunnerReconcileFailsDeadWorkerWhenExitFileIsUnreadable()
+    {
+        var root = CreateTempDirectory();
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        var now = DateTimeOffset.Parse("2026-06-25T06:02:00Z");
+        var clock = new TestClock(now);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Fail dead worker from unreadable exit file");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        File.WriteAllText(stdout, "worker output");
+        File.WriteAllText(stderr, string.Empty);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            root,
+            stdout,
+            stderr,
+            exit,
+            now.AddMinutes(-5),
+            null,
+            null,
+            OwnedProcessIds: [111, 222]);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        using (var lockedExit = new FileStream(exit, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(lockedExit))
+        {
+            writer.Write("0");
+            writer.Flush();
+
+            var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+                .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+            Assert.NotNull(outcome.Verification);
+            Assert.Equal(1, outcome.ProcessRecord.ExitCode);
+            Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
+            Assert.True(outcome.Verification!.StandardError.Contains("exit code could not be read", StringComparison.Ordinal));
+            Assert.Equal(WorkTaskStatus.Running, task.Status);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_sweep_completes_role_boundary_exited_worker_from_exit_file")]
     public void BackgroundDispatchRunnerSweepCompletesRoleBoundaryExitedWorkerFromExitFile()
     {
