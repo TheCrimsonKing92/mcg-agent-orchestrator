@@ -2230,3 +2230,10 @@ Goal a3e3bc09: Backlog slice: Fix goal-mark-landed cleanup-budget test and branc
 
 - Operator gate: Planner: not-run; planner-only task (exit 0); Researcher: not-run; Researcher-only read-only task, no repository edits (exit 0); Developer: pass; CliGoalMarkLanded 7 passed, GoalWorktreesRemove 12 passed (exit 0); Tester: pass; CliGoalMarkLanded 7 passed, GoalWorktreesRemove 12 passed; only existing restore/analyzer warnings, including NuGet vulnerability-cache access warning (exit 0); Reviewer: prior evidence pass; independent rerun not-run due read-only sandbox denying temp lease directory creation (exit 0)
 - Model fit: OpenAI/gpt-5.5 - adequate - focused reviewer task - sufficient for diff/evidence comparison.
+
+## 2026-07-02 - Backlog item 4ce13aa2: Read-only backlog commands should not trigger orphan w...
+
+Goal be6b368e: Backlog item 4ce13aa2: Read-only backlog commands should not trigger orphan worktree cleanup.  Observed live on 2026-.... Planner task via OpenAI/gpt-5.5 (exit 0, commit none). Researcher task via OpenAI/gpt-5.5 (exit 0, commit 5716b850315edb27c2c5592e7386a0cd9f076a98). Developer task via OpenAI/gpt-5.5 (exit 0, commit none). Tester task via OpenAI/gpt-5.5 (exit 0, commit ea6be713bfd300544dc49e8be2ad8557e3af42bd). Reviewer task via OpenAI/gpt-5.5 (exit 0, commit ea6be713bfd300544dc49e8be2ad8557e3af42bd). Acceptance passed.
+
+- Operator gate: Planner: not-run; Planner read-only task (exit 0); Researcher: not-run; Researcher read-only task and filesystem sandbox is read-only (exit 0); Developer: pass; focused CLI startup/help/backlog cleanup regression and explicit orphan scheduler cleanup covered. Existing NU1903 warnings only. (exit 0); Tester: pass; 21+1+1 focused tests passed, manual locked-orphan help smoke passed; existing NU1900/analyzer warnings only (exit 0); Reviewer: pass evidence reviewed from prior Developer/Tester; not rerun by Reviewer (exit 0)
+- Model fit: OpenAI/gpt-5.5 - adequate - review task - focused diff and evidence review fit the model well.
