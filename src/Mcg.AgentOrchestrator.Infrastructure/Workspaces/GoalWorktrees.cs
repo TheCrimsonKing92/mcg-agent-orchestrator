@@ -1052,7 +1052,7 @@ public static class GoalWorktrees
                 path,
                 operation,
                 new IOException(BuildCleanupRetryMessage(path, firstDelete.Message ?? "Directory deletion failed.")));
-            return !Directory.Exists(path);
+            return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":delete-failed");
         }
 
         ReapRecordedWorkerProcesses(kernel, path);
@@ -1075,7 +1075,19 @@ public static class GoalWorktrees
             new IOException(BuildCleanupRetryMessage(
                 path,
                 secondDelete.Message ?? "Directory deletion failed after ACL reset.")));
-        return !Directory.Exists(path);
+        return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":post-acl-delete-failed");
+    }
+
+    private static bool RecordOrphanCleanupBackoffWhenLeftover(string path, string reason)
+    {
+        if (!Directory.Exists(path))
+        {
+            ClearOrphanCleanupBackoff(path);
+            return true;
+        }
+
+        RecordOrphanCleanupBackoff(path, reason);
+        return false;
     }
 
     private static bool RunBoundedCleanupStep(

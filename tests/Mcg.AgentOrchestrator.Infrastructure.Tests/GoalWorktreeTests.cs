@@ -3809,6 +3809,87 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_records_backoff_for_transient_orphan_delete_failure")]
+    public void GoalWorktreesSweepRecordsBackoffForTransientOrphanDeleteFailure()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-transient");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "transient residue");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+                GoalWorktreeDeleteFailureKind.Transient,
+                "The process cannot access the file because it is being used by another process.");
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal([orphanPath], result.LeftoverPaths);
+            Assert.True(Directory.Exists(orphanPath));
+            Assert.True(HasCleanupNeededRecord(repo, orphanPath, "orphan-sweep:delete-failed"));
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_records_backoff_when_second_delete_fails_after_acl_reset")]
+    public void GoalWorktreesSweepRecordsBackoffWhenSecondDeleteFailsAfterAclReset()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-second-delete");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "acl residue");
+            var deleteAttempts = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            {
+                deleteAttempts++;
+                return GoalWorktreeDeleteResult.Failed(
+                    deleteAttempts == 1
+                        ? GoalWorktreeDeleteFailureKind.AccessDenied
+                        : GoalWorktreeDeleteFailureKind.Unknown,
+                    deleteAttempts == 1
+                        ? "Access to the path is denied."
+                        : "Directory deletion failed after ACL reset.");
+            };
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal([orphanPath], result.LeftoverPaths);
+            Assert.Equal(2, deleteAttempts);
+            Assert.Equal([orphanPath], acl.ResetPaths);
+            Assert.True(Directory.Exists(orphanPath));
+            Assert.True(HasCleanupNeededRecord(repo, orphanPath, "orphan-sweep:post-acl-delete-failed"));
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_failure_logs_warning_and_reports_resumable_leftover")]
     public void GoalWorktreesCleanupFailureLogsWarningAndReportsResumableLeftover()
     {
