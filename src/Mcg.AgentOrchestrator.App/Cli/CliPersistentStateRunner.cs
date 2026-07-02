@@ -47,6 +47,21 @@ internal static class CliPersistentStateRunner
             return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsSingleGoalConductCommand(args))
+        {
+            return ExecuteAcceptanceOutsideTransaction(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref currentGoal,
+                channel,
+                acceptanceVerifier,
+                persistOnlyCurrentGoal: true);
+        }
+
         if (IsAcceptanceCommand(args))
         {
             return ExecuteAcceptanceOutsideTransaction(
@@ -183,6 +198,14 @@ internal static class CliPersistentStateRunner
         return args.Any(a =>
             a.Equals("--loop", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("--watch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static bool IsSingleGoalConductCommand(IReadOnlyList<string> args)
+    {
+        return args.Count > 1 &&
+            args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) &&
+            !args[1].StartsWith("--", StringComparison.Ordinal) &&
+            !IsConductLoop(args);
     }
 
     internal static bool IsAcceptanceCommand(IReadOnlyList<string> args)
@@ -518,13 +541,21 @@ internal static class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
-        IGoalAcceptanceVerifier? acceptanceVerifier = null)
+        IGoalAcceptanceVerifier? acceptanceVerifier = null,
+        bool persistOnlyCurrentGoal = false)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+
+        void PersistCurrentGoal(AgentOrchestratorKernel checkpoint, GoalId goalId)
+        {
+            var snapshot = checkpoint.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
+                ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry acceptance.");
+            stateRepository.SaveGoalSnapshotsAsync([snapshot], CancellationToken.None).GetAwaiter().GetResult();
+        }
 
         AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
         {
@@ -576,7 +607,14 @@ internal static class CliPersistentStateRunner
 
         if (shouldSave)
         {
-            Persist(kernel);
+            if (persistOnlyCurrentGoal && currentGoal is not null)
+            {
+                PersistCurrentGoal(kernel, currentGoal.Id);
+            }
+            else
+            {
+                Persist(kernel);
+            }
         }
 
         return shouldSave;

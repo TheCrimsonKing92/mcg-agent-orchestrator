@@ -5383,6 +5383,20 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_single_goal_conduct_outside_command_transaction")]
+    public void RunnerRoutesSingleGoalConductOutsideCommandTransaction()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "abc123"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsSingleGoalConductCommand(["CONDUCT", "abc123", "--policy", "Permissive"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "--loop"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "abc123", "--watch"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "--help"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["next"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand([]));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_commands")]
     public void RunnerSkipsKernelStateForOperatorAndBacklogCommands()
     {

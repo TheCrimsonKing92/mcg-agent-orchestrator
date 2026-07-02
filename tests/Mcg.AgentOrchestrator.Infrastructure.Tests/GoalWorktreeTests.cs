@@ -2003,6 +2003,59 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_conduct_completed_goal_lands_through_persistent_runner_without_command_transaction")]
+    public async Task CliConductCompletedGoalLandsThroughPersistentRunnerWithoutCommandTransaction()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            RunGit(repo, "branch", "-M", "main");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Conduct completed goal persistence", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["previous verifier failure"]);
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "conduct-persist.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Conduct persistence goal");
+
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["conduct", goal.Id.Value[..8], "--policy", "Permissive"],
+                    stateRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal,
+                    acceptanceVerifier: FakeAcceptanceVerifier.Passed());
+                Assert.True(changed);
+            });
+
+            Assert.Contains("Conduct " + goal.Id.Value[..8], output);
+            Assert.Contains("Landed:", output);
+            Assert.True(File.Exists(Path.Combine(repo, "conduct-persist.txt")));
+
+            var reloaded = await stateRepository.LoadAsync();
+            var reloadedGoal = reloaded.GetGoal(goal.Id);
+            Assert.Null(reloadedGoal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_queue_holds_stale_branch_with_manual_merge_command")]
     public void CliAcceptanceQueueHoldsStaleBranchWithManualMergeCommand()
     {
