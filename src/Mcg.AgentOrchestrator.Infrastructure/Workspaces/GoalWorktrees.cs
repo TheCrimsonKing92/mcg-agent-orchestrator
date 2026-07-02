@@ -413,20 +413,26 @@ public static class GoalWorktrees
         if (!BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
         {
             _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
-            return new GoalWorktreeRemoveResult(Directory.Exists(path)
-                ? "Removed workspace; leftover directory deferred to orphan sweep."
-                : "Removed workspace.", null, [], null);
+            return CompleteOrDeferredRemoveResult(
+                path,
+                goalId,
+                "Removed workspace.",
+                "Removed workspace, but leftover directory cleanup is incomplete.");
         }
 
         var branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
         _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         return branchRemoval.ExitCode == 0
-            ? new GoalWorktreeRemoveResult(Directory.Exists(path)
-                ? $"Removed workspace and merged branch {branch}; leftover directory deferred to orphan sweep."
-                : $"Removed workspace and merged branch {branch}.", null, [], null)
-            : new GoalWorktreeRemoveResult(Directory.Exists(path)
-                ? $"Removed workspace; branch {branch} kept because it has unmerged commits; leftover directory deferred to orphan sweep."
-                : $"Removed workspace; branch {branch} kept because it has unmerged commits.", null, [], null);
+            ? CompleteOrDeferredRemoveResult(
+                path,
+                goalId,
+                $"Removed workspace and merged branch {branch}.",
+                $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete.")
+            : CompleteOrDeferredRemoveResult(
+                path,
+                goalId,
+                $"Removed workspace; branch {branch} kept because it has unmerged commits.",
+                $"Removed workspace; branch {branch} kept because it has unmerged commits, but leftover directory cleanup is incomplete.");
     }
 
     public static GoalWorktreeSweepResult SweepOrphanedWorktrees(string executionDirectory, AgentOrchestratorKernel? kernel = null)
@@ -719,6 +725,25 @@ public static class GoalWorktrees
     private static bool IsRegisteredWorktree(string executionDirectory, string path, int gitTimeoutMilliseconds)
     {
         return RegisteredWorktreePaths(executionDirectory, gitTimeoutMilliseconds).Contains(NormalizePath(path));
+    }
+
+    private static GoalWorktreeRemoveResult CompleteOrDeferredRemoveResult(
+        string path,
+        GoalId goalId,
+        string completeMessage,
+        string incompleteMessage)
+    {
+        if (!Directory.Exists(path))
+        {
+            return new GoalWorktreeRemoveResult(completeMessage, null, [], null);
+        }
+
+        var resumeCommand = $"workspace remove {Prefix(goalId)}";
+        return new GoalWorktreeRemoveResult(
+            $"{incompleteMessage} Resume with: {resumeCommand}",
+            path,
+            FindLockHolders(path),
+            resumeCommand);
     }
 
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
