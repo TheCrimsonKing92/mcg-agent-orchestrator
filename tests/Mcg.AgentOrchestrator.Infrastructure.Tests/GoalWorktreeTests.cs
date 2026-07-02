@@ -3298,7 +3298,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Empty(result.LeftoverPaths);
             Assert.False(Directory.Exists(orphanPath));
             Assert.True(Directory.Exists(registeredPath));
-            Assert.Contains(acl.ResetPaths, resetPath => string.Equals(resetPath, orphanPath, StringComparison.Ordinal));
+            Assert.Empty(acl.ResetPaths);
         }
         finally
         {
@@ -3330,7 +3330,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Empty(result.LeftoverPaths);
             Assert.False(Directory.Exists(orphanPath));
             Assert.True(Directory.Exists(registeredPath));
-            Assert.Contains(acl.ResetPaths, resetPath => string.Equals(resetPath, orphanPath, StringComparison.Ordinal));
+            Assert.Empty(acl.ResetPaths);
         }
         finally
         {
@@ -3360,12 +3360,113 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.Equal(path, ensured);
             Assert.True(File.Exists(Path.Combine(path, ".git")));
-            Assert.True(acl.ResetPaths.SequenceEqual([path]));
+            Assert.Empty(acl.ResetPaths);
         }
         finally
         {
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_resets_acl_only_after_access_denied_delete")]
+    public void GoalWorktreesSweepResetsAclOnlyAfterAccessDeniedDelete()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-access-denied");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            var deleteAttempts = 0;
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.DeleteDirectoryForCleanup = path =>
+            {
+                deleteAttempts++;
+                if (deleteAttempts == 1)
+                {
+                    return GoalWorktreeDeleteResult.Failed(
+                        GoalWorktreeDeleteFailureKind.AccessDenied,
+                        "Access to the path is denied.");
+                }
+
+                Directory.Delete(path, recursive: true);
+                return GoalWorktreeDeleteResult.Success;
+            };
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.BuildServerShutdown = (_, _) => throw new InvalidOperationException("cheap orphan cleanup should not shut down build servers");
+
+            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal(1, result.RemovedCount);
+            Assert.Empty(result.LeftoverPaths);
+            Assert.Equal(2, deleteAttempts);
+            Assert.True(acl.ResetPaths.SequenceEqual([orphanPath]));
+            Assert.False(Directory.Exists(orphanPath));
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_records_timeout_backoff_and_skips_repeat_acl_reset")]
+    public void GoalWorktreesSweepRecordsTimeoutBackoffAndSkipsRepeatAclReset()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-timeout");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            long elapsedMilliseconds = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+                GoalWorktreeDeleteFailureKind.AccessDenied,
+                "Access to the path is denied.");
+            GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
+            GoalWorktrees.SandboxAclHelper = new TimeoutSandboxAclHelper(acl, () => elapsedMilliseconds = GitCli.DefaultTimeoutMilliseconds);
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+
+            var first = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var second = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Empty(first.LeftoverPaths.Where(path => !string.Equals(path, orphanPath, StringComparison.Ordinal)));
+            Assert.Equal([orphanPath], second.LeftoverPaths);
+            Assert.True(acl.ResetPaths.SequenceEqual([orphanPath]));
+            Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:acl-reset" && warning.Exception is TimeoutException);
+            Assert.Contains(warnings, warning =>
+                warning.Operation == "orphan-sweep:backoff" &&
+                warning.Exception.Message.Contains("Remove-Item -LiteralPath", StringComparison.Ordinal) &&
+                warning.Exception.Message.Contains(orphanPath, StringComparison.Ordinal));
+            Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
+            Assert.True(Directory.Exists(orphanPath));
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
             DeleteDirectory(repo);
         }
     }
@@ -4137,6 +4238,15 @@ public sealed class GoalWorktreeIntegrationTests
         {
             ResetPaths.Add(worktreePath);
             TimeoutMilliseconds.Add(timeoutMilliseconds);
+        }
+    }
+
+    private sealed class TimeoutSandboxAclHelper(RecordingSandboxAclHelper inner, Action afterReset) : ISandboxAclHelper
+    {
+        public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds)
+        {
+            inner.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
+            afterReset();
         }
     }
 
