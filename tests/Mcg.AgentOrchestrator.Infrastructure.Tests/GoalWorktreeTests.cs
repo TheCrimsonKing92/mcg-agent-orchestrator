@@ -3945,6 +3945,169 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_owned_ephemeral_sweep_removes_goal_context_temp_and_scratch_only")]
+    public void GoalWorktreesOwnedEphemeralSweepRemovesGoalContextTempAndScratchOnly()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var prefix = goalId.Value[..8];
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goalId.Value);
+            var tempPath = Path.Combine(repo, ".t", prefix + "-dispatch");
+            var scratchPath = Path.Combine(repo, ".scratch", prefix);
+            var unrelatedTempPath = Path.Combine(repo, ".t", "unrelated");
+            Directory.CreateDirectory(contextPath);
+            Directory.CreateDirectory(tempPath);
+            Directory.CreateDirectory(scratchPath);
+            Directory.CreateDirectory(unrelatedTempPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            File.WriteAllText(Path.Combine(tempPath, "prompt.md"), "prompt");
+            File.WriteAllText(Path.Combine(scratchPath, "body.md"), "body");
+            File.WriteAllText(Path.Combine(unrelatedTempPath, "keep.txt"), "keep");
+
+            var result = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+
+            Assert.True(result.IsComplete);
+            Assert.Equal(3, result.RemovedCount);
+            Assert.False(Directory.Exists(contextPath));
+            Assert.False(Directory.Exists(tempPath));
+            Assert.False(Directory.Exists(scratchPath));
+            Assert.True(Directory.Exists(unrelatedTempPath));
+            Assert.True(Directory.Exists(Path.Combine(repo, ".t")));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".scratch")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_owned_ephemeral_sweep_persists_cleanup_needed_backoff")]
+    public void GoalWorktreesOwnedEphemeralSweepPersistsCleanupNeededBackoff()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goalId.Value);
+            Directory.CreateDirectory(contextPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var attempts = 0;
+
+            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            {
+                attempts++;
+                return GoalWorktreeDeleteResult.Failed(
+                    GoalWorktreeDeleteFailureKind.Unknown,
+                    "Directory deletion failed.");
+            };
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var first = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+            var second = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.False(second.IsComplete);
+            Assert.Equal([contextPath], second.LeftoverPaths);
+            Assert.Equal(1, attempts);
+            Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
+            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
+            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reports_owned_ephemeral_cleanup_leftover")]
+    public void GoalWorktreesRemoveReportsOwnedEphemeralCleanupLeftover()
+    {
+        var repo = CreateSeededRepository();
+        var originalDeleteForCleanup = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var worktreePath = GoalWorktrees.Ensure(repo, goalId);
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goalId.Value);
+            Directory.CreateDirectory(contextPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectoryForCleanup = cleanupPath =>
+                cleanupPath.Equals(contextPath, StringComparison.OrdinalIgnoreCase)
+                    ? GoalWorktreeDeleteResult.Failed(
+                        GoalWorktreeDeleteFailureKind.Unknown,
+                        "Directory deletion failed.")
+                    : originalDeleteForCleanup(cleanupPath);
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(result.IsComplete);
+            Assert.Equal(contextPath, result.LeftoverPath);
+            Assert.False(Directory.Exists(worktreePath));
+            Assert.True(Directory.Exists(contextPath));
+            Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
+            Assert.Contains(result.Message, text => text.Contains("Owned ephemeral cleanup is incomplete", StringComparison.Ordinal));
+            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDeleteForCleanup;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_terminal_goal_cleans_owned_ephemeral_dirs_without_worker_start")]
+    public void TerminalGoalSweepTerminalGoalCleansOwnedEphemeralDirsWithoutWorkerStart()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implemented elsewhere.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Clean terminal owned ephemerals", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
+            var snapshot = kernel.ExportSnapshot();
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals
+                    .Select(candidate => candidate.Id == goal.Id.Value
+                        ? candidate with { Status = GoalStatus.Completed }
+                        : candidate)
+                    .ToArray()
+            });
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goal.Id.Value);
+            var tempPath = Path.Combine(repo, ".t", goal.Id.Value[..8] + "-prompt");
+            Directory.CreateDirectory(contextPath);
+            Directory.CreateDirectory(tempPath);
+
+            var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var repairedTask = kernel.GetGoal(goal.Id).Tasks.Single();
+
+            Assert.Contains(result.Goals.Single().Repairs, repair => repair.Kind == "owned-ephemeral-cleanup");
+            Assert.Empty(result.Blockers);
+            Assert.False(Directory.Exists(contextPath));
+            Assert.False(Directory.Exists(tempPath));
+            Assert.Null(repairedTask.LastProcess);
+            Assert.Null(repairedTask.LastDispatch);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_honors_cleanup_needed_backoff_when_no_lock_holder_was_recorded")]
     public void GoalWorktreesRemoveHonorsCleanupNeededBackoffWhenNoLockHolderWasRecorded()
     {

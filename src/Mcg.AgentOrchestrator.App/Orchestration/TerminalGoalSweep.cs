@@ -161,6 +161,25 @@ internal static class TerminalGoalSweep
                 }
             }
 
+            if (IsTerminalSweepStatus(goal.Status) && !blockers.Any(IsTerminalCleanupBlockingBlocker))
+            {
+                var ephemeralCleanup = GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goal.Id, kernel);
+                if (!ephemeralCleanup.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "owned-ephemeral-cleanup-needed",
+                        $"owned ephemeral cleanup incomplete; leftovers={string.Join(",", ephemeralCleanup.LeftoverPaths)}",
+                        $"conduct {prefix} --loop"));
+                }
+                else if (ephemeralCleanup.RemovedCount > 0)
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "owned-ephemeral-cleanup",
+                        $"removed {ephemeralCleanup.RemovedCount} owned ephemeral director{(ephemeralCleanup.RemovedCount == 1 ? "y" : "ies")}",
+                        $"conduct {prefix} --loop"));
+                }
+            }
+
             if (repairs.Count > 0 || blockers.Count > 0)
             {
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
@@ -289,6 +308,12 @@ internal static class TerminalGoalSweep
 
     private static bool IsStaleTerminalAssignedTaskStatus(WorkTaskStatus status) =>
         status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman;
+
+    private static bool IsTerminalCleanupBlockingBlocker(TerminalGoalSweepBlocker blocker) =>
+        blocker.Kind is "terminal-dirty-worktree" or
+            "terminal-live-dispatch" or
+            "stale-terminal-excluded" or
+            "completed-branch-unmerged";
 
     private static bool IsProcessAlive(int processId)
     {

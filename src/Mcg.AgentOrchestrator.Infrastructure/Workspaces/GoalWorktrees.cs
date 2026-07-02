@@ -67,6 +67,11 @@ internal sealed record GoalWorktreeDeleteResult(
 
 public sealed record GoalWorktreeSweepResult(int RemovedCount, IReadOnlyList<string> LeftoverPaths);
 
+public sealed record GoalOwnedEphemeralSweepResult(int RemovedCount, IReadOnlyList<string> LeftoverPaths)
+{
+    public bool IsComplete => LeftoverPaths.Count == 0;
+}
+
 public sealed record GoalWorktreeCleanupOptions(TimeSpan SweepInterval)
 {
     public static GoalWorktreeCleanupOptions Default { get; } = new(TimeSpan.FromMinutes(5));
@@ -432,26 +437,31 @@ public static class GoalWorktrees
         if (!BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
         {
             _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
             return CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
                 "Removed workspace.",
-                "Removed workspace, but leftover directory cleanup is incomplete.");
+                "Removed workspace, but leftover directory cleanup is incomplete.",
+                ephemeralCleanup);
         }
 
         var branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
         _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        var ownedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
         return branchRemoval.ExitCode == 0
             ? CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
                 $"Removed workspace and merged branch {branch}.",
-                $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete.")
+                $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete.",
+                ownedEphemeralCleanup)
             : CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
                 $"Removed workspace; branch {branch} kept because it has unmerged commits.",
-                $"Removed workspace; branch {branch} kept because it has unmerged commits, but leftover directory cleanup is incomplete.");
+                $"Removed workspace; branch {branch} kept because it has unmerged commits, but leftover directory cleanup is incomplete.",
+                ownedEphemeralCleanup);
     }
 
     public static GoalWorktreeSweepResult SweepOrphanedWorktrees(string executionDirectory, AgentOrchestratorKernel? kernel = null)
@@ -490,6 +500,33 @@ public static class GoalWorktrees
         }
 
         return new GoalWorktreeSweepResult(removed, leftovers);
+    }
+
+    public static GoalOwnedEphemeralSweepResult SweepOwnedEphemeralDirectories(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null)
+    {
+        var root = Path.GetFullPath(executionDirectory);
+        var removed = 0;
+        var leftovers = new List<string>();
+
+        foreach (var path in EnumerateOwnedEphemeralDirectories(root, goalId))
+        {
+            if (ClearOrphanDirectory(path, kernel, "owned-ephemeral-sweep"))
+            {
+                removed++;
+            }
+            else if (Directory.Exists(path))
+            {
+                leftovers.Add(path);
+            }
+        }
+
+        TryDeleteEmptyDirectory(Path.Combine(root, ".t"));
+        TryDeleteEmptyDirectory(Path.Combine(root, ".scratch"));
+
+        return new GoalOwnedEphemeralSweepResult(removed, leftovers);
     }
 
     /// <summary>
@@ -750,11 +787,22 @@ public static class GoalWorktrees
         string path,
         GoalId goalId,
         string completeMessage,
-        string incompleteMessage)
+        string incompleteMessage,
+        GoalOwnedEphemeralSweepResult? ownedEphemeralCleanup = null)
     {
         if (!Directory.Exists(path))
         {
             ClearCleanupNeeded(path);
+            if (ownedEphemeralCleanup is { IsComplete: false })
+            {
+                var leftover = ownedEphemeralCleanup.LeftoverPaths[0];
+                return new GoalWorktreeRemoveResult(
+                    $"{completeMessage} Owned ephemeral cleanup is incomplete. Conductor retry: {ConductorRetryCommand(goalId)}",
+                    leftover,
+                    FindLockHoldersForCleanup(leftover),
+                    ConductorRetryCommand(goalId));
+            }
+
             return new GoalWorktreeRemoveResult(completeMessage, null, [], null);
         }
 
@@ -1055,13 +1103,13 @@ public static class GoalWorktrees
                 path,
                 operation,
                 new IOException(BuildCleanupRetryMessage(path, firstDelete.Message ?? "Directory deletion failed.")));
-            return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":delete-failed");
+            return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":delete-failed", operation + ":backoff");
         }
 
         ReapRecordedWorkerProcesses(kernel, path);
         if (!RunBoundedCleanupStep(path, operation + ":acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, operation, timeout)))
         {
-            RecordOrphanCleanupBackoff(path, operation + ":acl-reset-timeout");
+            RecordOrphanCleanupBackoff(path, operation + ":acl-reset-timeout", operation + ":backoff");
             return false;
         }
 
@@ -1078,10 +1126,42 @@ public static class GoalWorktrees
             new IOException(BuildCleanupRetryMessage(
                 path,
                 secondDelete.Message ?? "Directory deletion failed after ACL reset.")));
-        return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":post-acl-delete-failed");
+        return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":post-acl-delete-failed", operation + ":backoff");
     }
 
-    private static bool RecordOrphanCleanupBackoffWhenLeftover(string path, string reason)
+    private static IEnumerable<string> EnumerateOwnedEphemeralDirectories(string executionDirectory, GoalId goalId)
+    {
+        var fullGoalId = goalId.Value;
+        var prefix = Prefix(goalId);
+        var contextPath = Path.Combine(executionDirectory, ".orchestrator-context", fullGoalId);
+        if (Directory.Exists(contextPath))
+        {
+            yield return contextPath;
+        }
+
+        foreach (var rootName in new[] { ".t", ".scratch" })
+        {
+            var root = Path.Combine(executionDirectory, rootName);
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(root))
+            {
+                var name = Path.GetFileName(directory);
+                if (name.Equals(fullGoalId, StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return directory;
+                }
+            }
+        }
+    }
+
+    private static bool RecordOrphanCleanupBackoffWhenLeftover(string path, string reason, string warningOperation = "orphan-sweep:backoff")
     {
         if (!Directory.Exists(path))
         {
@@ -1089,7 +1169,7 @@ public static class GoalWorktrees
             return true;
         }
 
-        RecordOrphanCleanupBackoff(path, reason);
+        RecordOrphanCleanupBackoff(path, reason, warningOperation);
         return false;
     }
 
@@ -1194,18 +1274,24 @@ public static class GoalWorktrees
 
     private static string CleanupBackoffStorePath(string orphanPath)
     {
-        var root = LocateWorktreeRoot(orphanPath);
-        return Path.Combine(Path.GetDirectoryName(root)!, ".orchestrator", "state.db");
+        var root = LocateCleanupStateRoot(orphanPath);
+        return Path.Combine(root, ".orchestrator", "state.db");
     }
 
-    private static string LocateWorktreeRoot(string orphanPath)
+    private static string LocateCleanupStateRoot(string orphanPath)
     {
         var directory = new DirectoryInfo(Path.GetFullPath(orphanPath));
         while (directory.Parent is not null)
         {
             if (directory.Parent.Name.Equals(DirectoryName, StringComparison.OrdinalIgnoreCase))
             {
-                return directory.Parent.FullName;
+                return directory.Parent.Parent?.FullName ?? directory.Parent.FullName;
+            }
+
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
+            {
+                return directory.FullName;
             }
 
             directory = directory.Parent;
@@ -1214,10 +1300,26 @@ public static class GoalWorktrees
         return Path.GetDirectoryName(Path.GetFullPath(orphanPath)) ?? Path.GetFullPath(orphanPath);
     }
 
+    private static void TryDeleteEmptyDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+            {
+                Directory.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            WarnCleanupFailure(path, "owned-ephemeral-sweep:empty-root", ex);
+        }
+    }
+
     private static bool IsCleanupBackedOff(string path, string operation, out OrphanCleanupBackoffEntry entry)
     {
         entry = default!;
         if (!operation.Equals("orphan-sweep", StringComparison.OrdinalIgnoreCase) &&
+            !operation.Equals("owned-ephemeral-sweep", StringComparison.OrdinalIgnoreCase) &&
             !operation.Equals("remove", StringComparison.OrdinalIgnoreCase))
         {
             return false;

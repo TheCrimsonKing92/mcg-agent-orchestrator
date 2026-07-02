@@ -695,6 +695,39 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_does_not_start_worker_or_mutate_owned_ephemeral_cleanup")]
+    public void WorkerProfileDispatcherPreflightDoesNotStartWorkerOrMutateOwnedEphemeralCleanup()
+{
+    var root = CreateSeededDispatchRepository();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Preflight cleanup boundary", [task]);
+    var agent = SubscriptionDeveloperAgent();
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var contextPath = Path.Combine(root, ".orchestrator-context", goal.Id.Value);
+    var tempPath = Path.Combine(root, ".t", goal.Id.Value[..8] + "-preflight");
+    Directory.CreateDirectory(contextPath);
+    Directory.CreateDirectory(tempPath);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-07-02T19:00:00Z"),
+        sandboxOptions: sandbox);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Contains(preflight.Findings, finding => finding.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", StringComparison.Ordinal));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+    Assert.True(Directory.Exists(contextPath));
+    Assert.True(Directory.Exists(tempPath));
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_claude_cli_only_auth_under_low_integrity_before_dispatch")]
     public void WorkerProfileDispatcherPreflightBlocksClaudeCliOnlyAuthUnderLowIntegrityBeforeDispatch()
 {
