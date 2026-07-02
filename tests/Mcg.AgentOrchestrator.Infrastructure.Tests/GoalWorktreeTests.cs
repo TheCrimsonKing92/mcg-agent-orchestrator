@@ -1039,6 +1039,77 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_repairs_landed_cleaned_stale_acceptance_failure")]
+    public void CliWorkspaceRemoveRepairsLandedCleanedStaleAcceptanceFailure()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove recovery", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var order = new List<string>();
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                EventWriter = new RecordingGoalLifecycleEventWriter(order)
+            };
+
+            CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Contains("remove-worktree", order);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_keeps_stale_acceptance_failure_without_landing_evidence")]
+    public void CliWorkspaceRemoveKeepsStaleAcceptanceFailureWithoutLandingEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove no landing recovery", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            _ = GoalWorktrees.Ensure(repo, goal.Id);
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.DoesNotContain("Acceptance repaired:", output);
+            Assert.NotNull(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_can_target_non_current_goal")]
     public void CliWorkspaceRemoveCanTargetNonCurrentGoal()
     {

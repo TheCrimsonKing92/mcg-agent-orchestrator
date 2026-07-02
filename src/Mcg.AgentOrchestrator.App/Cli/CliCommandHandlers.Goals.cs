@@ -2448,7 +2448,29 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
         case "remove":
             var policy = ResolveCliAutonomyPolicy(parts);
             EnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "workspace remove");
-            PrintWorkspaceRemoveResult(context.Worktrees.Remove(executionDirectory, goal.Id, context.Kernel));
+            GoalOperationJournal.Begin(executionDirectory, goal, "workspace:remove", "Removing goal workspace.");
+            GoalWorktreeRemoveResult removeResult;
+            try
+            {
+                removeResult = context.Worktrees.Remove(executionDirectory, goal.Id, context.Kernel);
+            }
+            catch (InvalidOperationException ex)
+            {
+                GoalOperationJournal.Failed(executionDirectory, goal, "workspace:remove", ex.Message);
+                throw;
+            }
+
+            PrintWorkspaceRemoveResult(removeResult);
+            if (removeResult.IsComplete)
+            {
+                GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", removeResult.Message);
+                ReconcileLandedCleanedAcceptance(context, goal, "workspace remove");
+                context.EventWriter.AppendCleanedUp(goal.Id);
+            }
+            else
+            {
+                GoalOperationJournal.Failed(executionDirectory, goal, "workspace:remove", removeResult.Message);
+            }
             return;
 
         default:
