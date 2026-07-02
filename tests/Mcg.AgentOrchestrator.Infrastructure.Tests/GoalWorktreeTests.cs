@@ -474,10 +474,11 @@ public sealed class GoalWorktreeIntegrationTests
             if (OperatingSystem.IsWindows())
             {
                 // Windows holds the file exclusively, so the registered worktree and branch are
-                // cleaned up while the leftover directory is deferred to a later sweep.
-                Assert.True(partial.IsComplete);
-                Assert.Null(partial.LeftoverPath);
-                Assert.True(partial.Message.Contains("deferred to orphan sweep", StringComparison.OrdinalIgnoreCase));
+                // cleaned up while the leftover directory is reported as resumable cleanup.
+                Assert.False(partial.IsComplete);
+                Assert.Equal(path, partial.LeftoverPath);
+                Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", partial.ResumeCommand);
+                Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
                 Assert.True(Directory.Exists(path));
 
                 // Lock released; resume call deletes the directory and cleans up the branch.
@@ -591,10 +592,11 @@ public sealed class GoalWorktreeIntegrationTests
 
             if (OperatingSystem.IsWindows())
             {
-                Assert.True(partial.IsComplete);
+                Assert.False(partial.IsComplete);
                 Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
-                Assert.True(partial.Message.Contains("deferred to orphan sweep", StringComparison.OrdinalIgnoreCase));
-                Assert.Null(partial.LeftoverPath);
+                Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
+                Assert.Equal(path, partial.LeftoverPath);
+                Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", partial.ResumeCommand);
             }
             else
             {
@@ -1542,6 +1544,63 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_reports_not_accepted_when_cleanup_leaves_resumable_leftover")]
+    public void CliAcceptanceReportsNotAcceptedWhenCleanupLeavesResumableLeftover()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Acceptance cleanup leftover test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var worktrees = new CapturingGoalWorktreeService
+            {
+                RemoveOverride = (_, goalId, _, _) => new GoalWorktreeRemoveResult(
+                    "Removed workspace, but leftover directory cleanup is incomplete. Resume with: workspace remove " + goalId.Value[..8],
+                    worktreePath,
+                    [],
+                    $"workspace remove {goalId.Value[..8]}")
+            };
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                Worktrees = worktrees
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
+            Assert.True(output.Contains("BLOCKER step=remove-worktree", StringComparison.Ordinal));
+            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", StringComparison.Ordinal));
+            var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+            Assert.False(acceptance.IsAccepted);
+            Assert.Contains(acceptance.Blockers, blocker =>
+                blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
+                blocker.Message.Contains("remove-worktree", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -3276,6 +3335,34 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reports_unregistered_leftover_directory_as_incomplete")]
+    public void GoalWorktreesRemoveReportsUnregisteredLeftoverDirectoryAsIncomplete()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            GoalWorktrees.DeleteDirectory = _ => false;
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(result.IsComplete);
+            Assert.Equal(path, result.LeftoverPath);
+            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
+            Assert.True(Directory.Exists(path));
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_deletes_orphaned_worktree_directory")]
     public void GoalWorktreesSweepDeletesOrphanedWorktreeDirectory()
     {
@@ -3471,8 +3558,8 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_failure_logs_warning_and_defers_leftover")]
-    public void GoalWorktreesCleanupFailureLogsWarningAndDefersLeftover()
+    [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_failure_logs_warning_and_reports_resumable_leftover")]
+    public void GoalWorktreesCleanupFailureLogsWarningAndReportsResumableLeftover()
     {
         var repo = CreateSeededRepository();
         var originalDelete = GoalWorktrees.DeleteDirectory;
@@ -3495,9 +3582,10 @@ public sealed class GoalWorktreeIntegrationTests
 
             var result = GoalWorktrees.Remove(repo, goalId);
 
-            Assert.True(result.IsComplete);
-            Assert.Null(result.LeftoverPath);
-            Assert.True(result.Message.Contains("deferred to orphan sweep", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.IsComplete);
+            Assert.Equal(path, result.LeftoverPath);
+            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(path));
             var warning = Assert.Single(warnings);
             Assert.Equal(path, warning.Path);
@@ -3956,6 +4044,8 @@ public sealed class GoalWorktreeIntegrationTests
     {
         public int? RemoveTimeoutMilliseconds { get; private set; }
 
+        public Func<string, GoalId, AgentOrchestratorKernel?, int?, GoalWorktreeRemoveResult>? RemoveOverride { get; init; }
+
         public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
 
         public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
@@ -3969,6 +4059,11 @@ public sealed class GoalWorktreeIntegrationTests
             int? gitTimeoutMilliseconds = null)
         {
             RemoveTimeoutMilliseconds = gitTimeoutMilliseconds;
+            if (RemoveOverride is not null)
+            {
+                return RemoveOverride(executionDirectory, goalId, kernel, gitTimeoutMilliseconds);
+            }
+
             return gitTimeoutMilliseconds is { } timeout
                 ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
                 : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
