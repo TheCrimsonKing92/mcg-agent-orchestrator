@@ -375,6 +375,19 @@ public static class GoalWorktrees
 
         var wasAlreadyUnregistered = !hasRegisteredWorktree;
 
+        if (hasLeftoverDirectory && IsCleanupBackedOff(path, "remove", out var backoff))
+        {
+            WarnCleanupFailure(
+                path,
+                "remove:skip-backoff",
+                new IOException(BuildCleanupRetryMessage(path, backoff.Reason)));
+            return new GoalWorktreeRemoveResult(
+                $"Workspace cleanup deferred by cleanup-needed backoff for {path}.",
+                path,
+                FindLockHolders(path),
+                ConductorRetryCommand(goalId));
+        }
+
         if (hasRegisteredWorktree)
         {
             var removal = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "remove", path);
@@ -1012,7 +1025,7 @@ public static class GoalWorktrees
         }
 
         var cleanupBudget = GoalWorktreeCleanupBudget.Start(GitCli.DefaultTimeoutMilliseconds, CleanupElapsedMilliseconds);
-        if (IsOrphanCleanupBackedOff(path, operation, out var backoff))
+        if (IsCleanupBackedOff(path, operation, out var backoff))
         {
             WarnCleanupFailure(
                 path,
@@ -1181,10 +1194,11 @@ public static class GoalWorktrees
         return Path.GetDirectoryName(Path.GetFullPath(orphanPath)) ?? Path.GetFullPath(orphanPath);
     }
 
-    private static bool IsOrphanCleanupBackedOff(string path, string operation, out OrphanCleanupBackoffEntry entry)
+    private static bool IsCleanupBackedOff(string path, string operation, out OrphanCleanupBackoffEntry entry)
     {
         entry = default!;
-        if (!operation.Equals("orphan-sweep", StringComparison.OrdinalIgnoreCase))
+        if (!operation.Equals("orphan-sweep", StringComparison.OrdinalIgnoreCase) &&
+            !operation.Equals("remove", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

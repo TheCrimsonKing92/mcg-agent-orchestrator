@@ -146,6 +146,13 @@ internal static class TerminalGoalSweep
                         removeResult.Message,
                         $"acceptance {prefix}"));
                 }
+                else if (!removeResult.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "completed-worktree-cleanup-needed",
+                        removeResult.Message,
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
                     repairs.Add(new TerminalGoalSweepRepair(

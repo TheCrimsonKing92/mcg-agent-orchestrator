@@ -6885,6 +6885,52 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_incomplete_completed_worktree_cleanup_reports_blocker")]
+    public void TerminalGoalSweepIncompleteCompletedWorktreeCleanupReportsBlocker()
+    {
+        var root = CreateAcceptanceRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Completed merged with leftover cleanup", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            var worktree = CommitGoalWork(root, goal.Id, "src/leftover.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            File.Delete(Path.Combine(worktree, ".git"));
+            RunGit(root, "worktree", "prune");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+            GoalWorktrees.DeleteDirectory = _ => false;
+            GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var goalResult = Assert.Single(result.Goals);
+            var blocker = Assert.Single(goalResult.Blockers);
+
+            Assert.False(result.Changed);
+            Assert.Empty(goalResult.Repairs);
+            Assert.Equal("completed-worktree-cleanup-needed", blocker.Kind);
+            Assert.True(blocker.Evidence.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal($"conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", blocker.Command);
+            Assert.True(Directory.Exists(worktree));
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_assigned_task_with_merged_branch_cleans_without_reopening")]
     public void TerminalGoalSweepCompletedAssignedTaskWithMergedBranchCleansWithoutReopening()
     {

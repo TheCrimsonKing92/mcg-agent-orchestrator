@@ -3852,6 +3852,62 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_honors_cleanup_needed_backoff_before_retrying_cleanup")]
+    public void GoalWorktreesRemoveHonorsCleanupNeededBackoffBeforeRetryingCleanup()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var deleteAttempts = 0;
+            var shutdownCalls = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectory = _ =>
+            {
+                deleteAttempts++;
+                return false;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => shutdownCalls++;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+            var second = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.False(second.IsComplete);
+            Assert.Equal(path, second.LeftoverPath);
+            Assert.Equal(1, deleteAttempts);
+            Assert.Equal(1, shutdownCalls);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reaps_recorded_worker_processes_before_delete")]
     public void GoalWorktreesRemoveReapsRecordedWorkerProcessesBeforeDelete()
     {
