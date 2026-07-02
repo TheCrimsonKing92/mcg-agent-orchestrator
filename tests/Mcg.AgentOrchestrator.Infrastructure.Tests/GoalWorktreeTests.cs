@@ -603,6 +603,62 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_persists_cleanup_needed_when_goal_artifacts_delete_fails")]
+    public void GoalWorktreesRemovePersistsCleanupNeededWhenGoalArtifactsDeleteFails()
+    {
+        var repo = CreateSeededRepository();
+        var originalIsolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        var isolatedRoot = Path.Combine(repo, "isolated-dotnet");
+        try
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "cleanup-needed");
+            var lockedFile = Path.Combine(buildEnvironment.RootPath, "held-open.log");
+            File.WriteAllText(lockedFile, "held");
+            var lockReleased = false;
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockReleased
+                ? []
+                : [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "held artifact root")];
+
+            GoalWorktreeRemoveResult partial;
+            using (var fs = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                partial = GoalWorktrees.Remove(repo, goalId);
+            }
+            lockReleased = true;
+
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(partial.IsComplete);
+                Assert.Equal(buildEnvironment.RootPath, partial.LeftoverPath);
+                Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
+                Assert.False(Directory.Exists(path));
+                Assert.True(Directory.Exists(buildEnvironment.RootPath));
+                Assert.True(HasCleanupNeededRecord(repo, buildEnvironment.RootPath, "remove:goal-artifacts:lock-held"));
+
+                var retry = GoalWorktrees.Remove(repo, goalId);
+
+                Assert.True(retry.IsComplete);
+                Assert.False(Directory.Exists(buildEnvironment.RootPath));
+                Assert.False(HasCleanupNeededRecord(repo, buildEnvironment.RootPath, "remove:goal-artifacts:lock-held"));
+            }
+            else
+            {
+                Assert.True(partial.IsComplete);
+                Assert.False(Directory.Exists(buildEnvironment.RootPath));
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, originalIsolatedRoot);
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_retries_and_succeeds_when_transient_lock_releases")]
     public void GoalWorktreesRemoveRetriesAndSucceedsWhenTransientLockReleases()
     {

@@ -376,7 +376,14 @@ public static class GoalWorktrees
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
-            return new GoalWorktreeRemoveResult("Workspace already clean; nothing to remove.", null, [], null);
+            var earlyOwnedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
+            earlyOwnedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, earlyOwnedEphemeralCleanup);
+            return CompleteOrDeferredRemoveResult(
+                path,
+                goalId,
+                "Workspace already clean; nothing to remove.",
+                "Workspace already clean, but leftover cleanup is incomplete.",
+                earlyOwnedEphemeralCleanup);
         }
 
         var wasAlreadyUnregistered = !hasRegisteredWorktree;
@@ -436,8 +443,8 @@ public static class GoalWorktrees
 
         if (!BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
         {
-            _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
+            ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup);
             return CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
@@ -447,8 +454,8 @@ public static class GoalWorktrees
         }
 
         var branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
-        _ = DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         var ownedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
+        ownedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ownedEphemeralCleanup);
         return branchRemoval.ExitCode == 0
             ? CompleteOrDeferredRemoveResult(
                 path,
@@ -527,6 +534,53 @@ public static class GoalWorktrees
         TryDeleteEmptyDirectory(Path.Combine(root, ".scratch"));
 
         return new GoalOwnedEphemeralSweepResult(removed, leftovers);
+    }
+
+    private static GoalOwnedEphemeralSweepResult SweepGoalBuildArtifacts(
+        string executionDirectory,
+        GoalId goalId,
+        GoalOwnedEphemeralSweepResult ownedEphemeralCleanup)
+    {
+        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+        if (!Directory.Exists(root))
+        {
+            ClearCleanupNeeded(root, executionDirectory);
+            return ownedEphemeralCleanup;
+        }
+
+        var leftovers = ownedEphemeralCleanup.LeftoverPaths.ToList();
+        if (IsCleanupBackedOff(root, "remove", out var backoff, executionDirectory))
+        {
+            var lockHolders = FindLockHoldersForCleanup(root);
+            if (!IsLockHeldCleanupNeededReason(backoff.Reason) || lockHolders.Count > 0)
+            {
+                WarnCleanupFailure(
+                    root,
+                    "remove:goal-artifacts:skip-backoff",
+                    new IOException(BuildCleanupRetryMessage(root, backoff.Reason)));
+                leftovers.Add(root);
+                return new GoalOwnedEphemeralSweepResult(ownedEphemeralCleanup.RemovedCount, leftovers);
+            }
+
+            ClearCleanupNeeded(root, executionDirectory);
+        }
+
+        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId))
+        {
+            ClearCleanupNeeded(root, executionDirectory);
+            return ownedEphemeralCleanup with { RemovedCount = ownedEphemeralCleanup.RemovedCount + 1 };
+        }
+
+        WarnCleanupFailure(
+            root,
+            "remove:goal-artifacts",
+            new IOException(BuildCleanupRetryMessage(root, "remove:goal-artifacts")));
+        var failureReason = FindLockHoldersForCleanup(root).Count > 0
+            ? "remove:goal-artifacts:lock-held"
+            : "remove:goal-artifacts";
+        RecordCleanupNeeded(root, failureReason, executionDirectory);
+        leftovers.Add(root);
+        return new GoalOwnedEphemeralSweepResult(ownedEphemeralCleanup.RemovedCount, leftovers);
     }
 
     /// <summary>
@@ -1315,7 +1369,11 @@ public static class GoalWorktrees
         }
     }
 
-    private static bool IsCleanupBackedOff(string path, string operation, out OrphanCleanupBackoffEntry entry)
+    private static bool IsCleanupBackedOff(
+        string path,
+        string operation,
+        out OrphanCleanupBackoffEntry entry,
+        string? cleanupStateRoot = null)
     {
         entry = default!;
         if (!operation.Equals("orphan-sweep", StringComparison.OrdinalIgnoreCase) &&
@@ -1325,7 +1383,7 @@ public static class GoalWorktrees
             return false;
         }
 
-        if (!TryReadOrphanCleanupBackoff(path, out var existingEntry))
+        if (!TryReadOrphanCleanupBackoff(path, out var existingEntry, cleanupStateRoot))
         {
             return false;
         }
@@ -1336,24 +1394,28 @@ public static class GoalWorktrees
             return true;
         }
 
-        ClearOrphanCleanupBackoff(path);
+        ClearOrphanCleanupBackoff(path, cleanupStateRoot);
         return false;
     }
 
-    private static void RecordCleanupNeeded(string path, string reason) =>
-        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed");
+    private static void RecordCleanupNeeded(string path, string reason, string? cleanupStateRoot = null) =>
+        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed", cleanupStateRoot);
 
-    private static void ClearCleanupNeeded(string path) =>
-        ClearOrphanCleanupBackoff(path);
+    private static void ClearCleanupNeeded(string path, string? cleanupStateRoot = null) =>
+        ClearOrphanCleanupBackoff(path, cleanupStateRoot);
 
     private static bool IsLockHeldCleanupNeededReason(string reason) =>
         reason.EndsWith(":lock-held", StringComparison.OrdinalIgnoreCase);
 
-    private static void RecordOrphanCleanupBackoff(string path, string reason, string warningOperation = "orphan-sweep:backoff")
+    private static void RecordOrphanCleanupBackoff(
+        string path,
+        string reason,
+        string warningOperation = "orphan-sweep:backoff",
+        string? cleanupStateRoot = null)
     {
         try
         {
-            using var conn = OpenCleanupBackoffConnection(path);
+            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
             using var command = conn.CreateCommand();
             command.CommandText = """
                 INSERT INTO worktree_cleanup_backoff(path, skip_until_utc, reason)
@@ -1374,18 +1436,21 @@ public static class GoalWorktrees
         }
     }
 
-    private static bool TryReadOrphanCleanupBackoff(string path, out OrphanCleanupBackoffEntry entry)
+    private static bool TryReadOrphanCleanupBackoff(
+        string path,
+        out OrphanCleanupBackoffEntry entry,
+        string? cleanupStateRoot = null)
     {
         entry = default!;
         try
         {
-            var statePath = CleanupBackoffStorePath(path);
+            var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
             if (!File.Exists(statePath))
             {
                 return false;
             }
 
-            using var conn = OpenCleanupBackoffConnection(path);
+            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
             using var command = conn.CreateCommand();
             command.CommandText = "SELECT skip_until_utc, reason FROM worktree_cleanup_backoff WHERE path = $path";
             command.Parameters.AddWithValue("$path", NormalizePath(path));
@@ -1410,15 +1475,15 @@ public static class GoalWorktrees
         }
     }
 
-    private static void ClearOrphanCleanupBackoff(string path)
+    private static void ClearOrphanCleanupBackoff(string path, string? cleanupStateRoot = null)
     {
         try
         {
-            var statePath = CleanupBackoffStorePath(path);
+            var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
             if (!File.Exists(statePath))
                 return;
 
-            using var conn = OpenCleanupBackoffConnection(path);
+            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
             using var command = conn.CreateCommand();
             command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
             command.Parameters.AddWithValue("$path", NormalizePath(path));
@@ -1430,9 +1495,14 @@ public static class GoalWorktrees
         }
     }
 
-    private static SqliteConnection OpenCleanupBackoffConnection(string path)
+    private static string CleanupBackoffStorePath(string path, string? cleanupStateRoot) =>
+        cleanupStateRoot is null
+            ? CleanupBackoffStorePath(path)
+            : Path.Combine(Path.GetFullPath(cleanupStateRoot), ".orchestrator", "state.db");
+
+    private static SqliteConnection OpenCleanupBackoffConnection(string path, string? cleanupStateRoot = null)
     {
-        var statePath = CleanupBackoffStorePath(path);
+        var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
