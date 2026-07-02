@@ -3294,6 +3294,38 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktreeOrphanSweepScheduler_sweep_now_deletes_orphaned_worktree_directory")]
+    public void GoalWorktreeOrphanSweepSchedulerSweepNowDeletesOrphanedWorktreeDirectory()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        try
+        {
+            var registeredPath = GoalWorktrees.Ensure(repo, GoalId.New());
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-scheduler");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+
+            var result = GoalWorktreeOrphanSweepScheduler.SweepNow(repo);
+
+            Assert.Equal(1, result.RemovedCount);
+            Assert.Empty(result.LeftoverPaths);
+            Assert.False(Directory.Exists(orphanPath));
+            Assert.True(Directory.Exists(registeredPath));
+            Assert.Contains(acl.ResetPaths, resetPath => string.Equals(resetPath, orphanPath, StringComparison.Ordinal));
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_ensure_clears_existing_orphan_and_retries_once")]
     public void GoalWorktreesEnsureClearsExistingOrphanAndRetriesOnce()
     {
