@@ -133,7 +133,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             RequireRemainingArgument(parts, noteTarget.NextIndex, "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>");
             var noteTask = noteTarget.Task;
             context.Kernel.RecordTaskNote(context.CurrentGoal!.Id, noteTask.Id, parts[noteTarget.NextIndex]);
-            ConsoleViews.PrintTask(context.CurrentGoal!, noteTask);
+            Console.WriteLine($"Note added to task {noteTask.Id}");
             return true;
 
         case "dispatch":

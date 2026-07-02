@@ -10,24 +10,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$Arguments = @($Arguments | ForEach-Object { [string]$_ })
-if ($Arguments.Count -eq 0) {
-    throw "Usage: .\scripts\Start-OrchestratorCommand.ps1 [-Name <name>] <orchestrator-args...>"
-}
-
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
-    Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
-} else {
-    [System.IO.Path]::GetFullPath($AppDll)
-}
-if (-not (Test-Path -LiteralPath $resolvedAppDll)) {
-    throw "App DLL not found. Build the app first: $resolvedAppDll"
-}
-
-$logsRoot = Join-Path $repoRoot ".orchestrator\logs"
-New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
-
 function ConvertTo-SafeName {
     param([string]$Value)
     $safe = ($Value.Trim().ToLowerInvariant().ToCharArray() | ForEach-Object {
@@ -84,40 +66,103 @@ function ConvertTo-CommandLineArgument {
     return $quoted.ToString()
 }
 
-$stamp = Get-Date -Format "yyyyMMddHHmmss"
-$safeName = ConvertTo-SafeName $Name
-$stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
-$stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
-$processArguments = @($resolvedAppDll) + $Arguments
-$processArgumentLine = ($processArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
-$dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
-if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
-    $dotnetPath = "dotnet"
+function Write-LaunchFailure {
+    param(
+        [string]$Reason,
+        [string]$StdoutPath,
+        [string]$StderrPath,
+        [string[]]$LaunchArgs
+    )
+
+    $errorPayload = [ordered]@{
+        reason = $Reason
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($StdoutPath)) {
+        $errorPayload.stdoutPath = $StdoutPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($StderrPath)) {
+        $errorPayload.stderrPath = $StderrPath
+    }
+
+    if ($null -ne $LaunchArgs) {
+        $errorPayload.args = @($LaunchArgs)
+    }
+
+    [Console]::Error.WriteLine(($errorPayload | ConvertTo-Json -Compress))
 }
 
-$previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
-$previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$stdoutPath = $null
+$stderrPath = $null
+$processArguments = @()
+
 try {
+    $Arguments = @($Arguments | ForEach-Object { [string]$_ })
+    if ($Arguments.Count -eq 0) {
+        throw "Usage: .\scripts\Start-OrchestratorCommand.ps1 [-Name <name>] <orchestrator-args...>"
+    }
+
+    $resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
+        Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+    } else {
+        [System.IO.Path]::GetFullPath($AppDll)
+    }
+
+    $logsRoot = Join-Path $repoRoot ".orchestrator\logs"
+    New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
+
+    $stamp = Get-Date -Format "yyyyMMddHHmmss"
+    $safeName = ConvertTo-SafeName $Name
+    $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
+    $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
+    $processArguments = @($resolvedAppDll) + $Arguments
+
+    if (-not (Test-Path -LiteralPath $resolvedAppDll)) {
+        throw "App DLL not found. Build the app first: $resolvedAppDll"
+    }
+
+    $processArgumentLine = ($processArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
+    $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+    if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
+        $dotnetPath = "dotnet"
+    }
+
+    $previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
+    $previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
+    $startedAt = (Get-Date).ToUniversalTime().ToString("O", [System.Globalization.CultureInfo]::InvariantCulture)
     [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $stdoutPath, "Process")
     [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $stderrPath, "Process")
 
-    $process = Start-Process `
-        -WindowStyle Hidden `
-        -PassThru `
-        -FilePath $dotnetPath `
-        -WorkingDirectory $repoRoot `
-        -ArgumentList $processArgumentLine `
-        -RedirectStandardOutput $stdoutPath `
-        -RedirectStandardError $stderrPath
-}
-finally {
-    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $previousStdoutLogPath, "Process")
-    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $previousStderrLogPath, "Process")
-}
+    try {
+        $process = Start-Process `
+            -WindowStyle Hidden `
+            -PassThru `
+            -FilePath $dotnetPath `
+            -WorkingDirectory $repoRoot `
+            -ArgumentList $processArgumentLine `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $previousStdoutLogPath, "Process")
+        [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $previousStderrLogPath, "Process")
+    }
 
-[pscustomobject]@{
-    pid = [int]$process.Id
-    stdoutPath = $stdoutPath
-    stderrPath = $stderrPath
-    args = @($Arguments)
-} | ConvertTo-Json -Compress
+    [pscustomobject]@{
+        pid = [int]$process.Id
+        stdoutPath = $stdoutPath
+        stderrPath = $stderrPath
+        args = @($processArguments)
+        startedAt = $startedAt
+    } | ConvertTo-Json -Compress
+}
+catch {
+    Write-LaunchFailure `
+        -Reason $_.Exception.Message `
+        -StdoutPath $stdoutPath `
+        -StderrPath $stderrPath `
+        -LaunchArgs $processArguments
+    exit 1
+}

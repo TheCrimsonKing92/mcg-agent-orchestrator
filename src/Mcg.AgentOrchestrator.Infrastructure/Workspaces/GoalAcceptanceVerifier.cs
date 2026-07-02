@@ -39,7 +39,14 @@ public interface IGoalAcceptanceVerifier
 
 public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
-    internal sealed record CommandResult(int ExitCode, string Output);
+    internal sealed record CommandResult(
+        int ExitCode,
+        string Output,
+        bool TimedOut = false,
+        string? CommandLine = null,
+        string? StdoutPath = null,
+        string? StderrPath = null,
+        TimeSpan? Timeout = null);
 
     // Hard ceiling for a single build/test process. The suite itself runs in ~90s even in the
     // throttled acceptance environment, so this only guards a genuinely runaway process. Output is
@@ -77,13 +84,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
 
-        // Inject any policy-required checks (derived from the change scope) that are not
-        // already present in the manifest, so the anti-drift gate never fires from a stale
-        // manifest without the operator needing to hand-edit acceptance-manifest.json.
-        var injected = BuildPolicyInjectedChecks(manifest.Checks, changedFiles);
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks = injected.Count == 0
-            ? manifest.Checks
-            : [.. manifest.Checks, .. injected];
+        // Apply policy-required checks from the change scope. Focused project checks replace
+        // matching unfiltered project checks so a narrow App change does not still run the full
+        // Infrastructure project suite from the tracked manifest.
+        var effectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles);
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
@@ -327,35 +331,68 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static List<AcceptanceManifestCheck> BuildPolicyInjectedChecks(
+    private static IReadOnlyList<AcceptanceManifestCheck> BuildPolicyEffectiveChecks(
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles)
     {
         if (changedFiles is null || changedFiles.Count == 0)
-            return [];
+            return manifestChecks;
 
         var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        var plannedChecks = plan.Checks
+            .Where(c => c.Command.Count > 0)
+            .Select(PolicyCheckToManifestCheck)
+            .ToArray();
+        var focusedProjectChecks = plannedChecks
+            .Where(IsFocusedProjectDotnetCheck)
+            .ToArray();
         var coveredNames = manifestChecks
             .Select(c => c.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var injected = new List<AcceptanceManifestCheck>();
+        var effective = manifestChecks
+            .Where(check => !IsReplacedByFocusedProjectCheck(check, focusedProjectChecks))
+            .ToList();
         var injectedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var check in plan.Checks.Where(c => c.Command.Count > 0))
+        foreach (var plannedManifestCheck in plannedChecks)
         {
-            if (coveredNames.Contains(check.Name))
+            if (coveredNames.Contains(plannedManifestCheck.Name))
                 continue;
 
-            var commandKey = $"dotnet-test:{check.CommandLine}";
+            if (effective.Any(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                DotnetCheckMatches(check, plannedManifestCheck)))
+                continue;
+
+            var commandKey = ManifestCheckKey(plannedManifestCheck);
             if (!injectedKeys.Add(commandKey))
                 continue;
 
-            injected.Add(PolicyCheckToManifestCheck(check));
+            effective.Add(plannedManifestCheck);
         }
 
-        return injected;
+        return effective;
     }
+
+    private static bool IsFocusedProjectDotnetCheck(AcceptanceManifestCheck check) =>
+        check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(check.Project) &&
+        check.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+        check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsReplacedByFocusedProjectCheck(
+        AcceptanceManifestCheck manifestCheck,
+        IReadOnlyList<AcceptanceManifestCheck> focusedProjectChecks) =>
+        manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(manifestCheck.Project) &&
+        manifestCheck.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+        !manifestCheck.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase)) &&
+        focusedProjectChecks.Any(focused =>
+            string.Equals(NormalizePath(focused.Project), NormalizePath(manifestCheck.Project), StringComparison.OrdinalIgnoreCase));
+
+    private static string ManifestCheckKey(AcceptanceManifestCheck check) =>
+        $"{check.Type}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
 
     private static AcceptanceManifestCheck PolicyCheckToManifestCheck(RepositoryTestImpactCheck check)
     {
@@ -541,6 +578,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var result = await _runner(arguments, worktreePath, cancellationToken).ConfigureAwait(false);
+        if (result.TimedOut)
+        {
+            return (new AcceptanceCheckResult(
+                check.Name,
+                false,
+                result.ExitCode,
+                BuildTimeoutOutput(result),
+                ResultSummary: BuildTimeoutSummary(result),
+                Advisory: check.Advisory), false);
+        }
+
         return (new AcceptanceCheckResult(
             check.Name,
             result.ExitCode == 0,
@@ -578,7 +626,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(WithBuildEnvironmentArguments(arguments, environment), worktreePath, cancellationToken).ConfigureAwait(false);
 
         var retried = false;
-        if (result.ExitCode != 0 && (result.Output.Contains("CS2012", StringComparison.Ordinal) || IsTransientTesthostAbort(result.Output)))
+        if (!result.TimedOut &&
+            result.ExitCode != 0 &&
+            (result.Output.Contains("CS2012", StringComparison.Ordinal) || IsTransientTesthostAbort(result.Output)))
         {
             // CS2012 is a transient obj-dll file lock; a mid-run testhost abort ("host process exited
             // unexpectedly" / "Test Run Aborted" with no completed verdict) is an environmental crash
@@ -597,19 +647,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
         // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
         // block a green goal, while never masking a build/compile failure and still surfacing the tail.
-        var reportedAllPassed = result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-        var passed = result.ExitCode == 0 || reportedAllPassed;
+        var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+        var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
         return (new AcceptanceCheckResult(
             check.Name,
             passed,
             result.ExitCode,
-            passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
+            result.TimedOut
+                ? BuildTimeoutOutput(result)
+                : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
             environment.ArtifactsPath,
             "goal-acceptance-verifier",
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
             retried,
-            ExtractResultSummary(result.Output)), retried);
+            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output)), retried);
     }
 
     // A dotnet test run whose own summary banner is "Passed!" (zero failed) but which then exits non-zero
@@ -793,15 +845,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             args.Add(check.Project);
         }
 
-        args.AddRange(check.Arguments);
+        var explicitFilter = ExtractFilterArguments(check.Arguments, args);
 
         // Exclude host-integration tests that spawn a real Kestrel dashboard server (binds a port,
         // needs an interactive firewall allow) — they hang in the unattended, relocated gate. Match
         // both by class name (works on a worktree built before the trait existed) and by the
         // [Trait("Category","HostIntegration")] tag (covers any future such tests). They run in a
         // dedicated lane instead.
-        args.Add("--filter");
-        args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+        if (string.IsNullOrWhiteSpace(explicitFilter) && NeedsUnattendedHostIntegrationExclusion(check))
+        {
+            args.Add("--filter");
+            args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+        }
 
         // Fail a hung test fast and by name instead of silently eating CommandTimeout. A test that
         // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
@@ -812,6 +867,45 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         args.Add("--blame-hang-dump-type");
         args.Add("none");
         return [.. args];
+    }
+
+    private static bool NeedsUnattendedHostIntegrationExclusion(AcceptanceManifestCheck check) =>
+        string.IsNullOrWhiteSpace(check.Project) ||
+        check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
+        check.Project.EndsWith(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase) ||
+        check.Project.EndsWith(
+            "tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string? ExtractFilterArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
+    {
+        string? filter = null;
+        for (var index = 0; index < sourceArguments.Count; index++)
+        {
+            var argument = sourceArguments[index];
+            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 < sourceArguments.Count)
+                {
+                    filter = sourceArguments[index + 1];
+                    index++;
+                }
+
+                continue;
+            }
+
+            destinationArguments.Add(argument);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            destinationArguments.Add("--filter");
+            destinationArguments.Add(filter);
+        }
+
+        return filter;
     }
 
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment)
@@ -879,6 +973,38 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return tail.Length <= maxChars ? tail : tail[^maxChars..];
     }
 
+    private static string BuildTimeoutSummary(CommandResult result) =>
+        $"timed out after {FormatTimeout(result.Timeout ?? CommandTimeout)}";
+
+    private static string BuildTimeoutOutput(CommandResult result)
+    {
+        var details = new List<string>
+        {
+            $"Verification command timed out after {FormatTimeout(result.Timeout ?? CommandTimeout)}.",
+        };
+
+        if (!string.IsNullOrWhiteSpace(result.CommandLine))
+            details.Add($"Command: {result.CommandLine}");
+        if (!string.IsNullOrWhiteSpace(result.StdoutPath))
+            details.Add($"stdout: {result.StdoutPath}");
+        if (!string.IsNullOrWhiteSpace(result.StderrPath))
+            details.Add($"stderr: {result.StderrPath}");
+
+        var tail = TailOutput(result.Output);
+        if (!string.IsNullOrWhiteSpace(tail))
+        {
+            details.Add("Last output:");
+            details.Add(tail);
+        }
+
+        return string.Join(Environment.NewLine, details);
+    }
+
+    private static string FormatTimeout(TimeSpan timeout) =>
+        timeout.TotalSeconds >= 60
+            ? $"{timeout.TotalMinutes:0.#}m"
+            : $"{timeout.TotalSeconds:0.#}s";
+
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -894,6 +1020,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
 
+        var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
+        var timedOut = false;
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -946,12 +1074,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                throw;
+                if (cancellationToken.IsCancellationRequested)
+                    throw;
+
+                timedOut = true;
             }
 
             var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
             var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
-            return new CommandResult(process.ExitCode, (stdout + stderr).Trim());
+            var exitCode = timedOut ? -1 : process.ExitCode;
+            return new CommandResult(
+                exitCode,
+                (stdout + stderr).Trim(),
+                timedOut,
+                commandLine,
+                stdoutPath,
+                stderrPath,
+                CommandTimeout);
         }
         finally
         {
@@ -960,10 +1099,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 WorkerProcessJobs.Release(processId);
             }
 
-            TryDeleteFile(stdoutPath);
-            TryDeleteFile(stderrPath);
+            if (!timedOut)
+            {
+                TryDeleteFile(stdoutPath);
+                TryDeleteFile(stderrPath);
+            }
         }
     }
+
+    private static string QuoteForDisplay(string value) =>
+        value.Contains(' ', StringComparison.Ordinal) || value.Contains('"', StringComparison.Ordinal)
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
 
     private static string BuildRedirectedCommand(
         string[] arguments,

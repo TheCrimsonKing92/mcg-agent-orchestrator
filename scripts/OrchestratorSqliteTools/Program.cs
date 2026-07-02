@@ -6,6 +6,8 @@ return exitCode;
 
 internal static class OrchestratorSqliteTools
 {
+    private const string RepoRootEnvironmentVariable = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";
+
     private static readonly HashSet<string> AllowedGoalStatuses = new(StringComparer.Ordinal)
     {
         "Proposed",
@@ -35,7 +37,7 @@ internal static class OrchestratorSqliteTools
 
     private static async Task<int> ListGoalsAsync(string[] args)
     {
-        var repoRoot = Environment.CurrentDirectory;
+        string? repoRoot = null;
         string? dbPath = null;
         string? status = null;
         var limit = 20;
@@ -49,6 +51,7 @@ internal static class OrchestratorSqliteTools
                     repoRoot = RequireValue(args, ref i, arg);
                     break;
                 case "--db":
+                case "--db-path":
                     dbPath = RequireValue(args, ref i, arg);
                     break;
                 case "--status":
@@ -69,30 +72,68 @@ internal static class OrchestratorSqliteTools
             }
         }
 
-        repoRoot = Path.GetFullPath(repoRoot);
-        dbPath = Path.GetFullPath(dbPath ?? Path.Combine(repoRoot, ".orchestrator", "state.db"));
-        if (!File.Exists(dbPath))
-            return Fail($"State database not found: {dbPath}");
+        var resolvedRepoRoot = ResolveRepoRoot(repoRoot);
+        dbPath = ResolveStateDbPath(dbPath, resolvedRepoRoot);
+        var stateDirectory = Path.GetDirectoryName(dbPath);
+        var backlogTitles = string.IsNullOrWhiteSpace(stateDirectory)
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : LoadBacklogTitles(Path.Combine(stateDirectory, "backlog.db"));
 
-        await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False;");
-        await conn.OpenAsync();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+        await using var conn = CreateConnection(dbPath, readOnly: true);
+        try
+        {
+            await conn.OpenAsync();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+            await RunNonQueryAsync(conn, "PRAGMA temp_store=MEMORY");
+            await RunNonQueryAsync(conn, "PRAGMA query_only=ON");
+        }
+        catch (SqliteException ex)
+        {
+            return FailOpen(dbPath, ex);
+        }
 
+        try
+        {
+            await PrintGoalRowsAsync(conn, status, limit, backlogTitles, includeSourceBacklogColumn: true);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 && ex.Message.Contains("source_backlog_item_id", StringComparison.OrdinalIgnoreCase))
+        {
+            await PrintGoalRowsAsync(conn, status, limit, backlogTitles, includeSourceBacklogColumn: false);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 14)
+        {
+            return FailOpen(dbPath, ex);
+        }
+
+        return 0;
+    }
+
+    private static async Task PrintGoalRowsAsync(
+        SqliteConnection conn,
+        string? status,
+        int limit,
+        IReadOnlyDictionary<string, string> backlogTitles,
+        bool includeSourceBacklogColumn)
+    {
         await using var cmd = conn.CreateCommand();
+        var projection = includeSourceBacklogColumn
+            ? "id, status, source_backlog_item_id, snapshot_json"
+            : "id, status, snapshot_json";
         cmd.CommandText = status is null
             ? """
-              SELECT id, status, snapshot_json
+              SELECT {0}
               FROM goals
               ORDER BY updated_at DESC, id
               LIMIT $limit
               """
             : """
-              SELECT id, status, snapshot_json
+              SELECT {0}
               FROM goals
               WHERE status = $status
               ORDER BY updated_at DESC, id
               LIMIT $limit
               """;
+        cmd.CommandText = string.Format(cmd.CommandText, projection);
         cmd.Parameters.AddWithValue("$limit", limit);
         if (status is not null)
             cmd.Parameters.AddWithValue("$status", status);
@@ -102,16 +143,16 @@ internal static class OrchestratorSqliteTools
         {
             var id = reader.GetString(0);
             var rowStatus = reader.GetString(1);
-            var snapshotJson = reader.GetString(2);
-            Console.WriteLine($"{Short(id)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
+            var sourceBacklogItemId = includeSourceBacklogColumn && !reader.IsDBNull(2) ? reader.GetString(2) : null;
+            var snapshotJson = reader.GetString(includeSourceBacklogColumn ? 3 : 2);
+            sourceBacklogItemId ??= ExtractSourceBacklogItemId(snapshotJson);
+            Console.WriteLine($"{Short(id)}{FormatFriendlyLabel(sourceBacklogItemId, backlogTitles)} [{rowStatus}] {ExtractObjective(snapshotJson)}");
         }
-
-        return 0;
     }
 
     private static async Task<int> SetGoalStatusAsync(string[] args)
     {
-        var repoRoot = Environment.CurrentDirectory;
+        string? repoRoot = null;
         string? dbPath = null;
         string? status = null;
         var dryRun = false;
@@ -126,6 +167,7 @@ internal static class OrchestratorSqliteTools
                     repoRoot = RequireValue(args, ref i, arg);
                     break;
                 case "--db":
+                case "--db-path":
                     dbPath = RequireValue(args, ref i, arg);
                     break;
                 case "--status":
@@ -155,14 +197,18 @@ internal static class OrchestratorSqliteTools
         if (prefixes.Count == 0)
             return Fail("Provide at least one goal id or unique prefix.");
 
-        repoRoot = Path.GetFullPath(repoRoot);
-        dbPath = Path.GetFullPath(dbPath ?? Path.Combine(repoRoot, ".orchestrator", "state.db"));
-        if (!File.Exists(dbPath))
-            return Fail($"State database not found: {dbPath}");
+        dbPath = ResolveStateDbPath(dbPath, repoRoot);
 
-        await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False;");
-        await conn.OpenAsync();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+        await using var conn = CreateConnection(dbPath, readOnly: false);
+        try
+        {
+            await conn.OpenAsync();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+        }
+        catch (SqliteException ex)
+        {
+            return FailOpen(dbPath, ex);
+        }
 
         var rows = await ResolveGoalsAsync(conn, prefixes);
         if (rows.Count == 0)
@@ -218,7 +264,7 @@ internal static class OrchestratorSqliteTools
 
     private static async Task<int> RequeueTaskAsync(string[] args)
     {
-        var repoRoot = Environment.CurrentDirectory;
+        string? repoRoot = null;
         string? dbPath = null;
         string? goalPrefix = null;
         string? note = null;
@@ -234,6 +280,7 @@ internal static class OrchestratorSqliteTools
                     repoRoot = RequireValue(args, ref i, arg);
                     break;
                 case "--db":
+                case "--db-path":
                     dbPath = RequireValue(args, ref i, arg);
                     break;
                 case "--task-number":
@@ -268,14 +315,18 @@ internal static class OrchestratorSqliteTools
         if (string.IsNullOrWhiteSpace(note))
             return Fail("Missing required --note <text>.");
 
-        repoRoot = Path.GetFullPath(repoRoot);
-        dbPath = Path.GetFullPath(dbPath ?? Path.Combine(repoRoot, ".orchestrator", "state.db"));
-        if (!File.Exists(dbPath))
-            return Fail($"State database not found: {dbPath}");
+        dbPath = ResolveStateDbPath(dbPath, repoRoot);
 
-        await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False;");
-        await conn.OpenAsync();
-        await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+        await using var conn = CreateConnection(dbPath, readOnly: false);
+        try
+        {
+            await conn.OpenAsync();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000");
+        }
+        catch (SqliteException ex)
+        {
+            return FailOpen(dbPath, ex);
+        }
 
         var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
         if (rows.Count == 0)
@@ -428,6 +479,126 @@ internal static class OrchestratorSqliteTools
         await cmd.ExecuteNonQueryAsync();
     }
 
+    private static async Task<bool> HasColumnAsync(SqliteConnection conn, string table, string column)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $name";
+        cmd.Parameters.AddWithValue("$name", column);
+        var count = (long)(await cmd.ExecuteScalarAsync() ?? 0L);
+        return count > 0;
+    }
+
+    private static string ResolveStateDbPath(string? dbPath, string? repoRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(dbPath))
+            return Path.GetFullPath(dbPath);
+
+        return Path.Combine(ResolveRepoRoot(repoRoot), ".orchestrator", "state.db");
+    }
+
+    private static string ResolveRepoRoot(string? repoRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(repoRoot))
+            return Path.GetFullPath(repoRoot);
+
+        var configuredRoot = Environment.GetEnvironmentVariable(RepoRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+            return NormalizeStateRoot(Path.GetFullPath(configuredRoot));
+
+        foreach (var candidate in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
+        {
+            var resolved = TryFindRepoRoot(candidate);
+            if (resolved is not null)
+                return NormalizeStateRoot(resolved);
+        }
+
+        return NormalizeStateRoot(Path.GetFullPath(Environment.CurrentDirectory));
+    }
+
+    private static string? TryFindRepoRoot(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            return null;
+
+        var directory = new DirectoryInfo(Path.GetFullPath(candidate));
+        while (directory is not null)
+        {
+            var gitPath = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
+                return directory.FullName;
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static string NormalizeStateRoot(string repoRoot)
+    {
+        var primaryRoot = TryResolvePrimaryRootFromLinkedWorktree(repoRoot);
+        if (primaryRoot is not null)
+            return primaryRoot;
+
+        if (File.Exists(Path.Combine(repoRoot, ".orchestrator", "state.db")))
+            return repoRoot;
+
+        return repoRoot;
+    }
+
+    private static string? TryResolvePrimaryRootFromLinkedWorktree(string repoRoot)
+    {
+        var gitFilePath = Path.Combine(repoRoot, ".git");
+        if (!File.Exists(gitFilePath))
+            return null;
+
+        var gitFile = File.ReadAllText(gitFilePath).Trim();
+        const string prefix = "gitdir:";
+        if (!gitFile.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var gitDir = gitFile[prefix.Length..].Trim();
+        if (!Path.IsPathRooted(gitDir))
+            gitDir = Path.Combine(repoRoot, gitDir);
+
+        gitDir = Path.GetFullPath(gitDir);
+        var commonGitDirectory = TryReadCommonGitDirectory(gitDir) ?? TryInferCommonGitDirectory(gitDir);
+        var primaryRoot = commonGitDirectory is null ? null : Path.GetDirectoryName(commonGitDirectory);
+        return string.IsNullOrWhiteSpace(primaryRoot) ? null : primaryRoot;
+    }
+
+    private static string? TryReadCommonGitDirectory(string gitDir)
+    {
+        var commonDirPath = Path.Combine(gitDir, "commondir");
+        if (!File.Exists(commonDirPath))
+            return null;
+
+        var commonDir = File.ReadAllText(commonDirPath).Trim();
+        if (string.IsNullOrWhiteSpace(commonDir))
+            return null;
+
+        if (!Path.IsPathRooted(commonDir))
+            commonDir = Path.Combine(gitDir, commonDir);
+
+        return Path.GetFullPath(commonDir);
+    }
+
+    private static string? TryInferCommonGitDirectory(string gitDir)
+    {
+        var worktreesDirectory = Path.GetDirectoryName(gitDir);
+        return worktreesDirectory is null ? null : Path.GetDirectoryName(worktreesDirectory);
+    }
+
+    private static SqliteConnection CreateConnection(string dbPath, bool readOnly)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
+            Pooling = false
+        };
+        return new SqliteConnection(builder.ToString());
+    }
+
     private static bool IsHelp(string arg) => arg is "--help" or "-h" or "help";
 
     private static int Fail(string message)
@@ -435,6 +606,17 @@ internal static class OrchestratorSqliteTools
         Console.Error.WriteLine(message);
         Console.Error.WriteLine();
         PrintUsage();
+        return 1;
+    }
+
+    private static int FailOpen(string dbPath, SqliteException exception)
+    {
+        var message = exception.Message;
+        var prefix = $"SQLite Error {exception.SqliteErrorCode}: ";
+        if (message.StartsWith(prefix, StringComparison.Ordinal))
+            message = message[prefix.Length..];
+
+        Console.Error.WriteLine($"sqlite-tool: cannot open database at {dbPath} (SQLite Error {exception.SqliteErrorCode}: {message})");
         return 1;
     }
 
@@ -468,6 +650,64 @@ internal static class OrchestratorSqliteTools
         Console.WriteLine();
         Console.WriteLine("Statuses:");
         Console.WriteLine($"  {string.Join(", ", AllowedGoalStatuses)}");
+    }
+
+    private static IReadOnlyDictionary<string, string> LoadBacklogTitles(string backlogDbPath)
+    {
+        if (!File.Exists(backlogDbPath))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            using var conn = CreateConnection(backlogDbPath, readOnly: true);
+            conn.Open();
+            using (var pragma = conn.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout=30000; PRAGMA query_only=ON";
+                pragma.ExecuteNonQuery();
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT id, title FROM backlog";
+            using var reader = cmd.ExecuteReader();
+            var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                var title = reader.IsDBNull(1) ? null : reader.GetString(1);
+                if (!string.IsNullOrWhiteSpace(title))
+                    titles[reader.GetString(0)] = title;
+            }
+
+            return titles;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string FormatFriendlyLabel(string? sourceBacklogItemId, IReadOnlyDictionary<string, string> backlogTitles)
+    {
+        if (string.IsNullOrWhiteSpace(sourceBacklogItemId) ||
+            !backlogTitles.TryGetValue(sourceBacklogItemId, out var title) ||
+            string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        return $" ({title.Trim().ReplaceLineEndings(" ")})";
+    }
+
+    private static string? ExtractSourceBacklogItemId(string snapshotJson)
+    {
+        try
+        {
+            return JsonNode.Parse(snapshotJson)?["SourceBacklogItemId"]?.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string Short(string id) => id.Length <= 8 ? id : id[..8];

@@ -12,6 +12,15 @@ public sealed record DispatchRefreshOutcome(
     DispatchRecoveryDecision? RecoveryDecision = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
 
+public sealed record DispatchProcessStartResult(
+    TaskProcessRecord? ProcessRecord,
+    WorkerSandboxPrepRecoverableAction? RecoveryAction)
+{
+    public static DispatchProcessStartResult Started(TaskProcessRecord processRecord) => new(processRecord, null);
+
+    public static DispatchProcessStartResult RequiresRecovery(WorkerSandboxPrepRecoverableAction action) => new(null, action);
+}
+
 public sealed class BackgroundDispatchRunner
 {
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
@@ -77,6 +86,18 @@ public sealed class BackgroundDispatchRunner
 
     public TaskProcessRecord StartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
     {
+        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot);
+        if (result.RecoveryAction is { } action)
+        {
+            throw new InvalidOperationException(action.Reason);
+        }
+
+        return result.ProcessRecord
+            ?? throw new InvalidOperationException("Dispatch start did not produce a process record.");
+    }
+
+    public DispatchProcessStartResult TryStartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
+    {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
@@ -130,7 +151,18 @@ public sealed class BackgroundDispatchRunner
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
             SandboxLowIntegrity: useSandbox,
-            Provider: ResolveSandboxProvider(dispatch)));
+            Provider: ResolveSandboxProvider(dispatch),
+            PromptPath: dispatch.PromptPath));
+
+        if (useSandbox && OperatingSystem.IsWindows())
+        {
+            var sandboxRoot = Path.Combine(dispatch.WorkingDirectory, ".mcg-sandbox");
+            var preparation = WorkerSandboxPreparer.CreateDefault().Prepare(dispatch.WorkingDirectory, sandboxRoot);
+            if (preparation.RecoveryAction is { } action)
+            {
+                return DispatchProcessStartResult.RequiresRecovery(action);
+            }
+        }
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
@@ -177,7 +209,7 @@ public sealed class BackgroundDispatchRunner
             OwnedProcessIds: [process.Id]);
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
-        return record;
+        return DispatchProcessStartResult.Started(record);
     }
 
     private static void ReleaseDispatchHostStartGate(string startGatePath)
@@ -196,13 +228,17 @@ public sealed class BackgroundDispatchRunner
 
     private WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
-        var provider = ResolveWorkerProvider(dispatch);
+        return ResolveSandboxProvider(ResolveWorkerProvider(dispatch));
+    }
+
+    internal static WorkerSandboxProvider ResolveSandboxProvider(IWorkerProvider provider)
+    {
         if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
         {
             return WorkerSandboxProvider.Claude;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli)
         {
             return WorkerSandboxProvider.Codex;
         }
@@ -432,13 +468,9 @@ public sealed class BackgroundDispatchRunner
                 standardOutput,
                 standardError,
                 providerFailureKind);
-            var providerCannotSelfCommit = task.LastDispatch is { } dispatch &&
-                !ResolveWorkerProvider(dispatch).Capabilities.CanSelfCommit;
             var shouldCommitDirtyWorktree =
                 (exitCode == 0 && worktreeEvidence.HasCommitAfterDispatch) ||
-                ((task.LastDispatch.SandboxLowIntegrity || providerCannotSelfCommit) &&
-                  (HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-                   sandboxCommitBlocked));
+                (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked);
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -899,6 +931,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         return !normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) &&

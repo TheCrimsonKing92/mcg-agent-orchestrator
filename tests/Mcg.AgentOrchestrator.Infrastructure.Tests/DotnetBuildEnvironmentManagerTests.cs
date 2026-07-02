@@ -286,7 +286,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             return;
         }
 
-        var repoRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ?? Directory.GetCurrentDirectory();
+        var repoRoot = ResolveRepositoryRoot();
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var root = CreateTempDirectory();
         var shimDirectory = Path.Combine(root, "shim");
@@ -334,6 +334,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.ArgumentList.Add("test");
             startInfo.ArgumentList.Add("Fake.Tests.csproj");
             startInfo.ArgumentList.Add("--no-restore");
+            startInfo.ArgumentList.Add("--filter");
+            startInfo.ArgumentList.Add("FullyQualifiedName~FocusedTests");
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
@@ -352,7 +354,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --artifacts-path ", StringComparison.Ordinal));
+            Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --filter FullyQualifiedName~FocusedTests --artifacts-path ", StringComparison.Ordinal));
             Assert.True(log.Contains("-maxcpucount:", StringComparison.Ordinal));
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
@@ -375,6 +377,34 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 // Best effort.
             }
         }
+    }
+
+    private static string ResolveRepositoryRoot()
+    {
+        var environmentRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+        if (IsRepositoryRoot(environmentRoot))
+        {
+            return Path.GetFullPath(environmentRoot!);
+        }
+
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (IsRepositoryRoot(directory.FullName))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not resolve repository root for Invoke-IsolatedDotnet.ps1.");
+    }
+
+    private static bool IsRepositoryRoot(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path) &&
+            File.Exists(Path.Combine(path, "scripts", "Invoke-IsolatedDotnet.ps1"));
     }
 
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]

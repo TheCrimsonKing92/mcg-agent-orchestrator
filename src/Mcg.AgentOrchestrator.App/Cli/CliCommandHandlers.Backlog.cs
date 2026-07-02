@@ -11,17 +11,21 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         case "backlog-list":
         {
             var all = parts.Any(p => p.Equals("--all", StringComparison.OrdinalIgnoreCase));
+            var limit = ParseOptionalLimit(parts);
+            var status = GetFlagValue(parts, "--status");
+            var text = GetFlagValue(parts, "--text");
+            var hasConstraints = limit is not null || !string.IsNullOrWhiteSpace(status) || !string.IsNullOrWhiteSpace(text);
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
-            var items = store.ListAsync(all).GetAwaiter().GetResult();
+            var items = ApplyBacklogListFilters(store.ListAsync(all).GetAwaiter().GetResult(), status, text, limit);
             if (items.Count == 0)
             {
                 Console.WriteLine(all
-                    ? "No backlog items."
-                    : "No open backlog items. Use --all to include closed items.");
+                    ? hasConstraints ? "No matching backlog items." : "No backlog items."
+                    : hasConstraints ? "No matching open backlog items. Use --all to include closed items." : "No open backlog items. Use --all to include closed items.");
                 return false;
             }
             foreach (var item in items)
-                Console.WriteLine($"[{item.Status}] {item.Id} — {item.Title}");
+                Console.WriteLine($"[{item.Status}] {item.Id} - {item.Title}");
             return false;
         }
 
@@ -92,6 +96,50 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         default:
             return null;
     }
+}
+
+internal static IReadOnlyList<BacklogItem> ApplyBacklogListFilters(
+    IReadOnlyList<BacklogItem> items,
+    string? status,
+    string? text,
+    int? limit)
+{
+    IEnumerable<BacklogItem> query = items;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        query = query.Where(item => item.Status.ToString().Equals(status, StringComparison.OrdinalIgnoreCase));
+    }
+
+    if (!string.IsNullOrWhiteSpace(text))
+    {
+        query = query.Where(item =>
+            item.Title.Contains(text, StringComparison.OrdinalIgnoreCase) ||
+            item.Body.Contains(text, StringComparison.OrdinalIgnoreCase));
+    }
+
+    if (limit is { } cap)
+    {
+        query = query.Take(cap);
+    }
+
+    return query.ToArray();
+}
+
+private static int? ParseOptionalLimit(IReadOnlyList<string> parts)
+{
+    var value = GetFlagValue(parts, "--limit");
+    if (value is null)
+    {
+        return null;
+    }
+
+    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var limit) ||
+        limit < 0)
+    {
+        throw new ArgumentException("--limit requires a non-negative integer value.");
+    }
+
+    return limit;
 }
 
 private static string? ResolveBacklogTextFile(IReadOnlyList<string> parts, string flag, int inlineIndex, string? defaultValue)

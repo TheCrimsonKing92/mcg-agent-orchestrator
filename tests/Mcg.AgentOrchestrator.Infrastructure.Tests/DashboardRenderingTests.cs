@@ -1860,11 +1860,15 @@ public sealed class DashboardRenderingTests
 
     var control = DashboardNextActionControls.Build(goal, action);
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id)).Items.Single();
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
-        FocusGoalPrefix: goalPrefix));
+        FocusGoalPrefix: goalPrefix,
+        FocusGoalChangedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
@@ -1881,11 +1885,66 @@ public sealed class DashboardRenderingTests
     Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
     Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
     Assert.False(workSummary.BuildEnvironment.LeaseExists);
+    Assert.Equal("focused CLI infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
+    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliHelpTests", StringComparison.Ordinal));
+    Assert.False(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~FundamentalAliasTests", StringComparison.Ordinal));
+    Assert.False(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
+    Assert.True(html.Contains("Test impact: Selected focused CLI infrastructure tests from changed file scope.", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", StringComparison.Ordinal));
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Suggested command: execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("Cost: large paid subscription start. Inspect the generated prompt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Dashboard_preview_resolves_test_impact_from_workspace_when_focus_changed_files_are_null")]
+    public void DashboardPreviewResolvesTestImpactFromWorkspaceWhenFocusChangedFilesAreNull()
+{
+    var root = CreateTempDirectory();
+    RunGit(root, "init", "-b", "main");
+    RunGit(root, "config", "user.email", "dashboard-tests@example.com");
+    RunGit(root, "config", "user.name", "Dashboard Tests");
+    File.WriteAllText(Path.Combine(root, "README.md"), "seed");
+    RunGit(root, "add", "-A");
+    RunGit(root, "commit", "-m", "Seed");
+
+    var workspace = CreateRefinedWorkspace(root);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render workspace-backed test impact", [new TaskSpec(TaskId.New(), "Change dashboard rendering", AgentRole.Developer)]);
+    var worktree = GoalWorktrees.Ensure(workspace.ExecutionDirectory, goal.Id);
+    var changedFile = Path.Combine(
+        worktree,
+        "src",
+        "Mcg.AgentOrchestrator.App",
+        "Dashboard",
+        "Preview.cs");
+    Directory.CreateDirectory(Path.GetDirectoryName(changedFile)!);
+    File.WriteAllText(changedFile, "// dashboard preview change");
+    RunGit(worktree, "add", "-A");
+    RunGit(worktree, "commit", "-m", "Dashboard preview change");
+    var dashboardWorkspace = new DashboardWorkspaceContext(
+        workspace.RootDirectory,
+        workspace.SqliteStatePath,
+        workspace.ExecutionDirectory,
+        workspace.PromptDirectory,
+        workspace.LogDirectory,
+        workspace.WorkerProfilePath,
+        workspace.AgentCatalogPath,
+        0);
+
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        executionDirectory: workspace.ExecutionDirectory);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+        EnableOperatorControls: true,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goal.Id.Value[..8],
+        Workspace: dashboardWorkspace));
+
+    Assert.Equal("focused dashboard infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
+    Assert.True(html.Contains("Test impact: Selected focused dashboard infrastructure tests from changed file scope.", StringComparison.Ordinal));
+    Assert.False(html.Contains("Test impact: No changed files detected; no build verification required.", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_allow_complex_paid_prepared_dispatch_under_size_threshold")]
@@ -2659,8 +2718,18 @@ public sealed class DashboardRenderingTests
     Assert.Equal<int>([321, 987], detail.LastProcess.Heartbeat.OwnedProcessIds);
     Assert.Equal(99, detail.LastProcess.Heartbeat.StandardOutputBytes);
     Assert.Equal(11, detail.LastProcess.Heartbeat.StandardErrorBytes);
+    Assert.NotNull(detail.LastProcess.HeartbeatAgeSeconds);
+    Assert.NotNull(detail.LastProcess.HeartbeatIdleDurationSeconds);
+    Assert.Equal(99, detail.LastProcess.HeartbeatStdoutBytes);
+    Assert.Equal(11, detail.LastProcess.HeartbeatStderrBytes);
+    Assert.Equal(heartbeatPath, detail.LastProcess.HeartbeatPath);
     Assert.True(logs.Heartbeat.IsAvailable);
     Assert.Equal(heartbeatPath, logs.Heartbeat.Path);
+    Assert.NotNull(logs.HeartbeatAgeSeconds);
+    Assert.NotNull(logs.HeartbeatIdleDurationSeconds);
+    Assert.Equal(99, logs.HeartbeatStdoutBytes);
+    Assert.Equal(11, logs.HeartbeatStderrBytes);
+    Assert.Equal(heartbeatPath, logs.HeartbeatPath);
     Assert.Equal(heartbeatPath, workSummary.Tasks.Single().LastProcess!.Heartbeat.Path);
     Assert.Contains(html, text => text.Contains("heartbeat running", StringComparison.Ordinal));
     Assert.Contains(html, text => text.Contains("owned_pids=321,987", StringComparison.Ordinal));
@@ -2668,6 +2737,48 @@ public sealed class DashboardRenderingTests
     Assert.Contains(html, text => text.Contains(heartbeatPath, StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("heartbeat: available state=running pid=321 child_pid=654 owned_pids=321,987", StringComparison.Ordinal));
     Assert.Contains(transcript, text => text.Contains("log bytes: stdout=99 stderr=11", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Dashboard_omits_dispatch_heartbeat_status_when_file_is_missing")]
+    public void DashboardOmitsDispatchHeartbeatStatusWhenFileIsMissing()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Render missing heartbeat", [new TaskSpec(TaskId.New(), "Run process", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.Single();
+    var process = new TaskProcessRecord(
+        321,
+        "codex exec prompt.md",
+        root,
+        Path.Combine(root, "worker.out.log"),
+        Path.Combine(root, "worker.err.log"),
+        Path.Combine(root, "worker.exit.txt"),
+        DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
+        null,
+        null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
+
+    var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
+    var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+
+    Assert.False(detail.LastProcess!.Heartbeat.IsAvailable);
+    Assert.Null(detail.LastProcess.HeartbeatAgeSeconds);
+    Assert.Null(detail.LastProcess.HeartbeatIdleDurationSeconds);
+    Assert.Null(detail.LastProcess.HeartbeatStdoutBytes);
+    Assert.Null(detail.LastProcess.HeartbeatStderrBytes);
+    Assert.Null(detail.LastProcess.HeartbeatPath);
+    Assert.False(logs.Heartbeat.IsAvailable);
+    Assert.Null(logs.HeartbeatAgeSeconds);
+    Assert.Null(logs.HeartbeatIdleDurationSeconds);
+    Assert.Null(logs.HeartbeatStdoutBytes);
+    Assert.Null(logs.HeartbeatStderrBytes);
+    Assert.Null(logs.HeartbeatPath);
+    Assert.DoesNotContain("heartbeat unavailable", html, StringComparison.Ordinal);
+    Assert.DoesNotContain(heartbeatPath, html, StringComparison.Ordinal);
 }
 
 static void AssertControl(
@@ -2916,5 +3027,31 @@ private static void AssertOpenAiModelOrderIsCostAware(string text)
     Assert.True(miniIndex >= 0);
     Assert.True(expensiveIndex >= 0);
     Assert.True(miniIndex < expensiveIndex);
+}
+
+private static void RunGit(string workingDirectory, params string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        WorkingDirectory = workingDirectory,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start git.");
+    var output = process.StandardOutput.ReadToEnd();
+    var error = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {output}{error}");
+    }
 }
 }

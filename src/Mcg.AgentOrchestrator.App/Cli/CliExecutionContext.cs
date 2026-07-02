@@ -15,7 +15,7 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
-    Action<AgentOrchestratorKernel, GoalId>? persistGoalKernel = null,
+    Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
     Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
@@ -29,8 +29,8 @@ public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kerne
 /// </summary>
 public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persistKernel?.Invoke(checkpointKernel);
 
-public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, GoalId changedGoalId) =>
-    persistGoalKernel?.Invoke(checkpointKernel, changedGoalId);
+public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
+    persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 
@@ -51,6 +51,8 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
+
+public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }
 
 public TimeSpan? RunGoalPollInterval { get; init; }
 
@@ -85,7 +87,11 @@ internal interface ICliGoalWorktreeService
 
     string? TryResolve(string executionDirectory, GoalId goalId);
 
-    GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null);
+    GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null,
+        int? gitTimeoutMilliseconds = null);
 
     bool IsGitWorkTree(string executionDirectory);
 
@@ -123,8 +129,14 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 
     public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
 
-    public GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
-        GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+    public GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null,
+        int? gitTimeoutMilliseconds = null) =>
+        gitTimeoutMilliseconds is { } timeout
+            ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
+            : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
 
     public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 

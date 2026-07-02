@@ -152,10 +152,14 @@ internal sealed class GoalRefinementService
         var goalId = new GoalId(goalIdValue);
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
         if (goal is null)
+        {
             // The goal is absent from this kernel (e.g. an empty/stale listener kernel). Degrade to the
             // store-only resolve so the clarification still clears in Discord and the precedent is
             // recorded, rather than rejecting the operator's answer outright.
+            Console.Error.WriteLine(
+                $"Warning: clarification goal '{goalIdValue}' was not found in the active kernel; resolving '{correlationKey}' through the collaboration store only.");
             return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
+        }
         var spec = goal.RefinedSpec;
         if (spec is null)
             return await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);

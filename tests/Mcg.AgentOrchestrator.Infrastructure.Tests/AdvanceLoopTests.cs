@@ -8,9 +8,9 @@ using Microsoft.Extensions.Hosting;
 public sealed class AdvanceLoopTests
 {
     private const string BlockingCodexProfileCommand =
-        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output (Get-Content -Raw {promptPath}); Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
+        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
     private const string BlockingClaudeProfileCommand =
-        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output (Get-Content -Raw {promptPath}); Write-Output '--permission-mode {permissionMode}'";
+        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output '--permission-mode {permissionMode}'";
 
     [Xunit.Fact(DisplayName = "CreateActivateAndHandoffGoal_starts_first_subscription_dispatch")]
     public void CreateActivateAndHandoffGoalStartsFirstSubscriptionDispatch()
@@ -223,9 +223,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Avoid surprise API spend", AgentRole.Developer, "Record explicit verification.");
     var goal = CreateRefinedGoal(kernel, "Prefer subscription should not fall back automatically", [task]);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var agent = new AgentDefinition(
         new AgentId("prefer-subscription-developer"),
         "Prefer Subscription developer",
@@ -265,9 +263,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Allow explicit fallback", AgentRole.Developer, "Record explicit verification.");
     var goal = CreateRefinedGoal(kernel, "Any available may fall back", [task]);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var agent = new AgentDefinition(
         new AgentId("any-available-developer"),
         "Any Available developer",
@@ -317,9 +313,7 @@ public sealed class AdvanceLoopTests
         ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var provider = new FakeSmokeProvider();
 
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
@@ -390,9 +384,7 @@ public sealed class AdvanceLoopTests
         ExecutionPolicy: AgentExecutionPolicy.AnyAvailable,
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var provider = new FakeSmokeProvider();
 
     GoalManagementCommandService.SubscriptionDispatchTask(
@@ -562,6 +554,7 @@ public sealed class AdvanceLoopTests
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_dispatches_one_ready_sdlc_stage_at_a_time")]
     public void StartSubscriptionReadyTasksDispatchesOneReadySdlcStageAtATime()
 {
+    using var sandboxScope = ClearWorkerSandboxEnvironment();
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
@@ -581,9 +574,7 @@ public sealed class AdvanceLoopTests
         CreateSubscriptionAgent(AgentRole.Reviewer)
     ];
     kernel.ActivateGoal(goal.Id, agents);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var profiles = new WorkerProfileCatalog(
     [
         new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
@@ -655,6 +646,7 @@ public sealed class AdvanceLoopTests
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_does_not_prepare_already_running_tasks")]
     public void StartSubscriptionReadyTasksDoesNotPrepareAlreadyRunningTasks()
 {
+    using var sandboxScope = ClearWorkerSandboxEnvironment();
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
@@ -662,9 +654,7 @@ public sealed class AdvanceLoopTests
     var goal = CreateRefinedGoal(kernel, "Do not double dispatch running task", [task]);
     var agents = new[] { CreateSubscriptionAgent(AgentRole.Developer) };
     kernel.ActivateGoal(goal.Id, agents);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var profiles = new WorkerProfileCatalog(
     [
         new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
@@ -791,9 +781,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
-    Directory.CreateDirectory(worktreePath);
-    File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    EnsureGoalWorktree(root, goal.Id);
     var promptCharacters = kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length;
 
     var blocked = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
@@ -1171,6 +1159,59 @@ private static Goal CreateRefinedGoal(AgentOrchestratorKernel kernel, string obj
         [],
         []));
     return goal;
+}
+
+private static string EnsureGoalWorktree(string root, GoalId goalId)
+{
+    if (!Directory.Exists(Path.Combine(root, ".git")))
+    {
+        AssertGit(root, "init", "-b", "main");
+        AssertGit(root, "config", "user.email", "tests@example.com");
+        AssertGit(root, "config", "user.name", "Advance Loop Tests");
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        AssertGit(root, "add", "seed.txt");
+        AssertGit(root, "commit", "-m", "Seed");
+    }
+
+    return GoalWorktrees.Ensure(root, goalId);
+}
+
+private static void AssertGit(string workingDirectory, params string[] args)
+{
+    var result = GitCli.Run(workingDirectory, args);
+    Assert.True(result.Succeeded, $"git {string.Join(' ', args)} failed: {result.Error}");
+}
+
+private static EnvironmentScope ClearWorkerSandboxEnvironment()
+{
+    return new EnvironmentScope(
+        (WorkerSandboxOptions.EnabledVariable, null),
+        (WorkerSandboxOptions.AccountVariable, null),
+        (WorkerSandboxOptions.CredentialTargetVariable, null));
+}
+
+private sealed class EnvironmentScope : IDisposable
+{
+    private readonly (string Name, string? Previous)[] _previous;
+
+    public EnvironmentScope(params (string Name, string? Value)[] values)
+    {
+        _previous = values
+            .Select(value => (value.Name, Environment.GetEnvironmentVariable(value.Name)))
+            .ToArray();
+        foreach (var (name, value) in values)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var (name, previous) in _previous)
+        {
+            Environment.SetEnvironmentVariable(name, previous);
+        }
+    }
 }
 
 private static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)

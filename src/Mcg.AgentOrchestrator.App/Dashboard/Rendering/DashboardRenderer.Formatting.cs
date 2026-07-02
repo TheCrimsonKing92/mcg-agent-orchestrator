@@ -107,6 +107,11 @@ public static partial class DashboardRenderer
 
     private static string RenderHeartbeatStatus(DispatchHeartbeatStatus heartbeat)
     {
+        if (!heartbeat.IsAvailable)
+        {
+            return string.Empty;
+        }
+
         return $"<div class=\"meta\">{Encode(ProcessHeartbeatText.FormatInline(heartbeat))}</div>";
     }
 

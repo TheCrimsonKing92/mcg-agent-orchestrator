@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -7,8 +8,7 @@ using System.Text.Json;
 public sealed class LauncherScriptTests
 {
     private static readonly string[] JsonLineSeparators = ["\r\n", "\n"];
-    private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "stderrPath", "stdoutPath"];
-    private static readonly string?[] ExpectedGoalsArgument = ["goals"];
+    private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "startedAt", "stderrPath", "stdoutPath"];
     private static readonly string?[] ExpectedAcceptanceGoalArguments = ["acceptance", "goal"];
     private static readonly string?[] ExpectedDoubleDashArguments =
     [
@@ -96,6 +96,139 @@ public sealed class LauncherScriptTests
         Assert.True(launcher.Contains("Set-Content -LiteralPath '%APP_HEAD%'", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_no_trailing_arguments_forwards_zero_arguments")]
+    public void InvokeRepoScriptNoTrailingArgumentsForwardsZeroArguments()
+    {
+        using var sandbox = CreateRepoScriptArgumentSandbox();
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, sandbox.RelativeScriptPath);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        AssertForwardedArguments(result.Stdout, []);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_empty_argument_splat_forwards_zero_arguments")]
+    public void InvokeRepoScriptEmptyArgumentSplatForwardsZeroArguments()
+    {
+        using var sandbox = CreateRepoScriptArgumentSandbox();
+        var wrapperPath = Path.Combine(sandbox.RepositoryRoot, "scripts", "Invoke-RepoScript.ps1");
+
+        var result = RunPowerShellCommand(sandbox.RepositoryRoot, $"""
+            $ErrorActionPreference = 'Stop'
+            $arguments = @()
+            & '{EscapePowerShellSingleQuoted(wrapperPath)}' '{EscapePowerShellSingleQuoted(sandbox.RelativeScriptPath)}' @arguments
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        AssertForwardedArguments(result.Stdout, []);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_non_empty_arguments_are_forwarded_in_order")]
+    public void InvokeRepoScriptNonEmptyArgumentsAreForwardedInOrder()
+    {
+        using var sandbox = CreateRepoScriptArgumentSandbox();
+        var wrapperPath = Path.Combine(sandbox.RepositoryRoot, "scripts", "Invoke-RepoScript.ps1");
+
+        var result = RunPowerShellCommand(sandbox.RepositoryRoot, $"""
+            $ErrorActionPreference = 'Stop'
+            $arguments = @('alpha', ' ', ' gamma ')
+            & '{EscapePowerShellSingleQuoted(wrapperPath)}' '{EscapePowerShellSingleQuoted(sandbox.RelativeScriptPath)}' @arguments
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        AssertForwardedArguments(result.Stdout, ["alpha", " ", " gamma "]);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeRepoScript_orchestrator_sqlite_tool_list_goals_smoke")]
+    public void InvokeRepoScriptOrchestratorSqliteToolListGoalsSmoke()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var dbPath = CreateSqliteToolSmokeDb();
+        try
+        {
+            var wrapperPath = Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1");
+            var result = RunPowerShellCommand(repoRoot, $"""
+                $ErrorActionPreference = 'Stop'
+                & '{EscapePowerShellSingleQuoted(wrapperPath)}' 'scripts\Invoke-OrchestratorSqliteTool.ps1' list-goals --db '{EscapePowerShellSingleQuoted(dbPath)}' --limit 10
+                """);
+
+            Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains("SQLite wrapper smoke", result.Stdout);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GetOrchestratorSnapshot_status_timeout_kills_owned_status_process_and_reports_partial_data")]
+    public void GetOrchestratorSnapshotStatusTimeoutKillsOwnedStatusProcessAndReportsPartialData()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var sandbox = CreateSnapshotStatusSandbox();
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = sandbox.RepositoryRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath;
+            startInfo.Environment["DOTNET_STATUS_SENTINEL"] = sandbox.SentinelPath;
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(sandbox.RepositoryRoot, "scripts", "Get-OrchestratorSnapshot.ps1"));
+            startInfo.ArgumentList.Add("-StatusTimeoutSeconds");
+            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("hang");
+            startInfo.ArgumentList.Add("ok");
+
+            var stopwatch = Stopwatch.StartNew();
+            var result = RunProcess(startInfo, "Get-OrchestratorSnapshot.ps1");
+            stopwatch.Stop();
+
+            Assert.True(
+                result.ExitCode == 0,
+                $"exit={result.ExitCode}{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}");
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"Snapshot took {stopwatch.Elapsed}.");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Contains("partial hang", result.Stdout);
+            Assert.Contains("status timed out after 1s; killed pid=", result.Stdout);
+            Assert.Contains("status ok ok", result.Stdout);
+            WaitForFile(sandbox.SentinelPath, TimeSpan.FromSeconds(5));
+            var childPid = int.Parse(File.ReadAllText(sandbox.SentinelPath).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(!IsProcessRunning(childPid), $"Expected hung status child pid {childPid} to be reaped.");
+        }
+        finally
+        {
+            sandbox.KillRecordedChild();
+        }
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_emits_json_pid_and_log_path_through_repo_script")]
     public void StartOrchestratorCommandEmitsJsonPidAndLogPathThroughRepoScript()
     {
@@ -149,13 +282,15 @@ public sealed class LauncherScriptTests
         var stdoutPath = root.GetProperty("stdoutPath").GetString();
         var stderrPath = root.GetProperty("stderrPath").GetString();
         var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        var startedAt = root.GetProperty("startedAt").GetString();
 
         Assert.True(pid > 0);
         Assert.False(string.IsNullOrWhiteSpace(stdoutPath));
         Assert.False(string.IsNullOrWhiteSpace(stderrPath));
         Assert.True(Path.IsPathFullyQualified(stdoutPath!));
         Assert.True(Path.IsPathFullyQualified(stderrPath!));
-        Assert.Equal(ExpectedGoalsArgument, args);
+        Assert.Equal(new[] { appDll, "goals" }, args);
+        Assert.True(DateTimeOffset.TryParse(startedAt, out _), $"Expected parseable startedAt, got '{startedAt}'.");
 
         try
         {
@@ -233,7 +368,7 @@ public sealed class LauncherScriptTests
         var stderrPath = launcherRoot.GetProperty("stderrPath").GetString()
             ?? throw new InvalidOperationException("Launcher did not emit stderrPath.");
         var emittedArgs = launcherRoot.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
-        Assert.Equal(ExpectedDoubleDashArguments, emittedArgs);
+        Assert.Equal(new[] { sandbox.EchoScriptPath }.Concat(ExpectedDoubleDashArguments).ToArray(), emittedArgs);
 
         try
         {
@@ -252,6 +387,58 @@ public sealed class LauncherScriptTests
         using var childDocument = JsonDocument.Parse(File.ReadAllText(stdoutPath));
         var childArgs = childDocument.RootElement.EnumerateArray().Select(argument => argument.GetString()).ToArray();
         Assert.Equal(ExpectedDoubleDashArguments, childArgs);
+    }
+
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_launch_failure_exits_nonzero_with_error_json_on_stderr")]
+    public void StartOrchestratorCommandLaunchFailureExitsNonzeroWithErrorJsonOnStderr()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = Path.Combine(
+            Path.GetTempPath(),
+            $"missing-dotnet-{Guid.NewGuid():N}.exe");
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Start-OrchestratorCommand.ps1");
+        startInfo.ArgumentList.Add("-Name");
+        startInfo.ArgumentList.Add("launcher-failure-test");
+        startInfo.ArgumentList.Add("-AppDll");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        startInfo.ArgumentList.Add("goals");
+
+        using var launcher = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start launcher script.");
+        var stdout = launcher.StandardOutput.ReadToEnd();
+        var stderr = launcher.StandardError.ReadToEnd();
+        Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        Assert.NotEqual(0, launcher.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
+
+        var errorLines = stderr.Split(
+            JsonLineSeparators,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(errorLines);
+
+        using var document = JsonDocument.Parse(errorLines[0]);
+        var root = document.RootElement;
+        var reason = root.GetProperty("reason").GetString() ?? string.Empty;
+        Assert.True(reason.Contains("cannot find", StringComparison.OrdinalIgnoreCase), reason);
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("stdoutPath").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("stderrPath").GetString()));
+        Assert.Equal(
+            new[] { Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"), "goals" },
+            root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_keeps_AppDll_named_only_and_forwards_remaining_arguments")]
@@ -357,6 +544,129 @@ public sealed class LauncherScriptTests
         return new DoubleDashLauncherSandbox(sandboxPath, hostPath, echoScriptPath);
     }
 
+    private static RepoScriptArgumentSandbox CreateRepoScriptArgumentSandbox()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var relativeDirectory = Path.Combine(".scratch", "invoke-repo-script-tests", Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(repoRoot, relativeDirectory);
+        Directory.CreateDirectory(directory);
+
+        var scriptPath = Path.Combine(directory, "record-arguments.ps1");
+        File.WriteAllText(scriptPath, """
+            param(
+                [Parameter(ValueFromRemainingArguments = $true)]
+                [object[]]$Arguments
+            )
+
+            $forwarded = if ($null -eq $Arguments -or $Arguments.Count -eq 0) {
+                @()
+            } else {
+                @($Arguments | ForEach-Object { [string]$_ })
+            }
+
+            [pscustomobject]@{
+                count = $forwarded.Count
+                args = @($forwarded)
+            } | ConvertTo-Json -Compress
+            """);
+
+        return new RepoScriptArgumentSandbox(repoRoot, Path.Combine(relativeDirectory, "record-arguments.ps1"), directory);
+    }
+
+    private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add(relativeScriptPath);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return RunProcess(startInfo, "Invoke-RepoScript.ps1");
+    }
+
+    private static ProcessResult RunPowerShellCommand(string repositoryRoot, string command)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(command);
+
+        return RunProcess(startInfo, "PowerShell command");
+    }
+
+    private static void AssertForwardedArguments(string stdout, string[] expected)
+    {
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal(expected.Length, root.GetProperty("count").GetInt32());
+        Assert.Equal(expected, root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
+    }
+
+    private static string EscapePowerShellSingleQuoted(string value) =>
+        value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static SnapshotStatusSandbox CreateSnapshotStatusSandbox()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"snapshot-status-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var appPath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0");
+        var shimPath = Path.Combine(repositoryRoot, "shim");
+        Directory.CreateDirectory(scriptsPath);
+        Directory.CreateDirectory(appPath);
+        Directory.CreateDirectory(shimPath);
+
+        File.Copy(
+            Path.Combine(FindLauncherSourceRoot(), "scripts", "Get-OrchestratorSnapshot.ps1"),
+            Path.Combine(scriptsPath, "Get-OrchestratorSnapshot.ps1"));
+        File.WriteAllText(
+            Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1"),
+            "Write-Output 'No active goals in snapshot sandbox.'\r\nexit 0\r\n");
+        File.WriteAllText(Path.Combine(appPath, "Mcg.AgentOrchestrator.App.dll"), "dummy");
+
+        var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
+        File.WriteAllText(
+            dotnetShimPath,
+            """
+            @echo off
+            if "%~3"=="hang" (
+              echo partial hang
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
+              exit /b 0
+            )
+            echo status ok %~3
+            exit /b 0
+            """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+        return new SnapshotStatusSandbox(
+            repositoryRoot,
+            dotnetShimPath,
+            Path.Combine(repositoryRoot, "status-child.pid"));
+    }
+
     private static LandVerifiedGoalSandbox CreateLandVerifiedGoalSandbox(string launcherBody)
     {
         const string goalPrefix = "abcdef12";
@@ -431,8 +741,31 @@ public sealed class LauncherScriptTests
             ?? throw new InvalidOperationException($"Failed to start {description}.");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30000), $"{description} did not exit within 30 seconds.");
+        Assert.True(process.WaitForExit(90000), $"{description} did not exit within 90 seconds.");
         return new ProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static string CreateSqliteToolSmokeDb()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"sqlite-tool-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var dbPath = Path.Combine(directory, "state.db");
+        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;");
+        connection.Open();
+        using var create = connection.CreateCommand();
+        create.CommandText = """
+            CREATE TABLE goals (
+                id TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO goals (id, status, snapshot_json, updated_at, version)
+            VALUES ('11111111111111111111111111111111', 'Active', '{"Objective":"SQLite wrapper smoke"}', '2026-06-30T00:00:00.0000000Z', 1);
+            """;
+        create.ExecuteNonQuery();
+        return dbPath;
     }
 
     private static void WaitForFile(string path, TimeSpan timeout)
@@ -446,6 +779,72 @@ public sealed class LauncherScriptTests
         Assert.True(File.Exists(path), $"Expected file to exist: {path}");
     }
 
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private sealed class SnapshotStatusSandbox(
+        string repositoryRoot,
+        string dotnetShimPath,
+        string sentinelPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string DotnetShimPath { get; } = dotnetShimPath;
+        public string SentinelPath { get; } = sentinelPath;
+
+        public void KillRecordedChild()
+        {
+            if (!File.Exists(SentinelPath))
+            {
+                return;
+            }
+
+            if (!int.TryParse(File.ReadAllText(SentinelPath).Trim(), out var pid))
+            {
+                return;
+            }
+
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            KillRecordedChild();
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private sealed class DoubleDashLauncherSandbox(
         string sandboxPath,
         string hostPath,
@@ -453,6 +852,29 @@ public sealed class LauncherScriptTests
     {
         public string HostPath { get; } = hostPath;
         public string EchoScriptPath { get; } = echoScriptPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(sandboxPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class RepoScriptArgumentSandbox(
+        string repositoryRoot,
+        string relativeScriptPath,
+        string sandboxPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string RelativeScriptPath { get; } = relativeScriptPath;
 
         public void Dispose()
         {

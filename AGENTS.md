@@ -111,8 +111,8 @@ Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the
 
 **Default: drive goals with the autonomous conductor (`conduct --loop`), not the manual verbs.** The full operate / observe / recover guide — golden path, the `conduct` flag matrix, the three policies, the state model, and the **stuck-goal playbook** (symptom → first command) — lives in [`docs/operator-runbook.md`](docs/operator-runbook.md); read it first. A few notes that complement it:
 
-- **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so a raw `dotnet test` in a worktree no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
-- At a landing, the conductor records the `DOGFOOD_LOG` entry itself; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
+- **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so raw `dotnet test` is safe in a worktree and no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
+- At a landing, the conductor records the dogfood entry in `.orchestrator/dogfood-log.db`; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
 - Daemon mode is for a small, curated active-goal set. Do not point it at a stale/open backlog wholesale; use `backlog-list` and filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal`, then keep the first daemon runs bounded with `--max-duration`.
 
 **Manual lower-level verbs (fallback / granular control only — prefer `conduct --loop`):** `subscription-dispatch <n>` → `start-dispatch <n> --confirm-dispatch-start` (the cost guard blocks ONLY on an *anomalous* prompt — disproportionate to task complexity, ≥2× the per-complexity ceiling, or batch total ≥2× the batch ceiling; routine/legitimately-large Complex briefs proceed silently, so `--confirm-large-paid-subscription-start` is needed only when a genuinely bloated prompt trips it) → wait on the printed pid → `refresh-dispatch <n>` → operator gate → `accept`. `acceptance`/`accept` fast-forwards only when main has not advanced mid-goal; otherwise run the printed `git merge goal/<prefix>`. ApiOnly tasks (e.g. the local Reviewer) run via `run <n>` with no file access — output reflects prompt text, not branch state; close HUMAN_INPUT with `answer <request-id>`, then `verify-manual <n> passed "<evidence incl. Model fit: line>"`. To put an operator note into an undispatched task's brief: `progress <n> running "<note>"` → `progress <n> failed "<reset>"` → `retry <n> "<msg>"`.
@@ -142,12 +142,12 @@ Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalo
 
 ## Evidence
 
-Update `DOGFOOD_LOG.md` only at dogfood goal boundaries or when recording durable product friction. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up.
+Record dogfood goal-boundary evidence with `dogfood-log add <goal-prefix>` or read it with `dogfood-log list --limit <n>`. Durable entries live in `.orchestrator/dogfood-log.db`, not in `DOGFOOD_LOG.md`. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up.
 
 For subscription/API-authored work, include a `Model fit:` note with the selected model or launcher, the task shape, and whether it was adequate, overkill, or underpowered. Use this evidence to tune future model selection.
 
 Do not paste full dashboard responses, full prompts, full logs, or long API payloads.
 
-Rotate `DOGFOOD_LOG.md` when it grows past roughly 500 lines: move all but the most recent entries to a dated archive under `docs/` (for example `docs/DOGFOOD_LOG-2026-06.md`) and keep the pointer line at the top of the log current. Do not load archives into context for routine work.
+Keep `DOGFOOD_LOG.md` as a pointer to the SQLite-backed command surface. Do not append durable entries there. Do not load historical archives into context for routine work.
 
 Check the backlog before proposing follow-up work: `backlog-list` reads the canonical store (`.orchestrator/backlog.db`; the `BACKLOG.md` file is legacy and being retired). Update it at goal boundaries — `backlog-close` finished items and `backlog-add` newly discovered follow-ups as self-contained entries that need no conversation history.

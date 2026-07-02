@@ -1,22 +1,33 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliCommandHelp
 {
-    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon]";
+    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path>";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
+    public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
         "Drive one goal or run the autonomous conductor loop.",
-        ["--policy", "--loop", "--max-iterations", "--max-duration", "--watch", "--daemon", "--help", "-h"]);
+        ["--policy", "--loop", "--max-iterations", "--max-duration", "--watch", "--daemon", "--poll-seconds", "--watch-interval", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Goal = new(
+        GoalUsage,
+        "Create a goal.",
+        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--brief-file", "--help", "-h" }
+            .ToHashSet(StringComparer.OrdinalIgnoreCase),
+        ValidateFlags: false);
 
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
@@ -36,7 +47,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
         "List backlog items from the backlog store.",
-        ["--all", "--help", "-h"]);
+        ["--all", "--limit", "--status", "--text", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
@@ -63,11 +74,21 @@ internal static class CliCommandHelp
         "Render all backlog items as markdown.",
         ["--help", "-h"]);
 
+    private static readonly CommandHelpEntry DogfoodLog = new(
+        DogfoodLogUsage,
+        "Read or add dogfood goal-boundary entries in the SQLite dogfood log store.",
+        ["--limit", "--help", "-h"]);
+
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
     {
+        if (TryPrintHelpCommand(args))
+        {
+            return true;
+        }
+
         if (!TryResolveEntry(args, out var entry) || !HasHelpFlag(args))
         {
             return false;
@@ -79,7 +100,7 @@ internal static class CliCommandHelp
 
     internal static bool IsCommandSpecificHelp(IReadOnlyList<string> args)
     {
-        return HasHelpFlag(args) && TryResolveEntry(args, out _);
+        return TryResolveHelpCommand(args, out _, out _) || (HasHelpFlag(args) && TryResolveEntry(args, out _));
     }
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
@@ -114,6 +135,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
         {
             entry = Conduct;
+            return true;
+        }
+
+        if (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Goal;
             return true;
         }
 
@@ -159,6 +186,12 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("dogfood-log", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = DogfoodLog;
+            return true;
+        }
+
         if (!args[0].Equals("workspace", StringComparison.OrdinalIgnoreCase))
         {
             if (CliArgumentParser.IsRecognizedCommand(args[0]))
@@ -178,6 +211,96 @@ internal static class CliCommandHelp
 
         entry = Workspace;
         return true;
+    }
+
+    private static bool TryPrintHelpCommand(IReadOnlyList<string> args)
+    {
+        if (!TryResolveHelpCommand(args, out var target, out var entry))
+        {
+            return false;
+        }
+
+        if (entry is { } resolved)
+        {
+            Print(resolved);
+            return true;
+        }
+
+        var suggestions = FindNearestCommands(target);
+        var suffix = suggestions.Count == 0
+            ? " Run help <command> for command usage."
+            : $" Did you mean: {string.Join(", ", suggestions)}?";
+        throw new ArgumentException($"Unknown command '{target}'.{suffix}");
+    }
+
+    private static bool TryResolveHelpCommand(
+        IReadOnlyList<string> args,
+        out string target,
+        out CommandHelpEntry? entry)
+    {
+        target = "";
+        entry = null;
+        if (args.Count < 2 || !args[0].Equals("help", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        target = args[1];
+        if (TryResolveEntry([target], out var resolved))
+        {
+            entry = resolved;
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<string> FindNearestCommands(string target)
+    {
+        var commands = CliArgumentParser.RecognizedCommands;
+        var prefixMatches = commands
+            .Where(command => command.StartsWith(target, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(command => command, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
+        if (prefixMatches.Length > 0)
+        {
+            return prefixMatches;
+        }
+
+        return commands
+            .Select(command => new { Command = command, Distance = EditDistance(target, command) })
+            .Where(candidate => candidate.Distance <= 2)
+            .OrderBy(candidate => candidate.Distance)
+            .ThenBy(candidate => candidate.Command, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(candidate => candidate.Command)
+            .ToArray();
+    }
+
+    private static int EditDistance(string left, string right)
+    {
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var j = 0; j <= right.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = char.ToUpperInvariant(left[i - 1]) == char.ToUpperInvariant(right[j - 1]) ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
     }
 
     private static void Print(CommandHelpEntry entry)
@@ -203,7 +326,30 @@ internal static class CliCommandHelp
 
         foreach (var flag in flags)
         {
-            Console.WriteLine($"  {flag}");
+            if (flag.Equals("--poll-seconds", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>    Positive integer seconds between watch polls; default {ConductorBatchLoop.DefaultWatchIntervalSeconds}.");
+            }
+            else if (flag.Equals("--watch-interval", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>    Legacy alias for --poll-seconds.");
+            }
+            else if (flag.Equals("--limit", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>");
+            }
+            else if (flag.Equals("--status", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <value>");
+            }
+            else if (flag.Equals("--text", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <pattern>");
+            }
+            else
+            {
+                Console.WriteLine($"  {flag}");
+            }
         }
     }
 
@@ -215,7 +361,8 @@ internal static class CliCommandHelp
     }
 
     private static bool IsFlag(string arg) =>
-        arg.StartsWith("-", StringComparison.Ordinal);
+        arg.StartsWith("-", StringComparison.Ordinal) &&
+        !int.TryParse(arg, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _);
 
     private readonly record struct CommandHelpEntry(
         string Usage,

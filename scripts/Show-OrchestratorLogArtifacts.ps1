@@ -4,7 +4,9 @@ param(
 
     [string]$TaskPrefix = "",
 
-    [int]$TailLines = 0
+    [int]$TailLines = 0,
+
+    [switch]$All
 )
 
 Set-StrictMode -Version Latest
@@ -37,6 +39,41 @@ $files = @(Get-ChildItem -LiteralPath $logsRoot -File -Filter $filter -ErrorActi
 if ($files.Count -eq 0) {
     Write-Output "No log artifacts matched '$filter'."
     exit 0
+}
+
+function Get-DispatchRunKey {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FileName
+    )
+
+    $suffixes = @(
+        ".heartbeat.json",
+        ".dispatch.json",
+        ".start-gate",
+        ".exit.txt",
+        ".out.log",
+        ".err.log"
+    )
+
+    foreach ($suffix in $suffixes) {
+        if ($FileName.EndsWith($suffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $FileName.Substring(0, $FileName.Length - $suffix.Length)
+        }
+    }
+
+    return [System.IO.Path]::GetFileNameWithoutExtension($FileName)
+}
+
+if (-not $All) {
+    $latestGroup = $files |
+        Group-Object { Get-DispatchRunKey -FileName $_.Name } |
+        Sort-Object `
+            @{ Expression = { ($_.Group | Sort-Object LastWriteTime, Name | Select-Object -Last 1).LastWriteTime } },
+            @{ Expression = { ($_.Group | Sort-Object LastWriteTime, Name | Select-Object -Last 1).Name } } |
+        Select-Object -Last 1
+
+    $files = @($latestGroup.Group | Sort-Object LastWriteTime, Name)
 }
 
 foreach ($file in $files) {

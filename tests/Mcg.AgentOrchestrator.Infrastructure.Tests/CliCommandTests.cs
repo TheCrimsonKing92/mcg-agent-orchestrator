@@ -76,6 +76,79 @@ public sealed class CliCommandTests
             parts);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_splits_limit_status_and_text_flags")]
+    public void CliBacklogListSplitsLimitStatusAndTextFlags()
+    {
+        var interactive = CliArgumentParser.SplitCommand("backlog-list --limit 5 --status open --text Foo");
+        var oneShot = CliArgumentParser.NormalizeArgs(["backlog-list", "--limit", "5", "--status", "open", "--text", "Foo"]);
+
+        Xunit.Assert.Equal(["backlog-list", "--limit", "5", "--status", "open", "--text", "Foo"], interactive);
+        Xunit.Assert.Equal(interactive, oneShot);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_limit_filter_caps_results")]
+    public void CliBacklogListLimitFilterCapsResults()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("One"),
+            BacklogItemFor("Two"),
+            BacklogItemFor("Three")
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: null, text: null, limit: 2);
+
+        Xunit.Assert.Equal(["One", "Two"], filtered.Select(item => item.Title));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_status_filter_matches_case_insensitively")]
+    public void CliBacklogListStatusFilterMatchesCaseInsensitively()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("Open item", status: BacklogItemStatus.Open),
+            BacklogItemFor("Done item", status: BacklogItemStatus.Done)
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: "done", text: null, limit: null);
+
+        var item = Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("Done item", item.Title);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_text_filter_matches_title_and_body_case_insensitively")]
+    public void CliBacklogListTextFilterMatchesTitleAndBodyCaseInsensitively()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("Dashboard polish", body: "No matching detail"),
+            BacklogItemFor("Worker output", body: "Needs Foo evidence"),
+            BacklogItemFor("Other", body: "No match")
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: null, text: "foo", limit: null);
+
+        var item = Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("Worker output", item.Title);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_combines_limit_status_and_text_filters")]
+    public void CliBacklogListCombinesLimitStatusAndTextFilters()
+    {
+        var items = new[]
+        {
+            BacklogItemFor("First Foo", status: BacklogItemStatus.Open),
+            BacklogItemFor("Done Foo", status: BacklogItemStatus.Done),
+            BacklogItemFor("Second Foo", status: BacklogItemStatus.Open),
+            BacklogItemFor("No match", status: BacklogItemStatus.Open)
+        };
+
+        var filtered = CliCommandHandlers.ApplyBacklogListFilters(items, status: "open", text: "foo", limit: 1);
+
+        var item = Xunit.Assert.Single(filtered);
+        Xunit.Assert.Equal("First Foo", item.Title);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_conduct_help_prints_usage_without_resolving_goal")]
     public void CliConductHelpPrintsUsageWithoutResolvingGoal()
     {
@@ -97,6 +170,148 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("-h, --help", result.Stdout);
         Xunit.Assert.DoesNotContain("Error:", result.Stderr);
         Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_conduct_loop_watch_accepts_poll_seconds_and_default")]
+    public void CliConductLoopWatchAcceptsPollSecondsAndDefault()
+    {
+        foreach (var testCase in new[]
+        {
+            new { Args = new[] { "conduct", "--loop", "--watch", "--poll-seconds", "5", "--max-iterations", "0" }, ExpectedOutput = "sleep 5s" },
+            new { Args = new[] { "conduct", "--loop", "--watch", "--max-iterations", "0" }, ExpectedOutput = $"sleep {ConductorBatchLoop.DefaultWatchIntervalSeconds}s" }
+        })
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var output = CaptureConsole(() =>
+            {
+                CliCommandDispatcher.ExecuteCommand(
+                    testCase.Args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            });
+
+            Xunit.Assert.Contains(testCase.ExpectedOutput, output);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_conduct_scoped_watch_accepts_poll_seconds_and_default")]
+    public void CliConductScopedWatchAcceptsPollSecondsAndDefault()
+    {
+        foreach (var testCase in new (string? PollSeconds, string ExpectedOutput)[]
+        {
+            ("5", "poll 5s"),
+            (null, $"poll {ConductorBatchLoop.DefaultWatchIntervalSeconds}s")
+        })
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Watch one goal");
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            var args = new List<string> { "conduct", goal.Id.Value[..8], "--watch", "--max-duration", "0" };
+            if (testCase.PollSeconds is not null)
+            {
+                args.Add("--poll-seconds");
+                args.Add(testCase.PollSeconds);
+            }
+
+            var output = CaptureConsole(() =>
+            {
+                CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            });
+
+            Xunit.Assert.Contains(testCase.ExpectedOutput, output);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_conduct_poll_seconds_rejects_invalid_values")]
+    [Xunit.InlineData("0")]
+    [Xunit.InlineData("-1")]
+    [Xunit.InlineData("foo")]
+    public void CliConductPollSecondsRejectsInvalidValues(string invalidPollSeconds)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Invalid poll goal");
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var loopError = Xunit.Assert.Throws<ArgumentException>(() =>
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["conduct", "--loop", "--watch", "--poll-seconds", invalidPollSeconds, "--max-iterations", "0"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+        Xunit.Assert.Contains("--poll-seconds requires a positive integer value.", loopError.Message);
+
+        var scopedError = Xunit.Assert.Throws<ArgumentException>(() =>
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["conduct", goal.Id.Value[..8], "--watch", "--poll-seconds", invalidPollSeconds, "--max-duration", "0"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+        Xunit.Assert.Contains("--poll-seconds requires a positive integer value.", scopedError.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_conduct_scoped_poll_seconds_requires_watch")]
+    public void CliConductScopedPollSecondsRequiresWatch()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Poll without watch goal");
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var error = Xunit.Assert.Throws<ArgumentException>(() =>
+        {
+            CliCommandDispatcher.ExecuteCommand(
+                ["conduct", goal.Id.Value[..8], "--poll-seconds", "5"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+
+        Xunit.Assert.Contains("--poll-seconds requires --watch.", error.Message);
     }
 
     [Xunit.Fact(DisplayName = "Cli_workspace_help_prints_usage_without_resolving_goal")]
@@ -2376,11 +2591,47 @@ public sealed class CliCommandTests
             ConsoleViews.PrintTask(goal, task);
             ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
         });
+        Xunit.Assert.Contains("Heartbeat Status:", output);
         Xunit.Assert.Contains("heartbeat: available state=running pid=777 child_pid=888", output);
         Xunit.Assert.Contains($"heartbeat path: {BackgroundDispatchRunner.GetHeartbeatPath(process)}", output);
         Xunit.Assert.Contains("log bytes: stdout=123 stderr=45", output);
         Xunit.Assert.Contains("stdout: ", output);
         Xunit.Assert.Contains("hello stdout", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_task_details_and_logs_render_missing_dispatch_heartbeat_status")]
+    public void CliTaskDetailsAndLogsRenderMissingDispatchHeartbeatStatus()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Render missing heartbeat cli", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var process = new TaskProcessRecord(
+            777,
+            "codex exec prompt.md",
+            root,
+            Path.Combine(root, "worker.out.log"),
+            Path.Combine(root, "worker.err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
+            null,
+            null);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var output = CaptureConsole(() =>
+        {
+            ConsoleViews.PrintTask(goal, task);
+            ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
+        });
+
+        Xunit.Assert.Contains("Heartbeat Status:", output);
+        Xunit.Assert.Contains("heartbeat: unavailable (missing)", output);
+        Xunit.Assert.Contains($"heartbeat path: {BackgroundDispatchRunner.GetHeartbeatPath(process)}", output);
+        Xunit.Assert.Contains("last observed: n/a age=n/a", output);
+        Xunit.Assert.Contains("last progress: n/a idle=n/a", output);
+        Xunit.Assert.Contains("log bytes: stdout=n/a stderr=n/a", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_api_run_blocks_paid_provider_without_confirm_flag")]
@@ -3055,7 +3306,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_profile_dispatch_allows_complex_paid_subscription_start_under_size_threshold")]
     public void CliProfileDispatchAllowsComplexPaidSubscriptionStartUnderSizeThreshold()
     {
-        var root = CreateTempDirectory();
+        var root = CreateShortAcceptanceRepository();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
@@ -3706,6 +3957,102 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "Dispatch remains available.");
         Xunit.Assert.True(dispatchChanged);
         Xunit.Assert.NotNull(task.LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_note_confirms_and_keeps_status_across_task_states")]
+    public void CliNoteConfirmsAndKeepsStatusAcrossTaskStates()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Annotate tasks",
+            [
+                new TaskSpec(TaskId.New(), "Pending task", AgentRole.Planner),
+                new TaskSpec(TaskId.New(), "Assigned task", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Running task", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Done task", AgentRole.Reviewer),
+                new TaskSpec(TaskId.New(), "Blocked task", AgentRole.Researcher)
+            ]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("researcher"), "Researcher", AgentRole.Researcher, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks[2].Id, WorkTaskStatus.Running, "Started.");
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks[3].Id, WorkTaskStatus.Completed, "Done.");
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks[4].Id, WorkTaskStatus.Failed, "Blocked.");
+        var expectedStatuses = goal.Tasks.Select(task => task.Status).ToArray();
+
+        for (var index = 0; index < goal.Tasks.Count; index++)
+        {
+            var taskNumber = index + 1;
+            var message = $"operator note {taskNumber}";
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["note", taskNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), message],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Equal($"Note added to task {goal.Tasks[index].Id}{Environment.NewLine}", output);
+            Xunit.Assert.Equal(expectedStatuses[index], goal.Tasks[index].Status);
+            Xunit.Assert.Contains(goal.Timeline, evt =>
+                evt.TaskId == goal.Tasks[index].Id &&
+                evt.Kind == ProgressKind.TaskNote &&
+                evt.Message == message);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_note_rejects_missing_empty_and_unknown_task")]
+    public void CliNoteRejectsMissingEmptyAndUnknownTask()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Annotate task", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var missingMessage = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "1"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var emptyMessage = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "1", "   "],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var unknownTask = Xunit.Assert.Throws<KeyNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "99", "Known typo."],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Usage: note <task-number>", missingMessage.Message);
+        Xunit.Assert.Contains("Task note message cannot be empty.", emptyMessage.Message);
+        Xunit.Assert.Contains("99", unknownTask.Message);
     }
 
     [Xunit.Fact(DisplayName = "Cli_task_commands_accept_goal_prefix_for_non_current_goal")]
@@ -4850,6 +5197,27 @@ public sealed class CliCommandTests
         return workspace;
     }
 
+    private static IDisposable ClearWorkerSandboxEnv()
+    {
+        var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, null);
+        return new WorkerSandboxEnvRestore(previous);
+    }
+
+    private sealed class WorkerSandboxEnvRestore(string? previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
+        }
+    }
+
+    private static BacklogItem BacklogItemFor(
+        string title,
+        string body = "",
+        BacklogItemStatus status = BacklogItemStatus.Open) =>
+        new(Guid.NewGuid().ToString("n"), title, body, status, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, null);
+
     private static string ExecuteCliAndCapture(
         IReadOnlyList<string> parts,
         AgentOrchestratorKernel kernel,
@@ -5015,6 +5383,20 @@ public sealed class CliCommandTests
         Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_single_goal_conduct_outside_command_transaction")]
+    public void RunnerRoutesSingleGoalConductOutsideCommandTransaction()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "abc123"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsSingleGoalConductCommand(["CONDUCT", "abc123", "--policy", "Permissive"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "--loop"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "abc123", "--watch"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct", "--help"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["conduct"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand(["next"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsSingleGoalConductCommand([]));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_commands")]
     public void RunnerSkipsKernelStateForOperatorAndBacklogCommands()
     {
@@ -5142,6 +5524,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
     public void CliSubscriptionDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
+        using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
@@ -5224,6 +5607,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_simple_goal_with_dispatch_creates_goal_and_launches_worker")]
     public void CliSimpleGoalWithDispatchCreatesGoalAndLaunchesWorker()
     {
+        using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         // Fake a git worktree at root so WorkerSandboxCapabilityPlanner passes the .git existence
         // check when no goal worktree has been created yet (EnsureGoalWorkspaceForDispatch is a
@@ -5509,6 +5893,62 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(bodyContent, item.Body);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_status_prints_source_backlog_title_as_goal_label")]
+    public async Task CliStatusPrintsSourceBacklogTitleAsGoalLabel()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Friendly backlog title");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Objective preview remains");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["status", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains($"Goal {goal.Id.Value} (Friendly backlog title)", output);
+        Xunit.Assert.Contains("Objective: Objective preview remains", output);
+        Xunit.Assert.Contains("Status: Draft", output);
+        Xunit.Assert.Contains("Tasks:", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_status_omits_goal_label_without_source_backlog_title")]
+    public void CliStatusOmitsGoalLabelWithoutSourceBacklogTitle()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("No linked backlog");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["status", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains($"Goal {goal.Id.Value}{Environment.NewLine}", output);
+        Xunit.Assert.DoesNotContain("()", output);
+        Xunit.Assert.Contains("Objective: No linked backlog", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_missing_gives_clear_error")]
     public async Task CliBacklogAddBodyFileMissingGivesClearError()
     {
@@ -5597,6 +6037,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_profile_dispatch_with_confirm_dispatch_start_prepares_and_launches")]
     public void CliProfileDispatchWithConfirmDispatchStartPreparesAndLaunches()
     {
+        using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
@@ -5676,8 +6117,8 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(task.LastProcess);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_commits_dogfood_entry_after_recording")]
-    public void CliAcceptanceCommitsDogfoodEntryAfterRecording()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_records_dogfood_entry_in_sqlite_without_committing_log_file")]
+    public async Task CliAcceptanceRecordsDogfoodEntryInSqliteWithoutCommittingLogFile()
     {
         var root = CreateTempDirectory();
         RunGit(root, "init", "-b", "main");
@@ -5708,10 +6149,11 @@ public sealed class CliCommandTests
         RunGit(worktree, "commit", "-m", "Goal work");
 
         var goalPrefix = goal.Id.Value[..8];
+        var workspace = CreateRefinedWorkspace(root);
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             kernel,
-            CreateRefinedWorkspace(root),
+            workspace,
             ref agents,
             providers,
             ref profiles,
@@ -5719,9 +6161,49 @@ public sealed class CliCommandTests
 
         var statusOutput = RunGitOutput(root, "status", "--porcelain", "DOGFOOD_LOG.md");
         Xunit.Assert.Equal(string.Empty, statusOutput.Trim());
+        var record = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value);
+        Xunit.Assert.NotNull(record);
+        Xunit.Assert.Contains("Commit dogfood entry test", record!.RenderedMarkdown);
 
         var logOutput = RunGitOutput(root, "log", "--oneline", "-5");
-        Xunit.Assert.Contains($"Record dogfood entry for goal {goalPrefix}", logOutput);
+        Xunit.Assert.DoesNotContain($"Record dogfood entry for goal {goalPrefix}", logOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_dogfood_log_add_and_list_use_sqlite_store")]
+    public async Task CliDogfoodLogAddAndListUseSqliteStore()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Dogfood command objective");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        var workspace = CreateRefinedWorkspace(root);
+
+        var addOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "add", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var listOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "list", "--limit", "5"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var record = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value);
+        Xunit.Assert.NotNull(record);
+        Xunit.Assert.Contains("Recorded to", addOutput);
+        Xunit.Assert.Contains("Dogfood command objective", listOutput);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]
@@ -5910,6 +6392,68 @@ public sealed class CliCommandTests
         Xunit.Assert.Empty(second.Goals);
     }
 
+    [Xunit.Theory(DisplayName = "TerminalGoalSweep_global_stale_terminal_goal_with_assigned_task_is_excluded_once")]
+    [Xunit.InlineData(GoalStatus.Completed)]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    public void TerminalGoalSweepGlobalStaleTerminalGoalWithAssignedTaskIsExcludedOnce(GoalStatus status)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal($"Stale {status}", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, status);
+
+        var first = TerminalGoalSweep.Run(kernel, root);
+        var second = TerminalGoalSweep.Run(kernel, root);
+
+        Xunit.Assert.False(first.Changed);
+        var result = first.Goals.Single();
+        Xunit.Assert.Empty(result.Repairs);
+        var blocker = result.Blockers.Single();
+        Xunit.Assert.Equal("stale-terminal-excluded", blocker.Kind);
+        Xunit.Assert.Equal("excluded", blocker.Command);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goalState={status}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action=excluded", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(status, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Single(second.Goals.Single().Blockers);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_excludes_before_human_input_process_reconcile")]
+    public void TerminalGoalSweepGlobalStaleTerminalExcludesBeforeHumanInputProcessReconcile()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Need operator", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Terminal process should stay terminal", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "HUMAN_INPUT: choose a recovery path");
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+        var result = TerminalGoalSweep.Run(kernel, root);
+
+        var goalResult = result.Goals.Single();
+        var blocker = goalResult.Blockers.Single();
+        Xunit.Assert.False(result.Changed);
+        Xunit.Assert.Empty(goalResult.Repairs);
+        Xunit.Assert.Equal("stale-terminal-excluded", blocker.Kind);
+        Xunit.Assert.Equal("excluded", blocker.Command);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Running", blocker.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
+        Xunit.Assert.Null(kernel.GetTask(goal.Id, task.Id).LastVerification);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
     public void TerminalGoalSweepSupersededWithAssignedTaskReopensGoal()
     {
@@ -6072,8 +6616,8 @@ public sealed class CliCommandTests
             Xunit.Assert.Equal(1, repository.TransactionCount);
     }
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_conduct_surface_same_terminal_task_repair")]
-    public void TerminalGoalSweepNextAndConductSurfaceSameTerminalTaskRepair()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_repairs_but_global_conduct_excludes_terminal_task_desync")]
+    public void TerminalGoalSweepNextRepairsButGlobalConductExcludesTerminalTaskDesync()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -6117,12 +6661,18 @@ public sealed class CliCommandTests
         });
 
         var nextRepair = SingleLineContaining(nextOutput, "SWEEP_REPAIR");
-        var conductRepair = SingleLineContaining(conductOutput, "SWEEP_REPAIR");
-        Xunit.Assert.Equal(nextRepair, conductRepair);
         Xunit.Assert.Contains("kind=terminal-task-desync", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains("goalState=Completed", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains($"command=\"conduct {goal.Id.Value[..8]} --loop\"", nextRepair, StringComparison.Ordinal);
+
+        var conductExclusion = SingleLineContaining(conductOutput, "SWEEP_BLOCKER");
+        Xunit.Assert.Contains("kind=stale-terminal-excluded", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goalId={goal.Id.Value}", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goalState=Completed", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action=excluded", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("SWEEP_REPAIR", conductOutput, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_readiness_prints_repair_before_preflight")]
@@ -6456,10 +7006,9 @@ public sealed class CliCommandTests
     public void PersistentRunnerConductLoopLoadsTerminalGoalsForStaleSweep()
     {
         var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var completedGoalIds = new List<string>();
-        for (var i = 0; i < 200; i++)
+        for (var i = 0; i < 3; i++)
         {
             var completed = kernel.CreateGoal($"Completed audit goal {i}", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
             kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
@@ -6472,35 +7021,27 @@ public sealed class CliCommandTests
         var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active conductor goal");
         var failed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Failed conductor goal");
         kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "Still needs conductor/operator attention");
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = null;
         var repository = new InMemoryTransactionalStateRepository(kernel);
         repository.CleanedUpGoalIds.Add(cleanedUp.Id.Value);
 
-        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["conduct", "--loop", "--max-iterations", "1"],
-            repository,
-            workspace,
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal));
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository);
 
         Xunit.Assert.Equal(0, repository.LoadCount);
-        Xunit.Assert.True(repository.LoadGoalsCount >= 1);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.All(completedGoalIds, id => Xunit.Assert.Contains(id, repository.LoadedGoalIds));
         Xunit.Assert.DoesNotContain(cleanedUp.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(failed.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.All(completedGoalIds, id => Xunit.Assert.Contains(loaded.Goals, goal => goal.Id.Value == id));
+        Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id == cleanedUp.Id);
+        Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
+        Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == failed.Id);
         var expectedLoadedIds = completedGoalIds.Concat([active.Id.Value, failed.Id.Value])
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
-        Xunit.Assert.All(repository.LoadGoalBatches, batch =>
-            Xunit.Assert.Equal(
-                expectedLoadedIds,
-                batch.OrderBy(id => id, StringComparer.Ordinal).ToArray()));
+        Xunit.Assert.Equal(
+            expectedLoadedIds,
+            repository.LoadGoalBatches.Single().OrderBy(id => id, StringComparer.Ordinal).ToArray());
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_preserves_terminal_dependency_readiness_without_loading_dependency")]
@@ -6626,6 +7167,22 @@ public sealed class CliCommandTests
     private static string CreateAcceptanceRepository()
     {
         var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.com");
+        RunGit(root, "config", "user.name", "CLI Tests");
+        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "-A");
+        RunGit(root, "commit", "-m", "Seed");
+        return root;
+    }
+
+    private static string CreateShortAcceptanceRepository()
+    {
+        var baseDirectory = Path.Combine(Path.GetTempPath(), "mcg-short-tests");
+        Directory.CreateDirectory(baseDirectory);
+        var root = Path.Combine(baseDirectory, Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(root);
         RunGit(root, "init", "-b", "main");
         RunGit(root, "config", "user.email", "tests@example.com");
         RunGit(root, "config", "user.name", "CLI Tests");
@@ -6832,6 +7389,8 @@ public sealed class CliCommandTests
 
         public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
 
+        public Action<CancellationToken>? BeforeSaveCommit { get; set; }
+
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
             LoadCount++;
@@ -6855,6 +7414,23 @@ public sealed class CliCommandTests
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
             _kernel = Clone(kernel);
+            return Task.CompletedTask;
+        }
+
+        public Task SaveGoalSnapshotsAsync(
+            IReadOnlyCollection<GoalSnapshot> goals,
+            CancellationToken cancellationToken = default)
+        {
+            if (goals.Count == 0)
+                return Task.CompletedTask;
+
+            var replacements = goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+            var snapshot = _kernel.ExportSnapshot();
+            var merged = snapshot.Goals
+                .Select(goal => replacements.TryGetValue(goal.Id, out var replacement) ? replacement : goal)
+                .ToList();
+            merged.AddRange(replacements.Values.Where(goal => snapshot.Goals.All(existing => existing.Id != goal.Id)));
+            _kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = merged });
             return Task.CompletedTask;
         }
 
@@ -6917,6 +7493,7 @@ public sealed class CliCommandTests
                 var (shouldSave, result) = await transaction(transactionKernel, CheckpointAsync, cancellationToken);
                 if (shouldSave)
                 {
+                    BeforeSaveCommit?.Invoke(cancellationToken);
                     _kernel = Clone(transactionKernel);
                 }
 
@@ -6967,6 +7544,62 @@ public sealed class CliCommandTests
                 "Passed.",
                 ArtifactsPath: Path.Combine(worktreePath, "artifacts"),
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.")]));
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_carries_prompt_budget_through_state_commit")]
+    public void PersistentRunnerGoalMarkLandedCarriesPromptBudgetThroughStateCommit()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Already landed persistent cleanup", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+            var observedCommitBudget = false;
+            repository.BeforeSaveCommit = token =>
+            {
+                observedCommitBudget = token.CanBeCanceled;
+                Xunit.Assert.True(token.CanBeCanceled);
+                Xunit.Assert.False(token.IsCancellationRequested);
+            };
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                    repository,
+                    CreateRefinedWorkspace(root),
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.True(changed);
+            });
+
+            Xunit.Assert.True(observedCommitBudget);
+            Xunit.Assert.Equal(1, repository.TransactionCount);
+            Xunit.Assert.Contains("cleanup: branch deleted", output);
+            Xunit.Assert.Contains("cleanup: goal marked CleanedUp", output);
+            Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
 

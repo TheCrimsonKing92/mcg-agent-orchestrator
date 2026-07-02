@@ -4,6 +4,42 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class RunEventStoreTests
 {
+    [Xunit.Fact(DisplayName = "DogfoodLogStore_upserts_goal_entries_and_lists_recent")]
+    public async Task DogfoodLogStoreUpsertsGoalEntriesAndListsRecent()
+    {
+        var store = new DogfoodLogStore(Path.Combine(CreateTempDirectory(), "dogfood-log.db"));
+
+        await store.UpsertAsync(new DogfoodLogAppend(
+            "goal-1",
+            "## 2026-07-02 - First",
+            "summary",
+            "tests passed",
+            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough",
+            "## 2026-07-02 - First\n\nsummary"));
+        await store.UpsertAsync(new DogfoodLogAppend(
+            "goal-1",
+            "## 2026-07-02 - First updated",
+            "updated summary",
+            "tests passed",
+            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough",
+            "## 2026-07-02 - First updated\n\nupdated summary"));
+        await store.UpsertAsync(new DogfoodLogAppend(
+            "goal-2",
+            "## 2026-07-02 - Second",
+            "second summary",
+            "tests passed",
+            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough",
+            "## 2026-07-02 - Second\n\nsecond summary"));
+
+        var recent = await store.ListRecentAsync();
+        var first = await store.GetByGoalIdAsync("goal-1");
+
+        Assert.Equal(2, recent.Count);
+        Assert.NotNull(first);
+        Assert.Equal("updated summary", first!.Summary);
+        Assert.Contains(recent, record => record.GoalId == "goal-2");
+    }
+
     [Xunit.Fact(DisplayName = "SqliteRunEventStore_appends_records_without_mutating_prior_events")]
     public async Task SqliteRunEventStoreAppendsRecordsWithoutMutatingPriorEvents()
     {

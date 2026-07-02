@@ -99,7 +99,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     var catalog = AgentCatalog.Default().AddOrReplaceById(alternate);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile(
         "claude-cli",
-        "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})"));
+        "claude --model {subscriptionModelName} --permission-mode bypassPermissions"));
 
     var report = OrchestratorHealthInspector.Inspect(
         new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
@@ -133,7 +133,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile(
         "claude-cli",
-        "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})"));
+        "claude --model {subscriptionModelName} --permission-mode bypassPermissions"));
 
     var report = OrchestratorHealthInspector.Inspect(
         new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["OPENAI_API_KEY"] = "set" },
@@ -367,7 +367,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 {
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory}"),
         new WorkerProfile("codex-spark", "codex exec (Get-Content -Raw {promptPath})")
     ]);
 

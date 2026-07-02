@@ -46,7 +46,7 @@ internal sealed class ConductorBatchLoop
         string? onlyGoalId = null,
         Action<AgentOrchestratorKernel>? persistTick = null,
         bool keepAliveWhenIdle = false,
-        Action<AgentOrchestratorKernel, GoalId>? persistGoalTick = null,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick = null,
         bool quiet = false,
         TimeSpan? stallWarningThreshold = null)
     {
@@ -284,11 +284,12 @@ internal sealed class ConductorBatchLoop
             // long-running watch loop never persists and a killed loop loses every dispatch on rollback —
             // the goal then re-dispatches the same stage forever and can never advance.
             // When persistGoalTick is supplied, persist only the goals whose disposition changed this tick
-            // (short per-goal CAS writes). Fall back to whole-kernel persistTick if not supplied.
+            // in one bulk checkpoint. The per-goal loop above is justified because it runs each goal's
+            // state machine; the durable write is intentionally batched.
             if (persistGoalTick is not null)
             {
-                foreach (var changedGoalId in changedGoalIds)
-                    persistGoalTick(kernel, changedGoalId);
+                if (changedGoalIds.Count > 0)
+                    persistGoalTick(kernel, changedGoalIds.ToArray());
             }
             else
             {
@@ -558,6 +559,11 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver)
     {
+        if (IsStaleTerminalGoalWithAssignedWork(goal))
+        {
+            return false;
+        }
+
         if (goal.Status is GoalStatus.Cancelled or GoalStatus.Superseded)
         {
             return false;
@@ -579,6 +585,10 @@ internal sealed class ConductorBatchLoop
 
         return true;
     }
+
+    private static bool IsStaleTerminalGoalWithAssignedWork(Goal goal) =>
+        (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed) &&
+        goal.Tasks.Any(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman);
 
     private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Escalated esc

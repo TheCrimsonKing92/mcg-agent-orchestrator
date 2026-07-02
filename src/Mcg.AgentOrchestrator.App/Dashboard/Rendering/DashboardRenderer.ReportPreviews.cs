@@ -24,6 +24,12 @@ public static partial class DashboardRenderer
         var verificationGate = kernel.BuildVerificationGate(goal.Id);
         var verificationWorklist = kernel.BuildVerificationWorklist(goal.Id);
         var humanInputWorklist = kernel.BuildHumanInputWorklist(goal.Id);
+        var testImpact = DashboardResponseMapper.ToGoalWorkSummaryDto(
+            kernel,
+            goal,
+            options.AgentDefinitions,
+            executionDirectory: options.Workspace?.ExecutionDirectory,
+            changedFiles: options.FocusGoalChangedFiles).TestImpact;
 
         html.AppendLine("<div class=\"report-preview-grid\">");
         RenderReportPreview(
@@ -56,7 +62,8 @@ public static partial class DashboardRenderer
             [
                 $"Verified: {goal.Tasks.Count(task => task.LastVerification?.Succeeded is true)}",
                 $"Processes: {goal.Tasks.Count(task => task.LastProcess is not null)}",
-                $"Dispatches: {goal.Tasks.Count(task => task.LastDispatch is not null)}"
+                $"Dispatches: {goal.Tasks.Count(task => task.LastDispatch is not null)}",
+                $"Test impact: {Encode(testImpact?.Summary ?? "not available")}"
             ],
             $"/api/goals/{goalPrefix}/work-summary",
             "Open compact JSON");

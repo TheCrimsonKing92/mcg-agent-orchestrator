@@ -32,7 +32,11 @@ if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Usage: .\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> [script arguments...]"
 }
 
-$ScriptArguments = @($ScriptArguments | ForEach-Object { [string]$_ })
+$ScriptArguments = if ($null -eq $ScriptArguments -or $ScriptArguments.Count -eq 0) {
+    @()
+} else {
+    @($ScriptArguments | ForEach-Object { [string]$_ })
+}
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $candidate = if ([System.IO.Path]::IsPathRooted($ScriptPath)) {

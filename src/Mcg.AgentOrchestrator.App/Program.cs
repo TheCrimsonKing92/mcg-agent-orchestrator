@@ -32,9 +32,17 @@ catch (Exception ex)
 var startupArgs = tenantSelection.CommandArgs.Count == 0
     ? []
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
-if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+try
 {
-    return 0;
+    if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+    {
+        return 0;
+    }
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
 }
 
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
@@ -92,9 +100,12 @@ catch (ArgumentException ex)
     return 1;
 }
 
-WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
-WorkerProcessJobs.SweepStartupOrphans();
-GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
+if (RunsStartupCleanup(startupArgs))
+{
+    WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
+    WorkerProcessJobs.SweepStartupOrphans();
+    GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
+}
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
@@ -303,6 +314,9 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
+
+static bool RunsStartupCleanup(IReadOnlyList<string> startupArgs) =>
+    !CliPersistentStateRunner.SkipsKernelState(startupArgs);
 
 static int ExitCompletedStartupCommand(int exitCode)
 {

@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Dashboard.Hosting;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Prototype;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
@@ -20,7 +21,7 @@ public sealed class DashboardHostTests
     public async Task SimpleHostedDashboardServesReadOnlyMetadataAndSurvey()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var providers = new InMemoryModelProviderRegistry([]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -130,6 +131,7 @@ public sealed class DashboardHostTests
     public async Task PrototypeDashboardServesHealthAndGoalJsonOverKestrel()
     {
         var root = CreateTempDirectory();
+        SeedSpecRefinerBinding(OrchestratorWorkspace.ForDirectory(PrototypeWorkspaceSeeder.GetWorkspacePath(root), root));
         var port = GetAvailablePort();
         var url = $"http://localhost:{port}/";
         var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");

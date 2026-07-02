@@ -225,7 +225,7 @@ public sealed class WorkerDispatchTests
     kernel.RetryTask(goal.Id, developer.Id, "old retry feedback that should not be the current blocker");
     var latestFeedback = "latest retry feedback: fix goals subscribe routing before redispatch";
     kernel.RetryTask(goal.Id, developer.Id, latestFeedback);
-    var profile = new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+    var profile = new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory}");
 
     var result = WorkerProfileDispatcher.PrepareTask(
         kernel,
@@ -241,7 +241,7 @@ public sealed class WorkerDispatchTests
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains(prompt, text => text.Contains(latestFeedback, StringComparison.Ordinal));
     Assert.Equal(result.PromptPath, developer.LastDispatch!.PromptPath);
-    Assert.Contains(developer.LastDispatch.Command, text => text.Contains(result.PromptPath, StringComparison.Ordinal));
+    Assert.DoesNotContain(result.PromptPath, developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(File.Exists(developer.LastDispatch.PromptPath));
 }
 
@@ -256,7 +256,7 @@ public sealed class WorkerDispatchTests
     var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
     var goal = kernel.CreateGoal("Fix stale retry dispatch prompts", [developer]);
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    var profile = new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+    var profile = new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory}");
 
     var first = WorkerProfileDispatcher.PrepareTask(
         kernel,
@@ -314,7 +314,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
     ]);
     var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
 
@@ -337,7 +337,8 @@ public sealed class WorkerDispatchTests
         var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
         Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
         Assert.Contains(File.ReadAllText(refreshedPromptPath), text => text.Contains(lateState, StringComparison.Ordinal));
-        Assert.Contains(developer.LastDispatch.Command, text => text.Contains(refreshedPromptPath, StringComparison.Ordinal));
+        Assert.DoesNotContain(refreshedPromptPath, developer.LastDispatch.Command, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
         Xunit.Assert.Null(developer.LastProcess);
     }
     finally
@@ -372,7 +373,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
     ]);
     var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
 
@@ -1101,6 +1102,7 @@ public sealed class WorkerDispatchTests
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
@@ -1108,7 +1110,8 @@ public sealed class WorkerDispatchTests
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: sandbox);
     var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -1145,6 +1148,7 @@ public sealed class WorkerDispatchTests
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
@@ -1152,7 +1156,8 @@ public sealed class WorkerDispatchTests
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: sandbox);
 
     Assert.True(preflight.Allowed);
     Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
@@ -1183,9 +1188,26 @@ public sealed class WorkerDispatchTests
     var task = goal.Tasks.Single();
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var dispatchedAt = DateTimeOffset.Parse("2026-06-13T12:00:00Z");
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
-    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, [agent], profiles, worktree, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, goal, task, [agent], profiles, promptRoot, worktree, dispatchedAt);
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        profiles,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: sandbox);
     var result = RunPowerShellCommand(worktree, task.LastDispatch!.Command);
 
     Assert.True(preflight.Allowed);
@@ -1415,7 +1437,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-model {apiModelName} --api-reasoning {apiReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-model {apiModelName} --api-reasoning {apiReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory}")
     ]);
     var simpleGoal = kernel.CreateGoal(
         "Fix a dashboard typo",
@@ -1534,7 +1556,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory}")
     ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -1609,7 +1631,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-model {apiModelName} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-model {apiModelName} --complexity {taskComplexity} --sandbox workspace-write --cd {workingDirectory}")
     ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -1641,7 +1663,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         AgentRole.Developer,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var profile = new WorkerProfile("codex-cli", "codex exec (Get-Content -Raw {promptPath})");
+    var profile = new WorkerProfile("codex-cli", "codex exec");
 
     var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile, promptRoot, workingDirectory, dispatchedAt);
 
@@ -1656,7 +1678,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("codex-cli", result.Task.LastDispatch!.WorkerName);
     Assert.Equal(workingDirectory, result.Task.LastDispatch.WorkingDirectory);
     Assert.Equal(dispatchedAt, result.Task.LastDispatch.DispatchedAt);
-    Assert.Contains(result.Task.LastDispatch.Command, text => text.Contains(result.PromptPath, StringComparison.Ordinal));
+    Assert.DoesNotContain(result.PromptPath, result.Task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, result.Task.Status);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_includes_working_directory_in_dispatched_prompt")]
@@ -1669,7 +1691,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var goal = kernel.CreateGoal("Dispatch with working directory context");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
     var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
-    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory}");
 
     var result = WorkerProfileDispatcher.PrepareTask(kernel, goal, task, profile, promptRoot, workingDirectory, DateTimeOffset.UtcNow);
 
@@ -1691,7 +1713,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var branch = ReadGit(worktree, ["branch", "--show-current"]);
     var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
     kernel.RetryTask(goal.Id, developer.Id, "latest developer retry feedback");
-    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory}");
 
     var firstDispatch = WorkerProfileDispatcher.PrepareTask(
         kernel,
@@ -1777,6 +1799,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
     kernel.ActivateGoal(goal.Id, [assignedAgent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -1786,7 +1809,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: sandbox);
 
     Assert.Equal(assignedAgent.Id, task.AssignedAgentId);
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -1935,7 +1959,77 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var developer = goal.Tasks.Single();
     Assert.Equal("claude-cli", developer.LastDispatch!.WorkerName);
     Assert.Contains(developer.LastDispatch.Command, text => text.Contains("claude --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", StringComparison.Ordinal));
+    Assert.DoesNotContain(" -p", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("Anthropic", developer.LastDispatch.ProviderName);
+}
+
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_explicit_codex_oss_profile_uses_codex_stdin_delivery")]
+    public void SubscriptionDispatchExplicitCodexOssProfileUsesCodexStdinDelivery()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-01T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Dispatch Codex OSS write worker",
+        [new TaskSpec(TaskId.New(), "Implement the focused change.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-developer"),
+        "OpenAI Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profileOverride = new DispatchModelOverride("codex-oss-cli", "qwen3:8b", null);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        dispatchedAt,
+        profileOverride);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        profileOverride);
+    var provider = WorkerProviderCatalog.Default().ResolveProfile("codex-oss-cli");
+    var sandboxProvider = BackgroundDispatchRunner.ResolveSandboxProvider(provider);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Equal(ProviderKind.OpenAICodexOssCli, provider.Identity.Kind);
+    Assert.Equal(WorkerSandboxProvider.Codex, sandboxProvider);
+    Assert.Equal("codex-oss-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal(ProviderKind.OpenAICodexOssCli, task.LastDispatch.WorkerProviderKind);
+    Assert.Equal("Ollama", task.LastDispatch.ProviderName);
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("codex exec --skip-git-repo-check --oss --local-provider ollama", StringComparison.Ordinal));
+    Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(task.LastDispatch.PromptPath!, task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.True(DispatchProcessHost.ShouldWritePromptToStdin(new DispatchProcessHost.DispatchRunParameters(
+        task.LastDispatch.Command,
+        workingDirectory,
+        Path.Combine(root, "stdout.log"),
+        Path.Combine(root, "stderr.log"),
+        Path.Combine(root, "exit.txt"),
+        null,
+        ShutdownBuildServerOnExit: false,
+        DisableSharedCompilation: false,
+        Provider: sandboxProvider,
+        PromptPath: task.LastDispatch.PromptPath)));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_escalates_default_openai_agents_for_complex_subscription_tasks")]
@@ -1993,7 +2087,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory}")
     ]);
     var modelOverride = new DispatchModelOverride(null, "gpt-5.3-codex-spark", null);
 
@@ -2028,8 +2122,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
-        new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode bypassPermissions -p (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory}"),
+        new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode bypassPermissions")
     ]);
     var modelOverride = new DispatchModelOverride("codex-cli", "gpt-5.3-codex-spark", null);
 
@@ -2069,7 +2163,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory} (Get-Content -Raw {promptPath})"),
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory}"),
         new WorkerProfile("alt-profile", "alt-cli --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --cd {workingDirectory} (Get-Content -Raw {promptPath})")
     ]);
     var profileOverride = new DispatchModelOverride("alt-profile", null, null);
@@ -2101,7 +2195,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory}")
     ]);
     var reasoningOverride = new DispatchModelOverride(null, null, "low");
 
@@ -2136,7 +2230,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory}")
     ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -2166,6 +2260,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -2175,11 +2270,13 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: sandbox);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode 'plan' -p", StringComparison.Ordinal));
-    Assert.Contains(task.LastDispatch.Command, text => text.Contains("Get-Content -Raw", StringComparison.Ordinal));
+    Assert.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode 'plan'", StringComparison.Ordinal));
+    Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_reasoning_pinning")]
     public void WorkerProfileDispatcherRejectsSubscriptionProfilesWithoutReasoningPinning()
@@ -4517,8 +4614,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=?? dirty.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_with_verification_evidence_is_committed_by_orchestrator")]
-    public void BackgroundDispatchRunnerFileRoleDirtyWorktreeWithVerificationEvidenceIsCommittedByOrchestrator()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dirty_worktree_with_verification_evidence_only_stays_failed")]
+    public void BackgroundDispatchRunnerLowIntegrityDirtyWorktreeWithVerificationEvidenceOnlyStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4533,22 +4630,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    // The worker edited the worktree AND showed verification evidence but never committed. This is
-    // the default path: the orchestrator commits the verified diff so the worker never needs .git.
-    Assert.True(
-        task.Status == WorkTaskStatus.Completed,
-        task.LastVerification?.StandardError ?? "missing verification");
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    var subject = ReadGit(worktree, ["log", "-1", "--pretty=%s"]);
-    Assert.Equal("Developer task.: Implemented the feature and ran the focused tests.", subject);
-    Assert.True(subject.Length <= 72);
-    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
-    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_self_committing_provider_dirty_verified_without_low_integrity_evidence_stays_failed")]
@@ -4575,8 +4663,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_activates_orchestrator_commit_path")]
-    public void BackgroundDispatchRunnerCodexProviderCanSelfCommitFalseActivatesOrchestratorCommitPath()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_without_low_integrity_stays_failed")]
+    public void BackgroundDispatchRunnerCodexProviderCanSelfCommitFalseWithoutLowIntegrityStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4590,18 +4678,17 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_activates_orchestrator_commit_path")]
-    public void BackgroundDispatchRunnerTypedProviderCanSelfCommitFalseActivatesOrchestratorCommitPath()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_without_low_integrity_stays_failed")]
+    public void BackgroundDispatchRunnerTypedProviderCanSelfCommitFalseWithoutLowIntegrityStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4630,13 +4717,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_does_not_activate_commit_path_from_provider_display_name")]
@@ -4666,8 +4753,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_is_committed_by_orchestrator")]
-    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedIsCommittedByOrchestrator()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_without_typed_sandbox_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedWithoutTypedSandboxEvidenceStaysFailed()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -4680,19 +4767,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited but commit failed under low integrity"),
         sandboxLowIntegrity: true);
 
-    // A low-integrity worker edited the worktree and verified its work but could NOT write the medium
-    // .git to commit, so it exited non-zero. The worker's exit code is not authoritative: the
-    // orchestrator commits the verified edits and the dispatch advances. This is what makes the Low-IL
-    // sandbox autonomous without granting the worker write access to the shared .git.
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.Contains(
-        task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_git_metadata_permission_failure_is_nonfatal_with_dirty_worker_result")]
@@ -4764,6 +4846,42 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_git_1312_commits_work_without_sandbox_marker")]
+    public void BackgroundDispatchRunnerLowIntegrityGit1312CommitsWorkWithoutSandboxMarker()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the requested change." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "git status --short", "not-run"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git 1312 failure");
+            File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        },
+        sandboxLowIntegrity: true);
+    File.WriteAllText(
+        process.StandardErrorPath,
+        "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.DoesNotContain(WorkerSandboxPreparer.MarkerFileName, ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.MarkerFileName]));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
@@ -5406,9 +5524,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.ActivateGoal(reviewerGoal.Id, [reviewerAgent]);
     var developerTask = developerGoal.Tasks.Single();
     var reviewerTask = reviewerGoal.Tasks.Single();
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null);
 
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
     Assert.Contains(developerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'bypassPermissions'", StringComparison.Ordinal));
     Assert.Contains(reviewerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'plan'", StringComparison.Ordinal));
@@ -5551,7 +5673,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Directory.CreateDirectory(workingDirectory);
     File.WriteAllText(Path.Combine(workingDirectory, "AGENTS.md"), "Repo-local agent guidance.");
     File.WriteAllText(Path.Combine(workingDirectory, "BACKLOG.md"), "Open backlog item.");
-    File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Recent dogfood note.");
+    File.WriteAllText(Path.Combine(workingDirectory, "DOGFOOD_LOG.md"), "Compatibility pointer only.");
     File.WriteAllText(Path.Combine(workingDirectory, "TestRepo.sln"), ""); // mark as dotnet for toolchain detection
     var kernel = new AgentOrchestratorKernel();
     var priorTask = new TaskSpec(TaskId.New(), "Plan implementation.", AgentRole.Planner);
@@ -5590,7 +5712,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(Path.Combine(contextDirectory, "context-package.json")));
     Assert.True(File.Exists(Path.Combine(contextDirectory, "AGENTS.md")));
     Assert.False(File.Exists(Path.Combine(contextDirectory, "BACKLOG.md")));
-    Assert.True(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
+    Assert.False(File.Exists(Path.Combine(contextDirectory, "DOGFOOD_LOG.md")));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
     var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
     var deterministic = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
@@ -5654,6 +5776,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(workflowBrokers, text => text.Contains("source-survey", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("diff-summary", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("acceptance-evidence", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains(".orchestrator/dogfood-log.db", StringComparison.Ordinal));
+    Assert.Contains(workflowBrokers, text => text.Contains("dogfood-log list", StringComparison.Ordinal));
+    Assert.DoesNotContain("Artifact: DOGFOOD_LOG.md", workflowBrokers, StringComparison.Ordinal);
     Assert.Contains(workflowBrokers, text => text.Contains("Broker Output Contract", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("WORKER_RESULT blockers", StringComparison.Ordinal));
     Assert.Contains(summaries, text => text.Contains("Changed files: Not reported.", StringComparison.Ordinal));
@@ -6436,6 +6561,51 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(root2.TryGetProperty("timestamp", out _));
 }
 
+    [Xunit.Fact(DisplayName = "ShowOrchestratorLogArtifacts_defaults_to_latest_dispatch_run_and_all_restores_history")]
+    public void ShowOrchestratorLogArtifactsDefaultsToLatestDispatchRunAndAllRestoresHistory()
+{
+    var root = CreateTempDirectory();
+    var scripts = Path.Combine(root, "scripts");
+    var logs = Path.Combine(root, ".orchestrator", "logs");
+    Directory.CreateDirectory(scripts);
+    Directory.CreateDirectory(logs);
+    File.Copy(
+        FindRepositoryFile("scripts", "Show-OrchestratorLogArtifacts.ps1"),
+        Path.Combine(scripts, "Show-OrchestratorLogArtifacts.ps1"));
+
+    const string goalPrefix = "946820de";
+    const string taskPrefix = "1f0ce3bb";
+    var olderPrefix = $"{goalPrefix}-{taskPrefix}-20260629120000";
+    var latestPrefix = $"{goalPrefix}-{taskPrefix}-20260629130000";
+
+    WriteDispatchArtifact(logs, olderPrefix, ".out.log", "older stdout line 1\nolder stdout tail", DateTime.Parse("2026-06-29T12:00:01"));
+    WriteDispatchArtifact(logs, olderPrefix, ".err.log", "older stderr tail", DateTime.Parse("2026-06-29T12:00:02"));
+    WriteDispatchArtifact(logs, olderPrefix, ".exit.txt", "1", DateTime.Parse("2026-06-29T12:00:03"));
+    WriteDispatchArtifact(logs, latestPrefix, ".out.log", "latest stdout line 1\nlatest stdout tail", DateTime.Parse("2026-06-29T13:00:01"));
+    WriteDispatchArtifact(logs, latestPrefix, ".err.log", "latest stderr tail", DateTime.Parse("2026-06-29T13:00:02"));
+    WriteDispatchArtifact(logs, latestPrefix, ".exit.txt", "0", DateTime.Parse("2026-06-29T13:00:03"));
+
+    var defaultResult = RunPowerShellCommand(
+        root,
+        "& '.\\scripts\\Show-OrchestratorLogArtifacts.ps1' -GoalPrefix '946820de' -TaskPrefix '1f0ce3bb' -TailLines 1");
+
+    Assert.Equal(0, defaultResult.ExitCode);
+    Assert.Contains(latestPrefix, defaultResult.StandardOutput);
+    Assert.Contains("latest stdout tail", defaultResult.StandardOutput);
+    Assert.DoesNotContain(olderPrefix, defaultResult.StandardOutput);
+    Assert.DoesNotContain("older stdout tail", defaultResult.StandardOutput);
+
+    var allResult = RunPowerShellCommand(
+        root,
+        "& '.\\scripts\\Show-OrchestratorLogArtifacts.ps1' -GoalPrefix '946820de' -TaskPrefix '1f0ce3bb' -TailLines 1 -All");
+
+    Assert.Equal(0, allResult.ExitCode);
+    Assert.Contains(olderPrefix, allResult.StandardOutput);
+    Assert.Contains(latestPrefix, allResult.StandardOutput);
+    Assert.Contains("older stdout tail", allResult.StandardOutput);
+    Assert.Contains("latest stdout tail", allResult.StandardOutput);
+}
+
     private static TaskBrief CreateBudgetBrief(params string[] lines)
 {
     return new TaskBrief(
@@ -6728,6 +6898,25 @@ private static (int ExitCode, string StandardOutput, string StandardError) RunPo
     process.WaitForExit(60000);
 
     return (process.ExitCode, output, error);
+}
+
+private static void WriteDispatchArtifact(string logsRoot, string prefix, string suffix, string content, DateTime lastWriteTime)
+{
+    var path = Path.Combine(logsRoot, prefix + suffix);
+    File.WriteAllText(path, content);
+    File.SetLastWriteTime(path, lastWriteTime);
+}
+
+private static string FindRepositoryFile(params string[] relativeSegments)
+{
+    var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+    var candidate = Path.Combine(new[] { repositoryRoot }.Concat(relativeSegments).ToArray());
+    if (File.Exists(candidate))
+    {
+        return candidate;
+    }
+
+    throw new FileNotFoundException($"Could not find repository file '{Path.Combine(relativeSegments)}'.");
 }
 
 private static string WorkerResultBlock(

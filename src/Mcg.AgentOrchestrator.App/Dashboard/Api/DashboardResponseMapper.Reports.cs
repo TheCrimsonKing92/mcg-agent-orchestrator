@@ -244,11 +244,14 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     AgentOrchestratorKernel kernel,
     Goal goal,
     IReadOnlyList<AgentDefinition>? agents = null,
-    DashboardHostInfoDto? host = null)
+    DashboardHostInfoDto? host = null,
+    string? executionDirectory = null,
+    IReadOnlyList<string>? changedFiles = null)
 {
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
+    var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
 
     return new GoalWorkSummaryDto(
         goal.Id.Value,
@@ -262,7 +265,31 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         ToGoalBuildEnvironmentDto(goal),
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
-        ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)));
+        ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
+        testImpact);
+}
+
+private static GoalTestImpactDto BuildGoalTestImpactDto(
+    Goal goal,
+    string? executionDirectory,
+    IReadOnlyList<string>? changedFiles)
+{
+    changedFiles ??= TryGetGoalChangedFiles(goal, executionDirectory);
+    var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+    return new GoalTestImpactDto(
+        plan.RequiresBuild,
+        plan.RequiresBroadVerification,
+        plan.Summary,
+        plan.Checks.Select(check => new GoalTestImpactCheckDto(check.Name, check.CommandLine, check.Reason)).ToList());
+}
+
+private static IReadOnlyList<string> TryGetGoalChangedFiles(Goal goal, string? executionDirectory)
+{
+    if (string.IsNullOrWhiteSpace(executionDirectory))
+        return [];
+
+    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    return worktree is null ? [] : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree);
 }
 
 private static GoalBuildEnvironmentDto ToGoalBuildEnvironmentDto(Goal goal)

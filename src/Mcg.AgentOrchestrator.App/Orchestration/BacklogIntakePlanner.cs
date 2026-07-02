@@ -81,7 +81,7 @@ internal static class BacklogIntakePlanner
             objective,
             "Run `workspace create <goal-prefix>` before file-touching work; use the goal worktree for dispatch, tests, acceptance, and cleanup.",
             "Inspect goal-branch diff, run focused tests named in the plan, verify worker result/evidence records, then run acceptance before merge.",
-            "Close or update the backlog item (`backlog-close`) and add a DOGFOOD_LOG entry with commands, tests, blockers, and Model fit.");
+            "Close or update the backlog item (`backlog-close`) and record goal-boundary evidence with `dogfood-log add <goal-prefix>`; durable entries live in `.orchestrator/dogfood-log.db`.");
     }
 
     private static List<string> InferTargetFiles(string text)

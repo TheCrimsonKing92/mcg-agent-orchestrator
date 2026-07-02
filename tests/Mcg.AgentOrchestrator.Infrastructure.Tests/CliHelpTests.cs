@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CliHelpTests
 {
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]
-    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--all")]
+    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
     [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--reason-file")]
@@ -47,8 +47,100 @@ public sealed class CliHelpTests
         Xunit.Assert.Empty(kernel.Goals);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_help_command_prints_command_usage_without_executing")]
+    public void CliHelpCommandPrintsCommandUsageWithoutExecuting()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["help", "backlog-list"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Usage: backlog-list", output);
+        Xunit.Assert.Contains("--limit <n>", output);
+        Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_help_unknown_command_suggests_nearest_command")]
+    public void CliHelpUnknownCommandSuggestsNearestCommand()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["help", "backlog-lits"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Unknown command 'backlog-lits'. Did you mean: backlog-list?", ex.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_conduct_help_documents_poll_seconds")]
+    public void CliConductHelpDocumentsPollSeconds()
+    {
+        foreach (var args in new[]
+        {
+            new[] { "conduct", "--help" },
+            new[] { "conduct", "--loop", "--help" },
+            new[] { "conduct", "--watch", "--help" }
+        })
+        {
+            var root = CreateTempDirectory();
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+
+                Xunit.Assert.False(changed);
+            });
+
+            Xunit.Assert.Contains("--poll-seconds <n>", output);
+            Xunit.Assert.Contains("Positive integer seconds between watch polls", output);
+            Xunit.Assert.Contains($"default {ConductorBatchLoop.DefaultWatchIntervalSeconds}", output);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "Cli_help_startup_exits_zero_before_state_creation")]
-    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--all")]
+    [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--simple")]
+    [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
     public void CliHelpStartupExitsZeroBeforeStateCreation(string[] args, string synopsisToken, string optionToken)
     {
@@ -62,6 +154,55 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains(optionToken, result.StandardOutput);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
         Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_startup_help_and_backlog_commands_skip_orphan_worktree_cleanup")]
+    public async Task CliStartupHelpAndBacklogCommandsSkipOrphanWorktreeCleanup()
+    {
+        await AssertCliSkipsOrphanWorktreeCleanupAsync(
+            ["goal", "--help"],
+            result =>
+            {
+                Xunit.Assert.Equal(0, result.ExitCode);
+                Xunit.Assert.Contains("Usage: goal", result.StandardOutput);
+            });
+
+        await AssertCliSkipsOrphanWorktreeCleanupAsync(
+            ["backlog-list", "--limit", "5", "--text", "ACL reset budget"],
+            result =>
+            {
+                Xunit.Assert.Equal(0, result.ExitCode);
+                Xunit.Assert.Contains("No matching open backlog items.", result.StandardOutput);
+            });
+
+        await AssertCliSkipsOrphanWorktreeCleanupAsync(
+            ["backlog-add", "ACL reset budget", "Keep backlog commands isolated."],
+            result =>
+            {
+                Xunit.Assert.Equal(0, result.ExitCode);
+                Xunit.Assert.Contains("Added:", result.StandardOutput);
+            });
+
+        await AssertCliSkipsOrphanWorktreeCleanupAsync(
+            ["backlog-close", "{backlog-id}", "done"],
+            result =>
+            {
+                Xunit.Assert.Equal(0, result.ExitCode);
+                Xunit.Assert.Contains("Closed:", result.StandardOutput);
+            },
+            seedBacklogItem: true);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_help_unknown_command_startup_exits_one_with_suggestion")]
+    public void CliHelpUnknownCommandStartupExitsOneWithSuggestion()
+    {
+        var root = CreateTempDirectory();
+
+        var result = RunAppCli(root, ["help", "backlog-lits"]);
+
+        Xunit.Assert.Equal(1, result.ExitCode);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardOutput), result.StandardOutput);
+        Xunit.Assert.Contains("Error: Unknown command 'backlog-lits'. Did you mean: backlog-list?", result.StandardError);
     }
 
     [Xunit.Theory(DisplayName = "Cli_invalid_flags_fail_before_handler_execution")]
@@ -106,7 +247,7 @@ public sealed class CliHelpTests
         Xunit.Assert.Equal(1, result.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardOutput), result.StandardOutput);
         Xunit.Assert.Contains("Error: Unknown option '--frobnitz'.", result.StandardError);
-        Xunit.Assert.Contains("Usage: backlog-list [--all]", result.StandardError);
+        Xunit.Assert.Contains("Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]", result.StandardError);
     }
 
     [Xunit.Fact(DisplayName = "Cli_backlog_list_valid_flags_still_execute")]
@@ -123,7 +264,7 @@ public sealed class CliHelpTests
         var output = CaptureConsole(() =>
         {
             var changed = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-list", "--all"],
+                ["backlog-list", "--all", "--limit", "10", "--status", "open", "--text", "foo"],
                 kernel,
                 workspace,
                 ref agents,
@@ -134,7 +275,7 @@ public sealed class CliHelpTests
             Xunit.Assert.False(changed);
         });
 
-        Xunit.Assert.Contains("No backlog items.", output);
+        Xunit.Assert.Contains("No matching backlog items.", output);
     }
 
     private static string CaptureConsole(Action action)
@@ -158,6 +299,85 @@ public sealed class CliHelpTests
         var path = Path.Combine(Path.GetTempPath(), "mcg-cli-help-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static async Task AssertCliSkipsOrphanWorktreeCleanupAsync(
+        string[] args,
+        Action<(int ExitCode, string StandardOutput, string StandardError)> assertResult,
+        bool seedBacklogItem = false)
+    {
+        var root = CreateTempDirectory();
+        string? backlogId = null;
+        try
+        {
+            InitializeGitRepository(root);
+            using var orphanLock = CreateLockedOrphanWorktree(root);
+            if (seedBacklogItem)
+            {
+                var workspace = OrchestratorWorkspace.ForDirectory(root);
+                var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Seed backlog item");
+                backlogId = item.Id[..8];
+            }
+
+            var resolvedArgs = args
+                .Select(arg => arg.Equals("{backlog-id}", StringComparison.Ordinal) ? backlogId ?? arg : arg)
+                .ToArray();
+
+            var result = RunAppCli(root, resolvedArgs);
+
+            assertResult(result);
+            Xunit.Assert.DoesNotContain("worktree-cleanup", result.StandardError, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.True(Directory.Exists(orphanLock.OrphanPath), "startup cleanup should not touch orphan worktrees for help/backlog-only commands");
+            Xunit.Assert.True(File.Exists(orphanLock.LockPath), "startup cleanup should not touch orphan worktree contents for help/backlog-only commands");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static LockedOrphanWorktree CreateLockedOrphanWorktree(string root)
+    {
+        var orphanPath = Path.Combine(root, GoalWorktrees.DirectoryName, "9458d180");
+        var sandboxPath = Path.Combine(orphanPath, ".mcg-sandbox");
+        Directory.CreateDirectory(sandboxPath);
+        var lockPath = Path.Combine(sandboxPath, "locked.txt");
+        var stream = File.Open(lockPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+        return new LockedOrphanWorktree(stream, orphanPath, lockPath);
+    }
+
+    private sealed class LockedOrphanWorktree(FileStream stream, string orphanPath, string lockPath) : IDisposable
+    {
+        private readonly FileStream _stream = stream;
+
+        public string OrphanPath { get; } = orphanPath;
+
+        public string LockPath { get; } = lockPath;
+
+        public void Dispose() => _stream.Dispose();
+    }
+
+    private static void InitializeGitRepository(string root)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("init");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start git init.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(10000) || process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git init failed. stdout={output} stderr={error}");
+        }
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(

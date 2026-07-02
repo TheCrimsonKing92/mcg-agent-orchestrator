@@ -10,6 +10,11 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Verification {status} ({verification.ExitCode}): {verification.Command}");
+        if (TryFailReviewerWorkerResultBlocker(goalId, task, verification))
+        {
+            return;
+        }
+
         TryCompleteTaskWithPassingVerification(goal, task, $"Task completed with passing verification: {verification.Command}");
         RefreshGoalStatus(goal);
     }
@@ -48,6 +53,10 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
+        if (TryFailReviewerWorkerResultBlocker(goalId, task, verification))
+        {
+            return;
+        }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var isRecoverableSubscriptionLimit = effectiveProviderFailureKind == ProviderFailureKind.RateLimit ||
@@ -100,6 +109,23 @@ public sealed partial class AgentOrchestratorKernel
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
                 ? $"Dispatch completed successfully: {task.LastDispatch.Command}"
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
+    }
+
+    private bool TryFailReviewerWorkerResultBlocker(GoalId goalId, TaskSpec task, TaskVerificationRecord verification)
+    {
+        if (verification.Succeeded &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            ReviewerWorkerResultBlockers.TryFindBlocker(verification, out var blocker))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Reviewer WORKER_RESULT reported blocker: {blocker}");
+            return true;
+        }
+
+        return false;
     }
 
     public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit)

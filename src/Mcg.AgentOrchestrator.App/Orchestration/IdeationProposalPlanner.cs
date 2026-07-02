@@ -63,16 +63,19 @@ internal static class IdeationProposalPlanner
         sb.AppendLine(backlogText.Length > 4000 ? backlogText[..4000] + "\n...(truncated)" : backlogText);
 
         sb.AppendLine();
-        sb.AppendLine("## DOGFOOD_LOG.md (recent 2000 chars)");
-        var dogfoodPath = Path.Combine(workspace.ExecutionDirectory, "DOGFOOD_LOG.md");
-        if (File.Exists(dogfoodPath))
+        sb.AppendLine("## Dogfood Log (SQLite recent entries, top 2000 chars)");
+        try
         {
-            var text = File.ReadAllText(dogfoodPath);
+            var records = new DogfoodLogStore(workspace.DogfoodLogStorePath)
+                .ListRecentAsync(10)
+                .GetAwaiter()
+                .GetResult();
+            var text = string.Join(Environment.NewLine + Environment.NewLine, records.Select(record => record.RenderedMarkdown));
             sb.AppendLine(text.Length > 2000 ? text[^2000..] : text);
         }
-        else
+        catch (Exception ex)
         {
-            sb.AppendLine("(not found)");
+            sb.AppendLine($"(dogfood-log unavailable: {ex.Message})");
         }
 
         return sb.ToString();

@@ -13,7 +13,7 @@ internal sealed class WorkerSkillSelector
         new(
             "orchestrator-dogfood",
             Path.Combine(".agents", "skills", "orchestrator-dogfood", "SKILL.md"),
-            "Use for orchestrator dogfood goals, backlog changes, goal/workspace lifecycle commands, subscription dispatches, dashboard validation, acceptance gates, and DOGFOOD_LOG evidence."),
+            "Use for orchestrator dogfood goals, backlog changes, goal/workspace lifecycle commands, subscription dispatches, dashboard validation, acceptance gates, and SQLite dogfood-log evidence."),
         new(
             "orchestrator-worker-verification",
             Path.Combine(".agents", "skills", "orchestrator-worker-verification", "SKILL.md"),
@@ -112,7 +112,7 @@ internal sealed class WorkerSkillSelector
             "subscription",
             "dispatch",
             "acceptance",
-            "DOGFOOD_LOG",
+            "dogfood-log",
             "dashboard");
         var verificationSignals = task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer ||
             ContainsAny(text, "verify", "verification", "review", "worker result", "dispatch log", "worktree diff", "acceptance");

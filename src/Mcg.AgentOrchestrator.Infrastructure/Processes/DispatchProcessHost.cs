@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -49,7 +50,8 @@ public static class DispatchProcessHost
         // The worker can only EDIT the worktree (the shared .git stays medium and out of reach); the
         // orchestrator commits the worker's edits afterwards. Default = run at medium integrity.
         bool SandboxLowIntegrity = false,
-        WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown);
+        WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown,
+        string? PromptPath = null);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -63,17 +65,17 @@ public static class DispatchProcessHost
     // never the medium-integrity profile or main repo. The host runs at medium and cannot launch a Low
     // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
     // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
-    internal static void ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
+    internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
         => ApplyWorkerSandbox(startInfo, parameters, WorkerSandboxPreparer.CreateDefault());
 
-    internal static void ApplyWorkerSandbox(
+    internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(
         ProcessStartInfo startInfo,
         DispatchRunParameters parameters,
         WorkerSandboxPreparer preparer)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
-            return;
+            return new WorkerSandboxPreparationResult(false, false);
         }
 
         // Label ONLY the worktree Low so the Low worker can edit it. The shared git common dir is
@@ -84,6 +86,11 @@ public static class DispatchProcessHost
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
         var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
+        if (preparation.RecoveryAction is { } action)
+        {
+            throw new InvalidOperationException(action.Reason);
+        }
+
         ProtectGitMetadata(parameters.WorkingDirectory);
 
         // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
@@ -114,6 +121,8 @@ public static class DispatchProcessHost
         {
             startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
         }
+
+        return preparation;
     }
 
     internal static void SeedProviderEnvironment(
@@ -672,9 +681,7 @@ public static void DropToLow() {
                 ?? throw new InvalidOperationException("Failed to start worker process.");
             workerGroup = OwnedProcessGroup.Attach(worker);
 
-            // Close the worker's stdin immediately so it reads EOF instead of blocking on an
-            // inherited/open pipe (see RedirectStandardInput note above).
-            try { worker.StandardInput.Close(); } catch { /* worker may have already exited */ }
+            WritePromptToWorkerStdin(worker, parameters);
 
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
             using var stdout = new FileStream(parameters.StdoutPath, FileMode.Create, FileAccess.Write, FileShare.Read);
@@ -855,6 +862,43 @@ public static void DropToLow() {
         {
             throw new InvalidOperationException("Dispatch host start gate was not released; refusing to launch worker outside the supervisor job.");
         }
+    }
+
+    internal static bool ShouldWritePromptToStdin(DispatchRunParameters parameters) =>
+        parameters.Provider is WorkerSandboxProvider.Claude or WorkerSandboxProvider.Codex &&
+        !string.IsNullOrWhiteSpace(parameters.PromptPath);
+
+    internal static void WritePromptToWorkerStdin(Process worker, DispatchRunParameters parameters)
+    {
+        try
+        {
+            if (ShouldWritePromptToStdin(parameters))
+            {
+                WriteUtf8PromptToStream(parameters.PromptPath!, worker.StandardInput.BaseStream);
+                worker.StandardInput.Flush();
+            }
+        }
+        finally
+        {
+            // EOF is the end-of-prompt signal for stdin-driven workers. Close before draining output so
+            // neither side waits for the other indefinitely.
+            try { worker.StandardInput.Close(); } catch { /* worker may have already exited */ }
+        }
+    }
+
+    internal static void WriteUtf8PromptToStream(string promptPath, Stream target)
+    {
+        using var reader = new StreamReader(
+            promptPath,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+            detectEncodingFromByteOrderMarks: false);
+        using var writer = new StreamWriter(
+            target,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 16 * 1024,
+            leaveOpen: true);
+        writer.Write(reader.ReadToEnd());
+        writer.Flush();
     }
 
     private static void TryWriteExitCode(string path, int exitCode)

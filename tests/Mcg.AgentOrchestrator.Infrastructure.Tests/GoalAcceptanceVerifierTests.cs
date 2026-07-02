@@ -152,6 +152,60 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[1]);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_failed_check_with_timeout_diagnostics")]
+    public async Task GoalAcceptanceVerifierReturnsFailedCheckWithTimeoutDiagnostics()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "focused CLI infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": [ "--filter", "CliHelpTests", "--verbosity", "minimal" ] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(calls.Count == 1
+                    ? new GoalAcceptanceVerifier.CommandResult(0, "")
+                    : new GoalAcceptanceVerifier.CommandResult(
+                        -1,
+                        "restore complete\nstill running infrastructure tests",
+                        TimedOut: true,
+                        CommandLine: "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                        StdoutPath: "C:\\temp\\acceptance.out",
+                        StderrPath: "C:\\temp\\acceptance.err",
+                        Timeout: TimeSpan.FromMinutes(10)));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcd1234abcd1234abcd1234abcd1234"));
+
+            Assert.False(result.Passed);
+            Assert.Equal(-1, result.ExitCode);
+            Assert.Equal(2, calls.Count);
+            var check = Assert.Single(result.Checks!.Where(check => !check.Passed));
+            Assert.Equal("focused CLI infrastructure tests", check.Name);
+            Assert.False(check.Passed);
+            Assert.Equal("timed out after 10m", check.ResultSummary);
+            Assert.Equal(result.ArtifactsPath, check.ArtifactsPath);
+            var outputTail = result.OutputTail ?? string.Empty;
+            Assert.True(outputTail.Contains("Command: dotnet test", StringComparison.Ordinal), outputTail);
+            Assert.True(outputTail.Contains("stdout: C:\\temp\\acceptance.out", StringComparison.Ordinal), outputTail);
+            Assert.True(outputTail.Contains("stderr: C:\\temp\\acceptance.err", StringComparison.Ordinal), outputTail);
+            Assert.True(outputTail.Contains("still running infrastructure tests", StringComparison.Ordinal), outputTail);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_passed_without_retry_on_first_time_pass")]
     public async Task GoalAcceptanceVerifierReturnsPassedWithoutRetryOnFirstTimePass()
     {
@@ -230,6 +284,156 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[1]);
         var check = Xunit.Assert.Single(result.Checks!);
         Assert.Equal("infrastructure tests", check.Name);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_focused_infrastructure_filter_for_cli_only_changes")]
+    public async Task GoalAcceptanceVerifierRunsFocusedInfrastructureFilterForCliOnlyChanges()
+    {
+        var root = CreateStandardManifestWorkspace();
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Focused CLI tests passed.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, calls.Count);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+        Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("--filter", calls[2]);
+        Assert.Contains(calls[2], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.False(calls[2].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
+        Assert.False(calls[2].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
+        Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Equal(["git diff whitespace", "focused CLI infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_replaces_project_level_infrastructure_check_for_focused_cli_scope")]
+    public async Task GoalAcceptanceVerifierReplacesProjectLevelInfrastructureCheckForFocusedCliScope()
+    {
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Core tests passed."),
+            new(0, "Focused CLI tests passed."),
+            new(0, "")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(5, calls.Count);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[3][2]);
+        Assert.Contains("--filter", calls[3]);
+        Assert.Contains(calls[3], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.False(calls[3].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
+        Assert.False(calls[3].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
+        Assert.DoesNotContain(
+            calls,
+            call => call.Length > 2 &&
+                call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                call[1].Equals("test", StringComparison.OrdinalIgnoreCase) &&
+                call[2].Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase) &&
+                !call.Contains("--filter", StringComparer.OrdinalIgnoreCase));
+        Assert.Equal(
+            ["git diff whitespace", "core tests", "focused CLI infrastructure tests", "forbidden changed paths"],
+            result.Checks!.Select(check => check.Name).ToArray());
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_full_infrastructure_suite_for_multiple_app_subsystems")]
+    public async Task GoalAcceptanceVerifierRunsFullInfrastructureSuiteForMultipleAppSubsystems()
+    {
+        var root = CreateStandardManifestWorkspace();
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Full Infrastructure tests passed.")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles:
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
+                "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
+            ]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, calls.Count);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+        Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("--filter", calls[2]);
+        Assert.Contains("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration", calls[2]);
+        Assert.Equal(["git diff whitespace", "infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_full_infrastructure_suite_for_app_plus_shared_infrastructure_or_script_changes")]
+    public async Task GoalAcceptanceVerifierRunsFullInfrastructureSuiteForAppPlusSharedInfrastructureOrScriptChanges()
+    {
+        var root = CreateStandardManifestWorkspace();
+
+        static async Task AssertFullInfrastructureRunAsync(string root, IReadOnlyList<string> changedFiles)
+        {
+            var calls = new List<string[]>();
+            var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+                new(0, ""),
+                new(0, ""),
+                new(0, "Full Infrastructure tests passed.")
+            ]);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var result = await verifier.RunAsync(root, changedFiles: changedFiles);
+
+            Assert.True(result.Passed);
+            Assert.Equal(3, calls.Count);
+            Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+            Assert.Contains("--filter", calls[2]);
+            Assert.Contains("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration", calls[2]);
+            Assert.Equal("infrastructure tests", result.Checks![1].Name);
+        }
+
+        await AssertFullInfrastructureRunAsync(
+            root,
+            [
+                "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.ReportPreviews.cs",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
+            ]);
+        await AssertFullInfrastructureRunAsync(
+            root,
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
+                "scripts/Invoke-IsolatedDotnet.ps1"
+            ]);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_manifest_command_checks_before_dotnet_tests")]
@@ -1156,6 +1360,26 @@ public sealed class GoalAcceptanceVerifierTests
                 { "name": "full dotnet tests", "type": "dotnet-test", "project": "Mcg.AgentOrchestrator.sln", "arguments": ["--verbosity", "minimal"] }
               ],
               "forbiddenChangedPathGlobs": []
+            }
+            """);
+
+    private static string CreateCheckedInManifestShapeWorkspace() =>
+        CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": [
+                "bin/**",
+                "obj/**",
+                ".scratch/**",
+                ".orchestrator-prototype/**",
+                "TestResults/**",
+                "playwright-report/**"
+              ]
             }
             """);
 

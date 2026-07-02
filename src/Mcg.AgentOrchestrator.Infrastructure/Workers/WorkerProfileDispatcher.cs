@@ -315,7 +315,7 @@ public static class WorkerProfileDispatcher
             AddSkillAvailabilityFindings(findings, goal, task, workingDirectory);
             AddBuildEnvironmentFinding(findings, goal, task);
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
-            AddGitMetadataAccessFinding(findings, task, workingDirectory);
+            AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
 
             if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
             {
@@ -402,7 +402,11 @@ public static class WorkerProfileDispatcher
         return null;
     }
 
-    private static void AddGitMetadataAccessFinding(List<string> findings, TaskSpec task, string workingDirectory)
+    private static void AddGitMetadataAccessFinding(
+        List<string> findings,
+        TaskSpec task,
+        string workingDirectory,
+        WorkerSandboxOptions sandbox)
     {
         if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
         {
@@ -416,7 +420,7 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var access = GoalWorktrees.InspectGitMetadataAccess(workingDirectory);
+        var access = GoalWorktrees.InspectGitMetadataAccess(workingDirectory, sandbox);
         var status = access.Error is null ? "ok" : "warn";
         findings.Add(
             $"{status}: git metadata index_lock={access.IndexLockPath}; " +
@@ -962,7 +966,7 @@ public static class WorkerProfileDispatcher
             return false;
         }
 
-        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark &&
+        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 

@@ -26,7 +26,7 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
 
-`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the `DOGFOOD_LOG` entry, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`).
+`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`).
 
 You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, or `accept` by hand. A single non-loop `conduct <goal-prefix>` advances exactly one step (useful for stepping/inspection).
 
@@ -122,7 +122,7 @@ This is the most important section. Match the **observable symptom** to its caus
 | Low-IL dispatch shows no stdout/stderr files and no heartbeat for minutes, while process inspection shows `icacls ... /setintegritylevel ... /T` under `__dispatch-run` | The sandbox is still applying Mandatory Integrity labels before the worker launch. Older builds redirected `icacls` output without draining it, causing pipe backpressure, 120s startup timeouts, orphaned `icacls`, and duplicate retries; a completed `icacls` can also return nonzero on a previously used worktree. | Stop the loop with `.conduct-stop`, then stop only the exact orphan dispatch PIDs if the task was already retried. Verify `DispatchProcessHost.SetLowIntegrity` drains `icacls`, kills it on timeout, treats completed nonzero exits as non-fatal, and emits a `preparing-sandbox` heartbeat before restarting the conductor. |
 | Goal genuinely dead / wrong, can't proceed | — | `abandon-goal <goal> <single-token-reason> --confirm-goal-abandon` (remove its worktree first if a Low-IL `.mcg-sandbox` orphan blocks it). |
 | Worker log shows exit 0 and file changes exist in `.orchestrator-worktrees/<prefix>` but the task is still `[Dispatched]` / reconcile loop shows `held` indefinitely | Orphaned dispatch reconcile — loop crashed after worker exited. The work is safe in the worktree. | `recover <goal> "<note>"` resets the stale dispatch → then `acceptance <goal>` (or re-run the loop) to read the worktree commits. |
-| Acceptance build fails with `CS2012` / `MSB3491` — "file is being used by another process" | Roslyn / VBCSCompiler build server holds the output DLL. Transient; not a code defect. | `dotnet build-server shutdown` (releases the file handles), then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
+| Acceptance build fails with `MSB3491` / "file is being used by another process" after the repo-wide build-server disablement | A non-build-server process such as a running dashboard/test host may still hold an output DLL. Transient; not a code defect. | Stop the exact owning process when known; otherwise `dotnet build-server shutdown` is harmless, then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
 | `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> <text>` for each; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
 | You want two or more goals to advance concurrently | Goals with overlapping file scopes contend for the same worktree paths — running them together produces merge conflicts. | Verify non-overlapping file scopes first. Then intake all goals **before** starting a single `conduct --loop --watch --policy Permissive` — one loop tick advances every eligible goal; the slot cap (5 under Permissive) limits concurrent workers. |
 
@@ -180,7 +180,7 @@ Created
   → AwaitingVerification    # worker exited; acceptance suite queued
   → Verified                # acceptance suite green; change-risk gate evaluable
   → Merged                  # goal branch merged into main (landing action)
-  → Recorded                # DOGFOOD_LOG entry written
+  → Recorded                # SQLite dogfood-log entry written
   → CleanedUp               # worktree removed; goal is terminal
 ```
 
@@ -219,6 +219,7 @@ Durable state lives in stores, never in `.scratch`.
 |---|---|
 | `.orchestrator/state.db` | the kernel: goals, tasks, dispatches, verifications (SQLite, single-writer) |
 | `.orchestrator/backlog.db` | the backlog (use `backlog-list`/`backlog-add`/`backlog-show`/`backlog-close`; this is the source of truth, not `BACKLOG.md`) |
+| `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
 | `.orchestrator/agents.json` | the agent catalog (which model each role uses) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
@@ -226,6 +227,16 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator-context/<goal-id>` | worker context artifacts for a goal |
 
 `--brief-file`/`--body-file` are throwaway vehicles to pass long text past the command-length cap — the durable copy becomes the goal objective / backlog item, so **delete the scratch input** afterward.
+
+Dogfood goal-boundary evidence is durable SQLite state, not a tracked markdown append log.
+
+```powershell
+mcg-orchestrator.cmd dogfood-log list --limit 10
+mcg-orchestrator.cmd dogfood-log add <goal-prefix>
+mcg-orchestrator.cmd record-goal <goal-prefix>   # compatibility alias for add + render
+```
+
+`DOGFOOD_LOG.md` remains only as a pointer for operators and should not receive new durable entries.
 
 For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` updates both the indexed `goals.status` column and the serialized snapshot in `.orchestrator/state.db`. It is an operator recovery tool, not a normal workflow command; prefer `recover`, `retry`, and `conduct` first.
 

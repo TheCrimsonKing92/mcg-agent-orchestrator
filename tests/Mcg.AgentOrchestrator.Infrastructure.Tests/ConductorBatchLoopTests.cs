@@ -41,7 +41,7 @@ public sealed class ConductorBatchLoopTests
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
         Action<Goal>? record = null,
-        Action<Goal>? cleanup = null,
+        Func<Goal, GoalWorktreeRemoveResult>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null) =>
@@ -65,7 +65,7 @@ public sealed class ConductorBatchLoopTests
                 : ((g, _) => land(g)),
             null,
             record ?? (_ => { }),
-            cleanup ?? (_ => { }),
+            cleanup ?? (_ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null)),
             writeEscalation ?? ((_, _, _) => { }),
             classifyRisk ?? (_ => null));
 
@@ -1272,7 +1272,7 @@ public sealed class ConductorBatchLoopTests
             runAcceptance: _ => true,
             land: g => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok"),
             record: _ => { },
-            cleanup: _ => { });
+            cleanup: _ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null));
 
         var stopFile = NoStopPath();
         var summary = new ConductorBatchLoop().Run(
@@ -1897,7 +1897,11 @@ public sealed class ConductorBatchLoopTests
                 return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
             },
             record: goal => advancedGoalIds.Add(goal.Id),
-            cleanup: goal => advancedGoalIds.Add(goal.Id));
+            cleanup: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
+            });
 
         var summary = new ConductorBatchLoop().Run(
             kernel,
@@ -1911,6 +1915,47 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Escalated);
         Assert.Contains(verifiedGoal.Id, driverCalls);
         Assert.Empty(advancedGoalIds.Where(terminalGoalIds.Contains));
+    }
+
+    [Xunit.Theory(DisplayName = "BatchLoop_stale_terminal_goals_with_assigned_work_are_excluded_from_processing_set")]
+    [Xunit.InlineData(GoalStatus.Completed)]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    public void BatchLoopStaleTerminalGoalsWithAssignedWorkAreExcludedFromProcessingSet(GoalStatus status)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var staleTask = new TaskSpec(TaskId.New(), "Stale assigned work", AgentRole.Developer);
+        var staleGoal = kernel.CreateGoal($"Stale {status}", [staleTask]);
+        var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
+        kernel.ActivateGoal(staleGoal.Id, DefaultAgents());
+        kernel = WithGoalStatus(kernel, staleGoal.Id, status);
+
+        var advancedGoalIds = new List<GoalId>();
+        var driver = MakeDriver(
+            createWorkspace: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return "/tmp/workspace";
+            },
+            dispatchAndStart: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Contains(activeGoal.Id, advancedGoalIds);
+        Assert.DoesNotContain(staleGoal.Id, advancedGoalIds);
+        Assert.Equal(status, kernel.GetGoal(staleGoal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(staleGoal.Id, staleTask.Id).Status);
     }
 
     // ── Duration cap: loop exits when max-duration is reached ────────────
@@ -1939,13 +1984,13 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Advanced);
     }
 
-    // ── Per-tick write scope: persistGoalTick fires exactly for goals that changed ──
+    // ── Per-tick write scope: persistGoalTick fires once with exactly the goals that changed ──
 
-    [Xunit.Fact(DisplayName = "PersistGoalTick_FiresExactlyForGoalsThatChangedDisposition")]
-    public void PersistGoalTick_FiresExactlyForGoalsThatChangedDisposition()
+    [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]
+    public void PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition()
     {
         // Two goals: A advances (workspace creation), B is held by concurrent cap.
-        // persistGoalTick must be called exactly once for A and zero times for B.
+        // persistGoalTick must be called once with A and without B.
         var kernel = new AgentOrchestratorKernel();
         var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal A");
         var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal B");
@@ -1961,16 +2006,31 @@ public sealed class ConductorBatchLoopTests
                 : 0,
             createWorkspace: _ => { createWorkspaceCalls++; return "/tmp/ws"; });
 
-        var persistedGoalIds = new List<GoalId>();
+        var persistedGoalBatches = new List<IReadOnlyCollection<GoalId>>();
 
         new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
             maxIterations: 1,
-            persistGoalTick: (_, changedGoalId) => persistedGoalIds.Add(changedGoalId));
+            persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
 
         // A changed disposition (workspace created); B was held with no state change.
+        var persistedGoalIds = Assert.Single(persistedGoalBatches);
         Assert.Contains(goalA.Id, persistedGoalIds);
         Assert.DoesNotContain(goalB.Id, persistedGoalIds);
         Assert.Single(persistedGoalIds);
+    }
+
+    private static AgentOrchestratorKernel WithGoalStatus(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        GoalStatus status)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goal => goal.Id == goalId.Value ? goal with { Status = status } : goal)
+                .ToArray()
+        });
     }
 }

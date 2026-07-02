@@ -240,6 +240,35 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         }
     }
 
+    public async Task SaveGoalSnapshotsAsync(
+        IReadOnlyCollection<GoalSnapshot> goals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+
+        if (goals.Count == 0)
+            return;
+
+        await using var conn = await BeginWriteAsync(cancellationToken);
+        try
+        {
+            var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+            // SQLite has no provider-level array/upsert binding here, so each row is still a
+            // statement; the bulk boundary is one connection, one BEGIN IMMEDIATE, one COMMIT.
+            foreach (var goal in goals)
+            {
+                await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken);
+            }
+
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+        }
+        catch
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            throw;
+        }
+    }
+
     public async Task<T> TransactAsync<T>(
         Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default)
@@ -436,28 +465,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         foreach (var goal in snapshot.Goals)
         {
-            var json = JsonSerializer.Serialize(goal, SerializerOptions);
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
-                VALUES ($id, $status, $objective, $source_backlog_item_id, $updated_at, $json, 1)
-                ON CONFLICT(id) DO UPDATE SET
-                    status        = excluded.status,
-                    objective     = excluded.objective,
-                    source_backlog_item_id = excluded.source_backlog_item_id,
-                    snapshot_json = excluded.snapshot_json,
-                    version       = goals.version + 1,
-                    updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
-                                         THEN excluded.updated_at
-                                         ELSE goals.updated_at END
-                """;
-            cmd.Parameters.AddWithValue("$id", goal.Id);
-            cmd.Parameters.AddWithValue("$status", goal.Status.ToString());
-            cmd.Parameters.AddWithValue("$objective", goal.Objective);
-            cmd.Parameters.AddWithValue("$source_backlog_item_id", (object?)goal.SourceBacklogItemId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$updated_at", updatedAt);
-            cmd.Parameters.AddWithValue("$json", json);
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken);
         }
 
         foreach (var request in snapshot.HumanInputRequests)
@@ -575,32 +583,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 return false;
             }
 
-            var json = JsonSerializer.Serialize(snapshot, SerializerOptions);
             var updatedAt = DateTimeOffset.UtcNow.ToString("O");
-            await using (var writeCmd = conn.CreateCommand())
-            {
-                writeCmd.CommandText = """
-                    INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
-                    VALUES ($id, $status, $objective, $source_backlog_item_id, $updated_at, $json, $version)
-                    ON CONFLICT(id) DO UPDATE SET
-                        status        = excluded.status,
-                        objective     = excluded.objective,
-                        source_backlog_item_id = excluded.source_backlog_item_id,
-                        snapshot_json = excluded.snapshot_json,
-                        version       = excluded.version,
-                        updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
-                                             THEN excluded.updated_at
-                                             ELSE goals.updated_at END
-                    """;
-                writeCmd.Parameters.AddWithValue("$id", goalId.Value);
-                writeCmd.Parameters.AddWithValue("$status", snapshot.Status.ToString());
-                writeCmd.Parameters.AddWithValue("$objective", snapshot.Objective);
-                writeCmd.Parameters.AddWithValue("$source_backlog_item_id", (object?)snapshot.SourceBacklogItemId ?? DBNull.Value);
-                writeCmd.Parameters.AddWithValue("$updated_at", updatedAt);
-                writeCmd.Parameters.AddWithValue("$json", json);
-                writeCmd.Parameters.AddWithValue("$version", currentVersion + 1);
-                await writeCmd.ExecuteNonQueryAsync(cancellationToken);
-            }
+            await UpsertGoalRowAsync(conn, snapshot, updatedAt, versionSql: "$version", cancellationToken, currentVersion + 1);
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             return true;
@@ -610,6 +594,39 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
             throw;
         }
+    }
+
+    private static async Task UpsertGoalRowAsync(
+        SqliteConnection conn,
+        GoalSnapshot goal,
+        string updatedAt,
+        string versionSql,
+        CancellationToken cancellationToken,
+        int? version = null)
+    {
+        var json = JsonSerializer.Serialize(goal, SerializerOptions);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $$"""
+            INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version)
+            VALUES ($id, $status, $objective, $source_backlog_item_id, $updated_at, $json, COALESCE($version, 1))
+            ON CONFLICT(id) DO UPDATE SET
+                status        = excluded.status,
+                objective     = excluded.objective,
+                source_backlog_item_id = excluded.source_backlog_item_id,
+                snapshot_json = excluded.snapshot_json,
+                version       = {{versionSql}},
+                updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
+                                     THEN excluded.updated_at
+                                     ELSE goals.updated_at END
+            """;
+        cmd.Parameters.AddWithValue("$id", goal.Id);
+        cmd.Parameters.AddWithValue("$status", goal.Status.ToString());
+        cmd.Parameters.AddWithValue("$objective", goal.Objective);
+        cmd.Parameters.AddWithValue("$source_backlog_item_id", (object?)goal.SourceBacklogItemId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+        cmd.Parameters.AddWithValue("$json", json);
+        cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task UpsertModelFitHistoryRowAsync(

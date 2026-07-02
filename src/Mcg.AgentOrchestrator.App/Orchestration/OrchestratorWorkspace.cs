@@ -147,6 +147,8 @@ internal sealed record OrchestratorWorkspace(
 
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 
+    public string DogfoodLogStorePath => Path.Combine(OrchestratorDirectory, "dogfood-log.db");
+
     public string RunEventStorePath => Path.Combine(OrchestratorDirectory, "run-events.db");
 
     public string OperatorChannelPath => Path.Combine(OrchestratorDirectory, "operator-channel.json");

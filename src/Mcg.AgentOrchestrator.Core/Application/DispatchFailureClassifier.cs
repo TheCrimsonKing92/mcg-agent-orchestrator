@@ -569,7 +569,8 @@ public static class DispatchFailureClassifier
         var commitBlocked =
             output.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("CreateProcessAsUserW 1312", StringComparison.OrdinalIgnoreCase) ||
+            (output.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) &&
+             output.Contains("1312", StringComparison.OrdinalIgnoreCase)) ||
             output.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
             (output.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
              output.Contains("Permission denied", StringComparison.OrdinalIgnoreCase));
@@ -929,6 +930,7 @@ public static class DispatchFailureClassifier
             ProviderKind.OpenAICodexCli or
             ProviderKind.AnthropicClaudeCli or
             ProviderKind.OpenAICodexSpark or
+            ProviderKind.OpenAICodexOssCli or
             ProviderKind.OllamaQwenCodeCli;
     }
 

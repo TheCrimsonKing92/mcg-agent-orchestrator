@@ -118,7 +118,7 @@ public sealed class GoalDependencyTests
             land: (g, _) => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             afterSuccessfulLanding: null,
             record: _ => { },
-            cleanup: _ => { },
+            cleanup: _ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null),
             writeEscalation: (_, _, _) => { },
             classifyChangeRisk: _ => null);
 
@@ -192,7 +192,11 @@ public sealed class GoalDependencyTests
             },
             afterSuccessfulLanding: null,
             record: g => { if (g.Id == a.Id) aRecorded = true; },
-            cleanup: g => { if (g.Id == a.Id) aCleaned = true; },
+            cleanup: g =>
+            {
+                if (g.Id == a.Id) aCleaned = true;
+                return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
+            },
             writeEscalation: (_, _, _) => { },
             classifyChangeRisk: _ => null);
 
@@ -247,7 +251,7 @@ public sealed class GoalDependencyTests
             land: (g, _) => new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"),
             afterSuccessfulLanding: null,
             record: _ => { },
-            cleanup: _ => { },
+            cleanup: _ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null),
             writeEscalation: (_, _, _) => { },
             classifyChangeRisk: _ => null);
 
