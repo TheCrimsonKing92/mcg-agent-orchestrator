@@ -3625,6 +3625,7 @@ public sealed class GoalWorktreeIntegrationTests
         var originalDelete = GoalWorktrees.DeleteDirectory;
         var originalAcl = GoalWorktrees.SandboxAclHelper;
         var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -3649,6 +3650,7 @@ public sealed class GoalWorktreeIntegrationTests
             RunGit(repo, "worktree", "prune");
 
             var deleteAttempts = 0;
+            var lockHolderProbes = 0;
             GoalWorktrees.DeleteDirectory = path =>
             {
                 deleteAttempts++;
@@ -3662,6 +3664,9 @@ public sealed class GoalWorktreeIntegrationTests
             };
             GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
             GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
+                : [];
 
             var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
@@ -3680,6 +3685,7 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.DeleteDirectory = originalDelete;
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
