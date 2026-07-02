@@ -499,7 +499,7 @@ internal static class OrchestratorSqliteTools
     private static string ResolveRepoRoot(string? repoRoot)
     {
         if (!string.IsNullOrWhiteSpace(repoRoot))
-            return Path.GetFullPath(repoRoot);
+            return NormalizeStateRoot(Path.GetFullPath(repoRoot));
 
         var configuredRoot = Environment.GetEnvironmentVariable(RepoRootEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(configuredRoot))
