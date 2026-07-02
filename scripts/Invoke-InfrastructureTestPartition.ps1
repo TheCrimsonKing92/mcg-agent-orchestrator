@@ -93,12 +93,21 @@ function Write-TrxSummary {
     foreach ($file in $trxFiles) {
         [xml]$trx = Get-Content $file.FullName
         $c = $trx.TestRun.ResultSummary.Counters
+        $total = [int]$c.total
         $failed = [int]$c.failed
+        if ($total -le 0) {
+            $green = $false
+        }
+
         if ($failed -gt 0) {
             $green = $false
         }
 
         "{0}: total={1} passed={2} failed={3} skipped={4}" -f $file.Name, $c.total, $c.passed, $failed, $c.notExecuted
+        if ($total -le 0) {
+            "  ZERO TESTS - filter matched no tests."
+        }
+
         $trx.TestRun.Results.UnitTestResult |
             Where-Object { $_.outcome -eq 'Failed' } |
             ForEach-Object {

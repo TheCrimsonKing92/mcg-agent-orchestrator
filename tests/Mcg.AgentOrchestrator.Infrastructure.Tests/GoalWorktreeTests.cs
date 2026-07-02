@@ -149,6 +149,77 @@ public sealed class GoalWorktreeIntegrationTests
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_fails_when_filter_runs_zero_tests")]
+    public void InfrastructurePartitionHelperFailsWhenFilterRunsZeroTests()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var sandboxPath = Path.Combine(Path.GetTempPath(), $"infra-partition-zero-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(sandboxPath, "scripts");
+        Directory.CreateDirectory(scriptsPath);
+        try
+        {
+            File.Copy(
+                Path.Combine(repoRoot, "scripts", "Invoke-InfrastructureTestPartition.ps1"),
+                Path.Combine(scriptsPath, "Invoke-InfrastructureTestPartition.ps1"));
+            File.WriteAllText(Path.Combine(scriptsPath, "Invoke-IsolatedDotnet.ps1"), """
+                param(
+                    [Parameter(ValueFromRemainingArguments = $true)]
+                    [string[]]$Arguments
+                )
+
+                $resultsDirectoryIndex = [Array]::IndexOf($Arguments, '--results-directory')
+                if ($resultsDirectoryIndex -lt 0) {
+                    throw 'Missing --results-directory argument.'
+                }
+
+                $resultsDirectory = $Arguments[$resultsDirectoryIndex + 1]
+                New-Item -ItemType Directory -Force $resultsDirectory | Out-Null
+                @'
+                <?xml version="1.0" encoding="utf-8"?>
+                <TestRun>
+                  <ResultSummary outcome="Completed">
+                    <Counters total="0" executed="0" passed="0" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+                  </ResultSummary>
+                  <Results />
+                </TestRun>
+                '@ | Set-Content -Path (Join-Path $resultsDirectory 'zero.trx') -Encoding UTF8
+                exit 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = sandboxPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(scriptsPath, "Invoke-InfrastructureTestPartition.ps1"));
+            startInfo.ArgumentList.Add("-Partition");
+            startInfo.ArgumentList.Add("Cli");
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start Invoke-InfrastructureTestPartition.ps1.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(30000), "Invoke-InfrastructureTestPartition.ps1 did not exit within 30 seconds.");
+            Assert.Equal(1, process.ExitCode);
+            Assert.Contains("zero.trx: total=0 passed=0 failed=0 skipped=0", stdout);
+            Assert.Contains("ZERO TESTS - filter matched no tests.", stdout);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        }
+        finally
+        {
+            DeleteDirectory(sandboxPath);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "InvokeRepoScript_StartOrchestratorCommand_emits_parseable_launch_json")]
     public void InvokeRepoScriptStartOrchestratorCommandEmitsParseableLaunchJson()
     {
