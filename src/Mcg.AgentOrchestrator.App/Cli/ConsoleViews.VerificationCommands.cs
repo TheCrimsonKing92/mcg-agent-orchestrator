@@ -100,6 +100,8 @@ public static string BuildAcceptanceSuggestedCommand(GoalAcceptanceBlocker block
             $"verify {taskNumber} <command> | verify-manual {taskNumber} passed <note>",
         GoalAcceptanceBlockerKind.VerificationFailed when taskNumber is not null =>
             $"verifications {taskNumber} | retry {taskNumber} <note>",
+        GoalAcceptanceBlockerKind.AcceptanceFailed =>
+            blocker.SuggestedAction,
         _ => "monitor"
     };
 }

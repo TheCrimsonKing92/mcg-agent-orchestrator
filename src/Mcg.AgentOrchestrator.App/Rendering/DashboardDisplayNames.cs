@@ -93,6 +93,7 @@ internal static class DashboardDisplayNames
         GoalAcceptanceBlockerKind.VerificationNotReady => "Verification not ready",
         GoalAcceptanceBlockerKind.VerificationMissing => "Verification missing",
         GoalAcceptanceBlockerKind.VerificationFailed => "Verification failed",
+        GoalAcceptanceBlockerKind.AcceptanceFailed => "Acceptance failed",
         _ => kind.ToString()
     };
 
