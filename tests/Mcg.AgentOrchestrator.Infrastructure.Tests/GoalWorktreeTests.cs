@@ -523,6 +523,7 @@ public sealed class GoalWorktreeIntegrationTests
     public void GoalWorktreesRemoveReportsLeftoverPathAndResumesWhenLockReleased()
     {
         var repo = CreateSeededRepository();
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var goalId = GoalId.New();
@@ -535,6 +536,10 @@ public sealed class GoalWorktreeIntegrationTests
 
             var lockedFile = Path.Combine(path, "leftover.log");
             File.WriteAllText(lockedFile, "held open");
+            var lockHolderProbes = 0;
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "held open")]
+                : [];
 
             // Hold the file open exclusively so Directory.Delete fails.
             GoalWorktreeRemoveResult partial;
@@ -552,12 +557,12 @@ public sealed class GoalWorktreeIntegrationTests
                 Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
                 Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
                 Assert.True(Directory.Exists(path));
-                Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+                Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
 
                 // Lock released; resume call deletes the directory and cleans up the branch.
                 var final = GoalWorktrees.Remove(repo, goalId);
                 Assert.True(final.IsComplete);
-                Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+                Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
             }
             else
             {
@@ -570,6 +575,7 @@ public sealed class GoalWorktreeIntegrationTests
         }
         finally
         {
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -3933,8 +3939,8 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_honors_cleanup_needed_backoff_before_retrying_cleanup")]
-    public void GoalWorktreesRemoveHonorsCleanupNeededBackoffBeforeRetryingCleanup()
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_honors_cleanup_needed_backoff_when_no_lock_holder_was_recorded")]
+    public void GoalWorktreesRemoveHonorsCleanupNeededBackoffWhenNoLockHolderWasRecorded()
     {
         var repo = CreateSeededRepository();
         var originalDelete = GoalWorktrees.DeleteDirectory;
@@ -3965,9 +3971,7 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.CleanupWarningSink = warnings.Add;
             GoalWorktrees.CleanupUtcNow = () => now;
             GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
-            GoalWorktrees.FindLockHoldersForCleanup = _ => deleteAttempts == 0
-                ? []
-                : [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")];
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
 
             var first = GoalWorktrees.Remove(repo, goalId);
             var second = GoalWorktrees.Remove(repo, goalId);
@@ -3980,6 +3984,75 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
             Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
             Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_retries_cleanup_needed_immediately_after_lock_release")]
+    public void GoalWorktreesRemoveRetriesCleanupNeededImmediatelyAfterLockRelease()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var deleteAttempts = 0;
+            var shutdownCalls = 0;
+            var lockHolderProbes = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectory = cleanupPath =>
+            {
+                deleteAttempts++;
+                if (deleteAttempts == 1)
+                {
+                    return false;
+                }
+
+                Directory.Delete(cleanupPath, recursive: true);
+                return true;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => shutdownCalls++;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
+                : [];
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+            var second = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.True(second.IsComplete);
+            Assert.Null(second.LeftoverPath);
+            Assert.Equal(2, deleteAttempts);
+            Assert.Equal(2, shutdownCalls);
+            Assert.False(Directory.Exists(path));
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
         }
         finally
         {

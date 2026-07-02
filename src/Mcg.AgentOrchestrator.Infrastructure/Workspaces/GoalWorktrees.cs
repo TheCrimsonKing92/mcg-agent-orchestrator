@@ -379,7 +379,7 @@ public static class GoalWorktrees
         if (hasLeftoverDirectory && IsCleanupBackedOff(path, "remove", out var backoff))
         {
             var lockHolders = FindLockHoldersForCleanup(path);
-            if (lockHolders.Count > 0)
+            if (!IsLockHeldCleanupNeededReason(backoff.Reason) || lockHolders.Count > 0)
             {
                 WarnCleanupFailure(
                     path,
@@ -759,11 +759,14 @@ public static class GoalWorktrees
         }
 
         var resumeCommand = ConductorRetryCommand(goalId);
-        RecordCleanupNeeded(path, "remove:leftover-directory");
+        var lockHolders = FindLockHoldersForCleanup(path);
+        RecordCleanupNeeded(
+            path,
+            lockHolders.Count > 0 ? "remove:leftover-directory:lock-held" : "remove:leftover-directory");
         return new GoalWorktreeRemoveResult(
             $"{incompleteMessage} Conductor retry: {resumeCommand}",
             path,
-            FindLockHoldersForCleanup(path),
+            lockHolders,
             resumeCommand);
     }
 
@@ -1240,6 +1243,9 @@ public static class GoalWorktrees
 
     private static void ClearCleanupNeeded(string path) =>
         ClearOrphanCleanupBackoff(path);
+
+    private static bool IsLockHeldCleanupNeededReason(string reason) =>
+        reason.EndsWith(":lock-held", StringComparison.OrdinalIgnoreCase);
 
     private static void RecordOrphanCleanupBackoff(string path, string reason, string warningOperation = "orphan-sweep:backoff")
     {
