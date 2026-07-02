@@ -46,10 +46,12 @@ public sealed class LauncherScriptTests
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         Assert.Contains("[land] DONE", result.Stdout);
         Assert.True(File.Exists(Path.Combine(sandbox.RepositoryPath, "goal.txt")));
-        Assert.Contains(
-            "Mcg.AgentOrchestrator.App.dll goal-mark-landed abcdef12 --confirm-goal-mark-landed",
-            File.ReadAllText(Path.Combine(sandbox.RepositoryPath, "dotnet-args.txt")),
-            StringComparison.Ordinal);
+        var dotnetArgs = File.ReadAllText(Path.Combine(sandbox.RepositoryPath, "dotnet-args.txt"));
+        Assert.True(
+            dotnetArgs.Contains(
+                "Mcg.AgentOrchestrator.App.dll goal-mark-landed abcdef12 --confirm-goal-mark-landed",
+                StringComparison.Ordinal),
+            dotnetArgs);
     }
 
     [Xunit.Fact(DisplayName = "LandVerifiedGoal_goal_mark_landed_nonzero_exit_exits_nonzero_without_done")]
