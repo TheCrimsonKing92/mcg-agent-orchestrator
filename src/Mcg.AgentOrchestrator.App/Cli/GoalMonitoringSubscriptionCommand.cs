@@ -97,7 +97,7 @@ internal static class GoalMonitoringSubscriptionCommand
                 }
 
                 fromCursor = parts[index + 1];
-                sinceEventId = Math.Max(parsedCursor.TimelineCursor, parsedCursor.RunEventCursor);
+                sinceEventId = Math.Max(parsedCursor.TimelineCursor, Math.Max(parsedCursor.RunEventCursor, parsedCursor.ProcessCursor));
                 index++;
                 continue;
             }
@@ -477,6 +477,7 @@ internal static class GoalMonitoringSubscriptionCommand
         var resumeCursor = options.ResumeCursor;
         var timelineCursor = resumeCursor.TimelineCursor;
         var runEventCursor = resumeCursor.RunEventCursor;
+        var processCursor = resumeCursor.ProcessCursor;
         var snapshotWritten = false;
         var deadline = options.Timeout is { } timeout
             ? DateTimeOffset.UtcNow.Add(timeout)
@@ -495,9 +496,9 @@ internal static class GoalMonitoringSubscriptionCommand
                 envelopes = [BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor)];
             }
 
-            var projectedEvents = ProjectCursorTokens(envelopes, timelineCursor, runEventCursor);
+            var projectedEvents = ProjectCursorTokens(envelopes, timelineCursor, runEventCursor, processCursor);
             var eligibleEvents = projectedEvents
-                .Where(evt => IsNewForCursor(evt, timelineCursor, runEventCursor) || (resumeCursor.IsEmpty && !snapshotWritten))
+                .Where(evt => IsNewForCursor(evt, timelineCursor, runEventCursor, processCursor) || (resumeCursor.IsEmpty && !snapshotWritten))
                 .Where(evt => Matches(evt, options))
                 .ToList();
             foreach (var evt in eligibleEvents)
@@ -507,7 +508,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
             foreach (var evt in envelopes)
             {
-                AdvanceCursor(evt, ref timelineCursor, ref runEventCursor);
+                AdvanceCursor(evt, ref timelineCursor, ref runEventCursor, ref processCursor);
             }
 
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -522,6 +523,7 @@ internal static class GoalMonitoringSubscriptionCommand
                     workspace,
                     timelineCursor,
                     runEventCursor,
+                    processCursor,
                     options,
                     output);
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -544,7 +546,7 @@ internal static class GoalMonitoringSubscriptionCommand
                     $"timeout={options.Timeout!.Value}");
                 PrintSubscriptionEvent(timeoutEvent with
                 {
-                    CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor).ToString()
+                    CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor, processCursor).ToString()
                 }, options.Format, output);
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
                 return null;
@@ -570,6 +572,7 @@ internal static class GoalMonitoringSubscriptionCommand
         OrchestratorWorkspace workspace,
         long timelineCursor,
         long runEventCursor,
+        long processCursor,
         GoalMonitoringSubscriptionOptions options,
         TextWriter output)
     {
@@ -580,7 +583,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
         var snapshot = BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor) with
         {
-            CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor).ToString()
+            CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor, processCursor).ToString()
         };
         if (Matches(snapshot, options))
         {
@@ -630,34 +633,52 @@ internal static class GoalMonitoringSubscriptionCommand
 
             if (process.Heartbeat.IsAvailable)
             {
+                var heartbeatAt = process.Heartbeat.LastObservedAt ?? batch.Snapshot.ObservedAt;
                 yield return new GoalStateSubscriptionEvent(
                     1,
-                    batch.LastEventId,
-                    process.Heartbeat.LastObservedAt ?? batch.Snapshot.ObservedAt,
+                    ProcessCursorSequence(task, process, heartbeatAt, "dispatch.heartbeat"),
+                    heartbeatAt,
                     "dispatch.heartbeat",
                     batch.GoalId,
                     task.TaskId,
                     task.Status.ToString(),
                     process.HeartbeatPath ?? process.StandardOutputPath,
                     process.ProcessId,
-                    $"state={process.Heartbeat.State} stdout={process.HeartbeatStdoutBytes ?? 0} stderr={process.HeartbeatStderrBytes ?? 0}");
+                    $"state={process.Heartbeat.State} stdout={process.HeartbeatStdoutBytes ?? 0} stderr={process.HeartbeatStderrBytes ?? 0}")
+                {
+                    CursorDomain = GoalStateCursorDomain.Process
+                };
             }
 
             if (!process.IsRunning && (process.CompletedAt is not null || process.ExitCode is not null))
             {
+                var completedAt = process.CompletedAt ?? batch.Snapshot.ObservedAt;
                 yield return new GoalStateSubscriptionEvent(
                     1,
-                    batch.LastEventId,
-                    process.CompletedAt ?? batch.Snapshot.ObservedAt,
+                    ProcessCursorSequence(task, process, completedAt, "dispatch.exit"),
+                    completedAt,
                     "dispatch.exit",
                     batch.GoalId,
                     task.TaskId,
                     state.ToString(),
                     process.ExitCodePath,
                     process.ProcessId,
-                    $"exit={process.ExitCode?.ToString() ?? "unknown"} cancelled={process.WasCancelled}");
+                    $"exit={process.ExitCode?.ToString() ?? "unknown"} cancelled={process.WasCancelled}")
+                {
+                    CursorDomain = GoalStateCursorDomain.Process
+                };
             }
         }
+    }
+
+    private static long ProcessCursorSequence(
+        TaskMonitoringSnapshotDto task,
+        ProcessDto process,
+        DateTimeOffset timestamp,
+        string eventKind)
+    {
+        var kindOffset = eventKind.Equals("dispatch.exit", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        return timestamp.UtcTicks + (task.TaskNumber * 10) + Math.Abs(process.ProcessId % 10) + kindOffset;
     }
 
     private static GoalStateSubscriptionEvent BuildSnapshotEvent(GoalMonitoringSnapshotDto snapshot, GoalLifecycleState state, string artifactPath, long cursor) =>
@@ -724,16 +745,22 @@ internal static class GoalMonitoringSubscriptionCommand
         return new GoalLifecycleFacts(workspaceExists, isBlocked, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }
 
-    private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor)
+    private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor, long processCursor)
     {
-        var cursor = evt.CursorDomain == GoalStateCursorDomain.RunEvent ? runEventCursor : timelineCursor;
+        var cursor = evt.CursorDomain switch
+        {
+            GoalStateCursorDomain.RunEvent => runEventCursor,
+            GoalStateCursorDomain.Process => processCursor,
+            _ => timelineCursor
+        };
         return evt.CursorSequence > cursor;
     }
 
     private static IReadOnlyList<GoalStateSubscriptionEvent> ProjectCursorTokens(
         IReadOnlyList<GoalStateSubscriptionEvent> events,
         long timelineCursor,
-        long runEventCursor)
+        long runEventCursor,
+        long processCursor)
     {
         var projected = new List<GoalStateSubscriptionEvent>(events.Count);
         foreach (var evt in events)
@@ -742,6 +769,10 @@ internal static class GoalMonitoringSubscriptionCommand
             {
                 runEventCursor = Math.Max(runEventCursor, evt.CursorSequence);
             }
+            else if (evt.CursorDomain == GoalStateCursorDomain.Process)
+            {
+                processCursor = Math.Max(processCursor, evt.CursorSequence);
+            }
             else
             {
                 timelineCursor = Math.Max(timelineCursor, evt.CursorSequence);
@@ -749,18 +780,24 @@ internal static class GoalMonitoringSubscriptionCommand
 
             projected.Add(evt with
             {
-                CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor).ToString()
+                CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor, processCursor).ToString()
             });
         }
 
         return projected;
     }
 
-    private static void AdvanceCursor(GoalStateSubscriptionEvent evt, ref long timelineCursor, ref long runEventCursor)
+    private static void AdvanceCursor(GoalStateSubscriptionEvent evt, ref long timelineCursor, ref long runEventCursor, ref long processCursor)
     {
         if (evt.CursorDomain == GoalStateCursorDomain.RunEvent)
         {
             runEventCursor = Math.Max(runEventCursor, evt.CursorSequence);
+            return;
+        }
+
+        if (evt.CursorDomain == GoalStateCursorDomain.Process)
+        {
+            processCursor = Math.Max(processCursor, evt.CursorSequence);
             return;
         }
 
@@ -949,9 +986,9 @@ internal sealed record GoalStateSubscriptionEvent(
     public GoalStateCursorDomain CursorDomain { get; init; }
 }
 
-internal readonly record struct GoalStateSubscriptionCursor(long TimelineCursor, long RunEventCursor)
+internal readonly record struct GoalStateSubscriptionCursor(long TimelineCursor, long RunEventCursor, long ProcessCursor = 0)
 {
-    public bool IsEmpty => TimelineCursor <= 0 && RunEventCursor <= 0;
+    public bool IsEmpty => TimelineCursor <= 0 && RunEventCursor <= 0 && ProcessCursor <= 0;
 
     public static GoalStateSubscriptionCursor Empty => new(0, 0);
 
@@ -959,8 +996,15 @@ internal readonly record struct GoalStateSubscriptionCursor(long TimelineCursor,
 
     public static GoalStateSubscriptionCursor RunEvent(long cursor) => new(0, Math.Max(0, cursor));
 
+    public static GoalStateSubscriptionCursor Process(long cursor) => new(0, 0, Math.Max(0, cursor));
+
     public static GoalStateSubscriptionCursor ForDomain(GoalStateCursorDomain domain, long cursor) =>
-        domain == GoalStateCursorDomain.RunEvent ? RunEvent(cursor) : Timeline(cursor);
+        domain switch
+        {
+            GoalStateCursorDomain.RunEvent => RunEvent(cursor),
+            GoalStateCursorDomain.Process => Process(cursor),
+            _ => Timeline(cursor)
+        };
 
     public static bool TryParse(string? value, out GoalStateSubscriptionCursor cursor)
     {
@@ -978,6 +1022,7 @@ internal readonly record struct GoalStateSubscriptionCursor(long TimelineCursor,
 
         long timeline = 0;
         long runEvent = 0;
+        long process = 0;
         var sawPart = false;
         foreach (var rawPart in value.Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -1010,10 +1055,18 @@ internal readonly record struct GoalStateSubscriptionCursor(long TimelineCursor,
                 continue;
             }
 
+            if (domain.Equals("process", StringComparison.OrdinalIgnoreCase) ||
+                domain.Equals("p", StringComparison.OrdinalIgnoreCase))
+            {
+                process = sequence;
+                sawPart = true;
+                continue;
+            }
+
             return false;
         }
 
-        cursor = new GoalStateSubscriptionCursor(timeline, runEvent);
+        cursor = new GoalStateSubscriptionCursor(timeline, runEvent, process);
         return sawPart;
     }
 
@@ -1029,24 +1082,31 @@ internal readonly record struct GoalStateSubscriptionCursor(long TimelineCursor,
 
     public override string ToString()
     {
-        if (TimelineCursor > 0 && RunEventCursor > 0)
+        var parts = new List<string>(3);
+        if (TimelineCursor > 0)
         {
-            return $"timeline:{TimelineCursor};run-event:{RunEventCursor}";
+            parts.Add($"timeline:{TimelineCursor}");
         }
 
         if (RunEventCursor > 0)
         {
-            return $"run-event:{RunEventCursor}";
+            parts.Add($"run-event:{RunEventCursor}");
         }
 
-        return $"timeline:{TimelineCursor}";
+        if (ProcessCursor > 0)
+        {
+            parts.Add($"process:{ProcessCursor}");
+        }
+
+        return parts.Count == 0 ? "timeline:0" : string.Join(';', parts);
     }
 }
 
 internal enum GoalStateCursorDomain
 {
     Timeline,
-    RunEvent
+    RunEvent,
+    Process
 }
 
 internal sealed record GoalMonitoringSubscriptionOptions(

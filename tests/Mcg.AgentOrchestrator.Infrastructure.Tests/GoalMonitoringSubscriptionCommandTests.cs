@@ -773,6 +773,76 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             evt.Message?.Contains("exit=0", StringComparison.Ordinal) == true);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_resumed_stream_includes_process_heartbeat_and_exit")]
+    public async Task MonitorGoalLocalResumedStreamIncludesProcessHeartbeatAndExit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Resume process stream", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor resumed process facts", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var startedAt = DateTimeOffset.Parse("2026-06-12T20:00:00Z");
+        var completedAt = startedAt.AddMinutes(1);
+        var stdout = Path.Combine(root, "worker.out.log");
+        var stderr = Path.Combine(root, "worker.err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, "ok");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, startedAt));
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Timeline event already consumed.");
+        var process = new TaskProcessRecord(123, "echo done", root, stdout, stderr, exit, startedAt, completedAt, 0);
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), """
+        {"pid":123,"childPid":456,"ownedPids":[123,456],"state":"running","lastObservedAt":"2026-06-12T20:00:30Z","lastProgressAt":"2026-06-12T20:00:20Z","stdoutBytes":2,"stderrBytes":0,"ownedCpuMs":10}
+        """);
+        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process, verification: null);
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                goal.Id.Value[..8],
+                "--once",
+                "--format",
+                "ndjson",
+                "--from-cursor",
+                "timeline:999",
+                "--event-kind",
+                "dispatch.heartbeat,dispatch.exit"
+            ],
+            output,
+            kernel,
+            workspace,
+            [agent],
+            WorkerProfileCatalog.Default());
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        var events = lines.Select(line =>
+        {
+            using var doc = JsonDocument.Parse(line);
+            return (
+                Kind: doc.RootElement.GetProperty("eventKind").GetString(),
+                Cursor: doc.RootElement.GetProperty("cursor").GetString());
+        }).ToArray();
+        Assert.Contains(events, evt =>
+            evt.Kind == "dispatch.heartbeat" &&
+            evt.Cursor?.Contains("timeline:999", StringComparison.Ordinal) == true &&
+            evt.Cursor.Contains("process:", StringComparison.Ordinal));
+        Assert.Contains(events, evt =>
+            evt.Kind == "dispatch.exit" &&
+            evt.Cursor?.Contains("timeline:999", StringComparison.Ordinal) == true &&
+            evt.Cursor.Contains("process:", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_prefix_subscription_excludes_global_conductor_ticks")]
     public void MonitorGoalPrefixSubscriptionExcludesGlobalConductorTicks()
     {
