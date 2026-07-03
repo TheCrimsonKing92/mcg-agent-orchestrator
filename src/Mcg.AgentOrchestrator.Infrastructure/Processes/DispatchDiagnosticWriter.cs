@@ -14,7 +14,8 @@ public sealed record DispatchDiagnosticRecord(
     long StderrLen,
     string Classification,
     string Reason,
-    string Timestamp);
+    string Timestamp,
+    DispatchAuthoritativeState? DispatchState = null);
 
 public interface IDispatchDiagnosticWriter
 {

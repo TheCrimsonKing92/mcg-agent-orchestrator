@@ -6827,6 +6827,16 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     File.WriteAllText(exit, "0");
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+    WriteHeartbeat(
+        task.LastProcess!,
+        clock.UtcNow.AddSeconds(-5),
+        clock.UtcNow.AddSeconds(-5),
+        "exiting",
+        stdoutBytes: 23,
+        stderrBytes: 0,
+        childPid: 123456,
+        ownedPids: [999999, 123456],
+        exitFileExists: true);
 
     new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: new FileDiagnosticWriter())
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -6850,6 +6860,25 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("success", cls.GetString());
     Assert.True(root2.TryGetProperty("reason", out _));
     Assert.True(root2.TryGetProperty("timestamp", out _));
+    Assert.True(root2.TryGetProperty("dispatchState", out var state));
+    Assert.Equal("refresh-dispatch", state.GetProperty("recommendedAction").GetString());
+    Assert.True(state.TryGetProperty("processTree", out var processTree));
+    Assert.Equal(999999, processTree.GetProperty("wrapperProcessId").GetInt32());
+    Assert.Equal(123456, processTree.GetProperty("childProcessId").GetInt32());
+    Assert.Contains(
+        processTree.GetProperty("ownedProcessIds").EnumerateArray(),
+        pid => pid.GetInt32() == 123456);
+    Assert.True(state.TryGetProperty("artifacts", out var artifacts));
+    Assert.True(artifacts.GetProperty("standardOutputExists").GetBoolean());
+    Assert.True(artifacts.GetProperty("exitCodeExists").GetBoolean());
+    Assert.True(artifacts.GetProperty("heartbeatExists").GetBoolean());
+    Assert.True(state.TryGetProperty("worktree", out var worktree));
+    Assert.Equal(root, worktree.GetProperty("workingDirectory").GetString());
+    Assert.True(worktree.GetProperty("exists").GetBoolean());
+    Assert.True(state.TryGetProperty("staleThresholds", out var staleThresholds));
+    Assert.True(staleThresholds.GetProperty("recentHeartbeatGrace").GetString() is { Length: > 0 });
+    Assert.True(staleThresholds.GetProperty("liveIdleTimeout").GetString() is { Length: > 0 });
+    Assert.True(staleThresholds.TryGetProperty("staleRetryBudgetRemaining", out _));
 }
 
     [Xunit.Fact(DisplayName = "ShowOrchestratorLogArtifacts_defaults_to_latest_dispatch_run_and_all_restores_history")]

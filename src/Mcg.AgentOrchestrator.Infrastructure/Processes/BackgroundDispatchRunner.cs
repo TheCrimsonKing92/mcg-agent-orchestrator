@@ -616,7 +616,7 @@ public sealed class BackgroundDispatchRunner
             HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
             ProviderFailureKind: providerFailureKind);
 
-        TryWriteDiagnosticRecord(goalId, taskId, processRecord, exitCode, standardOutput, standardError);
+        TryWriteDiagnosticRecord(goalId, taskId, task, completed, exitCode, standardOutput, standardError);
         return new DispatchRefreshOutcome(completed, verification, resultCommit, recoveryDecision, providerFailureKind);
     }
 
@@ -1811,6 +1811,7 @@ public sealed class BackgroundDispatchRunner
     private void TryWriteDiagnosticRecord(
         GoalId goalId,
         TaskId taskId,
+        TaskSpec task,
         TaskProcessRecord processRecord,
         int exitCode,
         string standardOutput,
@@ -1833,6 +1834,8 @@ public sealed class BackgroundDispatchRunner
             var classification = ClassifyDispatch(
                 exitCode, fileLen, readLen, standardOutput, standardError, out var reason);
 
+            var dispatchState = new DispatchStateSurface(_clock, _isStillRunning).Evaluate(goalId, task);
+
             var record = new DispatchDiagnosticRecord(
                 goalId.Value,
                 taskId.Value,
@@ -1845,7 +1848,8 @@ public sealed class BackgroundDispatchRunner
                 stderrLen,
                 classification,
                 reason,
-                _clock.UtcNow.ToString("O"));
+                _clock.UtcNow.ToString("O"),
+                dispatchState);
 
             _diagnosticWriter.WriteRecord(record);
         }
