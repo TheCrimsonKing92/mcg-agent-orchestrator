@@ -256,6 +256,7 @@ internal static class CliPersistentStateRunner
         var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
+        GoalId? goalMarkLandedGoalId = currentGoal?.Id;
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var slowStep = "state-load";
         using var cancellation = new CancellationTokenSource(CliCommandHandlers.GoalMarkLandedPromptTimeoutMilliseconds);
@@ -284,6 +285,7 @@ internal static class CliPersistentStateRunner
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
                         nextCurrentGoal = commandGoal;
+                        goalMarkLandedGoalId = commandGoal?.Id;
                         slowStep = "state-save-commit";
                         return Task.FromResult((shouldSave, shouldSave));
                     },
@@ -298,10 +300,73 @@ internal static class CliPersistentStateRunner
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
+            if (TryReturnSuccessfulDeferredGoalMarkLanded(args, workspace, goalMarkLandedGoalId, slowStep, elapsed.ElapsedMilliseconds))
+                return true;
+
             Console.Error.WriteLine($"goal-mark-landed slow substep: {slowStep} elapsedMs={elapsed.ElapsedMilliseconds}");
             throw new TimeoutException(
                 $"goal-mark-landed cleanup exceeded {CliCommandHandlers.GoalMarkLandedPromptTimeoutMilliseconds}ms during substep '{slowStep}'.");
         }
+        catch (Exception ex) when (
+            IsGoalMarkLandedStateCommitStep(slowStep) &&
+            IsGoalMarkLandedDeferredCommitFailure(ex) &&
+            TryReturnSuccessfulDeferredGoalMarkLanded(args, workspace, goalMarkLandedGoalId, slowStep, elapsed.ElapsedMilliseconds, ex))
+        {
+            return true;
+        }
+    }
+
+    private static bool TryReturnSuccessfulDeferredGoalMarkLanded(
+        IReadOnlyList<string> args,
+        OrchestratorWorkspace workspace,
+        GoalId? goalId,
+        string slowStep,
+        long elapsedMilliseconds,
+        Exception? exception = null)
+    {
+        if (!IsGoalMarkLandedCommand(args) || !IsGoalMarkLandedStateCommitStep(slowStep) || goalId is null)
+            return false;
+
+        if (!HasDurableLandedDeferredCleanupEvidence(workspace.ExecutionDirectory, goalId))
+            return false;
+
+        var detail = exception is null ? "commit cancelled after durable landed state" : exception.Message;
+        Console.Error.WriteLine(
+            $"warning: goal-mark-landed state commit failed after durable landed state and cleanup-needed were recorded; returning success. step={slowStep} elapsedMs={elapsedMilliseconds} detail={detail}");
+        return true;
+    }
+
+    private static bool IsGoalMarkLandedStateCommitStep(string slowStep) =>
+        slowStep.Equals("state-save-commit", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsGoalMarkLandedDeferredCommitFailure(Exception exception) =>
+        exception is TimeoutException or OperationCanceledException ||
+        IsTransientSqliteLock(exception) ||
+        (exception.InnerException is not null && IsGoalMarkLandedDeferredCommitFailure(exception.InnerException));
+
+    private static bool IsTransientSqliteLock(Exception exception)
+    {
+        if (exception.GetType().FullName is not "Microsoft.Data.Sqlite.SqliteException")
+            return false;
+
+        var code = exception.GetType().GetProperty("SqliteErrorCode")?.GetValue(exception);
+        return code is 5 or 6;
+    }
+
+    private static bool HasDurableLandedDeferredCleanupEvidence(string executionDirectory, GoalId goalId)
+    {
+        var journal = GoalOperationJournal.Read(executionDirectory, goalId);
+        var hasLanded = journal.LatestByOperation.Any(entry =>
+            entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase) &&
+            entry.Status == GoalOperationStatus.Completed);
+        var hasRecorded = journal.LatestByOperation.Any(entry =>
+            entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) &&
+            entry.Status == GoalOperationStatus.Completed);
+        var hasDeferredCleanup = journal.LatestByOperation.Any(entry =>
+            entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase) &&
+            entry.Status == GoalOperationStatus.Failed) &&
+            GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId) is not null;
+        return hasLanded && hasRecorded && hasDeferredCleanup;
     }
 
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
