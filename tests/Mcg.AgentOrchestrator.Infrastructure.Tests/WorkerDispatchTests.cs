@@ -4965,6 +4965,49 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_non_self_committing_provider_exit1_dirty_successful_worker_result_commits_on_behalf")]
+    public void BackgroundDispatchRunnerTypedNonSelfCommittingProviderExit1DirtySuccessfulWorkerResultCommitsOnBehalf()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var workerProfile = "typed-openai-worker";
+    var providers = new WorkerProviderCatalog([
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexCli, UsesCodexExitFileBehavior: true),
+            workerProfile,
+            "OpenAI",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: true,
+                SupportsPlanMode: true))
+    ]);
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "dotnet test --filter WorkerDispatch", "Passed: 2, Failed: 0"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but codex exited one"),
+        workerName: workerProfile,
+        command: "codex exec prompt",
+        workerProviderKind: ProviderKind.OpenAICodexCli);
+
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("complete no-blocker WORKER_RESULT and dirty worktree edits", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_without_typed_sandbox_evidence_stays_failed")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedWithoutTypedSandboxEvidenceStaysFailed()
 {
@@ -5328,6 +5371,42 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     // dispatch time. Test evidence is enforced by the acceptance run, not the self-report.
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_rejects_no_opener_files_plus_tests_only")]
+    public void WorkerResultParserSuccessfulResultRejectsNoOpenerFilesPlusTestsOnly()
+{
+    var output = """
+        Completed work summary:
+        files: src/Feature.cs
+        tests: Passed: 2, Failed: 0
+        """;
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out _, out var diagnostic);
+
+    Assert.False(parsed);
+    Assert.Contains("missing WORKER_RESULT field(s): commands, blockers, model_fit, skills, confidence.", diagnostic);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_accepts_complete_no_opener_field_scan")]
+    public void WorkerResultParserSuccessfulResultAcceptsCompleteNoOpenerFieldScan()
+{
+    var output = """
+        Completed work summary:
+        files: src/Feature.cs
+        commands: dotnet test --filter WorkerDispatch
+        tests: Passed: 2, Failed: 0
+        blockers: none
+        model_fit: OpenAI/gpt-5.5 - adequate - parser regression
+        skills: dotnet-windows-build-hygiene
+        confidence: high
+        """;
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out var fields, out var diagnostic);
+
+    Assert.True(parsed, diagnostic);
+    Assert.Equal("src/Feature.cs", fields["files"]);
+    Assert.Equal("none", fields["blockers"]);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
