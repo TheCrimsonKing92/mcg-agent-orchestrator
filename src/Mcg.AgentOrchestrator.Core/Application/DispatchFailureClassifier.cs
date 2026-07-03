@@ -1021,10 +1021,28 @@ public static class DispatchFailureClassifier
     {
         foreach (var output in outputs)
         {
+            var inWorkerResultBlock = false;
             foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
             {
                 var line = rawLine.Trim();
                 if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                if (IsWorkerResultOpener(line))
+                {
+                    inWorkerResultBlock = true;
+                    continue;
+                }
+
+                if (IsWorkerResultEndMarker(line))
+                {
+                    inWorkerResultBlock = false;
+                    continue;
+                }
+
+                if (inWorkerResultBlock)
                 {
                     continue;
                 }
@@ -1086,6 +1104,34 @@ public static class DispatchFailureClassifier
         line.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsWorkerResultOpener(string line)
+    {
+        var normalized = NormalizeWorkerResultMarker(line).TrimEnd(':').Trim();
+        return string.Equals(normalized, "WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWorkerResultEndMarker(string line)
+    {
+        var normalized = NormalizeWorkerResultMarker(line);
+        return string.Equals(normalized, "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeWorkerResultMarker(string text)
+    {
+        var trimmed = text.Trim();
+        var buffer = new char[trimmed.Length];
+        var length = 0;
+        foreach (var ch in trimmed)
+        {
+            if (ch is not ('#' or '*' or '`'))
+            {
+                buffer[length++] = ch;
+            }
+        }
+
+        return new string(buffer, 0, length).Trim();
+    }
 
     private static bool IsProviderErrorLine(string line)
     {

@@ -310,7 +310,7 @@ public sealed class DispatchExecutionTests
         "commands: dotnet test --no-build",
         "tests: fail - timed out",
         "commit: none",
-        "blockers: full Infrastructure no-build timed out at 214s",
+        "blockers: full Infrastructure no-build timed out at 214s after local rate limit fixture",
         "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
         "skills: dotnet-windows-build-hygiene",
         "confidence: medium",
@@ -336,7 +336,7 @@ public sealed class DispatchExecutionTests
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
-        evt.Message.Contains("full Infrastructure no-build timed out at 214s", StringComparison.Ordinal));
+        evt.Message.Contains("full Infrastructure no-build timed out at 214s after local rate limit fixture", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
