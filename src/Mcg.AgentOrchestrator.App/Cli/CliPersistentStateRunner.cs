@@ -362,12 +362,15 @@ internal static class CliPersistentStateRunner
         var hasRecorded = journal.LatestByOperation.Any(entry =>
             entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) &&
             entry.Status == GoalOperationStatus.Completed);
-        var hasDeferredCleanup = journal.LatestByOperation.Any(entry =>
-            entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase) &&
-            entry.Status == GoalOperationStatus.Failed) &&
-            GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId) is not null;
+        var hasDeferredCleanup = journal.LatestByOperation.Any(IsDeferredGoalMarkLandedCleanupEvidence);
         return hasLanded && hasRecorded && hasDeferredCleanup;
     }
+
+    private static bool IsDeferredGoalMarkLandedCleanupEvidence(GoalOperationJournalEntry entry) =>
+        entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase) &&
+        entry.Status == GoalOperationStatus.Failed &&
+        (entry.Detail?.Contains("Deferred cleanup after landing", StringComparison.OrdinalIgnoreCase) == true ||
+         entry.Detail?.Contains("cleanup-needed", StringComparison.OrdinalIgnoreCase) == true);
 
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
     // progress via an independent SaveAsync (passed to the loop as PersistCheckpoint). This makes a
