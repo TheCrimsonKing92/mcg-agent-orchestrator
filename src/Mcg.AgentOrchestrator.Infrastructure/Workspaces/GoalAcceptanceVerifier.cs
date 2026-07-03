@@ -334,11 +334,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         foreach (var plannedCheck in plan.Checks)
         {
             var plannedManifestCheck = PolicyCheckToManifestCheck(plannedCheck);
-            var existing = allChecks.FirstOrDefault(check =>
-                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                !check.Name.Equals(solutionCheck.Name, StringComparison.Ordinal) &&
-                DotnetCheckMatches(check, plannedManifestCheck));
-            scoped.Add(existing ?? plannedManifestCheck);
+            foreach (var scopedCheck in ExpandBroadInfrastructureCheck(plannedManifestCheck))
+            {
+                var existing = allChecks.FirstOrDefault(check =>
+                    check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                    !check.Name.Equals(solutionCheck.Name, StringComparison.Ordinal) &&
+                    DotnetCheckMatches(check, scopedCheck));
+                scoped.Add(existing ?? scopedCheck);
+            }
         }
 
         return scoped.Count == 0 ? null : scoped;
@@ -372,6 +375,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var plannedChecks = plan.Checks
             .Where(c => c.Command.Count > 0)
             .Select(PolicyCheckToManifestCheck)
+            .SelectMany(ExpandBroadInfrastructureCheck)
             .ToArray();
         var focusedProjectChecks = plannedChecks
             .Where(IsFocusedProjectDotnetCheck)
@@ -417,20 +421,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            foreach (var lane in InfrastructureTestLanes)
-            {
-                effective.Add(new AcceptanceManifestCheck
-                {
-                    Name = $"{check.Name}: {lane.Name}",
-                    Type = check.Type,
-                    Command = check.Command,
-                    Project = check.Project,
-                    Arguments = [.. check.Arguments, "--filter", lane.Filter]
-                });
-            }
+            effective.AddRange(ExpandBroadInfrastructureCheck(check));
         }
 
         return effective;
+    }
+
+    private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(AcceptanceManifestCheck check)
+    {
+        if (!IsBroadInfrastructureTestCheck(check))
+        {
+            yield return check;
+            yield break;
+        }
+
+        foreach (var lane in InfrastructureTestLanes)
+        {
+            yield return new AcceptanceManifestCheck
+            {
+                Name = $"{check.Name}: {lane.Name}",
+                Type = check.Type,
+                Command = check.Command,
+                Project = check.Project,
+                Arguments = [.. check.Arguments, "--filter", lane.Filter]
+            };
+        }
     }
 
     private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
@@ -1252,7 +1267,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         private static AcceptanceManifest FromTestImpactPlan(RepositoryTestImpactPlan plan) =>
             new()
             {
-                Checks = plan.Checks.Select(ToAcceptanceCheck).ToArray()
+                Checks = plan.Checks
+                    .Select(ToAcceptanceCheck)
+                    .SelectMany(ExpandBroadInfrastructureCheck)
+                    .ToArray()
             };
 
         private static AcceptanceManifestCheck ToAcceptanceCheck(RepositoryTestImpactCheck check)
