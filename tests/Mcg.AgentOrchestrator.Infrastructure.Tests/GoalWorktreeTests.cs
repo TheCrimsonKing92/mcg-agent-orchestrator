@@ -3364,12 +3364,15 @@ public sealed class GoalWorktreeIntegrationTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Out-of-band landed budget goal", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "landed.txt"), "landed");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
-            RunGit(repo, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
-            var worktrees = new CapturingGoalWorktreeService();
+            RunGit(repo, "branch", GoalWorktrees.BranchName(goal.Id));
+            var worktrees = new CapturingGoalWorktreeService
+            {
+                RemoveOverride = (_, _, _, _) => new GoalWorktreeRemoveResult(
+                    "Workspace already clean; nothing to remove.",
+                    null,
+                    [],
+                    null)
+            };
             var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
             kernel.SetEventWriter(eventWriter);
             var context = new CliExecutionContext(
