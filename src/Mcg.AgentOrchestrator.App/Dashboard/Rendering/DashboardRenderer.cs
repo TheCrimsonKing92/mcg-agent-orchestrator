@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -303,6 +304,9 @@ public static partial class DashboardRenderer
             var goalPrefix = goal.Id.Value[..8];
             html.AppendLine("<section class=\"goal-card\">");
             RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+            RenderOperatorDisposition(
+                html,
+                ResolveOperatorDisposition(goal, monitor, verificationGate, options));
 
             // Attention items — always visible in ops
             if (monitor.AttentionItems.Count > 0)
@@ -408,6 +412,9 @@ public static partial class DashboardRenderer
 
         html.AppendLine("<section class=\"goal-card\">");
         RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+        RenderOperatorDisposition(
+            html,
+            ResolveOperatorDisposition(goal, monitor, verificationGate, options));
 
         // Attention items and next steps — open
         html.AppendLine("<div class=\"goal-panel\">");
@@ -880,5 +887,24 @@ public static partial class DashboardRenderer
         evidence.TasksWithExecution == 0 &&
         evidence.TasksWithDispatch == 0 &&
         evidence.TasksWithProcess == 0;
+
+    private static GoalOperatorDisposition ResolveOperatorDisposition(
+        Goal goal,
+        GoalMonitor monitor,
+        GoalVerificationGate verificationGate,
+        DashboardRenderOptions options)
+    {
+        var runEventStorePath = options.Workspace?.SqliteStatePath is { Length: > 0 } statePath
+            ? Path.Combine(Path.GetDirectoryName(statePath) ?? string.Empty, "run-events.db")
+            : null;
+        return runEventStorePath is not null
+            && ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(runEventStorePath, goal) is { } conductorDisposition
+                ? conductorDisposition
+                : new GoalOperatorDispositionSurface().Evaluate(
+                    goal,
+                    monitor.PendingHumanInputCount,
+                    verificationGate.IsSatisfied,
+                    options.Workspace?.ExecutionDirectory);
+    }
 
 }

@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal sealed record ConductorTickEvent(
@@ -10,4 +12,5 @@ internal sealed record ConductorTickEvent(
     int Retried,
     int Done,
     bool WatchSleeping,
-    IReadOnlyList<string>? ProgressLines = null);
+    IReadOnlyList<string>? ProgressLines = null,
+    IReadOnlyList<ConductorOperatorDispositionSnapshot>? OperatorDispositions = null);

@@ -245,6 +245,7 @@ internal sealed record GoalWorkSummaryDto(
     int TotalTasks,
     int PendingHumanInputCount,
     bool VerificationSatisfied,
+    GoalOperatorDispositionDto OperatorDisposition,
     NextActionDto? NextAction,
     DashboardHostInfoDto? Host,
     GoalBuildEnvironmentDto BuildEnvironment,
@@ -341,6 +342,7 @@ internal sealed record GoalMonitoringSnapshotDto(
     long LastEventId,
     MonitorDto Monitor,
     IReadOnlyList<TaskMonitoringSnapshotDto> Tasks,
+    GoalOperatorDispositionDto? OperatorDisposition = null,
     OperatorInboxReportDto? OperatorInbox = null,
     ProviderCapacityScheduleDto? ProviderCapacity = null,
     string? GoalLabel = null);
@@ -441,6 +443,32 @@ internal sealed record DispatchAuthoritativeStateDto(
     DispatchWorktreeStateDto Worktree,
     DispatchStaleThresholdsDto StaleThresholds,
     string Summary);
+
+internal sealed record GoalOperatorDispositionDto(
+    OperatorDispositionState State,
+    OperatorDispositionConfidence Confidence,
+    string Reason,
+    string NextSafeCommand,
+    DateTimeOffset FreshAt,
+    IReadOnlyList<string> Blockers,
+    IReadOnlyList<OperatorEvidencePointerDto> Evidence,
+    IReadOnlyList<DispatchOperatorDispositionDto> Dispatches);
+
+internal sealed record DispatchOperatorDispositionDto(
+    string TaskId,
+    int TaskNumber,
+    AgentRole Role,
+    WorkTaskStatus TaskStatus,
+    OperatorDispositionState State,
+    OperatorDispositionConfidence Confidence,
+    string Reason,
+    string NextSafeCommand,
+    DateTimeOffset? FreshAt,
+    IReadOnlyList<string> Blockers,
+    IReadOnlyList<OperatorEvidencePointerDto> Evidence,
+    DispatchAuthoritativeStateDto? DispatchState);
+
+internal sealed record OperatorEvidencePointerDto(string Kind, string Path, string Detail);
 
 internal sealed record DispatchProcessTreeSummaryDto(
     int WrapperProcessId,
@@ -545,6 +573,7 @@ internal sealed record NextActionsDto(
     string GoalId,
     string Objective,
     GoalStatus Status,
+    GoalOperatorDispositionDto OperatorDisposition,
     IReadOnlyList<NextActionDto> Items);
 
 internal sealed record NextActionDto(
