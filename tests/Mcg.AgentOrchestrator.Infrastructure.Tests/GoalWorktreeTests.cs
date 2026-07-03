@@ -523,6 +523,7 @@ public sealed class GoalWorktreeIntegrationTests
     public void GoalWorktreesRemoveReportsLeftoverPathAndResumesWhenLockReleased()
     {
         var repo = CreateSeededRepository();
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var goalId = GoalId.New();
@@ -535,6 +536,10 @@ public sealed class GoalWorktreeIntegrationTests
 
             var lockedFile = Path.Combine(path, "leftover.log");
             File.WriteAllText(lockedFile, "held open");
+            var lockHolderProbes = 0;
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "held open")]
+                : [];
 
             // Hold the file open exclusively so Directory.Delete fails.
             GoalWorktreeRemoveResult partial;
@@ -549,13 +554,15 @@ public sealed class GoalWorktreeIntegrationTests
                 // cleaned up while the leftover directory is reported as resumable cleanup.
                 Assert.False(partial.IsComplete);
                 Assert.Equal(path, partial.LeftoverPath);
-                Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", partial.ResumeCommand);
+                Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
                 Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
                 Assert.True(Directory.Exists(path));
+                Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
 
                 // Lock released; resume call deletes the directory and cleans up the branch.
                 var final = GoalWorktrees.Remove(repo, goalId);
                 Assert.True(final.IsComplete);
+                Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
             }
             else
             {
@@ -568,6 +575,7 @@ public sealed class GoalWorktreeIntegrationTests
         }
         finally
         {
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -591,6 +599,62 @@ public sealed class GoalWorktreeIntegrationTests
         }
         finally
         {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_persists_cleanup_needed_when_goal_artifacts_delete_fails")]
+    public void GoalWorktreesRemovePersistsCleanupNeededWhenGoalArtifactsDeleteFails()
+    {
+        var repo = CreateSeededRepository();
+        var originalIsolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        var isolatedRoot = Path.Combine(repo, "isolated-dotnet");
+        try
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "cleanup-needed");
+            var lockedFile = Path.Combine(buildEnvironment.RootPath, "held-open.log");
+            File.WriteAllText(lockedFile, "held");
+            var lockReleased = false;
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockReleased
+                ? []
+                : [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "held artifact root")];
+
+            GoalWorktreeRemoveResult partial;
+            using (var fs = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                partial = GoalWorktrees.Remove(repo, goalId);
+            }
+            lockReleased = true;
+
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(partial.IsComplete);
+                Assert.Equal(buildEnvironment.RootPath, partial.LeftoverPath);
+                Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
+                Assert.False(Directory.Exists(path));
+                Assert.True(Directory.Exists(buildEnvironment.RootPath));
+                Assert.True(HasCleanupNeededRecord(repo, buildEnvironment.RootPath, "remove:goal-artifacts:lock-held"));
+
+                var retry = GoalWorktrees.Remove(repo, goalId);
+
+                Assert.True(retry.IsComplete);
+                Assert.False(Directory.Exists(buildEnvironment.RootPath));
+                Assert.False(HasCleanupNeededRecord(repo, buildEnvironment.RootPath, "remove:goal-artifacts:lock-held"));
+            }
+            else
+            {
+                Assert.True(partial.IsComplete);
+                Assert.False(Directory.Exists(buildEnvironment.RootPath));
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, originalIsolatedRoot);
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -668,7 +732,7 @@ public sealed class GoalWorktreeIntegrationTests
                 Assert.True(partial.Message.Contains(branch, StringComparison.Ordinal));
                 Assert.True(partial.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
                 Assert.Equal(path, partial.LeftoverPath);
-                Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", partial.ResumeCommand);
+                Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", partial.ResumeCommand);
             }
             else
             {
@@ -975,6 +1039,183 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_repairs_landed_cleaned_stale_acceptance_failure")]
+    public void CliWorkspaceRemoveRepairsLandedCleanedStaleAcceptanceFailure()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove recovery", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var order = new List<string>();
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                EventWriter = new RecordingGoalLifecycleEventWriter(order)
+            };
+
+            CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Contains("remove-worktree", order);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_keeps_stale_acceptance_failure_without_landing_evidence")]
+    public void CliWorkspaceRemoveKeepsStaleAcceptanceFailureWithoutLandingEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove no landing recovery", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            _ = GoalWorktrees.Ensure(repo, goal.Id);
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.DoesNotContain("Acceptance repaired:", output);
+            Assert.NotNull(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_prints_cleanup_backoff_skip_until")]
+    public void CliWorkspaceRemovePrintsCleanupBackoffSkipUntil()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove backoff", repo);
+            var path = Path.Combine(repo, GoalWorktrees.DirectoryName, goal.Id.Value[..8]);
+            var skipUntil = DateTimeOffset.Parse("2026-07-02T05:01:00Z");
+            var worktrees = new CapturingGoalWorktreeService
+            {
+                RemoveOverride = (_, _, _, _) => new GoalWorktreeRemoveResult(
+                    "Workspace cleanup deferred by cleanup-needed backoff.",
+                    path,
+                    [],
+                    $"conduct {goal.Id.Value[..8]} --loop",
+                    CleanupBackoff: new GoalWorktreeCleanupBackoff(
+                        "remove:cleanup-budget-exhausted",
+                        skipUntil,
+                        TimeSpan.FromMinutes(1)))
+            };
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                Worktrees = worktrees
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Contains("Cleanup backoff:", output);
+            Assert.Contains("reason=remove:cleanup-budget-exhausted", output);
+            Assert.Contains("skip_until_utc=2026-07-02T05:01:00.0000000+00:00", output);
+            Assert.Contains("remaining_wait=00:01:00", output);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_recovery_prints_cleanup_backoff_skip_until")]
+    public void CliGoalRecoveryPrintsCleanupBackoffSkipUntil()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Recover cleanup backoff", [
+                new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)
+            ]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            GoalWorktrees.DeleteDirectory = _ => false;
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
+            _ = GoalWorktrees.Remove(repo, goal.Id);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["goal-recovery", goal.Id.Value[..8]],
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Assert.Contains("Cleanup backoff:", output);
+            Assert.Contains("reason=remove:leftover-directory", output);
+            Assert.Contains("skip_until_utc=2026-07-02T05:10:00.0000000+00:00", output);
+            Assert.Contains("remaining_wait=00:10:00", output);
+            Assert.Contains($"workspace remove {goal.Id.Value[..8]}", output);
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_can_target_non_current_goal")]
     public void CliWorkspaceRemoveCanTargetNonCurrentGoal()
     {
@@ -1176,6 +1417,134 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_retry_treats_landed_cleaned_missing_worktree_as_accepted")]
+    public void CliAcceptanceRetryTreatsLandedCleanedMissingWorktreeAsAccepted()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Already landed cleaned acceptance retry", repo);
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
+            GoalOperationJournal.Completed(repo, goal, "workspace:remove", "Workspace removed.");
+
+            var verifierRuns = 0;
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Failed("should not run", onRun: () => verifierRuns++)
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8], "--keep-workspace"], context));
+
+            Assert.Equal(0, verifierRuns);
+            Assert.Contains("Acceptance repaired:", output);
+            Assert.DoesNotContain("Acceptance evidence: blocked", output);
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_direct_merge_journals_landing_before_cleanup_for_later_missing_worktree_retry")]
+    public void CliAcceptanceDirectMergeJournalsLandingBeforeCleanupForLaterMissingWorktreeRetry()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Direct acceptance journal recovery", repo);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8]], context));
+
+            Assert.Contains("Fast-forwarded", output);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "acceptance" &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+
+            var verifierRuns = 0;
+            kernel.RecordAcceptanceFailure(goal.Id, ["acceptance evidence blocked"]);
+            var retryContext = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Failed("should not run", onRun: () => verifierRuns++)
+            };
+
+            var retryOutput = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8], "--keep-workspace"], retryContext));
+
+            Assert.Equal(0, verifierRuns);
+            Assert.Contains("Acceptance repaired:", retryOutput);
+            Assert.DoesNotContain("Acceptance evidence: blocked", retryOutput);
+            Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_repair_clears_stale_failure_only_with_landing_and_cleanup_evidence")]
+    public void CliAcceptanceRepairClearsStaleFailureOnlyWithLandingAndCleanupEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var blockedGoal = CreateCompletedGoal(kernel, "Repair blocked goal", repo);
+            kernel.RecordAcceptanceFailure(blockedGoal.Id, ["acceptance evidence blocked"]);
+            var blockedContext = CreateAcceptanceContext(kernel, repo, blockedGoal);
+
+            var blocked = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-repair", blockedGoal.Id.Value[..8], "--confirm-acceptance-repair"],
+                blockedContext));
+            Assert.Contains("no completed acceptance or conductor landing evidence", blocked.Message);
+            Assert.NotNull(kernel.GetGoal(blockedGoal.Id).LatestAcceptanceFailure);
+
+            var repairGoal = CreateCompletedGoal(kernel, "Repair landed cleaned goal", repo);
+            kernel.RecordAcceptanceFailure(repairGoal.Id, ["acceptance evidence blocked"]);
+            GoalOperationJournal.Completed(repo, repairGoal, "conductor:land", "landed");
+            GoalOperationJournal.Completed(repo, repairGoal, "conductor:cleanup", "cleaned");
+            var repairContext = CreateAcceptanceContext(kernel, repo, repairGoal);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["acceptance-repair", repairGoal.Id.Value[..8], "--confirm-acceptance-repair"],
+                repairContext));
+
+            Assert.Contains("Acceptance repaired:", output);
+            Assert.Null(kernel.GetGoal(repairGoal.Id).LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_lands_after_transient_state_write_lock_releases")]
     public async Task CliAcceptanceLandsAfterTransientStateWriteLockReleases()
     {
@@ -1272,6 +1641,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(["stop-host", "merge", "mark-landed", "remove-worktree"], order);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
         }
         finally
         {
@@ -1365,6 +1735,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("BLOCKER step=verification reason=timeout", StringComparison.Ordinal), output);
             Assert.True(output.Contains("artifacts=C:\\artifacts\\goal-acceptance", StringComparison.Ordinal), output);
             Assert.True(output.Contains("Command: dotnet test infrastructure", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("stdout: C:\\temp\\acc.out", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("stderr: C:\\temp\\acc.err", StringComparison.Ordinal), output);
             Assert.True(output.Contains("Last output:", StringComparison.Ordinal), output);
             Assert.True(output.Contains("still running", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
@@ -1695,10 +2067,10 @@ public sealed class GoalWorktreeIntegrationTests
             var worktrees = new CapturingGoalWorktreeService
             {
                 RemoveOverride = (_, goalId, _, _) => new GoalWorktreeRemoveResult(
-                    "Removed workspace, but leftover directory cleanup is incomplete. Resume with: workspace remove " + goalId.Value[..8],
+                    "Removed workspace, but leftover directory cleanup is incomplete. Conductor retry: conduct " + goalId.Value[..8] + " --loop",
                     worktreePath,
                     [],
-                    $"workspace remove {goalId.Value[..8]}")
+                    $"conduct {goalId.Value[..8]} --loop")
             };
             var context = new CliExecutionContext(
                 kernel,
@@ -2994,12 +3366,15 @@ public sealed class GoalWorktreeIntegrationTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Out-of-band landed budget goal", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "landed.txt"), "landed");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
-            RunGit(repo, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
-            var worktrees = new CapturingGoalWorktreeService();
+            RunGit(repo, "branch", GoalWorktrees.BranchName(goal.Id));
+            var worktrees = new CapturingGoalWorktreeService
+            {
+                RemoveOverride = (_, _, _, _) => new GoalWorktreeRemoveResult(
+                    "Workspace already clean; nothing to remove.",
+                    null,
+                    [],
+                    null)
+            };
             var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
             kernel.SetEventWriter(eventWriter);
             var context = new CliExecutionContext(
@@ -3478,6 +3853,9 @@ public sealed class GoalWorktreeIntegrationTests
         var originalShutdown = GoalWorktrees.BuildServerShutdown;
         var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
         var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBudgetBackoff = GoalWorktrees.CleanupBudgetExhaustedBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var goalId = GoalId.New();
@@ -3489,21 +3867,43 @@ public sealed class GoalWorktreeIntegrationTests
             long elapsedMilliseconds = 2_500;
             var warnings = new List<GoalWorktreeCleanupWarning>();
             var acl = new RecordingSandboxAclHelper();
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
             GoalWorktrees.BuildServerShutdown = (_, _) => elapsedMilliseconds = 10_000;
             GoalWorktrees.SandboxAclHelper = acl;
             GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBudgetExhaustedBackoffDuration = TimeSpan.FromMinutes(1);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
 
             var result = GoalWorktrees.Remove(repo, goalId, null, 10_000);
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
-            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
+            if (result.CleanupBackoff is not { } cleanupBackoff)
+            {
+                throw new InvalidOperationException("Expected cleanup backoff details.");
+            }
+
+            Assert.Equal("remove:cleanup-budget-exhausted", cleanupBackoff.Reason);
+            Assert.Equal(now.AddMinutes(1), cleanupBackoff.SkipUntilUtc);
+            Assert.True(result.Message.Contains("skip_until_utc=", StringComparison.Ordinal));
             Assert.Empty(acl.ResetPaths);
             Assert.True(Directory.Exists(path));
-            var warning = Assert.Single(warnings);
-            Assert.Equal("remove:build-server-shutdown", warning.Operation);
-            Assert.IsType<TimeoutException>(warning.Exception);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:cleanup-budget-exhausted"));
+            Assert.Contains(warnings, warning =>
+                warning.Operation == "remove:build-server-shutdown" &&
+                warning.Exception is TimeoutException);
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+
+            elapsedMilliseconds = 0;
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            var retry = GoalWorktrees.Remove(repo, goalId, null, 10_000);
+
+            Assert.True(retry.IsComplete);
+            Assert.False(Directory.Exists(path));
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
         }
         finally
         {
@@ -3511,6 +3911,9 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.BuildServerShutdown = originalShutdown;
             GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
             GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBudgetExhaustedBackoffDuration = originalBudgetBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -3520,6 +3923,8 @@ public sealed class GoalWorktreeIntegrationTests
     {
         var repo = CreateSeededRepository();
         var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
         try
         {
             var goalId = GoalId.New();
@@ -3527,18 +3932,34 @@ public sealed class GoalWorktreeIntegrationTests
             File.Delete(Path.Combine(path, ".git"));
             RunGit(repo, "worktree", "prune");
             GoalWorktrees.DeleteDirectory = _ => false;
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
 
             var result = GoalWorktrees.Remove(repo, goalId);
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
-            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
             Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
+            if (result.CleanupBackoff is not { } cleanupBackoff)
+            {
+                throw new InvalidOperationException("Expected first cleanup backoff details.");
+            }
+
+            Assert.Equal("remove:leftover-directory", cleanupBackoff.Reason);
+            Assert.Equal(now.AddMinutes(10), cleanupBackoff.SkipUntilUtc);
+            Assert.Equal(TimeSpan.FromMinutes(10), cleanupBackoff.RemainingWait);
+            Assert.True(result.Message.Contains("skip_until_utc=2026-07-02T05:10:00.0000000+00:00", StringComparison.Ordinal));
+            Assert.True(result.Message.Contains("remaining_wait=00:10:00", StringComparison.Ordinal));
             Assert.True(Directory.Exists(path));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
         }
         finally
         {
             GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
             DeleteDirectory(repo);
         }
     }
@@ -3614,6 +4035,7 @@ public sealed class GoalWorktreeIntegrationTests
         var originalDelete = GoalWorktrees.DeleteDirectory;
         var originalAcl = GoalWorktrees.SandboxAclHelper;
         var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -3638,6 +4060,7 @@ public sealed class GoalWorktreeIntegrationTests
             RunGit(repo, "worktree", "prune");
 
             var deleteAttempts = 0;
+            var lockHolderProbes = 0;
             GoalWorktrees.DeleteDirectory = path =>
             {
                 deleteAttempts++;
@@ -3651,6 +4074,9 @@ public sealed class GoalWorktreeIntegrationTests
             };
             GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
             GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
+                : [];
 
             var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
@@ -3669,6 +4095,7 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.DeleteDirectory = originalDelete;
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -3787,7 +4214,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:acl-reset" && warning.Exception is TimeoutException);
             Assert.Contains(warnings, warning =>
                 warning.Operation == "orphan-sweep:backoff" &&
-                warning.Exception.Message.Contains("Remove-Item -LiteralPath", StringComparison.Ordinal) &&
+                warning.Exception.Message.Contains("Cleanup-needed record persisted in SQLite", StringComparison.Ordinal) &&
                 warning.Exception.Message.Contains(orphanPath, StringComparison.Ordinal));
             Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
             Assert.True(Directory.Exists(orphanPath));
@@ -3800,6 +4227,87 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.CleanupWarningSink = originalWarnings;
             GoalWorktrees.CleanupUtcNow = originalNow;
             GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_records_backoff_for_transient_orphan_delete_failure")]
+    public void GoalWorktreesSweepRecordsBackoffForTransientOrphanDeleteFailure()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-transient");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "transient residue");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+                GoalWorktreeDeleteFailureKind.Transient,
+                "The process cannot access the file because it is being used by another process.");
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal([orphanPath], result.LeftoverPaths);
+            Assert.True(Directory.Exists(orphanPath));
+            Assert.True(HasCleanupNeededRecord(repo, orphanPath, "orphan-sweep:delete-failed"));
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_records_backoff_when_second_delete_fails_after_acl_reset")]
+    public void GoalWorktreesSweepRecordsBackoffWhenSecondDeleteFailsAfterAclReset()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-second-delete");
+            Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
+            File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "acl residue");
+            var deleteAttempts = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var acl = new RecordingSandboxAclHelper();
+            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            {
+                deleteAttempts++;
+                return GoalWorktreeDeleteResult.Failed(
+                    deleteAttempts == 1
+                        ? GoalWorktreeDeleteFailureKind.AccessDenied
+                        : GoalWorktreeDeleteFailureKind.Unknown,
+                    deleteAttempts == 1
+                        ? "Access to the path is denied."
+                        : "Directory deletion failed after ACL reset.");
+            };
+            GoalWorktrees.SandboxAclHelper = acl;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal([orphanPath], result.LeftoverPaths);
+            Assert.Equal(2, deleteAttempts);
+            Assert.Equal([orphanPath], acl.ResetPaths);
+            Assert.True(Directory.Exists(orphanPath));
+            Assert.True(HasCleanupNeededRecord(repo, orphanPath, "orphan-sweep:post-acl-delete-failed"));
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
+            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -3830,12 +4338,12 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
-            Assert.Equal($"workspace remove {goalId.Value[..8].ToLowerInvariant()}", result.ResumeCommand);
+            Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
             Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(path));
-            var warning = Assert.Single(warnings);
-            Assert.Equal(path, warning.Path);
-            Assert.Equal("remove", warning.Operation);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+            Assert.Contains(warnings, warning => warning.Path == path && warning.Operation == "remove");
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
         }
         finally
         {
@@ -3843,6 +4351,312 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.BuildServerShutdown = originalShutdown;
             GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_owned_ephemeral_sweep_removes_goal_context_temp_and_scratch_only")]
+    public void GoalWorktreesOwnedEphemeralSweepRemovesGoalContextTempAndScratchOnly()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var prefix = goalId.Value[..8];
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goalId.Value);
+            var tempPath = Path.Combine(repo, ".t", prefix + "-dispatch");
+            var scratchPath = Path.Combine(repo, ".scratch", prefix);
+            var unrelatedTempPath = Path.Combine(repo, ".t", "unrelated");
+            Directory.CreateDirectory(contextPath);
+            Directory.CreateDirectory(tempPath);
+            Directory.CreateDirectory(scratchPath);
+            Directory.CreateDirectory(unrelatedTempPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            File.WriteAllText(Path.Combine(tempPath, "prompt.md"), "prompt");
+            File.WriteAllText(Path.Combine(scratchPath, "body.md"), "body");
+            File.WriteAllText(Path.Combine(unrelatedTempPath, "keep.txt"), "keep");
+
+            var result = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+
+            Assert.True(result.IsComplete);
+            Assert.Equal(3, result.RemovedCount);
+            Assert.False(Directory.Exists(contextPath));
+            Assert.False(Directory.Exists(tempPath));
+            Assert.False(Directory.Exists(scratchPath));
+            Assert.True(Directory.Exists(unrelatedTempPath));
+            Assert.True(Directory.Exists(Path.Combine(repo, ".t")));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".scratch")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_owned_ephemeral_sweep_persists_cleanup_needed_backoff")]
+    public void GoalWorktreesOwnedEphemeralSweepPersistsCleanupNeededBackoff()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goalId.Value);
+            Directory.CreateDirectory(contextPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var attempts = 0;
+
+            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            {
+                attempts++;
+                return GoalWorktreeDeleteResult.Failed(
+                    GoalWorktreeDeleteFailureKind.Unknown,
+                    "Directory deletion failed.");
+            };
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var first = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+            var second = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.False(second.IsComplete);
+            Assert.Equal([contextPath], second.LeftoverPaths);
+            Assert.Equal(1, attempts);
+            Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
+            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
+            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reports_owned_ephemeral_cleanup_leftover")]
+    public void GoalWorktreesRemoveReportsOwnedEphemeralCleanupLeftover()
+    {
+        var repo = CreateSeededRepository();
+        var originalDeleteForCleanup = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var goalId = GoalId.New();
+            var worktreePath = GoalWorktrees.Ensure(repo, goalId);
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goalId.Value);
+            Directory.CreateDirectory(contextPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectoryForCleanup = cleanupPath =>
+                cleanupPath.Equals(contextPath, StringComparison.OrdinalIgnoreCase)
+                    ? GoalWorktreeDeleteResult.Failed(
+                        GoalWorktreeDeleteFailureKind.Unknown,
+                        "Directory deletion failed.")
+                    : originalDeleteForCleanup(cleanupPath);
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(result.IsComplete);
+            Assert.Equal(contextPath, result.LeftoverPath);
+            Assert.False(Directory.Exists(worktreePath));
+            Assert.True(Directory.Exists(contextPath));
+            Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
+            Assert.Contains(result.Message, text => text.Contains("Owned ephemeral cleanup is incomplete", StringComparison.Ordinal));
+            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDeleteForCleanup;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_terminal_goal_cleans_owned_ephemeral_dirs_without_worker_start")]
+    public void TerminalGoalSweepTerminalGoalCleansOwnedEphemeralDirsWithoutWorkerStart()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implemented elsewhere.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Clean terminal owned ephemerals", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
+            var snapshot = kernel.ExportSnapshot();
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals
+                    .Select(candidate => candidate.Id == goal.Id.Value
+                        ? candidate with { Status = GoalStatus.Completed }
+                        : candidate)
+                    .ToArray()
+            });
+            var contextPath = Path.Combine(repo, ".orchestrator-context", goal.Id.Value);
+            var tempPath = Path.Combine(repo, ".t", goal.Id.Value[..8] + "-prompt");
+            Directory.CreateDirectory(contextPath);
+            Directory.CreateDirectory(tempPath);
+
+            var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var repairedTask = kernel.GetGoal(goal.Id).Tasks.Single();
+
+            Assert.Contains(result.Goals.Single().Repairs, repair => repair.Kind == "owned-ephemeral-cleanup");
+            Assert.Empty(result.Blockers);
+            Assert.False(Directory.Exists(contextPath));
+            Assert.False(Directory.Exists(tempPath));
+            Assert.Null(repairedTask.LastProcess);
+            Assert.Null(repairedTask.LastDispatch);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_honors_cleanup_needed_backoff_when_no_lock_holder_was_recorded")]
+    public void GoalWorktreesRemoveHonorsCleanupNeededBackoffWhenNoLockHolderWasRecorded()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var deleteAttempts = 0;
+            var shutdownCalls = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectory = _ =>
+            {
+                deleteAttempts++;
+                return false;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => shutdownCalls++;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+            var firstBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goalId);
+            var second = GoalWorktrees.Remove(repo, goalId);
+            var secondBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.False(second.IsComplete);
+            Assert.Equal(path, second.LeftoverPath);
+            if (firstBackoff is not { } firstBackoffDetail)
+            {
+                throw new InvalidOperationException("Expected first cleanup backoff details.");
+            }
+
+            if (secondBackoff is not { } secondBackoffDetail)
+            {
+                throw new InvalidOperationException("Expected second cleanup backoff details.");
+            }
+
+            Assert.Equal(firstBackoffDetail.SkipUntilUtc, secondBackoffDetail.SkipUntilUtc);
+            Assert.NotNull(second.CleanupBackoff);
+            Assert.True(second.Message.Contains("skip_until_utc=", StringComparison.Ordinal));
+            Assert.Equal(1, deleteAttempts);
+            Assert.Equal(1, shutdownCalls);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_retries_cleanup_needed_immediately_after_lock_release")]
+    public void GoalWorktreesRemoveRetriesCleanupNeededImmediatelyAfterLockRelease()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var deleteAttempts = 0;
+            var shutdownCalls = 0;
+            var lockHolderProbes = 0;
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+
+            GoalWorktrees.DeleteDirectory = cleanupPath =>
+            {
+                deleteAttempts++;
+                if (deleteAttempts == 1)
+                {
+                    return false;
+                }
+
+                Directory.Delete(cleanupPath, recursive: true);
+                return true;
+            };
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => shutdownCalls++;
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+                ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
+                : [];
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+            var second = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.True(second.IsComplete);
+            Assert.Null(second.LeftoverPath);
+            Assert.Equal(2, deleteAttempts);
+            Assert.Equal(2, shutdownCalls);
+            Assert.False(Directory.Exists(path));
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -4136,6 +4950,31 @@ public sealed class GoalWorktreeIntegrationTests
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
         return root;
+    }
+
+    private static bool HasCleanupNeededRecord(string repo, string cleanupPath, string reason)
+    {
+        var statePath = Path.Combine(repo, ".orchestrator", "state.db");
+        if (!File.Exists(statePath))
+        {
+            return false;
+        }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = statePath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM worktree_cleanup_backoff
+            WHERE path = $path AND reason = $reason;
+            """;
+        command.Parameters.AddWithValue("$path", NormalizePath(cleanupPath));
+        command.Parameters.AddWithValue("$reason", reason);
+        return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
     private static Goal CreateCompletedGoal(AgentOrchestratorKernel kernel, string objective, string repo)

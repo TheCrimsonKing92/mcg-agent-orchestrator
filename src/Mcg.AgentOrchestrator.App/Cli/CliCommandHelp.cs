@@ -16,6 +16,7 @@ internal static class CliCommandHelp
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
+    public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -78,6 +79,23 @@ internal static class CliCommandHelp
         DogfoodLogUsage,
         "Read or add dogfood goal-boundary entries in the SQLite dogfood log store.",
         ["--limit", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry OperatorCommands = new(
+        OperatorCommandsUsage,
+        "List approved repo-bounded command prefixes for the normal operator loop.",
+        ["--help", "-h"],
+        [
+            "Observe: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal>",
+            "Wait: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Wait-RepoInterval.ps1 -Seconds <n>",
+            "Wait dispatch: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Wait-ForDispatch.ps1 -ExitFile <path>",
+            "Git/diff: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-Git.ps1 status --short",
+            "Backlog/orchestrator: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 backlog-list --limit <n>",
+            "Process inspect: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Get-RepoProcessInfo.ps1 -Id <pid>",
+            "Exact stop: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Stop-RepoProcess.ps1 -Id <pid>",
+            "SQLite: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorSqliteTool.ps1 <args>",
+            "Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]",
+            "Land: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Land-VerifiedGoal.ps1 -GoalPrefix <goal>"
+        ]);
 
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -189,6 +207,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("dogfood-log", StringComparison.OrdinalIgnoreCase))
         {
             entry = DogfoodLog;
+            return true;
+        }
+
+        if (args[0].Equals("operator-commands", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = OperatorCommands;
             return true;
         }
 
@@ -351,6 +375,16 @@ internal static class CliCommandHelp
                 Console.WriteLine($"  {flag}");
             }
         }
+
+        if (entry.ExtraLines.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Approved prefixes:");
+            foreach (var line in entry.ExtraLines)
+            {
+                Console.WriteLine($"  {line}");
+            }
+        }
     }
 
     private static bool HasHelpFlag(IReadOnlyList<string> args)
@@ -368,10 +402,21 @@ internal static class CliCommandHelp
         string Usage,
         string Description,
         IReadOnlySet<string> Flags,
+        IReadOnlyList<string> ExtraLines,
         bool ValidateFlags)
     {
         public CommandHelpEntry(string usage, string description, IEnumerable<string> flags)
-            : this(usage, description, flags.ToHashSet(StringComparer.OrdinalIgnoreCase), ValidateFlags: true)
+            : this(usage, description, flags.ToHashSet(StringComparer.OrdinalIgnoreCase), [], ValidateFlags: true)
+        {
+        }
+
+        public CommandHelpEntry(string usage, string description, IEnumerable<string> flags, IReadOnlyList<string> extraLines)
+            : this(usage, description, flags.ToHashSet(StringComparer.OrdinalIgnoreCase), extraLines, ValidateFlags: true)
+        {
+        }
+
+        public CommandHelpEntry(string usage, string description, IReadOnlySet<string> flags, bool ValidateFlags)
+            : this(usage, description, flags, [], ValidateFlags)
         {
         }
 
@@ -379,6 +424,7 @@ internal static class CliCommandHelp
             $"Usage: {command} [options]",
             "Run this operator command.",
             GenericHelpFlags,
+            [],
             ValidateFlags: false);
     }
 }

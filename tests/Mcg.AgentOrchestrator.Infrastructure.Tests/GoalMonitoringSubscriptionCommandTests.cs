@@ -44,7 +44,9 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "TaskStarted,TaskCompleted",
             "--from-cursor",
             "4",
-            "--wait-terminal"
+            "--wait-terminal",
+            "--timeout",
+            "5s"
         ]);
 
         Assert.True(options.IsLocal);
@@ -59,6 +61,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal(4, options.ResumeCursor.TimelineCursor);
         Assert.Equal(0, options.ResumeCursor.RunEventCursor);
         Assert.Equal(["TaskStarted", "TaskCompleted"], options.EventKinds);
+        Assert.Equal(TimeSpan.FromSeconds(5), options.Timeout);
     }
 
     [Xunit.Fact(DisplayName = "Goals_subscribe_parses_goal_prefix_as_headless_target")]
@@ -715,6 +718,131 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal("Blocked", runEvent.CurrentState);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_process_envelopes_include_dispatch_heartbeat_and_exit")]
+    public void MonitorGoalLocalProcessEnvelopesIncludeDispatchHeartbeatAndExit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Run with process", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor process facts", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var startedAt = DateTimeOffset.Parse("2026-06-12T20:00:00Z");
+        var completedAt = startedAt.AddMinutes(1);
+        var stdout = Path.Combine(root, "worker.out.log");
+        var stderr = Path.Combine(root, "worker.err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, "ok");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, startedAt));
+        var process = new TaskProcessRecord(123, "echo done", root, stdout, stderr, exit, startedAt, completedAt, 0);
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), """
+        {"pid":123,"childPid":456,"ownedPids":[123,456],"state":"running","lastObservedAt":"2026-06-12T20:00:30Z","lastProgressAt":"2026-06-12T20:00:20Z","stdoutBytes":2,"stderrBytes":0,"ownedCpuMs":10}
+        """);
+        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process, verification: null);
+        var batch = GoalMonitoringStream.BuildBatch(
+            kernel,
+            kernel.GetGoal(goal.Id),
+            sinceEventId: 0,
+            agents: [],
+            workerProfiles: WorkerProfileCatalog.Default(),
+            workspace);
+
+        var events = GoalMonitoringSubscriptionCommand.BuildSubscriptionEvents(
+            batch,
+            kernel.GetGoal(goal.Id),
+            GoalLifecycleState.Running,
+            workspace,
+            []);
+
+        Assert.Contains(events, evt =>
+            evt.EventKind == "dispatch.heartbeat" &&
+            evt.TaskId == task.Id.Value &&
+            evt.ProcessId == 123 &&
+            evt.Message?.Contains("stdout=2", StringComparison.Ordinal) == true);
+        Assert.Contains(events, evt =>
+            evt.EventKind == "dispatch.exit" &&
+            evt.TaskId == task.Id.Value &&
+            evt.ProcessId == 123 &&
+            evt.Message?.Contains("exit=0", StringComparison.Ordinal) == true);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_resumed_stream_includes_process_heartbeat_and_exit")]
+    public async Task MonitorGoalLocalResumedStreamIncludesProcessHeartbeatAndExit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Resume process stream", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor resumed process facts", [task]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var startedAt = DateTimeOffset.Parse("2026-06-12T20:00:00Z");
+        var completedAt = startedAt.AddMinutes(1);
+        var stdout = Path.Combine(root, "worker.out.log");
+        var stderr = Path.Combine(root, "worker.err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, "ok");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, startedAt));
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Timeline event already consumed.");
+        var process = new TaskProcessRecord(123, "echo done", root, stdout, stderr, exit, startedAt, completedAt, 0);
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), """
+        {"pid":123,"childPid":456,"ownedPids":[123,456],"state":"running","lastObservedAt":"2026-06-12T20:00:30Z","lastProgressAt":"2026-06-12T20:00:20Z","stdoutBytes":2,"stderrBytes":0,"ownedCpuMs":10}
+        """);
+        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process, verification: null);
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                goal.Id.Value[..8],
+                "--once",
+                "--format",
+                "ndjson",
+                "--from-cursor",
+                "timeline:999",
+                "--event-kind",
+                "dispatch.heartbeat,dispatch.exit"
+            ],
+            output,
+            kernel,
+            workspace,
+            [agent],
+            WorkerProfileCatalog.Default());
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        var events = lines.Select(line =>
+        {
+            using var doc = JsonDocument.Parse(line);
+            return (
+                Kind: doc.RootElement.GetProperty("eventKind").GetString(),
+                Cursor: doc.RootElement.GetProperty("cursor").GetString());
+        }).ToArray();
+        Assert.Contains(events, evt =>
+            evt.Kind == "dispatch.heartbeat" &&
+            evt.Cursor?.Contains("timeline:999", StringComparison.Ordinal) == true &&
+            evt.Cursor.Contains("process:", StringComparison.Ordinal));
+        Assert.Contains(events, evt =>
+            evt.Kind == "dispatch.exit" &&
+            evt.Cursor?.Contains("timeline:999", StringComparison.Ordinal) == true &&
+            evt.Cursor.Contains("process:", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_prefix_subscription_excludes_global_conductor_ticks")]
     public void MonitorGoalPrefixSubscriptionExcludesGlobalConductorTicks()
     {
@@ -949,6 +1077,56 @@ public sealed class GoalMonitoringSubscriptionCommandTests
 
         Assert.Equal(1, ex.ExitCode);
         Assert.Contains("-> AwaitingHumanInput", output.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_times_out_with_compact_event_and_nonzero_exit")]
+    public async Task MonitorGoalWaitTerminalTimesOutWithCompactEventAndNonzeroExit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Keep running", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Wait timeout", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Still active.");
+        using var output = new StringWriter();
+
+        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["goals", "subscribe", "--goal-prefix", goal.Id.Value[..8], "--wait-terminal", "--format", "ndjson", "--timeout", "10ms"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.Equal(124, ex.ExitCode);
+        Assert.Contains("\"eventKind\":\"monitor.timeout\"", output.ToString());
+        Assert.Contains("\"currentState\":\"Dispatched\"", output.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_lifecycle_facts_surface_acceptance_failure_as_blocked")]
+    public void MonitorGoalLifecycleFactsSurfaceAcceptanceFailureAsBlocked()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Done", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Blocked acceptance", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        kernel.RecordAcceptanceFailure(goal.Id, ["acceptance"]);
+
+        var facts = GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, kernel.GetGoal(goal.Id));
+
+        Assert.True(facts.IsBlocked);
+        Assert.Equal(GoalLifecycleState.Blocked, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_does_not_emit_snapshot_that_violates_filters")]

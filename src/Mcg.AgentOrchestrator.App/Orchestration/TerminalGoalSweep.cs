@@ -44,17 +44,6 @@ internal static class TerminalGoalSweep
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
 
-            if (onlyGoalId is null &&
-                TryBuildGlobalStaleTerminalExclusionEvidence(originalGoal, out var preReconciliationExclusionEvidence))
-            {
-                blockers.Add(new TerminalGoalSweepBlocker(
-                    "stale-terminal-excluded",
-                    preReconciliationExclusionEvidence,
-                    "excluded"));
-                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
-                continue;
-            }
-
             var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
             if (reconciled > 0)
             {
@@ -114,6 +103,16 @@ internal static class TerminalGoalSweep
             }
             else if (!blockedByDirtyWorktree &&
                      !branchAlreadyLanded &&
+                     onlyGoalId is null &&
+                     TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var staleTerminalExclusionEvidence))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "stale-terminal-excluded",
+                    staleTerminalExclusionEvidence,
+                    "excluded"));
+            }
+            else if (!blockedByDirtyWorktree &&
+                     !branchAlreadyLanded &&
                      hasTerminalTaskDesync &&
                      kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
@@ -146,12 +145,40 @@ internal static class TerminalGoalSweep
                         removeResult.Message,
                         $"acceptance {prefix}"));
                 }
+                else if (!removeResult.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "completed-worktree-cleanup-needed",
+                        removeResult.Message,
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
                     repairs.Add(new TerminalGoalSweepRepair(
                         "merged-branch-cleanup",
                         removeResult.Message,
                         $"workspace remove {prefix}"));
+                }
+
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
+            }
+
+            if (IsTerminalSweepStatus(goal.Status) && !blockers.Any(IsTerminalCleanupBlockingBlocker))
+            {
+                var ephemeralCleanup = GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goal.Id, kernel);
+                if (!ephemeralCleanup.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "owned-ephemeral-cleanup-needed",
+                        $"owned ephemeral cleanup incomplete; leftovers={string.Join(",", ephemeralCleanup.LeftoverPaths)}",
+                        $"conduct {prefix} --loop"));
+                }
+                else if (ephemeralCleanup.RemovedCount > 0)
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "owned-ephemeral-cleanup",
+                        $"removed {ephemeralCleanup.RemovedCount} owned ephemeral director{(ephemeralCleanup.RemovedCount == 1 ? "y" : "ies")}",
+                        $"conduct {prefix} --loop"));
                 }
             }
 
@@ -162,6 +189,22 @@ internal static class TerminalGoalSweep
         }
 
         return new TerminalGoalSweepResult(results);
+    }
+
+    private static void AddOwnedEphemeralCleanupRepair(
+        GoalOwnedEphemeralSweepResult? ephemeralCleanup,
+        string prefix,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        if (ephemeralCleanup is not { RemovedCount: > 0 })
+        {
+            return;
+        }
+
+        repairs.Add(new TerminalGoalSweepRepair(
+            "owned-ephemeral-cleanup",
+            $"removed {ephemeralCleanup.RemovedCount} owned ephemeral director{(ephemeralCleanup.RemovedCount == 1 ? "y" : "ies")}",
+            $"conduct {prefix} --loop"));
     }
 
     private static bool TryBuildGlobalStaleTerminalExclusionEvidence(Goal goal, out string evidence)
@@ -283,6 +326,12 @@ internal static class TerminalGoalSweep
 
     private static bool IsStaleTerminalAssignedTaskStatus(WorkTaskStatus status) =>
         status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman;
+
+    private static bool IsTerminalCleanupBlockingBlocker(TerminalGoalSweepBlocker blocker) =>
+        blocker.Kind is "terminal-dirty-worktree" or
+            "terminal-live-dispatch" or
+            "stale-terminal-excluded" or
+            "completed-branch-unmerged";
 
     private static bool IsProcessAlive(int processId)
     {

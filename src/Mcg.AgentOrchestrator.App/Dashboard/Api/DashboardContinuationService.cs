@@ -145,18 +145,6 @@ internal sealed class DashboardContinuationService : IDisposable
                             current,
                             OrchestratorEntityResolver.GetLatestGoal(current),
                             watch.GoalId);
-                        var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
-                            current,
-                            agents,
-                            profiles,
-                            services.Workspace,
-                            goal,
-                            providers: services.Providers);
-                        if (advance.Executed)
-                        {
-                            return Task.FromResult((true, advance));
-                        }
-
                         var supervisor = GoalSupervisor.ApplySafe(
                             current,
                             goal,
@@ -165,9 +153,17 @@ internal sealed class DashboardContinuationService : IDisposable
                             AutonomyPolicy.SafeAuto);
                         if (supervisor.AppliedActions.Count == 0)
                         {
-                            return Task.FromResult((false, advance));
+                            var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+                                current,
+                                agents,
+                                profiles,
+                                services.Workspace,
+                                goal,
+                                providers: services.Providers);
+                            return Task.FromResult((advance.Executed, advance));
                         }
 
+                        var supervisorStopReason = GetSupervisorStopReason(current, goal, supervisor);
                         var step = new AdvanceResultDto(
                             goal.Id.Value,
                             true,
@@ -179,10 +175,9 @@ internal sealed class DashboardContinuationService : IDisposable
                             goal.Id.Value,
                             true,
                             1,
-                            TimelineMessage("Supervisor applied safe recovery action; continuing watch."),
+                            TimelineMessage(supervisorStopReason),
                             null,
-                            [step],
-                            ContinueAfter: DateTimeOffset.UtcNow);
+                            [step]);
                         return Task.FromResult((true, supervised));
                     },
                     watch.Cancellation.Token);
@@ -211,6 +206,7 @@ internal sealed class DashboardContinuationService : IDisposable
         {
             watch.Fail(ex.Message);
             PersistActiveWatches(services);
+            RemoveRestoredTerminalWatch(watch);
         }
     }
 
@@ -222,6 +218,23 @@ internal sealed class DashboardContinuationService : IDisposable
 
     private static bool ContainsStopReason(DashboardContinuationStatusDto status, string value) =>
         status.StopReason.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+    private static string GetSupervisorStopReason(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        GoalSupervisorApplyResult supervisor)
+    {
+        var runningRefresh = supervisor.Plan.Proposals.FirstOrDefault(proposal =>
+            proposal.Kind == GoalSupervisorProposalKind.RefreshRunningProcess &&
+            proposal.TaskId is not null);
+        if (runningRefresh?.TaskId is { } taskId &&
+            kernel.GetTask(goal.Id, taskId).LastProcess is { IsRunning: true })
+        {
+            return $"Background work is still running for task {taskId.Value[..8]}; continue after it exits.";
+        }
+
+        return "Supervisor applied safe recovery action.";
+    }
 
     private static string ShortGoalPrefix(string goalId) =>
         goalId.Length <= 8 ? goalId : goalId[..8];

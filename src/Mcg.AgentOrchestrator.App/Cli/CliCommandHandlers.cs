@@ -27,6 +27,12 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
     CliCommandHelp.ThrowIfInvalidFlags(parts);
 
     var command = parts[0].ToLowerInvariant();
+    if (command == "operator-commands")
+    {
+        CliCommandHelp.TryPrintStartupHelp(["operator-commands", "--help"]);
+        return false;
+    }
+
     var handled =
         TryExecuteFundamentalsAlias(command, parts, context) ??
         TryExecuteSystemCommand(command, parts, context) ??

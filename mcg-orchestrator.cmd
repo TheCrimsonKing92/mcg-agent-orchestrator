@@ -53,10 +53,14 @@ del "%BUILD_LOG%" 2>nul
 :: copy (under %TEMP%\mcg-run\<build-hash>), leaving the in-tree binary free to rebuild while it runs -- so
 :: builds and real runs stop interfering. Content-addressed by the App.dll hash: identical builds reuse one
 :: copy, a new build gets a fresh one, and copies unused for 7 days are pruned (a live copy's dll is locked,
-:: so it survives the prune). Falls back to the in-tree binary if the isolation step fails.
+:: so it survives the prune). Native SQLite assets are required in the isolated copy; fail before running
+:: the command if the build output cannot populate a complete run directory.
 set "RUNDIR="
 for /f "usebackq delims=" %%R in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\resolve-run-dir.ps1" "%APP_DLL%"`) do set "RUNDIR=%%R"
-if not defined RUNDIR set "RUNDIR=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0"
+if not defined RUNDIR (
+    echo ERROR: could not prepare isolated orchestrator run directory; see resolver error above and retry after repair >&2
+    exit /b 1
+)
 dotnet "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %*
 exit /b %ERRORLEVEL%
 

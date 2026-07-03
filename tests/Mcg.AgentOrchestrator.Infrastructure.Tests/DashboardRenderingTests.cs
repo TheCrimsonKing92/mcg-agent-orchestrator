@@ -507,11 +507,19 @@ public sealed class DashboardRenderingTests
 
     var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
     var recovery = dto.Items.Single().Recovery;
+    var dispatchState = dto.Items.Single().DispatchState;
 
     Assert.NotNull(recovery);
     Assert.Equal(DispatchRecoveryAction.MarkStale, recovery!.Action);
     Assert.Equal("mark-stale", recovery.ActionName);
     Assert.Equal("heartbeat-absent", recovery.EvidencePath);
+    Assert.NotNull(dispatchState);
+    Assert.Equal(DispatchStateKind.StaleCleanup, dispatchState!.Kind);
+    Assert.Equal("mark-stale", dispatchState.RecommendedAction);
+    Assert.Equal(999999, dispatchState.ProcessTree.WrapperProcessId);
+    Assert.False(dispatchState.Artifacts.ExitCodeExists);
+    Assert.Equal(DispatchRecoveryAction.MarkStale, dispatchState.RecoveryDecision.Action);
+    Assert.True(dispatchState.StaleThresholds.LiveIdleTimeoutSeconds > 0);
 }
 
     [Xunit.Fact(DisplayName = "Dashboard_human_wait_dto_and_rendering_include_operator_evidence")]

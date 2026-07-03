@@ -138,6 +138,47 @@ public sealed class CliHelpTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_operator_commands_help_documents_repo_bounded_prefixes")]
+    public void CliOperatorCommandsHelpDocumentsRepoBoundedPrefixes()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["operator-commands"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Usage: operator-commands", output);
+        Xunit.Assert.Contains("Approved prefixes:", output);
+        Xunit.Assert.Contains("scripts\\Get-OrchestratorSnapshot.ps1", output);
+        Xunit.Assert.Contains("scripts\\Wait-ForDispatch.ps1 -ExitFile <path>", output);
+        Xunit.Assert.Contains("scripts\\Invoke-Git.ps1", output);
+        Xunit.Assert.Contains("scripts\\Invoke-OrchestratorCommand.ps1 backlog-list", output);
+        Xunit.Assert.Contains("scripts\\Get-RepoProcessInfo.ps1", output);
+        Xunit.Assert.Contains("scripts\\Stop-RepoProcess.ps1", output);
+        Xunit.Assert.Contains("scripts\\Invoke-OrchestratorSqliteTool.ps1", output);
+        Xunit.Assert.Contains("Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]", output);
+        Xunit.Assert.Contains("Land: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Land-VerifiedGoal.ps1 -GoalPrefix <goal>", output);
+        Xunit.Assert.DoesNotContain("Get-Process codex", output, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
     [Xunit.Theory(DisplayName = "Cli_help_startup_exits_zero_before_state_creation")]
     [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--simple")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]

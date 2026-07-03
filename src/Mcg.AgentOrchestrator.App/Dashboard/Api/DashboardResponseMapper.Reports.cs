@@ -330,6 +330,7 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
 
 public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
 {
+    var dispatchState = ToDispatchAuthoritativeStateDto(TryEvaluateDispatchState(goal, task));
     return new TaskWorkSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
         task.Id.Value,
@@ -366,7 +367,8 @@ public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
                 task.LastVerification.Succeeded,
                 task.LastVerification.CompletedAt,
                 task.VerificationHistory.Count),
-        task.SubscriptionRetryAfter);
+        task.SubscriptionRetryAfter,
+        dispatchState);
 }
 
 public static GoalStageReadinessReportDto ToGoalStageReadinessReportDto(
@@ -516,6 +518,7 @@ public static NextActionDto ToNextActionDto(
     IReadOnlyList<AgentDefinition>? agents = null)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
+    var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item));
     return new NextActionDto(
         priority,
         item.Kind,
@@ -525,7 +528,8 @@ public static NextActionDto ToNextActionDto(
         TimelineText(item.Message),
         ConsoleViews.BuildSuggestedCommand(goal, item, agents),
         ToNextActionControlDto(goal, item, agents),
-        ToDispatchRecoveryDecisionDto(DispatchRecoveryView.Evaluate(goal, item)));
+        dispatchState?.RecoveryDecision,
+        dispatchState);
 }
 
 private static DispatchRecoveryDecisionDto? ToDispatchRecoveryDecisionDto(DispatchRecoveryDecision? decision) =>
@@ -537,6 +541,60 @@ private static DispatchRecoveryDecisionDto? ToDispatchRecoveryDecisionDto(Dispat
             decision.EvidencePath,
             decision.Reason,
             decision.Blocker);
+
+private static DispatchAuthoritativeState? TryEvaluateDispatchState(Goal goal, TaskSpec task)
+{
+    if (task.LastDispatch is null && task.LastProcess is null)
+    {
+        return null;
+    }
+
+    return new DispatchStateSurface().Evaluate(goal.Id, task);
+}
+
+internal static DispatchAuthoritativeStateDto? ToDispatchAuthoritativeStateDto(DispatchAuthoritativeState? state) =>
+    state is null
+        ? null
+        : new DispatchAuthoritativeStateDto(
+            state.Kind,
+            state.RecommendedAction,
+            ToDispatchRecoveryDecisionDto(state.RecoveryDecision)!,
+            new DispatchProcessTreeSummaryDto(
+                state.ProcessTree.WrapperProcessId,
+                state.ProcessTree.ChildProcessId,
+                state.ProcessTree.OwnedProcessIds,
+                state.ProcessTree.Processes
+                    .Select(process => new DispatchProcessTreeNodeDto(process.ProcessId, process.IsAlive, process.CommandLine))
+                    .ToList(),
+                state.ProcessTree.ChildCommandLine,
+                state.ProcessTree.HasLiveProcess,
+                state.ProcessTree.HasLiveChild),
+            new DispatchArtifactStatusDto(
+                state.Artifacts.StandardOutputPath,
+                state.Artifacts.StandardOutputExists,
+                state.Artifacts.StandardOutputBytes,
+                state.Artifacts.StandardErrorPath,
+                state.Artifacts.StandardErrorExists,
+                state.Artifacts.StandardErrorBytes,
+                state.Artifacts.ExitCodePath,
+                state.Artifacts.ExitCodeExists,
+                state.Artifacts.HeartbeatPath,
+                state.Artifacts.HeartbeatExists),
+            ToDispatchHeartbeatDto(state.Heartbeat),
+            new DispatchWorktreeStateDto(
+                state.Worktree.WorkingDirectory,
+                state.Worktree.Exists,
+                state.Worktree.IsGitWorktree,
+                state.Worktree.IsDirty,
+                state.Worktree.HeadCommit,
+                state.Worktree.CommitsAfterDispatch,
+                state.Worktree.StatusEntries,
+                state.Worktree.Error),
+            new DispatchStaleThresholdsDto(
+                state.StaleThresholds.RecentHeartbeatGrace.TotalSeconds,
+                state.StaleThresholds.LiveIdleTimeout.TotalSeconds,
+                state.StaleThresholds.StaleRetryBudgetRemaining),
+            state.Summary);
 
 public static NextActionControlDto? ToNextActionControlDto(
     Goal goal,
