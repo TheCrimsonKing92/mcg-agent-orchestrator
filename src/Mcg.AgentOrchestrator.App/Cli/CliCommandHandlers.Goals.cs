@@ -503,6 +503,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "status":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             ConsoleViews.PrintGoal(context.CurrentGoal, ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath));
+            PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             return false;
 
         case "monitor":
@@ -3280,6 +3281,16 @@ private static void RecordDeferredGoalCleanup(string executionDirectory, GoalId 
     {
         Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
     }
+}
+
+private static void PrintGoalCleanupBackoffStatus(string executionDirectory, GoalId goalId)
+{
+    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId);
+    if (backoff is null)
+        return;
+
+    Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
+    Console.WriteLine($"Cleanup retry: conduct {goalId.Value[..8].ToLowerInvariant()} --loop");
 }
 
 private sealed class GoalMarkLandedCleanupDeadline

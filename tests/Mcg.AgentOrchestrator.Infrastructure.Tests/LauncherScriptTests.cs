@@ -286,6 +286,7 @@ public sealed class LauncherScriptTests
             startInfo.ArgumentList.Add("-GoalPrefix");
             startInfo.ArgumentList.Add("hang");
             startInfo.ArgumentList.Add("ok");
+            startInfo.ArgumentList.Add("cleanup");
 
             var stopwatch = Stopwatch.StartNew();
             var result = RunProcess(startInfo, "Get-OrchestratorSnapshot.ps1");
@@ -299,6 +300,8 @@ public sealed class LauncherScriptTests
             Assert.Contains("partial hang", result.Stdout);
             Assert.Contains("status timed out after 1s; killed pid=", result.Stdout);
             Assert.Contains("status ok ok", result.Stdout);
+            Assert.Contains("Cleanup backoff: reason=remove:branch-delete-failed", result.Stdout);
+            Assert.Contains("Cleanup retry: conduct cleanup --loop", result.Stdout);
             WaitForFile(sandbox.SentinelPath, TimeSpan.FromSeconds(5));
             var childPid = int.Parse(File.ReadAllText(sandbox.SentinelPath).Trim(), System.Globalization.CultureInfo.InvariantCulture);
             Assert.True(!IsProcessRunning(childPid), $"Expected hung status child pid {childPid} to be reaped.");
@@ -758,6 +761,11 @@ public sealed class LauncherScriptTests
             if "%~3"=="hang" (
               echo partial hang
               powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
+              exit /b 0
+            )
+            if "%~3"=="cleanup" (
+              echo Cleanup backoff: reason=remove:branch-delete-failed skip_until_utc=2026-07-03T12:15:00.0000000+00:00 remaining_wait=00:15:00
+              echo Cleanup retry: conduct cleanup --loop
               exit /b 0
             )
             echo status ok %~3
