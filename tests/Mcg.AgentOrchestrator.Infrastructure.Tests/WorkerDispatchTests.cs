@@ -827,9 +827,56 @@ public sealed class WorkerDispatchTests
     Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("operator-state-surface.txt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_work_summary_surfaces_authoritative_dispatch_state")]
+    public void DashboardWorkSummarySurfacesAuthoritativeDispatchState()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-03T06:35:00Z");
+    var clock = new TestClock(now);
+    var (_, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "worker output",
+        string.Empty,
+        clock);
+    File.WriteAllText(Path.Combine(process.WorkingDirectory, "dispatch-state-evidence.txt"), "dirty evidence");
+    WriteHeartbeat(
+        process,
+        now.AddSeconds(-12),
+        now.AddSeconds(-12),
+        "exiting",
+        stdoutBytes: 13,
+        stderrBytes: 0,
+        childPid: 222,
+        ownedPids: [process.ProcessId, 222],
+        exitFileExists: true);
+
+    var summary = DashboardResponseMapper.ToTaskWorkSummaryDto(goal, task);
+    var state = Assert.IsType<DispatchAuthoritativeStateDto>(summary.DispatchState);
+
+    Assert.Equal(DispatchStateKind.ExitedAwaitingReconcile, state.Kind);
+    Assert.Equal("refresh-dispatch", state.RecommendedAction);
+    Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, state.RecoveryDecision.Action);
+    Assert.Equal(process.ProcessId, state.ProcessTree.WrapperProcessId);
+    Assert.Equal(222, state.ProcessTree.ChildProcessId);
+    Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == process.ProcessId);
+    Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == 222);
+    Assert.True(state.Artifacts.StandardOutputExists);
+    Assert.Equal(13, state.Artifacts.StandardOutputBytes);
+    Assert.True(state.Artifacts.ExitCodeExists);
+    Assert.True(state.Artifacts.HeartbeatExists);
+    Assert.True(state.Worktree.IsDirty == true);
+    Assert.False(string.IsNullOrWhiteSpace(state.Worktree.HeadCommit));
+    Assert.NotNull(state.Worktree.CommitsAfterDispatch);
+    Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("dispatch-state-evidence.txt", StringComparison.Ordinal));
+    Assert.True(state.StaleThresholds.RecentHeartbeatGraceSeconds > 0);
+    Assert.True(state.StaleThresholds.LiveIdleTimeoutSeconds > state.StaleThresholds.RecentHeartbeatGraceSeconds);
+    Assert.Contains("dirty_worktree=True", state.Summary);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_does_not_start_worker_or_mutate_owned_ephemeral_cleanup")]
     public void WorkerProfileDispatcherPreflightDoesNotStartWorkerOrMutateOwnedEphemeralCleanup()
-{
+    {
     var root = CreateSeededDispatchRepository();
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer);

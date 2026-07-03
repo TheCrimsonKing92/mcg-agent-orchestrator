@@ -351,7 +351,8 @@ internal sealed record TaskMonitoringSnapshotDto(
     AgentRole Role,
     WorkTaskStatus Status,
     ProcessDto? LastProcess,
-    DateTimeOffset? SubscriptionRetryAfter);
+    DateTimeOffset? SubscriptionRetryAfter,
+    DispatchAuthoritativeStateDto? DispatchState = null);
 
 internal sealed record TaskStatusMonitoringEventDto(
     string GoalId,
@@ -401,7 +402,8 @@ internal sealed record TaskWorkSummaryDto(
     DispatchSummaryDto? LastDispatch,
     ProcessSummaryDto? LastProcess,
     VerificationSummaryDto? LastVerification,
-    DateTimeOffset? SubscriptionRetryAfter);
+    DateTimeOffset? SubscriptionRetryAfter,
+    DispatchAuthoritativeStateDto? DispatchState = null);
 
 internal sealed record DispatchSummaryDto(
     string WorkerName,
@@ -428,6 +430,55 @@ internal sealed record VerificationSummaryDto(
     bool Succeeded,
     DateTimeOffset CompletedAt,
     int HistoryCount);
+
+internal sealed record DispatchAuthoritativeStateDto(
+    DispatchStateKind Kind,
+    string RecommendedAction,
+    DispatchRecoveryDecisionDto RecoveryDecision,
+    DispatchProcessTreeSummaryDto ProcessTree,
+    DispatchArtifactStatusDto Artifacts,
+    DispatchHeartbeatDto Heartbeat,
+    DispatchWorktreeStateDto Worktree,
+    DispatchStaleThresholdsDto StaleThresholds,
+    string Summary);
+
+internal sealed record DispatchProcessTreeSummaryDto(
+    int WrapperProcessId,
+    int? ChildProcessId,
+    IReadOnlyList<int> OwnedProcessIds,
+    IReadOnlyList<DispatchProcessTreeNodeDto> Processes,
+    string? ChildCommandLine,
+    bool HasLiveProcess,
+    bool HasLiveChild);
+
+internal sealed record DispatchProcessTreeNodeDto(int ProcessId, bool IsAlive, string? CommandLine);
+
+internal sealed record DispatchArtifactStatusDto(
+    string StandardOutputPath,
+    bool StandardOutputExists,
+    long StandardOutputBytes,
+    string StandardErrorPath,
+    bool StandardErrorExists,
+    long StandardErrorBytes,
+    string ExitCodePath,
+    bool ExitCodeExists,
+    string HeartbeatPath,
+    bool HeartbeatExists);
+
+internal sealed record DispatchWorktreeStateDto(
+    string WorkingDirectory,
+    bool Exists,
+    bool IsGitWorktree,
+    bool? IsDirty,
+    string? HeadCommit,
+    int? CommitsAfterDispatch,
+    IReadOnlyList<string> StatusEntries,
+    string? Error);
+
+internal sealed record DispatchStaleThresholdsDto(
+    double RecentHeartbeatGraceSeconds,
+    double LiveIdleTimeoutSeconds,
+    int StaleRetryBudgetRemaining);
 
 internal sealed record GoalStageReadinessReportDto(
     string GoalId,
@@ -505,7 +556,8 @@ internal sealed record NextActionDto(
     string Message,
     string SuggestedCommand,
     NextActionControlDto? Control,
-    DispatchRecoveryDecisionDto? Recovery);
+    DispatchRecoveryDecisionDto? Recovery,
+    DispatchAuthoritativeStateDto? DispatchState = null);
 
 internal sealed record DispatchRecoveryDecisionDto(
     DispatchRecoveryAction Action,

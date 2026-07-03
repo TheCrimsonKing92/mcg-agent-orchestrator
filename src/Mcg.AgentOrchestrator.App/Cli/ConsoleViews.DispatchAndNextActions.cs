@@ -80,11 +80,13 @@ public static void PrintNextActions(
     {
         var item = actions.Items[index];
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
-        if (DispatchRecoveryView.Evaluate(goal, item) is { } decision)
+        if (DispatchRecoveryView.EvaluateState(goal, item) is { } dispatchState)
         {
+            var decision = dispatchState.RecoveryDecision;
             var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
                 ? string.Empty
                 : $" blocker='{decision.Blocker}'";
+            Console.WriteLine($"     dispatch-state: state='{dispatchState.Kind}' action='{dispatchState.RecommendedAction}' live={dispatchState.ProcessTree.HasLiveProcess} child_pid={dispatchState.ProcessTree.ChildProcessId?.ToString() ?? "none"} exit_artifact={dispatchState.Artifacts.ExitCodeExists} dirty_worktree={dispatchState.Worktree.IsDirty?.ToString() ?? "unknown"}");
             Console.WriteLine($"     recovery: action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}");
         }
 

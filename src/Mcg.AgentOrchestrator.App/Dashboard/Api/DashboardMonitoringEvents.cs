@@ -123,7 +123,11 @@ internal static class DashboardMonitoringEvents
                 task.RequiredRole,
                 task.Status,
                 DashboardResponseMapper.ToProcessDto(task.LastProcess),
-                task.SubscriptionRetryAfter)).ToList(),
+                task.SubscriptionRetryAfter,
+                DashboardResponseMapper.ToDispatchAuthoritativeStateDto(
+                    task.LastDispatch is null && task.LastProcess is null
+                        ? null
+                        : new DispatchStateSurface().Evaluate(goal.Id, task)))).ToList(),
             operatorInbox,
             providerCapacity);
     }
