@@ -252,6 +252,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
+    var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, gate.IsSatisfied, executionDirectory);
 
     return new GoalWorkSummaryDto(
         goal.Id.Value,
@@ -260,6 +261,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
+        ToGoalOperatorDispositionDto(goal, disposition),
         nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
         host,
         ToGoalBuildEnvironmentDto(goal),
@@ -504,10 +506,14 @@ public static NextActionsDto ToNextActionsDto(
     GoalNextActions actions,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
+    var pendingHumanInput = goal.Tasks.Count(task => task.Status == WorkTaskStatus.WaitingForHuman);
+    var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
+    var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, pendingHumanInput, verificationSatisfied);
     return new NextActionsDto(
         actions.GoalId.Value,
         SummaryText(actions.Objective),
         actions.Status,
+        ToGoalOperatorDispositionDto(goal, disposition),
         actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, agents)).ToList());
 }
 
@@ -595,6 +601,35 @@ internal static DispatchAuthoritativeStateDto? ToDispatchAuthoritativeStateDto(D
                 state.StaleThresholds.LiveIdleTimeout.TotalSeconds,
                 state.StaleThresholds.StaleRetryBudgetRemaining),
             state.Summary);
+
+internal static GoalOperatorDispositionDto ToGoalOperatorDispositionDto(Goal goal, GoalOperatorDisposition disposition) =>
+    new(
+        disposition.State,
+        disposition.Confidence,
+        TimelineText(disposition.Reason),
+        disposition.NextSafeCommand,
+        disposition.FreshAt,
+        disposition.Blockers,
+        disposition.Evidence.Select(ToOperatorEvidencePointerDto).ToList(),
+        disposition.Dispatches.Select(dispatch => ToDispatchOperatorDispositionDto(goal, dispatch)).ToList());
+
+private static DispatchOperatorDispositionDto ToDispatchOperatorDispositionDto(Goal goal, DispatchOperatorDisposition dispatch) =>
+    new(
+        dispatch.TaskId.Value,
+        ConsoleViews.GetTaskDisplayNumber(goal, dispatch.TaskId),
+        dispatch.Role,
+        dispatch.TaskStatus,
+        dispatch.State,
+        dispatch.Confidence,
+        TimelineText(dispatch.Reason),
+        dispatch.NextSafeCommand,
+        dispatch.FreshAt,
+        dispatch.Blockers,
+        dispatch.Evidence.Select(ToOperatorEvidencePointerDto).ToList(),
+        ToDispatchAuthoritativeStateDto(dispatch.DispatchState));
+
+private static OperatorEvidencePointerDto ToOperatorEvidencePointerDto(OperatorEvidencePointer pointer) =>
+    new(pointer.Kind, pointer.Path, TimelineText(pointer.Detail));
 
 public static NextActionControlDto? ToNextActionControlDto(
     Goal goal,

@@ -303,6 +303,13 @@ public static partial class DashboardRenderer
             var goalPrefix = goal.Id.Value[..8];
             html.AppendLine("<section class=\"goal-card\">");
             RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+            RenderOperatorDisposition(
+                html,
+                new GoalOperatorDispositionSurface().Evaluate(
+                    goal,
+                    monitor.PendingHumanInputCount,
+                    verificationGate.IsSatisfied,
+                    options.Workspace?.ExecutionDirectory));
 
             // Attention items — always visible in ops
             if (monitor.AttentionItems.Count > 0)
@@ -408,6 +415,13 @@ public static partial class DashboardRenderer
 
         html.AppendLine("<section class=\"goal-card\">");
         RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+        RenderOperatorDisposition(
+            html,
+            new GoalOperatorDispositionSurface().Evaluate(
+                goal,
+                monitor.PendingHumanInputCount,
+                verificationGate.IsSatisfied,
+                options.Workspace?.ExecutionDirectory));
 
         // Attention items and next steps — open
         html.AppendLine("<div class=\"goal-panel\">");

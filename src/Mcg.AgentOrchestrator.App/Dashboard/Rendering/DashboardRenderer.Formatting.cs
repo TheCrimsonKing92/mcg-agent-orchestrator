@@ -11,6 +11,23 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
 public static partial class DashboardRenderer
 {
+    private static void RenderOperatorDisposition(StringBuilder html, GoalOperatorDisposition disposition)
+    {
+        var blockers = disposition.Blockers.Count == 0
+            ? "none"
+            : string.Join(", ", disposition.Blockers);
+        var evidence = disposition.Evidence.Count == 0
+            ? "evidence: none"
+            : "evidence: " + string.Join(", ", disposition.Evidence.Take(3).Select(item => $"{item.Kind}={item.Path}"));
+        html.AppendLine("<div class=\"goal-panel\">");
+        html.AppendLine("<h3>Operator disposition</h3>");
+        html.AppendLine($"<p><strong>{Encode(disposition.State.ToString())}</strong> <span class=\"meta\">confidence {Encode(disposition.Confidence.ToString())} &middot; fresh {Encode(disposition.FreshAt.ToString("u"))}</span></p>");
+        html.AppendLine($"<p>{Encode(OutputTextPreview.CreateTimeline(disposition.Reason).Text)}</p>");
+        html.AppendLine($"<p>Next safe command: <code>{Encode(disposition.NextSafeCommand)}</code></p>");
+        html.AppendLine($"<p class=\"meta\">Blockers: {Encode(blockers)} &middot; {Encode(evidence)}</p>");
+        html.AppendLine("</div>");
+    }
+
     private static string RenderEvidence(TaskSpec task)
     {
         var execution = task.LastExecution is null

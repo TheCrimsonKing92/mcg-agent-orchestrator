@@ -112,11 +112,14 @@ internal static class DashboardMonitoringEvents
         OperatorInboxReportDto? operatorInbox,
         ProviderCapacityScheduleDto? providerCapacity)
     {
+        var monitor = kernel.BuildMonitor(goal.Id);
+        var verification = kernel.BuildVerificationGate(goal.Id);
+        var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, verification.IsSatisfied);
         return new GoalMonitoringSnapshotDto(
             goal.Id.Value,
             DateTimeOffset.UtcNow,
             lastEventId,
-            DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id)),
+            DashboardResponseMapper.ToMonitorDto(monitor),
             goal.Tasks.Select(task => new TaskMonitoringSnapshotDto(
                 ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
                 task.Id.Value,
@@ -128,6 +131,7 @@ internal static class DashboardMonitoringEvents
                     task.LastDispatch is null && task.LastProcess is null
                         ? null
                         : new DispatchStateSurface().Evaluate(goal.Id, task)))).ToList(),
+            DashboardResponseMapper.ToGoalOperatorDispositionDto(goal, disposition),
             operatorInbox,
             providerCapacity);
     }

@@ -514,6 +514,9 @@ public sealed class DashboardRenderingTests
     Assert.Equal(DispatchRecoveryAction.MarkStale, recovery!.Action);
     Assert.Equal("mark-stale", recovery.ActionName);
     Assert.Equal("heartbeat-absent", recovery.EvidencePath);
+    Assert.Equal(OperatorDispositionState.Recover, dto.OperatorDisposition.State);
+    Assert.Equal("goal-recovery apply 1 --action mark-stale", dto.OperatorDisposition.NextSafeCommand);
+    Assert.Contains(dto.OperatorDisposition.Evidence, pointer => pointer.Kind == "exit-code");
     Assert.NotNull(dispatchState);
     Assert.Equal(DispatchStateKind.StaleCleanup, dispatchState!.Kind);
     Assert.Equal("mark-stale", dispatchState.RecommendedAction);
@@ -797,6 +800,8 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains("ReadyNowCount", snapshotText);
     Xunit.Assert.Contains("Verify task 1", snapshotText);
     Xunit.Assert.Contains("\"DispatchState\"", snapshotText);
+    Xunit.Assert.Contains("\"OperatorDisposition\"", snapshotText);
+    Xunit.Assert.Contains("\"NextSafeCommand\"", snapshotText);
     Xunit.Assert.Contains("\"RecommendedAction\": \"mark-stale\"", snapshotText);
     Xunit.Assert.Contains("\"ProcessTree\"", snapshotText);
     Xunit.Assert.Contains("\"WrapperProcessId\": 333333", snapshotText);
@@ -1481,6 +1486,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("name=\"answer\" value=\"No\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"data-toggle-custom-answer=\"answer-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("aria-expanded=\"false\"", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Operator disposition", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Next safe command:", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Work summary", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Action recommendation", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open recommendation JSON", StringComparison.Ordinal));
