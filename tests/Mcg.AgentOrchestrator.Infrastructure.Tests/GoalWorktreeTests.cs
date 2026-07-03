@@ -155,6 +155,17 @@ public sealed class GoalWorktreeIntegrationTests
     public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
     {
         var repoRoot = FindCurrentSourceRoot();
+        var cliCommandText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Cli",
+            "RepoProcessCliCommand.cs"));
+        Assert.DoesNotContain("ProcessCommandLines.Read", cliCommandText, StringComparison.Ordinal);
+        Assert.DoesNotContain("wmic", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Get-CimInstance", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Win32_Process", cliCommandText, StringComparison.OrdinalIgnoreCase);
+
         foreach (var relativePath in new[]
         {
             Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
