@@ -1735,6 +1735,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("BLOCKER step=verification reason=timeout", StringComparison.Ordinal), output);
             Assert.True(output.Contains("artifacts=C:\\artifacts\\goal-acceptance", StringComparison.Ordinal), output);
             Assert.True(output.Contains("Command: dotnet test infrastructure", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("stdout: C:\\temp\\acc.out", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("stderr: C:\\temp\\acc.err", StringComparison.Ordinal), output);
             Assert.True(output.Contains("Last output:", StringComparison.Ordinal), output);
             Assert.True(output.Contains("still running", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
