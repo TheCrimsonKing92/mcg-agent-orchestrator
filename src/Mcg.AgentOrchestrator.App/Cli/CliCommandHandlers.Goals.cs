@@ -738,7 +738,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.WorkerProfiles,
                 context.Workspace.ExecutionDirectory,
                 nextPolicy);
-            ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.Agents, nextHealth);
+            var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(context.Workspace.RunEventStorePath, context.CurrentGoal);
+            ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.Agents, nextHealth, conductorDisposition);
             if (isFull)
             {
                 PrintNextFullDetail(context, nextPolicy);
@@ -942,6 +943,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
                     persistGoalTick: context.PersistGoalCheckpoint,
+                    buildOperatorDispositions: loopKernel => ConductorOperatorDispositionSnapshots.Build(loopKernel, context.Workspace.ExecutionDirectory),
                     quiet: quietWatchProgress,
                     stallWarningThreshold: stallWarningThreshold);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
@@ -1000,7 +1002,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     wakeSignal: watchWakeSignal,
                     maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint,
-                    persistGoalTick: context.PersistGoalCheckpoint);
+                    persistGoalTick: context.PersistGoalCheckpoint,
+                    buildOperatorDispositions: wk => ConductorOperatorDispositionSnapshots.Build(wk, context.Workspace.ExecutionDirectory));
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }

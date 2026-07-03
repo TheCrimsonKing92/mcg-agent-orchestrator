@@ -85,6 +85,7 @@ internal static class ConductorTickPusher
         tick.Retried,
         tick.Done,
         tick.WatchSleeping,
-        progressLines = (IReadOnlyList<string>?)tick.ProgressLines ?? Array.Empty<string>()
+        progressLines = (IReadOnlyList<string>?)tick.ProgressLines ?? Array.Empty<string>(),
+        operatorDispositions = (IReadOnlyList<ConductorOperatorDispositionSnapshot>?)tick.OperatorDispositions ?? Array.Empty<ConductorOperatorDispositionSnapshot>()
     };
 }

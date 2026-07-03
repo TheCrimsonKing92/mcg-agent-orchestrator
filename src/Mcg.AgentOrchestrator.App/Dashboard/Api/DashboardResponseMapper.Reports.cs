@@ -246,13 +246,14 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     IReadOnlyList<AgentDefinition>? agents = null,
     DashboardHostInfoDto? host = null,
     string? executionDirectory = null,
-    IReadOnlyList<string>? changedFiles = null)
+    IReadOnlyList<string>? changedFiles = null,
+    GoalOperatorDisposition? conductorDisposition = null)
 {
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
-    var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, gate.IsSatisfied, executionDirectory);
+    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, gate.IsSatisfied, executionDirectory);
 
     return new GoalWorkSummaryDto(
         goal.Id.Value,
@@ -504,11 +505,11 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
 public static NextActionsDto ToNextActionsDto(
     Goal goal,
     GoalNextActions actions,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    GoalOperatorDisposition? conductorDisposition = null)
 {
-    var pendingHumanInput = goal.Tasks.Count(task => task.Status == WorkTaskStatus.WaitingForHuman);
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
-    var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, pendingHumanInput, verificationSatisfied);
+    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied);
     return new NextActionsDto(
         actions.GoalId.Value,
         SummaryText(actions.Objective),

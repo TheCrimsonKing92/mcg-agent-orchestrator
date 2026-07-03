@@ -1677,6 +1677,40 @@ public sealed class ConductorBatchLoopTests
         Assert.True(ticks.Skip(1).All(t => t.ProgressLines is not null && t.ProgressLines.Count == 0));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorTick_includes_operator_disposition_snapshot")]
+    public void ConductorTickIncludesOperatorDispositionSnapshot()
+    {
+        var (kernel, goal) = SimpleGoal("operator disposition tick");
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        BatchTickSummary? captured = null;
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: tick => captured = tick,
+            buildOperatorDispositions: _ =>
+            [
+                new ConductorOperatorDispositionSnapshot(
+                    goal.Id.Value,
+                    OperatorDispositionState.Wait,
+                    OperatorDispositionConfidence.High,
+                    "conductor snapshot",
+                    "wait",
+                    DateTimeOffset.Parse("2026-07-03T12:10:00Z"),
+                    [],
+                    [],
+                    [])
+            ]);
+
+        var snapshot = Assert.Single(captured!.OperatorDispositions!);
+        Assert.Equal(goal.Id.Value, snapshot.GoalId);
+        Assert.Equal(OperatorDispositionState.Wait, snapshot.State);
+        Assert.Equal("conductor snapshot", snapshot.Reason);
+    }
+
     [Xunit.Fact(DisplayName = "WatchProgress_emits_dispatch_role_liveness_bytes_and_files")]
     public void WatchProgressEmitsDispatchRoleLivenessBytesAndFiles()
     {

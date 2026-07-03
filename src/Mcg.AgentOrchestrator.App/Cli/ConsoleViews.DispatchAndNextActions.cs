@@ -65,7 +65,8 @@ public static void PrintNextActions(
     Goal goal,
     GoalNextActions actions,
     IReadOnlyList<AgentDefinition>? agents = null,
-    GoalHealthReport? health = null)
+    GoalHealthReport? health = null,
+    GoalOperatorDisposition? conductorDisposition = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
@@ -75,9 +76,9 @@ public static void PrintNextActions(
     }
 
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
-    var operatorDisposition = new GoalOperatorDispositionSurface().Evaluate(
+    var operatorDisposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
         goal,
-        goal.Tasks.Count(task => task.Status == WorkTaskStatus.WaitingForHuman),
+        pendingHumanInputCount: 0,
         verificationSatisfied);
     PrintOperatorDisposition(operatorDisposition);
 

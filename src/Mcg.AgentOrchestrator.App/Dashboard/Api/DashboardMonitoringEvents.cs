@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -38,10 +39,11 @@ internal static class DashboardMonitoringEvents
         Goal goal,
         long sinceEventId,
         OperatorInboxReportDto? operatorInbox,
-        ProviderCapacityScheduleDto? providerCapacity)
+        ProviderCapacityScheduleDto? providerCapacity,
+        GoalOperatorDisposition? conductorDisposition = null)
     {
         var allEvents = BuildTimelineEvents(goal);
-        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity);
+        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity, conductorDisposition);
         return new GoalMonitoringBatchDto(
             goal.Id.Value,
             Math.Max(0, sinceEventId),
@@ -110,11 +112,12 @@ internal static class DashboardMonitoringEvents
         Goal goal,
         long lastEventId,
         OperatorInboxReportDto? operatorInbox,
-        ProviderCapacityScheduleDto? providerCapacity)
+        ProviderCapacityScheduleDto? providerCapacity,
+        GoalOperatorDisposition? conductorDisposition)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var verification = kernel.BuildVerificationGate(goal.Id);
-        var disposition = new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, verification.IsSatisfied);
+        var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, verification.IsSatisfied);
         return new GoalMonitoringSnapshotDto(
             goal.Id.Value,
             DateTimeOffset.UtcNow,
@@ -199,7 +202,8 @@ internal static class DashboardMonitoringEvents
                     payload.Retried,
                     payload.Done,
                     payload.WatchSleeping,
-                    payload.ProgressLines);
+                    payload.ProgressLines,
+                    payload.OperatorDispositions);
         }
         catch (JsonException)
         {
@@ -215,5 +219,6 @@ internal static class DashboardMonitoringEvents
         int Retried,
         int Done,
         bool WatchSleeping,
-        IReadOnlyList<string>? ProgressLines);
+        IReadOnlyList<string>? ProgressLines,
+        IReadOnlyList<ConductorOperatorDispositionSnapshot>? OperatorDispositions);
 }
