@@ -533,7 +533,7 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
-                BackgroundDispatchRunner.ApplyRefreshOutcome(current, goal.Id, task.Id, outcome);
+                runner.ApplyRefreshOutcomeAndWriteDiagnostics(current, goal.Id, task.Id, outcome);
                 AutonomyPolicyEvidence.Record(current, goal, policy, AutonomyAction.Refresh, "refresh", allowed: true);
                 var updatedGoal = ResolveGoal(current, goalId);
                 var updatedTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(updatedGoal, taskId);
@@ -573,7 +573,7 @@ internal static partial class DashboardEndpoints
                 var refreshed = new List<TaskSpec>();
                 foreach (var (refreshTaskId, outcome) in outcomes)
                 {
-                    BackgroundDispatchRunner.ApplyRefreshOutcome(current, goal.Id, refreshTaskId, outcome);
+                    runner.ApplyRefreshOutcomeAndWriteDiagnostics(current, goal.Id, refreshTaskId, outcome);
                     refreshed.Add(current.GetTask(goal.Id, refreshTaskId));
                 }
 

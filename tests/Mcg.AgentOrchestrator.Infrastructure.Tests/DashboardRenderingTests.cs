@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 
 public sealed class DashboardRenderingTests
 {
@@ -668,6 +669,16 @@ public sealed class DashboardRenderingTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var goalPrefix = goal.Id.Value[..8];
+    var dispatchRoot = CreateTempDirectory();
+    var stdout = Path.Combine(dispatchRoot, "developer.out.log");
+    var stderr = Path.Combine(dispatchRoot, "developer.err.log");
+    var exit = Path.Combine(dispatchRoot, "developer.exit.txt");
+    File.WriteAllText(stdout, "worker output");
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", dispatchRoot, DateTimeOffset.UtcNow));
+    var process = new TaskProcessRecord(333333, "codex exec prompt", dispatchRoot, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, DateTimeOffset.UtcNow.AddMinutes(-45), DateTimeOffset.UtcNow.AddMinutes(-45), childPid: 444444, ownedPids: [333333, 444444]);
     var initialCursor = DashboardMonitoringEvents.BuildBatch(kernel, goal, 0).LastEventId;
 
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started monitoring work.");
@@ -785,6 +796,17 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains("ProviderCapacity", snapshotText);
     Xunit.Assert.Contains("ReadyNowCount", snapshotText);
     Xunit.Assert.Contains("Verify task 1", snapshotText);
+    Xunit.Assert.Contains("\"DispatchState\"", snapshotText);
+    Xunit.Assert.Contains("\"RecommendedAction\": \"mark-stale\"", snapshotText);
+    Xunit.Assert.Contains("\"ProcessTree\"", snapshotText);
+    Xunit.Assert.Contains("\"WrapperProcessId\": 333333", snapshotText);
+    Xunit.Assert.Contains("\"ChildProcessId\": 444444", snapshotText);
+    Xunit.Assert.Contains("\"Artifacts\"", snapshotText);
+    Xunit.Assert.Contains("\"StandardOutputExists\": true", snapshotText);
+    Xunit.Assert.Contains("\"Worktree\"", snapshotText);
+    Xunit.Assert.Contains("\"WorkingDirectory\"", snapshotText);
+    Xunit.Assert.Contains("\"StaleThresholds\"", snapshotText);
+    Xunit.Assert.Contains("\"StaleRetryBudgetRemaining\"", snapshotText);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_task_summary_fields_without_mutating_task")]
@@ -3061,5 +3083,30 @@ private static void RunGit(string workingDirectory, params string[] arguments)
     {
         throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {output}{error}");
     }
+}
+
+private static void WriteHeartbeat(
+    TaskProcessRecord process,
+    DateTimeOffset lastObservedAt,
+    DateTimeOffset lastProgressAt,
+    int? childPid = null,
+    IReadOnlyList<int>? ownedPids = null)
+{
+    var heartbeat = new
+    {
+        pid = process.ProcessId,
+        childPid,
+        ownedPids = ownedPids ?? Array.Empty<int>(),
+        startedAt = process.StartedAt,
+        lastObservedAt,
+        lastProgressAt,
+        state = "running",
+        stdoutBytes = 13,
+        stderrBytes = 0,
+        exitFileExists = false
+    };
+    File.WriteAllText(
+        BackgroundDispatchRunner.GetHeartbeatPath(process),
+        JsonSerializer.Serialize(heartbeat));
 }
 }
