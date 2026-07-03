@@ -23,13 +23,12 @@ internal static class WorkerResultParser
     /// <list type="bullet">
     ///   <item>Markdown decoration on the opener, end marker, and field keys is stripped.</item>
     ///   <item>Missing END_WORKER_RESULT is tolerated (EOF / blank line / heading terminates).</item>
-    ///   <item>When no opener is found, a field scan locates fields anywhere in the text.</item>
+    ///   <item>When no opener is found, a field scan locates the full required field set anywhere in the text.</item>
     /// </list>
     /// Returns false (with <paramref name="diagnostic"/>) when:
     /// <list type="bullet">
     ///   <item>A block opener is found but required fields are missing (substance gap, not format).</item>
-    ///   <item>No opener and the field scan cannot recover the minimal viable receipt
-    ///         (files + tests).</item>
+    ///   <item>No opener and the field scan cannot recover the full required field set.</item>
     /// </list>
     /// </summary>
     public static bool TryParseFields(
@@ -49,14 +48,14 @@ internal static class WorkerResultParser
             return TryParseBlock(lines, out fields, out diagnostic);
         }
 
-        // No opener at all: scan the full text for known field patterns.
-        // Minimal viable receipt requires at least commit, files, and tests.
-        if (TryScanFields(lines, out fields))
+        // No opener at all: scan the full text for known field patterns. This
+        // fallback is intentionally strict so incidental field labels in prose
+        // cannot be treated as a successful worker result.
+        if (TryScanFields(lines, out fields, out diagnostic))
         {
             return true;
         }
 
-        diagnostic = "missing WORKER_RESULT block.";
         return false;
     }
 
@@ -171,9 +170,13 @@ internal static class WorkerResultParser
 
     // ── Field scan (no-opener fallback) ───────────────────────────────────────
 
-    private static bool TryScanFields(string[] lines, out Dictionary<string, string> fields)
+    private static bool TryScanFields(
+        string[] lines,
+        out Dictionary<string, string> fields,
+        out string diagnostic)
     {
         fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        diagnostic = string.Empty;
 
         foreach (var line in lines)
         {
@@ -204,9 +207,24 @@ internal static class WorkerResultParser
             }
         }
 
-        // Minimal viable receipt: files and tests must be recoverable. commit is advisory.
-        return fields.ContainsKey("files") &&
-               fields.ContainsKey("tests");
+        var missing = new List<string>();
+        foreach (var f in RequiredFields)
+        {
+            if (!fields.ContainsKey(f))
+            {
+                missing.Add(f);
+            }
+        }
+
+        if (missing.Count == 0)
+        {
+            return true;
+        }
+
+        diagnostic = fields.Count == 0
+            ? "missing WORKER_RESULT block."
+            : $"missing WORKER_RESULT field(s): {string.Join(", ", missing)}.";
+        return false;
     }
 
     // ── Normalization helpers ─────────────────────────────────────────────────

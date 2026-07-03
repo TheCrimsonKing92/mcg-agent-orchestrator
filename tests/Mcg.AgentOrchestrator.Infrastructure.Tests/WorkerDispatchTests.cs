@@ -5373,6 +5373,42 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_rejects_no_opener_files_plus_tests_only")]
+    public void WorkerResultParserSuccessfulResultRejectsNoOpenerFilesPlusTestsOnly()
+{
+    var output = """
+        Completed work summary:
+        files: src/Feature.cs
+        tests: Passed: 2, Failed: 0
+        """;
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out _, out var diagnostic);
+
+    Assert.False(parsed);
+    Assert.Contains("missing WORKER_RESULT field(s): commands, blockers, model_fit, skills, confidence.", diagnostic);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_accepts_complete_no_opener_field_scan")]
+    public void WorkerResultParserSuccessfulResultAcceptsCompleteNoOpenerFieldScan()
+{
+    var output = """
+        Completed work summary:
+        files: src/Feature.cs
+        commands: dotnet test --filter WorkerDispatch
+        tests: Passed: 2, Failed: 0
+        blockers: none
+        model_fit: OpenAI/gpt-5.5 - adequate - parser regression
+        skills: dotnet-windows-build-hygiene
+        confidence: high
+        """;
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out var fields, out var diagnostic);
+
+    Assert.True(parsed, diagnostic);
+    Assert.Equal("src/Feature.cs", fields["files"]);
+    Assert.Equal("none", fields["blockers"]);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
     public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractPassesAdvisory()
 {
