@@ -237,6 +237,14 @@ internal static partial class CliCommandHandlers
                 return false;
             }
 
+            case "repo-process-info":
+                RepoProcessCliCommand.PrintInfo(parts, Console.Out);
+                return false;
+
+            case "repo-process-stop":
+                RepoProcessCliCommand.Stop(parts, Console.Out);
+                return false;
+
             case "stable-slot-dotnet":
                 RunStableSlotDotnet(parts, context);
                 return false;

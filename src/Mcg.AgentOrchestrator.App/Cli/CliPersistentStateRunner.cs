@@ -26,6 +26,21 @@ internal static class CliPersistentStateRunner
             return false;
         }
 
+        if (SkipsKernelState(args))
+        {
+            var commandKernel = new AgentOrchestratorKernel();
+            Goal? commandCurrentGoal = null;
+            return CliCommandDispatcher.ExecuteCommand(
+                args,
+                commandKernel,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref commandCurrentGoal,
+                channel);
+        }
+
         if (IsMetadataOnlyListing(args))
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
@@ -168,7 +183,7 @@ internal static class CliPersistentStateRunner
             // the kernel must NOT be listed here.
             "backlog-list" or "backlog-add" or "backlog-show" or "backlog-close" or
             "backlog-reopen" or "backlog-view" or
-            "firewall-setup" or "stable-slot-dotnet" or
+            "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "project" => true,
             _ => false,
         };
@@ -183,6 +198,8 @@ internal static class CliPersistentStateRunner
             "hosted-dashboard" or
             "simple-hosted-dashboard" or
             "open-dashboard" or
+            "repo-process-info" or
+            "repo-process-stop" or
             "monitor-goal" or
             "operator-channel" => false,
             _ => true

@@ -3,14 +3,10 @@
   Stop exact process ids after optional command-line guard checks.
 
 .DESCRIPTION
-  Operator helper for stopping known stale orchestrator processes through the
-  repo-approved Invoke-RepoScript.ps1 prefix. This intentionally requires exact
-  process ids and can verify that each command line contains one or more expected
-  substrings before stopping anything.
-
-.EXAMPLE
-  .\scripts\Invoke-RepoScript.ps1 scripts\Stop-RepoProcess.ps1 -Id 1234 -CommandContains acceptance -CommandContains c38f8779 -Force
+  Repo-bounded wrapper around the orchestrator CLI guarded process stopper. The
+  guard and tree stop run in .NET instead of PowerShell CIM/Stop-Process.
 #>
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [int[]]$Id,
@@ -23,20 +19,26 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$arguments = @('repo-process-stop')
 foreach ($processId in $Id) {
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$processId"
-    if ($null -eq $process) {
-        Write-Output "PROCESS id=$processId status=missing"
-        continue
-    }
+    $arguments += @('--id', $processId.ToString([System.Globalization.CultureInfo]::InvariantCulture))
+}
+foreach ($needle in $CommandContains) {
+    $arguments += @('--command-contains', $needle)
+}
+if ($Force) {
+    $arguments += '--force'
+}
 
-    $command = [string]$process.CommandLine
-    foreach ($needle in $CommandContains) {
-        if ($command.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
-            throw "Refusing to stop process $processId because command line does not contain '$needle'."
-        }
+try {
+    & (Join-Path $repoRoot 'scripts\Invoke-OrchestratorCommand.ps1') @arguments
+    if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
     }
-
-    Stop-Process -Id $processId -Force:$Force
-    Write-Output "PROCESS id=$processId status=stopped"
+}
+catch {
+    Write-Output "PROCESS_STOP_UNAVAILABLE operation=script-wrapper reason=$($_.Exception.GetType().Name): $($_.Exception.Message)"
+    Write-Output 'BACKLOG_CANDIDATE title="Repo process stop degraded" body="Stop-RepoProcess.ps1 could not run the orchestrator-authored guarded stop; preserve this disposition instead of requesting operator approval."'
+    exit 1
 }

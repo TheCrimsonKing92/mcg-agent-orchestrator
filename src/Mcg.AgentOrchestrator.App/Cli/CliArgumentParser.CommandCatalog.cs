@@ -27,6 +27,8 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "retention-plan",
     "build-lease-cleanup",
     "firewall-setup",
+    "repo-process-info",
+    "repo-process-stop",
     "stable-slot-dotnet",
     "acceptance-queue",
     "drain-goals",

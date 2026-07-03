@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -141,13 +142,116 @@ public sealed class GoalWorktreeIntegrationTests
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
         var stderr = process.StandardError.ReadToEnd();
-        process.StandardOutput.ReadToEnd();
+        var stdout = process.StandardOutput.ReadToEnd();
 
         Assert.True(process.WaitForExit(30000), "Find-OrchestratorLocks.ps1 did not exit within 30 seconds.");
         Assert.True(
             process.ExitCode is 0 or 2,
             $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("repo-process-info --locks", stdout, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Repo_process_helpers_do_not_use_PowerShell_CIM_process_queries")]
+    public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var cliCommandText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Cli",
+            "RepoProcessCliCommand.cs"));
+        Assert.DoesNotContain("ProcessCommandLines.Read", cliCommandText, StringComparison.Ordinal);
+        Assert.DoesNotContain("wmic", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Get-CimInstance", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Win32_Process", cliCommandText, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
+            Path.Combine("scripts", "Stop-RepoProcess.ps1"),
+            Path.Combine("scripts", "Find-OrchestratorLocks.ps1"),
+            Path.Combine("scripts", "Get-OrchestratorSnapshot.ps1")
+        })
+        {
+            var text = File.ReadAllText(Path.Combine(repoRoot, relativePath));
+            Assert.DoesNotContain("Get-CimInstance", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Win32_Process", text, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GetRepoProcessInfo_reports_exact_pid_lineage_through_repo_prefix")]
+    public void GetRepoProcessInfoReportsExactPidLineageThroughRepoPrefix()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Get-RepoProcessInfo.ps1");
+        startInfo.ArgumentList.Add("-Id");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Get-RepoProcessInfo.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Get-RepoProcessInfo.ps1 did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.True(stdout.Contains($"PROCESS id={Environment.ProcessId}", StringComparison.Ordinal), stdout);
+        Assert.True(stdout.Contains("parent=", StringComparison.Ordinal), stdout);
+        Assert.True(stdout.Contains("command=", StringComparison.Ordinal), stdout);
+    }
+
+    [Xunit.Fact(DisplayName = "StopRepoProcess_refuses_exact_pid_when_command_guard_mismatches")]
+    public void StopRepoProcessRefusesExactPidWhenCommandGuardMismatches()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Stop-RepoProcess.ps1");
+        startInfo.ArgumentList.Add("-Id");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("-CommandContains");
+        startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
+        startInfo.ArgumentList.Add("-Force");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Stop-RepoProcess.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.True(
+            stdout.Contains($"PROCESS id={Environment.ProcessId} status=refused reason=command-mismatch", StringComparison.Ordinal),
+            stdout);
     }
 
     [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_fails_when_filter_runs_zero_tests")]
@@ -2607,6 +2711,56 @@ public sealed class GoalWorktreeIntegrationTests
             var reloaded = await stateRepository.LoadAsync();
             var reloadedGoal = reloaded.GetGoal(goal.Id);
             Assert.Null(reloadedGoal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_repo_process_commands_skip_persistent_state_loading")]
+    public void CliRepoProcessCommandsSkipPersistentStateLoading()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var stateRepository = new ThrowingTransactionalStateRepository();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-info", "--id", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)]));
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["repo-process-info", "--id", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)],
+                    stateRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Assert.False(changed);
+            });
+
+            Assert.Contains($"PROCESS id={Environment.ProcessId}", output);
+            Assert.Equal(0, stateRepository.LoadCount);
+            Assert.Equal(0, stateRepository.TransactionCount);
+
+            Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-stop"]));
+            var usage = Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+                ["repo-process-stop"],
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Assert.Contains("Usage: repo-process-stop", usage.Message);
+            Assert.Equal(0, stateRepository.LoadCount);
+            Assert.Equal(0, stateRepository.TransactionCount);
         }
         finally
         {
@@ -5556,6 +5710,83 @@ public sealed class GoalWorktreeIntegrationTests
         {
             inner.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
             afterReset();
+        }
+    }
+
+    private sealed class ThrowingTransactionalStateRepository : ITransactionalOrchestratorStateRepository
+    {
+        public int LoadCount { get; private set; }
+
+        public int TransactionCount { get; private set; }
+
+        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load persistent state");
+        }
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load goal state");
+        }
+
+        public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save persistent state");
+
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list goal metadata");
+
+        public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list conduct metadata");
+
+        public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list model fit history");
+
+        public Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+            int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not build model outcomes");
+
+        public Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not query best fit");
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact persistent state");
+        }
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact persistent state");
+        }
+
+        public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load goal snapshots");
+        }
+
+        public Task SaveGoalSnapshotsAsync(
+            IReadOnlyCollection<GoalSnapshot> goals,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save goal snapshots");
+
+        public Task<T> TransactGoalAsync<T>(
+            GoalId goalId,
+            Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact goal state");
         }
     }
 
