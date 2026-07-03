@@ -1235,6 +1235,27 @@ public sealed class WorkerDispatchTests
     Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProvider_parse_outcome_ignores_rate_limit_words_inside_WORKER_RESULT_blockers")]
+    public void WorkerProviderParseOutcomeIgnoresRateLimitWordsInsideWorkerResultBlockers()
+{
+    var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: dotnet test --no-build",
+        "tests: not-run",
+        "commit: none",
+        "blockers: API rate limit hit while running a local verification fixture",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: none",
+        "confidence: medium",
+        "END_WORKER_RESULT");
+
+    var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, stdout, string.Empty));
+
+    Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+}
+
     [Xunit.Fact(DisplayName = "DispatchFailureClassifier_identifies_subscription_dispatch_from_typed_provider_identity")]
     public void DispatchFailureClassifierIdentifiesSubscriptionDispatchFromTypedProviderIdentity()
 {
@@ -4263,6 +4284,62 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(exit));
     Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("no observable progress", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("heartbeat state=running", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_records_WORKER_RESULT_blocker_as_task_failure_without_subscription_retry")]
+    public void BackgroundDispatchRunnerRefreshRecordsWorkerResultBlockerAsTaskFailureWithoutSubscriptionRetry()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-07-03T14:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh structured blocker");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: dotnet test --no-build",
+        "tests: fail - timed out",
+        "commit: none",
+        "blockers: full Infrastructure no-build timed out at 214s",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: dotnet-windows-build-hygiene",
+        "confidence: medium",
+        "END_WORKER_RESULT"));
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "1");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt",
+        root,
+        now.AddMinutes(-5),
+        "OpenAI",
+        "gpt-5.5",
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+    var completed = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, completed.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Equal(ProviderFailureKind.Unknown, task.LastVerification.ProviderFailureKind);
+    Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("full Infrastructure no-build timed out at 214s", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_fast_path_fires_when_cpu_idle_and_no_output")]
