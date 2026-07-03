@@ -7711,6 +7711,110 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_returns_success_after_durable_deferred_cleanup")]
+    public void PersistentRunnerGoalMarkLandedReturnsSuccessAfterDurableDeferredCleanup()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Already landed deferred cleanup", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var repository = new InMemoryTransactionalStateRepository(kernel)
+            {
+                BeforeSaveCommit = _ =>
+                {
+                    GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+                    GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
+                    GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
+                    GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
+                    throw new TimeoutException("state commit timed out");
+                }
+            };
+
+            var stderr = CaptureConsoleError(() => CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                    repository,
+                    CreateRefinedWorkspace(root),
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.True(changed);
+            }));
+
+            Xunit.Assert.Contains("warning: goal-mark-landed state commit failed after durable landed state", stderr);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_state_commit_timeout_requires_recorded_evidence")]
+    public void PersistentRunnerGoalMarkLandedStateCommitTimeoutRequiresRecordedEvidence()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Already landed missing record evidence", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var repository = new InMemoryTransactionalStateRepository(kernel)
+            {
+                BeforeSaveCommit = _ =>
+                {
+                    File.Delete(GoalOperationJournal.PathFor(root, goal.Id));
+                    GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+                    GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
+                    GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
+                    throw new TimeoutException("state commit timed out");
+                }
+            };
+
+            var ex = Xunit.Assert.Throws<TimeoutException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                repository,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+
+            Xunit.Assert.Equal("state commit timed out", ex.Message);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry")]
     public void CliGoalMarkLandedRetiresCompletedGoalAndWritesCleanupJournalEntry()
     {
