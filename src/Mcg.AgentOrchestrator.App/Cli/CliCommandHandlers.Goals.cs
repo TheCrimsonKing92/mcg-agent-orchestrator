@@ -3121,6 +3121,11 @@ private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
         }
     }
 
+    if (result.CleanupBackoff is not null)
+    {
+        Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(result.CleanupBackoff)}");
+    }
+
     if (result.ResumeCommand is not null)
     {
         Console.WriteLine($"Resume: {result.ResumeCommand}");

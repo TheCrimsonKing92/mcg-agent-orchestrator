@@ -1110,6 +1110,112 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_prints_cleanup_backoff_skip_until")]
+    public void CliWorkspaceRemovePrintsCleanupBackoffSkipUntil()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove backoff", repo);
+            var path = Path.Combine(repo, GoalWorktrees.DirectoryName, goal.Id.Value[..8]);
+            var skipUntil = DateTimeOffset.Parse("2026-07-02T05:01:00Z");
+            var worktrees = new CapturingGoalWorktreeService
+            {
+                RemoveOverride = (_, _, _, _) => new GoalWorktreeRemoveResult(
+                    "Workspace cleanup deferred by cleanup-needed backoff.",
+                    path,
+                    [],
+                    $"conduct {goal.Id.Value[..8]} --loop",
+                    CleanupBackoff: new GoalWorktreeCleanupBackoff(
+                        "remove:cleanup-budget-exhausted",
+                        skipUntil,
+                        TimeSpan.FromMinutes(1)))
+            };
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                Worktrees = worktrees
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Contains("Cleanup backoff:", output);
+            Assert.Contains("reason=remove:cleanup-budget-exhausted", output);
+            Assert.Contains("skip_until_utc=2026-07-02T05:01:00.0000000+00:00", output);
+            Assert.Contains("remaining_wait=00:01:00", output);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_recovery_prints_cleanup_backoff_skip_until")]
+    public void CliGoalRecoveryPrintsCleanupBackoffSkipUntil()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Recover cleanup backoff", [
+                new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)
+            ]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            GoalWorktrees.DeleteDirectory = _ => false;
+            GoalWorktrees.SandboxAclHelper = new RecordingSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
+            _ = GoalWorktrees.Remove(repo, goal.Id);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["goal-recovery", goal.Id.Value[..8]],
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Assert.Contains("Cleanup backoff:", output);
+            Assert.Contains("reason=remove:leftover-directory", output);
+            Assert.Contains("skip_until_utc=2026-07-02T05:10:00.0000000+00:00", output);
+            Assert.Contains("remaining_wait=00:10:00", output);
+            Assert.Contains($"workspace remove {goal.Id.Value[..8]}", output);
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_can_target_non_current_goal")]
     public void CliWorkspaceRemoveCanTargetNonCurrentGoal()
     {
@@ -3742,6 +3848,9 @@ public sealed class GoalWorktreeIntegrationTests
         var originalShutdown = GoalWorktrees.BuildServerShutdown;
         var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
         var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBudgetBackoff = GoalWorktrees.CleanupBudgetExhaustedBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
             var goalId = GoalId.New();
@@ -3753,16 +3862,28 @@ public sealed class GoalWorktreeIntegrationTests
             long elapsedMilliseconds = 2_500;
             var warnings = new List<GoalWorktreeCleanupWarning>();
             var acl = new RecordingSandboxAclHelper();
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
             GoalWorktrees.BuildServerShutdown = (_, _) => elapsedMilliseconds = 10_000;
             GoalWorktrees.SandboxAclHelper = acl;
             GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBudgetExhaustedBackoffDuration = TimeSpan.FromMinutes(1);
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
 
             var result = GoalWorktrees.Remove(repo, goalId, null, 10_000);
 
             Assert.False(result.IsComplete);
             Assert.Equal(path, result.LeftoverPath);
             Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
+            if (result.CleanupBackoff is not { } cleanupBackoff)
+            {
+                throw new InvalidOperationException("Expected cleanup backoff details.");
+            }
+
+            Assert.Equal("remove:cleanup-budget-exhausted", cleanupBackoff.Reason);
+            Assert.Equal(now.AddMinutes(1), cleanupBackoff.SkipUntilUtc);
+            Assert.True(result.Message.Contains("skip_until_utc=", StringComparison.Ordinal));
             Assert.Empty(acl.ResetPaths);
             Assert.True(Directory.Exists(path));
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:cleanup-budget-exhausted"));
@@ -3770,6 +3891,14 @@ public sealed class GoalWorktreeIntegrationTests
                 warning.Operation == "remove:build-server-shutdown" &&
                 warning.Exception is TimeoutException);
             Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+
+            elapsedMilliseconds = 0;
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            var retry = GoalWorktrees.Remove(repo, goalId, null, 10_000);
+
+            Assert.True(retry.IsComplete);
+            Assert.False(Directory.Exists(path));
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
         }
         finally
         {
@@ -3777,6 +3906,9 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.BuildServerShutdown = originalShutdown;
             GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
             GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBudgetExhaustedBackoffDuration = originalBudgetBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -4399,11 +4531,26 @@ public sealed class GoalWorktreeIntegrationTests
             GoalWorktrees.FindLockHoldersForCleanup = _ => [];
 
             var first = GoalWorktrees.Remove(repo, goalId);
+            var firstBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goalId);
             var second = GoalWorktrees.Remove(repo, goalId);
+            var secondBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goalId);
 
             Assert.False(first.IsComplete);
             Assert.False(second.IsComplete);
             Assert.Equal(path, second.LeftoverPath);
+            if (firstBackoff is not { } firstBackoffDetail)
+            {
+                throw new InvalidOperationException("Expected first cleanup backoff details.");
+            }
+
+            if (secondBackoff is not { } secondBackoffDetail)
+            {
+                throw new InvalidOperationException("Expected second cleanup backoff details.");
+            }
+
+            Assert.Equal(firstBackoffDetail.SkipUntilUtc, secondBackoffDetail.SkipUntilUtc);
+            Assert.NotNull(second.CleanupBackoff);
+            Assert.True(second.Message.Contains("skip_until_utc=", StringComparison.Ordinal));
             Assert.Equal(1, deleteAttempts);
             Assert.Equal(1, shutdownCalls);
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));

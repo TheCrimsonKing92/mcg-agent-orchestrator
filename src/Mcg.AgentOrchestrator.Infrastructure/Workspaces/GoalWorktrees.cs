@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -34,12 +35,22 @@ public sealed record GoalWorktreeRebaseResult(
 
 public sealed record WorktreeLockHolder(int ProcessId, string ProcessName, string? CommandLine);
 
+public sealed record GoalWorktreeCleanupBackoff(
+    string Reason,
+    DateTimeOffset SkipUntilUtc,
+    TimeSpan RemainingWait)
+{
+    public bool IsBudgetExhausted =>
+        Reason.Equals("remove:cleanup-budget-exhausted", StringComparison.OrdinalIgnoreCase);
+}
+
 public sealed record GoalWorktreeRemoveResult(
     string Message,
     string? LeftoverPath,
     IReadOnlyList<WorktreeLockHolder> LockHolders,
     string? ResumeCommand,
-    GoalOwnedEphemeralSweepResult? OwnedEphemeralCleanup = null)
+    GoalOwnedEphemeralSweepResult? OwnedEphemeralCleanup = null,
+    GoalWorktreeCleanupBackoff? CleanupBackoff = null)
 {
     public bool IsComplete => LeftoverPath is null;
 }
@@ -169,6 +180,7 @@ public static class GoalWorktrees
     internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
     internal static Func<DateTimeOffset> CleanupUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
     internal static TimeSpan CleanupBackoffDuration { get; set; } = TimeSpan.FromMinutes(30);
+    internal static TimeSpan CleanupBudgetExhaustedBackoffDuration { get; set; } = TimeSpan.FromMinutes(1);
 
     public static string BranchName(GoalId goalId) => $"goal/{Prefix(goalId)}";
 
@@ -392,17 +404,21 @@ public static class GoalWorktrees
         if (hasLeftoverDirectory && IsCleanupBackedOff(path, "remove", out var backoff))
         {
             var lockHolders = FindLockHoldersForCleanup(path);
-            if (!IsLockHeldCleanupNeededReason(backoff.Reason) || lockHolders.Count > 0)
+            if ((!IsLockHeldCleanupNeededReason(backoff.Reason) &&
+                    !IsBudgetExhaustedCleanupNeededReason(backoff.Reason)) ||
+                lockHolders.Count > 0)
             {
+                var detail = ToCleanupBackoff(backoff);
                 WarnCleanupFailure(
                     path,
                     "remove:skip-backoff",
-                    new IOException(BuildCleanupRetryMessage(path, backoff.Reason)));
+                    new IOException(BuildCleanupRetryMessage(path, backoff.Reason, detail)));
                 return new GoalWorktreeRemoveResult(
-                    $"Workspace cleanup deferred by cleanup-needed backoff for {path}.",
+                    $"Workspace cleanup deferred by cleanup-needed backoff for {path}. {FormatCleanupBackoff(detail)}",
                     path,
                     lockHolders,
-                    ConductorRetryCommand(goalId));
+                    ConductorRetryCommand(goalId),
+                    CleanupBackoff: detail);
             }
         }
 
@@ -429,11 +445,14 @@ public static class GoalWorktrees
                 !RunBoundedCleanupStep(path, "remove:acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove", timeout)))
             {
                 RecordCleanupNeeded(path, "remove:cleanup-budget-exhausted");
+                var detail = TryGetCleanupBackoff(path);
                 return new GoalWorktreeRemoveResult(
-                    $"Workspace cleanup deferred because cleanup budget was exhausted before deleting {path}.",
+                    $"Workspace cleanup deferred because cleanup budget was exhausted before deleting {path}." +
+                        (detail is null ? string.Empty : $" {FormatCleanupBackoff(detail)}"),
                     path,
                     FindLockHoldersForCleanup(path),
-                    ConductorRetryCommand(goalId));
+                    ConductorRetryCommand(goalId),
+                    CleanupBackoff: detail);
             }
         }
 
@@ -875,6 +894,12 @@ public static class GoalWorktrees
     }
 
     private static string ConductorRetryCommand(GoalId goalId) => $"conduct {Prefix(goalId)} --loop";
+
+    public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string executionDirectory, GoalId goalId) =>
+        TryGetCleanupBackoff(WorktreePath(executionDirectory, goalId));
+
+    public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
+        TryReadOrphanCleanupBackoff(path, out var entry) ? ToCleanupBackoff(entry) : null;
 
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
     {
@@ -1325,8 +1350,11 @@ public static class GoalWorktrees
             ? GoalWorktreeDeleteFailureKind.AccessDenied
             : GoalWorktreeDeleteFailureKind.Transient;
 
-    private static string BuildCleanupRetryMessage(string path, string reason) =>
-        $"{reason} Cleanup-needed record persisted in SQLite for conductor retry; path='{path}'.";
+    private static string BuildCleanupRetryMessage(string path, string reason, GoalWorktreeCleanupBackoff? backoff = null)
+    {
+        var suffix = backoff is null ? string.Empty : $" {FormatCleanupBackoff(backoff)}";
+        return $"{reason} Cleanup-needed record persisted in SQLite for conductor retry; path='{path}'.{suffix}";
+    }
 
     private static string CleanupBackoffStorePath(string orphanPath)
     {
@@ -1409,6 +1437,9 @@ public static class GoalWorktrees
     private static bool IsLockHeldCleanupNeededReason(string reason) =>
         reason.EndsWith(":lock-held", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsBudgetExhaustedCleanupNeededReason(string reason) =>
+        reason.Equals("remove:cleanup-budget-exhausted", StringComparison.OrdinalIgnoreCase);
+
     private static void RecordOrphanCleanupBackoff(
         string path,
         string reason,
@@ -1427,10 +1458,10 @@ public static class GoalWorktrees
                     reason = excluded.reason;
                 """;
             command.Parameters.AddWithValue("$path", NormalizePath(path));
-            command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(CleanupBackoffDuration).ToString("O"));
+            command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(CleanupBackoffDurationFor(reason)).ToString("O"));
             command.Parameters.AddWithValue("$reason", reason);
             command.ExecuteNonQuery();
-            WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason)));
+            WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason, TryGetCleanupBackoff(path, cleanupStateRoot))));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -1519,6 +1550,31 @@ public static class GoalWorktrees
     }
 
     private sealed record OrphanCleanupBackoffEntry(DateTimeOffset SkipUntilUtc, string Reason);
+
+    private static TimeSpan CleanupBackoffDurationFor(string reason) =>
+        IsBudgetExhaustedCleanupNeededReason(reason) ? CleanupBudgetExhaustedBackoffDuration : CleanupBackoffDuration;
+
+    private static GoalWorktreeCleanupBackoff ToCleanupBackoff(OrphanCleanupBackoffEntry entry)
+    {
+        var remaining = entry.SkipUntilUtc - CleanupUtcNow();
+        if (remaining < TimeSpan.Zero)
+        {
+            remaining = TimeSpan.Zero;
+        }
+
+        return new GoalWorktreeCleanupBackoff(entry.Reason, entry.SkipUntilUtc, remaining);
+    }
+
+    private static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path, string? cleanupStateRoot) =>
+        TryReadOrphanCleanupBackoff(path, out var entry, cleanupStateRoot) ? ToCleanupBackoff(entry) : null;
+
+    public static string FormatCleanupBackoff(GoalWorktreeCleanupBackoff backoff) =>
+        $"reason={backoff.Reason} skip_until_utc={backoff.SkipUntilUtc:O} remaining_wait={FormatRemainingWait(backoff.RemainingWait)}";
+
+    private static string FormatRemainingWait(TimeSpan wait) =>
+        wait.TotalSeconds < 1
+            ? "00:00:00"
+            : wait.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
 
     private static void DefaultBuildServerShutdown(string worktreePath, int timeoutMilliseconds)
     {

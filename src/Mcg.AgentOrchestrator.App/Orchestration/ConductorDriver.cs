@@ -973,6 +973,11 @@ internal sealed class ConductorDriver
             parts.Add("lockHolders=" + string.Join(", ", cleanup.LockHolders.Select(FormatLockHolder)));
         }
 
+        if (cleanup.CleanupBackoff is not null)
+        {
+            parts.Add(GoalWorktrees.FormatCleanupBackoff(cleanup.CleanupBackoff));
+        }
+
         if (!string.IsNullOrWhiteSpace(cleanup.ResumeCommand))
         {
             parts.Add($"resume={cleanup.ResumeCommand}");

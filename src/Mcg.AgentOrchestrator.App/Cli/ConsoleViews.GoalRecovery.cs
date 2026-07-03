@@ -21,6 +21,11 @@ public static void PrintGoalRecoveryReport(GoalRecoveryReport report)
         $"ownerAlive={report.BuildLease.OwnerProcessAlive} " +
         $"canCleanup={report.BuildLease.CanCleanup}");
     Console.WriteLine($"  {OutputTextPreview.CreateTimeline(report.BuildLease.Detail).Text}");
+    if (report.CleanupBackoff is not null)
+    {
+        Console.WriteLine($"Cleanup backoff: {Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees.FormatCleanupBackoff(report.CleanupBackoff)}");
+    }
+
     if (report.ChangeSummary.Files.Count > 0)
     {
         Console.WriteLine("Change classification: " +

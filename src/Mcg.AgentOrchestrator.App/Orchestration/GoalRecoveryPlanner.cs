@@ -15,6 +15,7 @@ internal sealed record GoalRecoveryReport(
     RepositoryTestImpactPlan TestImpactPlan,
     GoalOperationJournalSummary OperationJournal,
     DotnetBuildLeaseStatus BuildLease,
+    GoalWorktreeCleanupBackoff? CleanupBackoff,
     int PendingHumanInputCount,
     IReadOnlyList<GoalRecoveryTaskFinding> TaskFindings,
     IReadOnlyList<string> RecommendedActions);
@@ -42,6 +43,7 @@ internal static class GoalRecoveryPlanner
         var testImpactPlan = RepositoryTestImpactPlanner.Plan(changeSummary);
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
+        var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id);
         var pendingInput = kernel.BuildHumanInputWorklist(goal.Id).OpenCount;
         var findings = new List<GoalRecoveryTaskFinding>();
 
@@ -51,7 +53,7 @@ internal static class GoalRecoveryPlanner
             AddTaskFindings(findings, goal, task, index + 1);
         }
 
-        var actions = BuildRecommendedActions(goal, worktree, dirty, hasDiff, buildLease, pendingInput, findings);
+        var actions = BuildRecommendedActions(goal, worktree, dirty, hasDiff, buildLease, cleanupBackoff, pendingInput, findings);
         actions.InsertRange(0, BuildJournalRecommendedActions(operationJournal));
         return new GoalRecoveryReport(
             goal.Id,
@@ -65,6 +67,7 @@ internal static class GoalRecoveryPlanner
             testImpactPlan,
             operationJournal,
             buildLease,
+            cleanupBackoff,
             pendingInput,
             findings,
             actions);
@@ -172,6 +175,7 @@ internal static class GoalRecoveryPlanner
         bool? dirty,
         bool hasDiff,
         DotnetBuildLeaseStatus buildLease,
+        GoalWorktreeCleanupBackoff? cleanupBackoff,
         int pendingInput,
         List<GoalRecoveryTaskFinding> findings)
     {
@@ -203,6 +207,13 @@ internal static class GoalRecoveryPlanner
         if (buildLease.CanCleanup)
         {
             actions.Add("build-lease-cleanup --confirm-build-lease-cleanup");
+        }
+
+        if (cleanupBackoff is not null)
+        {
+            actions.Add(cleanupBackoff.IsBudgetExhausted
+                ? $"workspace remove {goal.Id.Value[..8]} ({GoalWorktrees.FormatCleanupBackoff(cleanupBackoff)})"
+                : $"workspace remove {goal.Id.Value[..8]} after {GoalWorktrees.FormatCleanupBackoff(cleanupBackoff)}");
         }
 
         if (!IsTerminal(goal.Status) && (findings.Count > 0 || dirty == true))
