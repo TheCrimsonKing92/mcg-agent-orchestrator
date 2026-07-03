@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -28,6 +29,11 @@ public sealed class FileDiagnosticWriter : IDispatchDiagnosticWriter
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    static FileDiagnosticWriter()
+    {
+        JsonOptions.Converters.Add(new JsonStringEnumConverter());
+    }
 
     private static readonly object WriteLock = new();
 

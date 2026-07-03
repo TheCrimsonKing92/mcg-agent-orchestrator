@@ -10,7 +10,13 @@ public sealed record DispatchRefreshOutcome(
     TaskVerificationRecord? Verification,
     string? ResultCommit = null,
     DispatchRecoveryDecision? RecoveryDecision = null,
-    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
+    DispatchDiagnosticPayload? DiagnosticPayload = null);
+
+public sealed record DispatchDiagnosticPayload(
+    int ExitCode,
+    string StandardOutput,
+    string StandardError);
 
 public sealed record DispatchProcessStartResult(
     TaskProcessRecord? ProcessRecord,
@@ -273,7 +279,7 @@ public sealed class BackgroundDispatchRunner
                 if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, recoveryDecision, out var outcome))
                     continue;
 
-                ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+                ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
                 reconciled++;
             }
         }
@@ -284,8 +290,29 @@ public sealed class BackgroundDispatchRunner
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
         var outcome = ReconcileLatestProcess(kernel, goalId, taskId);
-        ApplyRefreshOutcome(kernel, goalId, taskId, outcome);
+        ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goalId, taskId, outcome);
         return outcome.ProcessRecord;
+    }
+
+    public void ApplyRefreshOutcomeAndWriteDiagnostics(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        DispatchRefreshOutcome outcome)
+    {
+        ApplyRefreshOutcome(kernel, goalId, taskId, outcome);
+        if (outcome.DiagnosticPayload is not { } diagnostic)
+            return;
+
+        var task = kernel.GetTask(goalId, taskId);
+        TryWriteDiagnosticRecord(
+            goalId,
+            taskId,
+            task,
+            outcome.ProcessRecord,
+            diagnostic.ExitCode,
+            diagnostic.StandardOutput,
+            diagnostic.StandardError);
     }
 
     public DispatchRefreshOutcome ReconcileLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
@@ -616,8 +643,13 @@ public sealed class BackgroundDispatchRunner
             HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
             ProviderFailureKind: providerFailureKind);
 
-        TryWriteDiagnosticRecord(goalId, taskId, task, completed, exitCode, standardOutput, standardError);
-        return new DispatchRefreshOutcome(completed, verification, resultCommit, recoveryDecision, providerFailureKind);
+        return new DispatchRefreshOutcome(
+            completed,
+            verification,
+            resultCommit,
+            recoveryDecision,
+            providerFailureKind,
+            new DispatchDiagnosticPayload(exitCode, standardOutput, standardError));
     }
 
     private static string? TryGetWorktreeHead(string workingDirectory)

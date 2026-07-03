@@ -2834,8 +2834,9 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                 continue;
             }
 
-            var outcome = new BackgroundDispatchRunner().ReconcileLatestProcess(context.Kernel, goal.Id, task.Id);
-            BackgroundDispatchRunner.ApplyRefreshOutcome(context.Kernel, goal.Id, task.Id, outcome);
+            var runner = new BackgroundDispatchRunner();
+            var outcome = runner.ReconcileLatestProcess(context.Kernel, goal.Id, task.Id);
+            runner.ApplyRefreshOutcomeAndWriteDiagnostics(context.Kernel, goal.Id, task.Id, outcome);
             goal = context.Kernel.GetGoal(goal.Id);
             context.CurrentGoal = goal;
             var refreshedTask = goal.Tasks.First(candidate => candidate.Id == task.Id);

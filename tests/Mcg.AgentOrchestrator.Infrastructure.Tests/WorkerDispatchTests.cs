@@ -6860,8 +6860,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("success", cls.GetString());
     Assert.True(root2.TryGetProperty("reason", out _));
     Assert.True(root2.TryGetProperty("timestamp", out _));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.NotNull(task.LastVerification);
     Assert.True(root2.TryGetProperty("dispatchState", out var state));
-    Assert.Equal("refresh-dispatch", state.GetProperty("recommendedAction").GetString());
+    Assert.Equal("Completed", state.GetProperty("kind").GetString());
+    Assert.Equal("none", state.GetProperty("recommendedAction").GetString());
     Assert.True(state.TryGetProperty("processTree", out var processTree));
     Assert.Equal(999999, processTree.GetProperty("wrapperProcessId").GetInt32());
     Assert.Equal(123456, processTree.GetProperty("childProcessId").GetInt32());
