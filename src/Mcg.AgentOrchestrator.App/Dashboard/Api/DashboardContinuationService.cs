@@ -145,18 +145,6 @@ internal sealed class DashboardContinuationService : IDisposable
                             current,
                             OrchestratorEntityResolver.GetLatestGoal(current),
                             watch.GoalId);
-                        var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
-                            current,
-                            agents,
-                            profiles,
-                            services.Workspace,
-                            goal,
-                            providers: services.Providers);
-                        if (advance.Executed)
-                        {
-                            return Task.FromResult((true, advance));
-                        }
-
                         var supervisor = GoalSupervisor.ApplySafe(
                             current,
                             goal,
@@ -165,7 +153,14 @@ internal sealed class DashboardContinuationService : IDisposable
                             AutonomyPolicy.SafeAuto);
                         if (supervisor.AppliedActions.Count == 0)
                         {
-                            return Task.FromResult((false, advance));
+                            var advance = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+                                current,
+                                agents,
+                                profiles,
+                                services.Workspace,
+                                goal,
+                                providers: services.Providers);
+                            return Task.FromResult((advance.Executed, advance));
                         }
 
                         var step = new AdvanceResultDto(
@@ -179,10 +174,9 @@ internal sealed class DashboardContinuationService : IDisposable
                             goal.Id.Value,
                             true,
                             1,
-                            TimelineMessage("Supervisor applied safe recovery action; continuing watch."),
+                            TimelineMessage("Supervisor applied safe recovery action."),
                             null,
-                            [step],
-                            ContinueAfter: DateTimeOffset.UtcNow);
+                            [step]);
                         return Task.FromResult((true, supervised));
                     },
                     watch.Cancellation.Token);
@@ -211,6 +205,7 @@ internal sealed class DashboardContinuationService : IDisposable
         {
             watch.Fail(ex.Message);
             PersistActiveWatches(services);
+            RemoveRestoredTerminalWatch(watch);
         }
     }
 

@@ -34,7 +34,8 @@ internal static class GoalRecoveryPlanner
     public static GoalRecoveryReport Build(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        string executionDirectory)
+        string executionDirectory,
+        bool includeCleanupBackoff = true)
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var dirty = worktree is null ? null : TryIsWorktreeDirty(worktree);
@@ -43,7 +44,9 @@ internal static class GoalRecoveryPlanner
         var testImpactPlan = RepositoryTestImpactPlanner.Plan(changeSummary);
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
-        var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id);
+        var cleanupBackoff = includeCleanupBackoff
+            ? GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id)
+            : null;
         var pendingInput = kernel.BuildHumanInputWorklist(goal.Id).OpenCount;
         var findings = new List<GoalRecoveryTaskFinding>();
 

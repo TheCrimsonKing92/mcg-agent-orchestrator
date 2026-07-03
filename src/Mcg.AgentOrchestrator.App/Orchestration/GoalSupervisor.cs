@@ -47,7 +47,7 @@ internal static class GoalSupervisor
         bool applySafe = false,
         DateTimeOffset? now = null)
     {
-        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory);
+        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory, includeCleanupBackoff: false);
         var proposals = new List<GoalSupervisorProposal>();
         var observedAt = now ?? DateTimeOffset.UtcNow;
 
