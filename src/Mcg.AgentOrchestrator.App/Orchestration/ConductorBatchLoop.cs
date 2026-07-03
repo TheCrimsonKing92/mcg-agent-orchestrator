@@ -116,10 +116,17 @@ internal sealed class ConductorBatchLoop
                 {
                     var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
                     EmitProgress($"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
-                    var idleStop = sleepFunc is not null
-                        ? sleepFunc(idleInterval)
+                    var idleSleep = sleepFunc is not null
+                        ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal);
-                    if (idleStop)
+                    if (idleSleep == WatchSleepResult.WakeSignaled)
+                    {
+                        _sweep(kernel);
+                        _recoverInterruptedDispatches(kernel);
+                        persistTick?.Invoke(kernel);
+                    }
+
+                    if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                     {
                         stopRequested = true;
                         EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-while-idle");
@@ -321,11 +328,18 @@ internal sealed class ConductorBatchLoop
                 }
                 onTick?.Invoke(tickSummary with { WatchSleeping = true });
 
-                var stopDuringSleep = sleepFunc is not null
-                    ? sleepFunc(fallbackInterval)
+                var sleepResult = sleepFunc is not null
+                    ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                     : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal);
 
-                if (stopDuringSleep)
+                if (sleepResult == WatchSleepResult.WakeSignaled)
+                {
+                    _sweep(kernel);
+                    _recoverInterruptedDispatches(kernel);
+                    persistTick?.Invoke(kernel);
+                }
+
+                if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                 {
                     stopRequested = true;
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
@@ -654,20 +668,19 @@ internal sealed class ConductorBatchLoop
             (onlyGoalId is null || goal.Id.Value == onlyGoalId)
             && goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }));
 
-    // Returns true if the stop file appeared during sleep, false if the fallback timer or wake signal fired.
-    private static bool SleepUntilNextTick(TimeSpan interval, string stopFilePath, IConductorWakeSignal? wakeSignal)
+    private static WatchSleepResult SleepUntilNextTick(TimeSpan interval, string stopFilePath, IConductorWakeSignal? wakeSignal)
     {
         var remaining = interval;
         var poll = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
         while (remaining > TimeSpan.Zero)
         {
             if (IsStopRequested(stopFilePath))
-                return true;
+                return WatchSleepResult.StopRequested;
             var slice = remaining < poll ? remaining : poll;
             if (wakeSignal is not null)
             {
                 if (wakeSignal.Wait(slice))
-                    break;
+                    return WatchSleepResult.WakeSignaled;
             }
             else
             {
@@ -676,7 +689,9 @@ internal sealed class ConductorBatchLoop
             remaining -= slice;
         }
 
-        return IsStopRequested(stopFilePath);
+        return IsStopRequested(stopFilePath)
+            ? WatchSleepResult.StopRequested
+            : WatchSleepResult.FallbackElapsed;
     }
 
     private static string FormatOutcome(ConductorAdvanceOutcome outcome) => outcome switch
@@ -695,6 +710,13 @@ internal enum BatchSetAsideCondition
     DependencyEscalated,
     AdvanceFault,
     LifecycleEscalation
+}
+
+internal enum WatchSleepResult
+{
+    FallbackElapsed,
+    StopRequested,
+    WakeSignaled
 }
 
 internal sealed record BatchSetAsideEntry(string GoalId, BatchSetAsideCondition Condition);
