@@ -60,12 +60,16 @@ internal static class RepoProcessCliCommand
             }
         }
 
+        IReadOnlySet<int> currentInvocationLineage = options.LocksOnly
+            ? BuildCurrentInvocationLineage(byId)
+            : new HashSet<int>();
+
         if (options.Names.Count > 0 || options.CommandContains.Count > 0 || options.LocksOnly)
         {
             var query = snapshots.Where(snapshot =>
                 MatchesNames(snapshot, options.Names) &&
                 MatchesCommand(snapshot, options.CommandContains) &&
-                (!options.LocksOnly || IsLockHolder(snapshot)))
+                (!options.LocksOnly || IsReportableLockHolder(snapshot, currentInvocationLineage)))
                 .OrderByDescending(snapshot => snapshot.StartedAt ?? DateTimeOffset.MinValue)
                 .ThenByDescending(snapshot => snapshot.ProcessId)
                 .Take(options.Newest);
@@ -85,7 +89,7 @@ internal static class RepoProcessCliCommand
 
         foreach (var snapshot in selected)
         {
-            var prefix = options.LocksOnly && IsLockHolder(snapshot)
+            var prefix = options.LocksOnly && IsReportableLockHolder(snapshot, currentInvocationLineage)
                 ? $"LOCK id={snapshot.ProcessId} kind={ClassifyKind(snapshot)}"
                 : $"PROCESS id={snapshot.ProcessId}";
             output.WriteLine($"{prefix} parent={snapshot.ParentProcessId} name={snapshot.Name} created={FormatTime(snapshot.StartedAt)} path={snapshot.ExecutablePath ?? ""} command={ShortCommand(snapshot.CommandLine)}");
@@ -327,38 +331,83 @@ internal static class RepoProcessCliCommand
 
     private static bool MatchesCommand(ProcessSnapshot snapshot, IReadOnlyList<string> needles) =>
         needles.Count == 0 ||
-        needles.All(needle => (snapshot.CommandLine ?? string.Empty).IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+        needles.All(needle => ContainsOrdinalIgnoreCase(snapshot.CommandLine ?? string.Empty, needle));
 
     private static bool IsLockHolder(ProcessSnapshot snapshot)
     {
         var command = snapshot.CommandLine ?? string.Empty;
-        return command.IndexOf("App.dll", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            command.IndexOf("__dispatch-run", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            command.IndexOf("DispatchProcessHost", StringComparison.OrdinalIgnoreCase) >= 0;
+        return ContainsOrdinalIgnoreCase(command, "App.dll") ||
+            ContainsOrdinalIgnoreCase(command, "__dispatch-run") ||
+            ContainsOrdinalIgnoreCase(command, "DispatchProcessHost");
+    }
+
+    private static bool IsReportableLockHolder(ProcessSnapshot snapshot, IReadOnlySet<int> currentInvocationLineage) =>
+        IsLockHolder(snapshot) && !currentInvocationLineage.Contains(snapshot.ProcessId);
+
+    private static HashSet<int> BuildCurrentInvocationLineage(IReadOnlyDictionary<int, ProcessSnapshot> snapshotsById)
+    {
+        var excluded = new HashSet<int>();
+        var currentProcessId = Environment.ProcessId;
+        if (!snapshotsById.TryGetValue(currentProcessId, out var current))
+        {
+            excluded.Add(currentProcessId);
+            return excluded;
+        }
+
+        excluded.Add(current.ProcessId);
+        var parentId = current.ParentProcessId;
+        while (parentId > 0 && snapshotsById.TryGetValue(parentId, out var parent))
+        {
+            if (!IsRepoProcessWrapper(parent))
+            {
+                break;
+            }
+
+            excluded.Add(parent.ProcessId);
+            parentId = parent.ParentProcessId;
+        }
+
+        return excluded;
+    }
+
+    private static bool IsRepoProcessWrapper(ProcessSnapshot snapshot)
+    {
+        var name = snapshot.Name ?? string.Empty;
+        var command = snapshot.CommandLine ?? string.Empty;
+        return name.Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("cmd", StringComparison.OrdinalIgnoreCase) ||
+            ContainsOrdinalIgnoreCase(command, "Invoke-RepoScript.ps1") ||
+            ContainsOrdinalIgnoreCase(command, "Invoke-OrchestratorCommand.ps1") ||
+            ContainsOrdinalIgnoreCase(command, "Get-RepoProcessInfo.ps1") ||
+            ContainsOrdinalIgnoreCase(command, "Find-OrchestratorLocks.ps1");
     }
 
     private static string ClassifyKind(ProcessSnapshot snapshot)
     {
         var command = snapshot.CommandLine ?? string.Empty;
-        if (command.IndexOf("__dispatch-run", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            command.IndexOf("DispatchProcessHost", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (ContainsOrdinalIgnoreCase(command, "__dispatch-run") ||
+            ContainsOrdinalIgnoreCase(command, "DispatchProcessHost"))
         {
             return "dispatch-host";
         }
 
-        if (command.IndexOf("conduct", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (ContainsOrdinalIgnoreCase(command, "conduct"))
         {
             return "conduct-loop";
         }
 
-        if (command.IndexOf("serve-dashboard", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            command.IndexOf("-dashboard", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (ContainsOrdinalIgnoreCase(command, "serve-dashboard") ||
+            ContainsOrdinalIgnoreCase(command, "-dashboard"))
         {
             return "dashboard";
         }
 
         return "app-host";
     }
+
+    private static bool ContainsOrdinalIgnoreCase(string value, string expected) =>
+        value.Contains(expected, StringComparison.OrdinalIgnoreCase);
 
     private static void PrintUnavailable(TextWriter output, string operation, Exception ex)
     {

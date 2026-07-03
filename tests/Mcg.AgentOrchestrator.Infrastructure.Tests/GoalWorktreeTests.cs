@@ -142,13 +142,14 @@ public sealed class GoalWorktreeIntegrationTests
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
         var stderr = process.StandardError.ReadToEnd();
-        process.StandardOutput.ReadToEnd();
+        var stdout = process.StandardOutput.ReadToEnd();
 
         Assert.True(process.WaitForExit(30000), "Find-OrchestratorLocks.ps1 did not exit within 30 seconds.");
         Assert.True(
             process.ExitCode is 0 or 2,
             $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("repo-process-info --locks", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "Repo_process_helpers_do_not_use_PowerShell_CIM_process_queries")]
