@@ -134,6 +134,9 @@ public static class DispatchFailureClassifier
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
+    public static bool HasRecoverableSubscriptionLimitEvidence(TaskVerificationRecord verification) =>
+        TryGetRecoverableSubscriptionLimitLine(verification, out _);
+
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
         if (IsPreflightFailure(verification))

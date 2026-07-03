@@ -54,7 +54,7 @@ public sealed class StaticWorkerProvider : IWorkerProvider
             return ProviderFailureKind.Unknown;
         }
 
-        var text = string.Join(Environment.NewLine, outcome.StandardOutput, outcome.StandardError);
+        var text = StripWorkerResultBlocks(string.Join(Environment.NewLine, outcome.StandardOutput, outcome.StandardError));
         if (ContainsRateLimitSignal(text))
         {
             return ProviderFailureKind.RateLimit;
@@ -86,6 +86,39 @@ public sealed class StaticWorkerProvider : IWorkerProvider
         text.Contains("Unable to connect", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("could not resolve host", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("temporary failure in name resolution", StringComparison.OrdinalIgnoreCase);
+
+    private static string StripWorkerResultBlocks(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var kept = new List<string>();
+        var inWorkerResult = false;
+        foreach (var rawLine in text.Replace("\r\n", "\n").Split('\n'))
+        {
+            var marker = rawLine.Trim().Trim('#', '*', '`').Trim();
+            if (string.Equals(marker.TrimEnd(':').Trim(), "WORKER_RESULT", StringComparison.OrdinalIgnoreCase))
+            {
+                inWorkerResult = true;
+                continue;
+            }
+
+            if (string.Equals(marker, "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase))
+            {
+                inWorkerResult = false;
+                continue;
+            }
+
+            if (!inWorkerResult)
+            {
+                kept.Add(rawLine);
+            }
+        }
+
+        return string.Join(Environment.NewLine, kept);
+    }
 }
 
 public sealed class WorkerProviderCatalog

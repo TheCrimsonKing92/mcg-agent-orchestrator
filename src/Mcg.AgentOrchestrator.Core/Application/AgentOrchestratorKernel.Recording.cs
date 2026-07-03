@@ -10,7 +10,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Verification {status} ({verification.ExitCode}): {verification.Command}");
-        if (TryFailReviewerWorkerResultBlocker(goalId, task, verification))
+        if (TryFailWorkerResultBlocker(goalId, task, verification))
         {
             return;
         }
@@ -53,12 +53,24 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
-        if (TryFailReviewerWorkerResultBlocker(goalId, task, verification))
+        if (TryFailWorkerResultBlocker(goalId, task, verification))
         {
             return;
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
+        if (!verification.Succeeded &&
+            WorkerResultBlockers.TryFindBlocker(verification, out var blocker) &&
+            !DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"WORKER_RESULT reported blocker: {blocker}");
+            return;
+        }
+
         var isRecoverableSubscriptionLimit = effectiveProviderFailureKind == ProviderFailureKind.RateLimit ||
             (effectiveProviderFailureKind == ProviderFailureKind.Unknown &&
              DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
@@ -111,11 +123,11 @@ public sealed partial class AgentOrchestratorKernel
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
     }
 
-    private bool TryFailReviewerWorkerResultBlocker(GoalId goalId, TaskSpec task, TaskVerificationRecord verification)
+    private bool TryFailWorkerResultBlocker(GoalId goalId, TaskSpec task, TaskVerificationRecord verification)
     {
         if (verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
-            ReviewerWorkerResultBlockers.TryFindBlocker(verification, out var blocker))
+            WorkerResultBlockers.TryFindBlocker(verification, out var blocker))
         {
             ReportTaskProgress(
                 goalId,

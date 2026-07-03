@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-internal static class ReviewerWorkerResultBlockers
+internal static class WorkerResultBlockers
 {
     public static bool TryFindBlocker(TaskVerificationRecord? verification, out string blocker)
     {
