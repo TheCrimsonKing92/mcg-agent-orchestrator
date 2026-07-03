@@ -2717,6 +2717,56 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_repo_process_commands_skip_persistent_state_loading")]
+    public void CliRepoProcessCommandsSkipPersistentStateLoading()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var stateRepository = new ThrowingTransactionalStateRepository();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-info", "--id", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)]));
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["repo-process-info", "--id", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)],
+                    stateRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Assert.False(changed);
+            });
+
+            Assert.Contains($"PROCESS id={Environment.ProcessId}", output);
+            Assert.Equal(0, stateRepository.LoadCount);
+            Assert.Equal(0, stateRepository.TransactionCount);
+
+            Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-stop"]));
+            var usage = Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+                ["repo-process-stop"],
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Assert.Contains("Usage: repo-process-stop", usage.Message);
+            Assert.Equal(0, stateRepository.LoadCount);
+            Assert.Equal(0, stateRepository.TransactionCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_conduct_completed_goal_lands_through_persistent_runner_without_command_transaction")]
     public async Task CliConductCompletedGoalLandsThroughPersistentRunnerWithoutCommandTransaction()
     {
@@ -5659,6 +5709,83 @@ public sealed class GoalWorktreeIntegrationTests
         {
             inner.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
             afterReset();
+        }
+    }
+
+    private sealed class ThrowingTransactionalStateRepository : ITransactionalOrchestratorStateRepository
+    {
+        public int LoadCount { get; private set; }
+
+        public int TransactionCount { get; private set; }
+
+        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load persistent state");
+        }
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load goal state");
+        }
+
+        public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save persistent state");
+
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list goal metadata");
+
+        public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list conduct metadata");
+
+        public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list model fit history");
+
+        public Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+            int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not build model outcomes");
+
+        public Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not query best fit");
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact persistent state");
+        }
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact persistent state");
+        }
+
+        public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load goal snapshots");
+        }
+
+        public Task SaveGoalSnapshotsAsync(
+            IReadOnlyCollection<GoalSnapshot> goals,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save goal snapshots");
+
+        public Task<T> TransactGoalAsync<T>(
+            GoalId goalId,
+            Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact goal state");
         }
     }
 
