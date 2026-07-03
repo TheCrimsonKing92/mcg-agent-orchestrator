@@ -3921,6 +3921,8 @@ public sealed class GoalWorktreeIntegrationTests
     {
         var repo = CreateSeededRepository();
         var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
         try
         {
             var goalId = GoalId.New();
@@ -3928,6 +3930,9 @@ public sealed class GoalWorktreeIntegrationTests
             File.Delete(Path.Combine(path, ".git"));
             RunGit(repo, "worktree", "prune");
             GoalWorktrees.DeleteDirectory = _ => false;
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
 
             var result = GoalWorktrees.Remove(repo, goalId);
 
@@ -3935,12 +3940,24 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(path, result.LeftoverPath);
             Assert.Equal($"conduct {goalId.Value[..8].ToLowerInvariant()} --loop", result.ResumeCommand);
             Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
+            if (result.CleanupBackoff is not { } cleanupBackoff)
+            {
+                throw new InvalidOperationException("Expected first cleanup backoff details.");
+            }
+
+            Assert.Equal("remove:leftover-directory", cleanupBackoff.Reason);
+            Assert.Equal(now.AddMinutes(10), cleanupBackoff.SkipUntilUtc);
+            Assert.Equal(TimeSpan.FromMinutes(10), cleanupBackoff.RemainingWait);
+            Assert.True(result.Message.Contains("skip_until_utc=2026-07-02T05:10:00.0000000+00:00", StringComparison.Ordinal));
+            Assert.True(result.Message.Contains("remaining_wait=00:10:00", StringComparison.Ordinal));
             Assert.True(Directory.Exists(path));
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
         }
         finally
         {
             GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
             DeleteDirectory(repo);
         }
     }

@@ -886,11 +886,14 @@ public static class GoalWorktrees
         RecordCleanupNeeded(
             path,
             lockHolders.Count > 0 ? "remove:leftover-directory:lock-held" : "remove:leftover-directory");
+        var cleanupBackoff = TryGetCleanupBackoff(path);
         return new GoalWorktreeRemoveResult(
-            $"{incompleteMessage} Conductor retry: {resumeCommand}",
+            $"{incompleteMessage} Conductor retry: {resumeCommand}" +
+                (cleanupBackoff is null ? string.Empty : $" {FormatCleanupBackoff(cleanupBackoff)}"),
             path,
             lockHolders,
-            resumeCommand);
+            resumeCommand,
+            CleanupBackoff: cleanupBackoff);
     }
 
     private static string ConductorRetryCommand(GoalId goalId) => $"conduct {Prefix(goalId)} --loop";
