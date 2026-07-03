@@ -290,6 +290,25 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     branchAfterCleanup.ExitCode != 0)
                 {
                     branchDeleted = true;
+                    if (removeResult is { IsComplete: false })
+                    {
+                        var reconciled = TryRunGoalMarkLandedBestEffortStep(
+                            cleanupDeadline,
+                            "post-branch-cleanup-reconcile",
+                            timeout => context.Worktrees.Remove(
+                                landedDir,
+                                landedId,
+                                context.Kernel,
+                                timeout),
+                            out var reconciledCleanup,
+                            out var reconcileFailure);
+                        cleanupComplete = reconciled && reconciledCleanup is { IsComplete: true };
+                        if (!cleanupComplete)
+                        {
+                            var detail = reconcileFailure ?? reconciledCleanup?.Message ?? "post-branch cleanup reconciliation failed";
+                            Console.WriteLine($"cleanup deferred: {detail}");
+                        }
+                    }
                 }
                 else
                 {

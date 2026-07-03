@@ -519,6 +519,60 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_preserves_cleanup_needed_when_only_branch_delete_fails")]
+    public void GoalWorktreesRemovePreservesCleanupNeededWhenOnlyBranchDeleteFails()
+    {
+        var repo = CreateSeededRepository();
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+            File.WriteAllText(Path.Combine(path, "unmerged.txt"), "goal work");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Unmerged goal work");
+
+            DeleteDirectory(path);
+            RunGit(repo, "worktree", "prune");
+
+            Assert.False(Directory.Exists(path));
+            Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
+            Assert.True(BranchExists(repo, branch));
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.Equal(path, first.LeftoverPath);
+            Assert.Equal("remove:branch-delete-failed", first.CleanupBackoff?.Reason);
+            Assert.True(BranchExists(repo, branch));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+
+            var second = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(second.IsComplete);
+            Assert.Equal(path, second.LeftoverPath);
+            Assert.Equal("remove:branch-delete-failed", second.CleanupBackoff?.Reason);
+            Assert.True(BranchExists(repo, branch));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+
+            RunGit(repo, "branch", "-D", branch);
+            var final = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(final.IsComplete);
+            Assert.False(BranchExists(repo, branch));
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+        }
+        finally
+        {
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reports_leftover_path_and_resumes_when_lock_released")]
     public void GoalWorktreesRemoveReportsLeftoverPathAndResumesWhenLockReleased()
     {
