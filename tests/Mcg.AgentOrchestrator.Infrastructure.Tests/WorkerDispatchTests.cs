@@ -688,11 +688,143 @@ public sealed class WorkerDispatchTests
             OperatingSystem.IsWindows() ? "worker_git_write=blocked-by-low-integrity" : "worker_git_write=same-as-orchestrator",
             findings);
         Assert.Contains("commit_contract=workers edit worktree files; orchestrator commits verified dirty edits on behalf", findings);
+        Assert.Contains("ok: worktree clean before dispatch", findings);
     }
     finally
     {
         Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previousSandbox);
     }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_active_test_child_with_command_line")]
+    public void DispatchStateSurfaceReportsActiveTestChildWithCommandLine()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-07-03T06:00:00Z");
+    var clock = new TestClock(now);
+    var (kernel, goal, task, process) = CreateRecordedDispatch(root, clock);
+    WriteHeartbeat(
+        process,
+        now.AddSeconds(-20),
+        now.AddSeconds(-20),
+        "running",
+        stdoutBytes: 12,
+        stderrBytes: 0,
+        childPid: 222,
+        ownedCpuMs: 100,
+        ownedPids: [111, 222]);
+
+    var state = CreateStateSurface(clock, livePids: [111, 222], commandLines: new Dictionary<int, string>
+        {
+            [111] = "pwsh -File worker-wrapper.ps1",
+            [222] = "dotnet test --filter WorkerDispatchTests"
+        })
+        .Evaluate(goal.Id, task);
+
+    Assert.Equal(DispatchStateKind.ActiveTestChild, state.Kind);
+    Assert.Equal("hold", state.RecommendedAction);
+    Assert.True(state.ProcessTree.HasLiveChild);
+    Assert.Equal("dotnet test --filter WorkerDispatchTests", state.ProcessTree.ChildCommandLine);
+    Assert.Equal(DispatchRecoveryAction.Hold, state.RecoveryDecision.Action);
+    _ = kernel;
+}
+
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_exited_worker_awaiting_reconcile")]
+    public void DispatchStateSurfaceReportsExitedWorkerAwaitingReconcile()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-07-03T06:05:00Z");
+    var clock = new TestClock(now);
+    var (_, goal, task, process) = CreateRecordedDispatch(root, clock);
+    File.WriteAllText(process.ExitCodePath, "0");
+    WriteHeartbeat(
+        process,
+        now.AddSeconds(-10),
+        now.AddSeconds(-10),
+        "exiting",
+        stdoutBytes: 20,
+        stderrBytes: 0,
+        childPid: null,
+        ownedPids: [111]);
+
+    var state = CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>())
+        .Evaluate(goal.Id, task);
+
+    Assert.Equal(DispatchStateKind.ExitedAwaitingReconcile, state.Kind);
+    Assert.Equal("refresh-dispatch", state.RecommendedAction);
+    Assert.True(state.Artifacts.ExitCodeExists);
+    Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, state.RecoveryDecision.Action);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_stale_cleanup_when_process_and_exit_are_absent")]
+    public void DispatchStateSurfaceReportsStaleCleanupWhenProcessAndExitAreAbsent()
+{
+    var root = CreateTempDirectory();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T06:10:00Z"));
+    var (_, goal, task, _) = CreateRecordedDispatch(root, clock);
+
+    var state = CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>())
+        .Evaluate(goal.Id, task);
+
+    Assert.Equal(DispatchStateKind.StaleCleanup, state.Kind);
+    Assert.Equal("mark-stale", state.RecommendedAction);
+    Assert.False(state.Artifacts.ExitCodeExists);
+    Assert.False(state.Heartbeat.IsAvailable);
+    Assert.Equal(DispatchRecoveryAction.MarkStale, state.RecoveryDecision.Action);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_wedged_live_process_after_idle_timeout")]
+    public void DispatchStateSurfaceReportsWedgedLiveProcessAfterIdleTimeout()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-07-03T06:20:00Z");
+    var clock = new TestClock(now);
+    var (_, goal, task, process) = CreateRecordedDispatch(root, clock);
+    WriteHeartbeat(
+        process,
+        now.AddMinutes(-40),
+        now.AddMinutes(-40),
+        "running",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        childPid: null,
+        ownedCpuMs: 0,
+        ownedPids: [111]);
+
+    var state = CreateStateSurface(clock, livePids: [111], commandLines: new Dictionary<int, string>
+        {
+            [111] = "codex exec prompt"
+        })
+        .Evaluate(goal.Id, task);
+
+    Assert.Equal(DispatchStateKind.WedgedProcess, state.Kind);
+    Assert.Equal("classify-blocker", state.RecommendedAction);
+    Assert.Equal(DispatchRecoveryAction.ClassifyBlocker, state.RecoveryDecision.Action);
+    Assert.True(state.RecoveryDecision.Reason.Contains("idle", StringComparison.OrdinalIgnoreCase), state.RecoveryDecision.Reason);
+}
+
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_dirty_worktree_and_commit_state")]
+    public void DispatchStateSurfaceReportsDirtyWorktreeAndCommitState()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T06:30:00Z"));
+    var (_, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "WORKER_RESULT:",
+        string.Empty,
+        clock);
+    File.WriteAllText(Path.Combine(process.WorkingDirectory, "operator-state-surface.txt"), "dirty evidence");
+
+    var state = CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>())
+        .Evaluate(goal.Id, task);
+
+    Assert.True(state.Worktree.Exists);
+    Assert.True(state.Worktree.IsGitWorktree);
+    Assert.True(state.Worktree.IsDirty == true);
+    Assert.False(string.IsNullOrWhiteSpace(state.Worktree.HeadCommit));
+    Assert.NotNull(state.Worktree.CommitsAfterDispatch);
+    Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("operator-state-surface.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_does_not_start_worker_or_mutate_owned_ephemeral_cleanup")]
@@ -6687,6 +6819,48 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         DateTimeOffset.Parse("2026-06-01T15:01:00Z")));
     return previousDispatch;
 }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateRecordedDispatch(
+        string root,
+        IClock clock,
+        AgentRole role = AgentRole.Developer)
+{
+    Directory.CreateDirectory(root);
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, $"{role}.out.log");
+    var stderr = Path.Combine(logs, $"{role}.err.log");
+    var exit = Path.Combine(logs, $"{role}.exit.txt");
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+
+    var kernel = new AgentOrchestratorKernel();
+    var taskSpec = new TaskSpec(TaskId.New(), $"{role} task.", role);
+    var goal = kernel.CreateGoal("Dispatch state surface goal", [taskSpec]);
+    var agent = new AgentDefinition(
+        new AgentId(role.ToString().ToLowerInvariant()),
+        role.ToString(),
+        role,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single(candidate => candidate.RequiredRole == role);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, clock.UtcNow));
+    var process = new TaskProcessRecord(111, "codex exec prompt", root, stdout, stderr, exit, clock.UtcNow, null, null, OwnedProcessIds: [111]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    return (kernel, goal, task, process);
+}
+
+    private static DispatchStateSurface CreateStateSurface(
+        IClock clock,
+        IReadOnlyCollection<int> livePids,
+        IReadOnlyDictionary<int, string> commandLines) =>
+        new(
+            clock,
+            isProcessAlive: livePids.Contains,
+            readCommandLines: pids => pids
+                .Distinct()
+                .Where(commandLines.ContainsKey)
+                .ToDictionary(pid => pid, pid => commandLines[pid]));
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateCompletedGoalWorktreeDispatch(
         string root,
