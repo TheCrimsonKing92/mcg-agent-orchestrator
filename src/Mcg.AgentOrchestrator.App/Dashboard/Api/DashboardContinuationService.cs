@@ -163,6 +163,7 @@ internal sealed class DashboardContinuationService : IDisposable
                             return Task.FromResult((advance.Executed, advance));
                         }
 
+                        var supervisorStopReason = GetSupervisorStopReason(current, goal, supervisor);
                         var step = new AdvanceResultDto(
                             goal.Id.Value,
                             true,
@@ -174,7 +175,7 @@ internal sealed class DashboardContinuationService : IDisposable
                             goal.Id.Value,
                             true,
                             1,
-                            TimelineMessage("Supervisor applied safe recovery action."),
+                            TimelineMessage(supervisorStopReason),
                             null,
                             [step]);
                         return Task.FromResult((true, supervised));
@@ -217,6 +218,23 @@ internal sealed class DashboardContinuationService : IDisposable
 
     private static bool ContainsStopReason(DashboardContinuationStatusDto status, string value) =>
         status.StopReason.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+    private static string GetSupervisorStopReason(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        GoalSupervisorApplyResult supervisor)
+    {
+        var runningRefresh = supervisor.Plan.Proposals.FirstOrDefault(proposal =>
+            proposal.Kind == GoalSupervisorProposalKind.RefreshRunningProcess &&
+            proposal.TaskId is not null);
+        if (runningRefresh?.TaskId is { } taskId &&
+            kernel.GetTask(goal.Id, taskId).LastProcess is { IsRunning: true })
+        {
+            return $"Background work is still running for task {taskId.Value[..8]}; continue after it exits.";
+        }
+
+        return "Supervisor applied safe recovery action.";
+    }
 
     private static string ShortGoalPrefix(string goalId) =>
         goalId.Length <= 8 ? goalId : goalId[..8];
