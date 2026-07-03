@@ -114,11 +114,42 @@ function Quote-ProcessArgument {
 function Stop-OwnedProcessTree {
     param([int]$RootProcessId)
 
+    $stopScript = Join-Path $repoRoot "scripts\Stop-RepoProcess.ps1"
+    if (Test-Path -LiteralPath $stopScript) {
+        try {
+            & $stopScript -Id $RootProcessId -Force | Out-Null
+            return
+        }
+        catch {
+            Write-Output "process stop helper unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
+        }
+    }
+
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+        if (Test-Path -LiteralPath $taskkill) {
+            try {
+                & $taskkill /PID $RootProcessId /T /F | Out-Null
+                return
+            }
+            catch {
+                Write-Output "process stop taskkill fallback unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
+            }
+        }
+    }
+
     try {
-        & (Join-Path $repoRoot "scripts\Stop-RepoProcess.ps1") -Id $RootProcessId -Force | Out-Null
+        $process = [System.Diagnostics.Process]::GetProcessById($RootProcessId)
+        $process.Kill($true)
+    }
+    catch [System.ArgumentException] {
+        return
+    }
+    catch [System.InvalidOperationException] {
+        return
     }
     catch {
-        Write-Output "process stop unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
+        Write-Output "process stop fallback unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
     }
 }
 
