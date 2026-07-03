@@ -519,6 +519,60 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_preserves_cleanup_needed_when_only_branch_delete_fails")]
+    public void GoalWorktreesRemovePreservesCleanupNeededWhenOnlyBranchDeleteFails()
+    {
+        var repo = CreateSeededRepository();
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+            File.WriteAllText(Path.Combine(path, "unmerged.txt"), "goal work");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Unmerged goal work");
+
+            DeleteDirectory(path);
+            RunGit(repo, "worktree", "prune");
+
+            Assert.False(Directory.Exists(path));
+            Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
+            Assert.True(BranchExists(repo, branch));
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.Equal(path, first.LeftoverPath);
+            Assert.Equal("remove:branch-delete-failed", first.CleanupBackoff?.Reason);
+            Assert.True(BranchExists(repo, branch));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+
+            var second = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(second.IsComplete);
+            Assert.Equal(path, second.LeftoverPath);
+            Assert.Equal("remove:branch-delete-failed", second.CleanupBackoff?.Reason);
+            Assert.True(BranchExists(repo, branch));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+
+            RunGit(repo, "branch", "-D", branch);
+            var final = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(final.IsComplete);
+            Assert.False(BranchExists(repo, branch));
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+        }
+        finally
+        {
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_reports_leftover_path_and_resumes_when_lock_released")]
     public void GoalWorktreesRemoveReportsLeftoverPathAndResumesWhenLockReleased()
     {
@@ -3398,6 +3452,61 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(1_000, worktrees.RemoveTimeoutMilliseconds);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
             Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_records_landed_state_before_deferred_cleanup")]
+    public void CliGoalMarkLandedRecordsLandedStateBeforeDeferredCleanup()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Out-of-band landed deferred cleanup goal", repo);
+            RunGit(repo, "branch", GoalWorktrees.BranchName(goal.Id));
+            var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+            kernel.SetEventWriter(eventWriter);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                EventWriter = eventWriter,
+                GoalMarkLandedElapsedMilliseconds = () => CliCommandHandlers.GoalMarkLandedPromptTimeoutMilliseconds
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                context));
+
+            Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, e =>
+                e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
+            Assert.Contains(journal.LatestByOperation, e =>
+                e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
+            Assert.Contains(journal.LatestByOperation, e =>
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
+            Assert.DoesNotContain(journal.LatestByOperation, e =>
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+
+            var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id);
+            Assert.NotNull(cleanupBackoff);
+            Assert.StartsWith("remove:", cleanupBackoff!.Reason, StringComparison.Ordinal);
+            var recovery = GoalRecoveryPlanner.Build(kernel, goal, repo);
+            Assert.NotNull(recovery.CleanupBackoff);
+            Assert.Contains(recovery.RecommendedActions, action =>
+                action.Contains("workspace remove", StringComparison.Ordinal));
+            var facts = new GoalLifecycleFacts(IsMerged: true, IsRecorded: true);
+            Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(goal, facts));
         }
         finally
         {
