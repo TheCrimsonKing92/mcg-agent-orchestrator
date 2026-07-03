@@ -2535,7 +2535,13 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             if (removeResult.IsComplete)
             {
                 GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", removeResult.Message);
-                ReconcileLandedCleanedAcceptance(context, goal, "workspace remove");
+                ReconcileLandedCleanedAcceptance(context, goal, "workspace remove", cleanupEvidenceRecorded: true);
+                context.EventWriter.AppendCleanedUp(goal.Id);
+            }
+            else if (TryCompleteLandedBranchOnlyWorkspaceRemove(context, goal, removeResult, out var completedRemoveDetail))
+            {
+                GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", completedRemoveDetail);
+                ReconcileLandedCleanedAcceptance(context, goal, "workspace remove", cleanupEvidenceRecorded: true);
                 context.EventWriter.AppendCleanedUp(goal.Id);
             }
             else
@@ -2756,18 +2762,23 @@ private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerification
     return $"BLOCKER step=verification reason=timeout check=\"{timedOutCheck.Name}\" artifacts={artifactDetail} action=\"Inspect verification command, artifact path, and last output above; rerun acceptance after clearing the blocker.\"";
 }
 
-private static void ReconcileLandedCleanedAcceptance(CliExecutionContext context, Goal goal, string source)
+private static void ReconcileLandedCleanedAcceptance(
+    CliExecutionContext context,
+    Goal goal,
+    string source,
+    bool cleanupEvidenceRecorded = false)
 {
-    TryReconcileLandedCleanedAcceptance(context, goal, source, out _);
+    TryReconcileLandedCleanedAcceptance(context, goal, source, out _, cleanupEvidenceRecorded);
 }
 
 private static bool TryReconcileLandedCleanedAcceptance(
     CliExecutionContext context,
     Goal goal,
     string source,
-    out string detail)
+    out string detail,
+    bool cleanupEvidenceRecorded = false)
 {
-    if (!HasLandedCleanedTerminalEvidence(context, goal, out detail))
+    if (!HasLandedCleanedTerminalEvidence(context, goal, out detail, cleanupEvidenceRecorded))
     {
         return false;
     }
@@ -2777,7 +2788,11 @@ private static bool TryReconcileLandedCleanedAcceptance(
     return true;
 }
 
-private static bool HasLandedCleanedTerminalEvidence(CliExecutionContext context, Goal goal, out string detail)
+private static bool HasLandedCleanedTerminalEvidence(
+    CliExecutionContext context,
+    Goal goal,
+    out string detail,
+    bool cleanupEvidenceRecorded = false)
 {
     var goalPrefix = goal.Id.Value[..8];
     if (goal.Status != GoalStatus.Completed)
@@ -2803,10 +2818,11 @@ private static bool HasLandedCleanedTerminalEvidence(CliExecutionContext context
         return false;
     }
 
-    var hasCleanupEvidence = journal.LatestByOperation.Any(entry =>
-        entry.Status == GoalOperationStatus.Completed &&
-        (entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) ||
-         entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase)));
+    var hasCleanupEvidence = cleanupEvidenceRecorded ||
+        journal.LatestByOperation.Any(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            (entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase)));
     if (!hasCleanupEvidence)
     {
         detail = $"acceptance repair blocked: goal {goalPrefix} has no completed workspace cleanup evidence.";
@@ -2814,6 +2830,49 @@ private static bool HasLandedCleanedTerminalEvidence(CliExecutionContext context
     }
 
     detail = $"goal {goalPrefix} has completed landing and cleanup evidence.";
+    return true;
+}
+
+private static bool TryCompleteLandedBranchOnlyWorkspaceRemove(
+    CliExecutionContext context,
+    Goal goal,
+    GoalWorktreeRemoveResult removeResult,
+    out string detail)
+{
+    detail = string.Empty;
+    var executionDirectory = context.Workspace.ExecutionDirectory;
+    var worktreePath = GoalWorktrees.WorktreePath(executionDirectory, goal.Id);
+    if (context.Worktrees.TryResolve(executionDirectory, goal.Id) is not null ||
+        Directory.Exists(worktreePath))
+    {
+        return false;
+    }
+
+    var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+    var hasLandingEvidence = journal.LatestByOperation.Any(entry =>
+        entry.Status == GoalOperationStatus.Completed &&
+        (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+         entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)));
+    if (!hasLandingEvidence)
+    {
+        return false;
+    }
+
+    var branch = context.Worktrees.BranchName(goal.Id);
+    var branchExists = GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
+    if (branchExists.ExitCode != 0)
+    {
+        detail = $"Removed workspace. {removeResult.Message}";
+        return true;
+    }
+
+    var deleteBranch = GitCli.Run(executionDirectory, "branch", "-D", branch);
+    if (deleteBranch.ExitCode != 0)
+    {
+        return false;
+    }
+
+    detail = $"Removed workspace and cleaned landed branch {branch}.";
     return true;
 }
 
