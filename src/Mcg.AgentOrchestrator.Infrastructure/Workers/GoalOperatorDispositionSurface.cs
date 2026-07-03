@@ -67,8 +67,7 @@ public sealed class GoalOperatorDispositionSurface
         var blockers = new List<string>();
         var evidence = new List<OperatorEvidencePointer>();
 
-        var operationallyTerminal = IsTerminal(goal.Status) ||
-            (verificationSatisfied && goal.Tasks.Count > 0 && goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed));
+        var operationallyTerminal = IsTerminal(goal.Status);
 
         if (operationallyTerminal && pendingHumanInputCount > 0)
         {
