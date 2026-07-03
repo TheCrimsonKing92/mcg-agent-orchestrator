@@ -904,6 +904,16 @@ public static class GoalWorktrees
     public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
         TryReadOrphanCleanupBackoff(path, out var entry) ? ToCleanupBackoff(entry) : null;
 
+    public static GoalWorktreeCleanupBackoff? RecordGoalCleanupNeeded(
+        string executionDirectory,
+        GoalId goalId,
+        string reason)
+    {
+        var path = WorktreePath(executionDirectory, goalId);
+        RecordCleanupNeeded(path, reason);
+        return TryGetCleanupBackoff(path);
+    }
+
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
     {
         if (result.ExitCode == 0)
