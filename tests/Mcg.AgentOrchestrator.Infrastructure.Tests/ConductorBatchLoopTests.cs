@@ -1431,6 +1431,58 @@ public sealed class ConductorBatchLoopTests
         Assert.False(summary.StopRequested);
     }
 
+    [Xunit.Fact(DisplayName = "WatchMode_exit_wake_reconciles_before_stop_file_exit")]
+    public void WatchModeExitWakeReconcilesBeforeStopFileExit()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-wake-stop-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var exit = Path.Combine(root, "worker.exit.txt");
+        var stdout = Path.Combine(root, "worker.out.log");
+        var stderr = Path.Combine(root, "worker.err.log");
+        var stopFile = NoStopPath();
+        File.WriteAllText(stdout, "done");
+        File.WriteAllText(stderr, "");
+
+        var (kernel, goal) = SimpleGoal("running goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", root, now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(1234, "test.exe", root, stdout, stderr, exit, now, null, null, OwnedProcessIds: [1234]));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        var sweepCalls = 0;
+        var wakeSignal = new TestWakeSignal(() =>
+        {
+            File.WriteAllText(exit, "0");
+            File.WriteAllText(stopFile, "stop");
+        });
+
+        try
+        {
+            var summary = new ConductorBatchLoop(loopKernel =>
+            {
+                sweepCalls++;
+                runner.SweepExitedProcesses(loopKernel);
+            }).Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                stopFile,
+                watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
+                wakeSignal: wakeSignal);
+
+            Assert.True(summary.StopRequested);
+            Assert.True(sweepCalls >= 2);
+            Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
+        }
+        finally
+        {
+            if (File.Exists(stopFile)) File.Delete(stopFile);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WatchMode_idle_without_running_workers_keeps_default_fallback")]
     public void WatchModeIdleWithoutRunningWorkersKeepsDefaultFallback()
     {
