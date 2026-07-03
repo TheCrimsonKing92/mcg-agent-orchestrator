@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 public sealed class LauncherScriptTests
@@ -107,6 +108,72 @@ public sealed class LauncherScriptTests
         Assert.True(launcher.Contains("App.dll.git-head", StringComparison.Ordinal));
         Assert.True(launcher.Contains("rev-parse HEAD", StringComparison.Ordinal));
         Assert.True(launcher.Contains("Set-Content -LiteralPath '%APP_HEAD%'", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ResolveRunDir_repopulates_cached_copy_when_native_sqlite_asset_is_missing")]
+    public void ResolveRunDirRepopulatesCachedCopyWhenNativeSqliteAssetIsMissing()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(appOutput);
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            File.WriteAllText(appDll, "fake app");
+            var nativeSource = Path.Combine(appOutput, "runtimes", "win-x64", "native", "e_sqlite3.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(nativeSource)!);
+            File.WriteAllText(nativeSource, "native");
+
+            var runDir = Path.Combine(root, "mcg-run", AppDllHashPrefix(appDll));
+            Directory.CreateDirectory(runDir);
+            File.Copy(appDll, Path.Combine(runDir, Path.GetFileName(appDll)));
+
+            var result = RunPowerShellCommand(repoRoot, $"""
+                $ErrorActionPreference = 'Stop'
+                $env:TEMP = '{EscapePowerShellSingleQuoted(root)}'
+                $env:TMP = '{EscapePowerShellSingleQuoted(root)}'
+                & '{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "resolve-run-dir.ps1"))}' '{EscapePowerShellSingleQuoted(appDll)}'
+                """);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Equal(runDir, result.Stdout.Trim());
+            Assert.True(File.Exists(Path.Combine(runDir, "runtimes", "win-x64", "native", "e_sqlite3.dll")));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ResolveRunDir_missing_native_sqlite_asset_fails_with_repair_action")]
+    public void ResolveRunDirMissingNativeSqliteAssetFailsWithRepairAction()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(appOutput);
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            File.WriteAllText(appDll, "fake app");
+
+            var result = RunPowerShellCommand(repoRoot, $"""
+                $env:TEMP = '{EscapePowerShellSingleQuoted(root)}'
+                $env:TMP = '{EscapePowerShellSingleQuoted(root)}'
+                & '{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "resolve-run-dir.ps1"))}' '{EscapePowerShellSingleQuoted(appDll)}'
+                """);
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            Assert.True(result.Stderr.Contains("e_sqlite3", StringComparison.Ordinal), result.Stderr);
+            Assert.True(result.Stderr.Contains("dotnet build", StringComparison.Ordinal), result.Stderr);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "InvokeRepoScript_no_trailing_arguments_forwards_zero_arguments")]
@@ -641,6 +708,29 @@ public sealed class LauncherScriptTests
 
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static string AppDllHashPrefix(string appDll)
+    {
+        using var stream = File.OpenRead(appDll);
+        return Convert.ToHexString(SHA1.HashData(stream)).Substring(0, 16);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
 
     private static SnapshotStatusSandbox CreateSnapshotStatusSandbox()
     {
