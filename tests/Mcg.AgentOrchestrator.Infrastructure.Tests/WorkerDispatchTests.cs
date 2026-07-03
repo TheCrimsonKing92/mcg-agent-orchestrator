@@ -4965,6 +4965,49 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_non_self_committing_provider_exit1_dirty_successful_worker_result_commits_on_behalf")]
+    public void BackgroundDispatchRunnerTypedNonSelfCommittingProviderExit1DirtySuccessfulWorkerResultCommitsOnBehalf()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var workerProfile = "typed-openai-worker";
+    var providers = new WorkerProviderCatalog([
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexCli, UsesCodexExitFileBehavior: true),
+            workerProfile,
+            "OpenAI",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: true,
+                SupportsPlanMode: true))
+    ]);
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "dotnet test --filter WorkerDispatch", "Passed: 2, Failed: 0"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but codex exited one"),
+        workerName: workerProfile,
+        command: "codex exec prompt",
+        workerProviderKind: ProviderKind.OpenAICodexCli);
+
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        task.LastVerification.StandardError,
+        text => text.Contains("complete no-blocker WORKER_RESULT and dirty worktree edits", StringComparison.Ordinal));
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_without_typed_sandbox_evidence_stays_failed")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedWithoutTypedSandboxEvidenceStaysFailed()
 {

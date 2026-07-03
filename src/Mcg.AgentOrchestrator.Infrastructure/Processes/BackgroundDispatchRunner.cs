@@ -459,6 +459,7 @@ public sealed class BackgroundDispatchRunner
             // Default path: a Developer/Tester that edited the worktree and showed verification
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
+            var originalExitCode = exitCode;
             var orchestratorCommitted = false;
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
@@ -468,9 +469,15 @@ public sealed class BackgroundDispatchRunner
                 standardOutput,
                 standardError,
                 providerFailureKind);
+            var successfulWorkerResult = HasSuccessfulWorkerResult(
+                processRecord.WorkingDirectory,
+                standardOutput,
+                standardError);
+            var provider = ResolveWorkerProvider(task.LastDispatch);
             var shouldCommitDirtyWorktree =
                 (exitCode == 0 && worktreeEvidence.HasCommitAfterDispatch) ||
-                (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked);
+                (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
+                (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit);
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -497,6 +504,13 @@ public sealed class BackgroundDispatchRunner
                             standardErrorDiagnostic,
                             "Classified worker git metadata write failure as non-fatal; orchestrator commit-on-behalf is the commit path. " +
                             $"index_lock={TryResolveIndexLockPath(processRecord.WorkingDirectory)}.");
+                    }
+                    else if (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit)
+                    {
+                        standardErrorDiagnostic = AppendDiagnostic(
+                            standardErrorDiagnostic,
+                            "Accepted non-zero worker exit because a complete no-blocker WORKER_RESULT and dirty worktree edits were present; " +
+                            "orchestrator commit-on-behalf is the commit path.");
                     }
                 }
             }
@@ -739,6 +753,42 @@ public sealed class BackgroundDispatchRunner
             try
             {
                 if (WorkerResultParser.TryParseFields(File.ReadAllText(path), out _, out _))
+                {
+                    return true;
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasSuccessfulWorkerResult(string workingDirectory, string standardOutput, string standardError)
+    {
+        if (WorkerResultParser.TryParseSuccessfulResult(
+                $"{standardOutput}\n{standardError}",
+                out _,
+                out _))
+        {
+            return true;
+        }
+
+        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
+        {
+            var path = Path.Combine(workingDirectory, fileName);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (WorkerResultParser.TryParseSuccessfulResult(File.ReadAllText(path), out _, out _))
                 {
                     return true;
                 }

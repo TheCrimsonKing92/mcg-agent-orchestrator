@@ -60,6 +60,41 @@ internal static class WorkerResultParser
         return false;
     }
 
+    internal static bool TryParseSuccessfulResult(
+        string text,
+        out Dictionary<string, string> fields,
+        out string diagnostic)
+    {
+        if (!TryParseFields(text, out fields, out diagnostic))
+        {
+            return false;
+        }
+
+        if (!HasSubstantiveValue(fields, "files"))
+        {
+            diagnostic = "WORKER_RESULT has no changed files.";
+            return false;
+        }
+
+        if (!HasSubstantiveValue(fields, "tests") ||
+            fields["tests"].Equals("not-run", StringComparison.OrdinalIgnoreCase) ||
+            fields["tests"].Equals("not run", StringComparison.OrdinalIgnoreCase))
+        {
+            diagnostic = "WORKER_RESULT has no completed test evidence.";
+            return false;
+        }
+
+        if (!fields.TryGetValue("blockers", out var blockers) ||
+            !blockers.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            diagnostic = $"WORKER_RESULT reported blockers: {blockers}.";
+            return false;
+        }
+
+        diagnostic = string.Empty;
+        return true;
+    }
+
     // ── Block parser ──────────────────────────────────────────────────────────
 
     private static bool TryParseBlock(
@@ -204,5 +239,12 @@ internal static class WorkerResultParser
     {
         var noMarkdown = MarkdownCharsPattern.Replace(key.Trim(), "");
         return noMarkdown.TrimStart('-', ' ').Trim();
+    }
+
+    private static bool HasSubstantiveValue(IReadOnlyDictionary<string, string> fields, string key)
+    {
+        return fields.TryGetValue(key, out var value) &&
+            !string.IsNullOrWhiteSpace(value) &&
+            !value.Equals("none", StringComparison.OrdinalIgnoreCase);
     }
 }
