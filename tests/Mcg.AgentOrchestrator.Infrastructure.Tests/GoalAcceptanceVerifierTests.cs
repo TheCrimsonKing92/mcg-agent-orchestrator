@@ -59,6 +59,55 @@ public sealed class GoalAcceptanceVerifierTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_checked_in_infrastructure_manifest_check")]
+    public async Task GoalAcceptanceVerifierPartitionsCheckedInInfrastructureManifestCheck()
+    {
+        var calls = new List<string[]>();
+        var root = CreateCheckedInManifestShapeWorkspace();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : ""));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            var checks = result.Checks ?? throw new InvalidOperationException("Expected acceptance checks.");
+            Assert.True(checks.Any(check => check.Name == "infrastructure tests: Cli"));
+            Assert.True(checks.Any(check => check.Name == "infrastructure tests: Goal acceptance verifier"));
+            Assert.True(checks.Any(check => check.Name == "infrastructure tests: Remainder"));
+            Assert.False(checks.Any(check => check.Name == "infrastructure tests"));
+
+            var infrastructureCalls = calls
+                .Where(call => call.Length > 2 &&
+                    call[0] == "dotnet" &&
+                    call[1] == "test" &&
+                    call[2].EndsWith("Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal))
+                .ToList();
+
+            Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
+            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
+            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests"));
+            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"));
+            Assert.Contains(infrastructureCalls, call =>
+                call.Any(argument =>
+                    argument.Contains("FullyQualifiedName!~GoalAcceptanceVerifierTests", StringComparison.Ordinal) &&
+                    argument.Contains("FullyQualifiedName!~DashboardRenderingTests", StringComparison.Ordinal) &&
+                    argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_once_on_CS2012_and_returns_passed")]
     public async Task GoalAcceptanceVerifierRetriesOnceOnCs2012AndReturnsPassed()
     {

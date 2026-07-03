@@ -63,6 +63,36 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
+    private static readonly InfrastructureTestLane[] InfrastructureTestLanes =
+    [
+        new("Cli", "FullyQualifiedName~CliCommandTests"),
+        new("Cli help", "FullyQualifiedName~CliHelpTests"),
+        new("Worker dispatch", "FullyQualifiedName~WorkerDispatchTests"),
+        new("Worker profiles", "FullyQualifiedName~WorkerProfileTests"),
+        new("Worker processes", "FullyQualifiedName~WorkerProcessJobsTests"),
+        new("Worker shell", "FullyQualifiedName~WorkerShellTests"),
+        new("Worker sandbox planner", "FullyQualifiedName~WorkerSandboxCapabilityPlannerTests"),
+        new("Dispatch process host", "FullyQualifiedName~DispatchProcessHostTests"),
+        new("Goal worktree", "FullyQualifiedName~GoalWorktreeTests"),
+        new("Goal acceptance verifier", "FullyQualifiedName~GoalAcceptanceVerifierTests"),
+        new("Dashboard rendering", "FullyQualifiedName~DashboardRenderingTests"),
+        new("Dashboard host", "FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"),
+        new("Dashboard validation", "FullyQualifiedName~DashboardValidationHarnessTests"),
+        new("Advance loop", "FullyQualifiedName~AdvanceLoopTests"),
+        new("Conductor batch loop", "FullyQualifiedName~ConductorBatchLoopTests"),
+        new("Conductor driver", "FullyQualifiedName~ConductorDriverTests"),
+        new("Conduct watch sweep scoping", "FullyQualifiedName~ConductWatchSweepScopingTests"),
+        new("Remainder",
+            "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests" +
+            "&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests" +
+            "&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests" +
+            "&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests" +
+            "&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests" +
+            "&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardHostTests" +
+            "&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests" +
+            "&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests" +
+            "&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration")
+    ];
 
     private readonly Func<string[], string, CancellationToken, Task<CommandResult>> _runner;
 
@@ -87,7 +117,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Apply policy-required checks from the change scope. Focused project checks replace
         // matching unfiltered project checks so a narrow App change does not still run the full
         // Infrastructure project suite from the tracked manifest.
-        var effectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles);
+        var effectiveChecks = ExpandBroadInfrastructureChecks(BuildPolicyEffectiveChecks(manifest.Checks, changedFiles));
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
@@ -375,11 +405,53 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return effective;
     }
 
+    private static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
+    {
+        var effective = new List<AcceptanceManifestCheck>();
+        foreach (var check in manifestChecks)
+        {
+            if (!IsBroadInfrastructureTestCheck(check))
+            {
+                effective.Add(check);
+                continue;
+            }
+
+            foreach (var lane in InfrastructureTestLanes)
+            {
+                effective.Add(new AcceptanceManifestCheck
+                {
+                    Name = $"{check.Name}: {lane.Name}",
+                    Type = check.Type,
+                    Command = check.Command,
+                    Project = check.Project,
+                    Arguments = [.. check.Arguments, "--filter", lane.Filter]
+                });
+            }
+        }
+
+        return effective;
+    }
+
+    private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
+        check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(check.Project) &&
+        IsInfrastructureTestProject(check.Project) &&
+        !check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
+
     private static bool IsFocusedProjectDotnetCheck(AcceptanceManifestCheck check) =>
         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(check.Project) &&
         check.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
         check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsInfrastructureTestProject(string project) =>
+        project.EndsWith(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase) ||
+        project.EndsWith(
+            "tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool IsReplacedByFocusedProjectCheck(
         AcceptanceManifestCheck manifestCheck,
@@ -872,12 +944,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool NeedsUnattendedHostIntegrationExclusion(AcceptanceManifestCheck check) =>
         string.IsNullOrWhiteSpace(check.Project) ||
         check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
-        check.Project.EndsWith(
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            StringComparison.OrdinalIgnoreCase) ||
-        check.Project.EndsWith(
-            "tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            StringComparison.OrdinalIgnoreCase);
+        IsInfrastructureTestProject(check.Project);
 
     private static string? ExtractFilterArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
     {
@@ -1264,4 +1331,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string? FilePath { get; init; }
         public bool Advisory { get; init; }
     }
+
+    private sealed record InfrastructureTestLane(string Name, string Filter);
 }
