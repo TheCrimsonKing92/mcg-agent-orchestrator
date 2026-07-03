@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -148,6 +149,97 @@ public sealed class GoalWorktreeIntegrationTests
             process.ExitCode is 0 or 2,
             $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Repo_process_helpers_do_not_use_PowerShell_CIM_process_queries")]
+    public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
+            Path.Combine("scripts", "Stop-RepoProcess.ps1"),
+            Path.Combine("scripts", "Find-OrchestratorLocks.ps1"),
+            Path.Combine("scripts", "Get-OrchestratorSnapshot.ps1")
+        })
+        {
+            var text = File.ReadAllText(Path.Combine(repoRoot, relativePath));
+            Assert.DoesNotContain("Get-CimInstance", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Win32_Process", text, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GetRepoProcessInfo_reports_exact_pid_lineage_through_repo_prefix")]
+    public void GetRepoProcessInfoReportsExactPidLineageThroughRepoPrefix()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Get-RepoProcessInfo.ps1");
+        startInfo.ArgumentList.Add("-Id");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Get-RepoProcessInfo.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Get-RepoProcessInfo.ps1 did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.True(stdout.Contains($"PROCESS id={Environment.ProcessId}", StringComparison.Ordinal), stdout);
+        Assert.True(stdout.Contains("parent=", StringComparison.Ordinal), stdout);
+        Assert.True(stdout.Contains("command=", StringComparison.Ordinal), stdout);
+    }
+
+    [Xunit.Fact(DisplayName = "StopRepoProcess_refuses_exact_pid_when_command_guard_mismatches")]
+    public void StopRepoProcessRefusesExactPidWhenCommandGuardMismatches()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Stop-RepoProcess.ps1");
+        startInfo.ArgumentList.Add("-Id");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("-CommandContains");
+        startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
+        startInfo.ArgumentList.Add("-Force");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Stop-RepoProcess.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.True(
+            stdout.Contains($"PROCESS id={Environment.ProcessId} status=refused reason=command-mismatch", StringComparison.Ordinal),
+            stdout);
     }
 
     [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_fails_when_filter_runs_zero_tests")]
