@@ -18,7 +18,6 @@
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix abc12345 test Mcg.AgentOrchestrator.sln --verbosity minimal
 #>
-[CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$ScriptPath,
@@ -59,6 +58,60 @@ if ([System.IO.Path]::GetExtension($resolved) -ne '.ps1') {
 
 if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
     throw "Script not found: $resolved"
+}
+
+if ([string]::Equals([System.IO.Path]::GetFileName($resolved), 'Invoke-Git.ps1', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $processArguments = [Environment]::GetCommandLineArgs()
+    $currentScript = [System.IO.Path]::GetFullPath($PSCommandPath)
+    $scriptArgumentOffset = -1
+    for ($i = 0; $i -lt $processArguments.Count; $i++) {
+        try {
+            $candidateScript = if ([System.IO.Path]::IsPathRooted($processArguments[$i])) {
+                [System.IO.Path]::GetFullPath($processArguments[$i])
+            } else {
+                [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $processArguments[$i]))
+            }
+
+            if ([string]::Equals($candidateScript, $currentScript, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $scriptArgumentOffset = $i + 2
+                break
+            }
+        } catch {
+        }
+    }
+
+    $gitArguments = if ($scriptArgumentOffset -ge 0 -and $scriptArgumentOffset -lt $processArguments.Count) {
+        @($processArguments[$scriptArgumentOffset..($processArguments.Count - 1)])
+    } else {
+        $parseErrors = $null
+        $lineTokens = @([System.Management.Automation.PSParser]::Tokenize($MyInvocation.Line, [ref]$parseErrors) |
+            Where-Object { $_.Type -in 'Command', 'CommandArgument', 'CommandParameter', 'String' })
+        $lineScriptOffset = -1
+        for ($i = 0; $i -lt $lineTokens.Count; $i++) {
+            try {
+                $candidateScript = if ([System.IO.Path]::IsPathRooted($lineTokens[$i].Content)) {
+                    [System.IO.Path]::GetFullPath($lineTokens[$i].Content)
+                } else {
+                    [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $lineTokens[$i].Content))
+                }
+
+                if ([string]::Equals($candidateScript, $currentScript, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $lineScriptOffset = $i + 2
+                    break
+                }
+            } catch {
+            }
+        }
+
+        if ($lineScriptOffset -ge 0 -and $lineScriptOffset -lt $lineTokens.Count) {
+            @($lineTokens[$lineScriptOffset..($lineTokens.Count - 1)] | ForEach-Object { $_.Content })
+        } else {
+            @($ScriptArguments)
+        }
+    }
+
+    & git -C $repoRoot @gitArguments
+    exit $LASTEXITCODE
 }
 
 $powerShellPath = (Get-Process -Id $PID).Path

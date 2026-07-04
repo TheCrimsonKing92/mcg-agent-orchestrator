@@ -152,6 +152,44 @@ public sealed class GoalWorktreeIntegrationTests
         Assert.DoesNotContain("repo-process-info --locks", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Xunit.Fact(DisplayName = "InvokeGit_through_repo_script_preserves_hyphenated_git_arguments")]
+    public void InvokeGitThroughRepoScriptPreservesHyphenatedGitArguments()
+    {
+        var sourceRoot = FindCurrentSourceRoot();
+        var repo = CreateSeededRepository();
+        try
+        {
+            var scriptsPath = Path.Combine(repo, "scripts");
+            Directory.CreateDirectory(scriptsPath);
+            File.Copy(Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"), Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
+            File.Copy(Path.Combine(sourceRoot, "scripts", "Invoke-Git.ps1"), Path.Combine(scriptsPath, "Invoke-Git.ps1"));
+
+            RunGit(repo, "branch", "invoke-git-delete");
+            var delete = RunInvokeRepoGit(repo, "branch", "-d", "invoke-git-delete");
+            Assert.True(delete.ExitCode == 0, delete.Stdout + delete.Stderr);
+            Assert.False(BranchExists(repo, "invoke-git-delete"));
+
+            RunGit(repo, "branch", "invoke-git-force-delete");
+            var forceDelete = RunInvokeRepoGit(repo, "branch", "-D", "invoke-git-force-delete");
+            Assert.True(forceDelete.ExitCode == 0, forceDelete.Stdout + forceDelete.Stderr);
+            Assert.False(BranchExists(repo, "invoke-git-force-delete"));
+
+            RunGit(repo, "branch", "invoke-git-rename-source");
+            var rename = RunInvokeRepoGit(repo, "branch", "-m", "invoke-git-rename-source", "invoke-git-rename-target");
+            Assert.True(rename.ExitCode == 0, rename.Stdout + rename.Stderr);
+            Assert.False(BranchExists(repo, "invoke-git-rename-source"));
+            Assert.True(BranchExists(repo, "invoke-git-rename-target"));
+
+            var config = RunInvokeRepoGit(repo, "-c", "advice.detachedHead=false", "branch", "--list", "invoke-git-rename-target");
+            Assert.True(config.ExitCode == 0, config.Stdout + config.Stderr);
+            Assert.True(config.Stdout.Contains("invoke-git-rename-target", StringComparison.Ordinal), config.Stdout);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Repo_process_helpers_do_not_use_PowerShell_CIM_process_queries")]
     public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
     {
@@ -5609,6 +5647,34 @@ public sealed class GoalWorktreeIntegrationTests
         {
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
         }
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) RunInvokeRepoGit(
+        string repositoryRoot,
+        params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = repositoryRoot
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(
+            ".\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-Git.ps1 " + string.Join(' ', arguments));
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(60000), "Invoke-RepoScript.ps1 did not exit within 60 seconds.");
+        return (process.ExitCode, output, error);
     }
 
     private static string RunGitOutput(string workingDirectory, params string[] arguments)
