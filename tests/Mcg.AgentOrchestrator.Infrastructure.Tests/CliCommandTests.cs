@@ -1185,6 +1185,45 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("command: refresh-dispatch 1", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_diagnostics_reports_active_dispatch_bounded_without_worktree_git_inspection")]
+    public void CliGoalDiagnosticsReportsActiveDispatchBoundedWithoutWorktreeGitInspection()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Keep worker running", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Diagnose active worker", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root, Environment.ProcessId);
+        Goal? currentGoal = kernel.GetGoal(goal.Id);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["goal-diagnostics", goal.Id.Value[..8]],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Goal diagnostics", output);
+        Xunit.Assert.Contains("Mode: bounded", output);
+        Xunit.Assert.Contains("dispatch-state: state='Running'", output);
+        Xunit.Assert.Contains("live=True", output);
+        Xunit.Assert.Contains("dirty_worktree=unknown", output);
+        Xunit.Assert.Contains("Deeper commands:", output);
+        Xunit.Assert.DoesNotContain("Goal readiness", output);
+        Xunit.Assert.DoesNotContain("subscription plan:", output);
+        Xunit.Assert.InRange(CountNonEmptyLines(output), 1, 40);
+    }
+
     [Xunit.Fact(DisplayName = "HistoricalDogfoodEvaluation_scores_recorded_goal_state_without_starting_workers")]
     public void HistoricalDogfoodEvaluationScoresRecordedGoalStateWithoutStartingWorkers()
     {
@@ -6875,6 +6914,22 @@ public sealed class CliCommandTests
             agents = AgentCatalog.Default().Agents;
             profiles = WorkerProfileCatalog.Default();
             currentGoal = goal;
+            var diagnosticsOutput = CaptureConsole(() =>
+            {
+                var diagnosticsRepository = new InMemoryTransactionalStateRepository(kernel);
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["next", goal.Id.Value[..8], "--full"],
+                    diagnosticsRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            });
+
+            agents = AgentCatalog.Default().Agents;
+            profiles = WorkerProfileCatalog.Default();
+            currentGoal = goal;
             var conductOutput = CaptureConsole(() =>
             {
                 var conductRepository = new InMemoryTransactionalStateRepository(kernel);
@@ -6895,6 +6950,9 @@ public sealed class CliCommandTests
             Xunit.Assert.Contains(expected, conductOutput);
             Xunit.Assert.Contains(command, conductOutput);
             Xunit.Assert.Equal(1, CountLinesContaining(conductOutput, expected));
+            Xunit.Assert.Contains("Goal diagnostics", diagnosticsOutput);
+            Xunit.Assert.Contains(expected, diagnosticsOutput);
+            Xunit.Assert.Contains(command, diagnosticsOutput);
             Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
         }
         finally
@@ -7346,6 +7404,9 @@ public sealed class CliCommandTests
     private static int CountLinesContaining(string text, string value) =>
         text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.Contains(value, StringComparison.Ordinal));
+
+    private static int CountNonEmptyLines(string text) =>
+        text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
 
     private static string SingleLineContaining(string text, string value) =>
         text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)

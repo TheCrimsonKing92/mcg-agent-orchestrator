@@ -454,6 +454,10 @@ public static class GoalWorktrees
             GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "prune");
         }
 
+        GitCli.GitResult? branchRemoval = hasBranch
+            ? GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch)
+            : null;
+
         if (Directory.Exists(path))
         {
             ReapRecordedWorkerProcesses(kernel, path);
@@ -477,31 +481,26 @@ public static class GoalWorktrees
             WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."));
         }
 
-        if (!BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
+        if (!hasBranch || branchRemoval is { ExitCode: 0 })
         {
+            var completeMessage = branchRemoval is { ExitCode: 0 }
+                ? $"Removed workspace and merged branch {branch}."
+                : "Removed workspace.";
+            var incompleteMessage = branchRemoval is { ExitCode: 0 }
+                ? $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
+                : "Removed workspace, but leftover directory cleanup is incomplete.";
             var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
             ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup);
             return CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
-                "Removed workspace.",
-                "Removed workspace, but leftover directory cleanup is incomplete.",
+                completeMessage,
+                incompleteMessage,
                 ephemeralCleanup);
         }
 
-        var branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
         var ownedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
         ownedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ownedEphemeralCleanup);
-        if (branchRemoval.ExitCode == 0)
-        {
-            return CompleteOrDeferredRemoveResult(
-                path,
-                goalId,
-                $"Removed workspace and merged branch {branch}.",
-                $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete.",
-                ownedEphemeralCleanup);
-        }
-
         RecordCleanupNeeded(path, "remove:branch-delete-failed");
         var branchCleanupBackoff = TryGetCleanupBackoff(path);
         return new GoalWorktreeRemoveResult(

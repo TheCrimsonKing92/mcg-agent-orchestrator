@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -724,11 +725,25 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintOperatorInbox(ackReport);
             return false;
 
+        case "goal-diagnostics":
+        {
+            var diagnosticsGoalPrefix = GetOptionalArgument(parts);
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, diagnosticsGoalPrefix);
+            PrintBoundedGoalDiagnostics(context);
+            return false;
+        }
+
         case "next":
         {
             var isFull = HasCliConfirmation(parts, "--full");
             var nextGoalPrefix = GetOptionalArgument(parts, "--full");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, nextGoalPrefix);
+            if (isFull)
+            {
+                PrintBoundedGoalDiagnostics(context);
+                return false;
+            }
+
             var nextSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             ConsoleViews.PrintTerminalGoalSweep(nextSweep);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -742,10 +757,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 nextPolicy);
             var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(context.Workspace.RunEventStorePath, context.CurrentGoal);
             ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.Agents, nextHealth, conductorDisposition);
-            if (isFull)
-            {
-                PrintNextFullDetail(context, nextPolicy);
-            }
             return nextSweep.Changed;
         }
 
@@ -1542,6 +1553,75 @@ private static string Slug(string value)
     }
 
     return slug.Trim('-');
+}
+
+private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
+{
+    var goal = context.CurrentGoal!;
+    var prefix = goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)];
+    Console.WriteLine();
+    Console.WriteLine($"Goal diagnostics {prefix} {goal.Status}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+    Console.WriteLine("Mode: bounded; skipped deep readiness, subscription prompt estimation, recovery planning, supervisor planning, inbox scan, and dispatch worktree git inspection.");
+
+    var diagnosticsSweep = TerminalGoalSweep.Diagnose(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
+    ConsoleViews.PrintTerminalGoalSweep(diagnosticsSweep, includeRepairs: false);
+
+    var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
+    var dispatchSurface = new DispatchStateSurface(inspectWorktree: false);
+    var dispositionSurface = new GoalOperatorDispositionSurface(dispatchSurface: dispatchSurface);
+    var disposition = dispositionSurface.Evaluate(
+        goal,
+        pendingHumanInputCount: context.Kernel.BuildHumanInputWorklist(goal.Id).OpenCount,
+        verificationSatisfied);
+    ConsoleViews.PrintOperatorDisposition(disposition);
+
+    Console.WriteLine("Dispatches:");
+    var dispatches = disposition.Dispatches
+        .Where(dispatch => dispatch.DispatchState is not null || dispatch.State is not OperatorDispositionState.Idle)
+        .ToList();
+    if (dispatches.Count == 0)
+    {
+        Console.WriteLine("  none");
+    }
+    else
+    {
+        foreach (var dispatch in dispatches)
+        {
+            var task = goal.Tasks.First(candidate => candidate.Id == dispatch.TaskId);
+            Console.WriteLine($"  Task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {dispatch.Role} status={dispatch.TaskStatus} state={dispatch.State} command='{dispatch.NextSafeCommand}' reason='{OutputTextPreview.CreateTimeline(dispatch.Reason).Text}'");
+            if (dispatch.DispatchState is { } dispatchState)
+            {
+                ConsoleViews.PrintDispatchState(dispatchState, "    ");
+            }
+        }
+    }
+
+    var actions = context.Kernel.BuildNextActions(goal.Id);
+    Console.WriteLine("Next actions:");
+    if (actions.Items.Count == 0)
+    {
+        Console.WriteLine("  none");
+    }
+    else
+    {
+        foreach (var item in actions.Items.Take(3))
+        {
+            Console.WriteLine($"  {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
+        }
+    }
+
+    Console.WriteLine("Deeper commands:");
+    Console.WriteLine($"  readiness {prefix}");
+    Console.WriteLine($"  evidence {prefix}");
+    Console.WriteLine($"  stages {prefix}");
+    Console.WriteLine($"  gates {prefix}");
+    Console.WriteLine($"  subscription-plan {prefix}");
+    Console.WriteLine($"  model-outcomes");
+    Console.WriteLine($"  loop-health");
+    Console.WriteLine($"  failure-triage {prefix}");
+    Console.WriteLine($"  goal-recovery {prefix}");
+    Console.WriteLine($"  operator-inbox {prefix}");
+    Console.WriteLine();
 }
 
 private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPolicy policy)
