@@ -1779,7 +1779,7 @@ public sealed class DashboardRenderingTests
     // Ops view shows completion banner in goal header
     var opsHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
     Assert.Contains(opsHtml, text => text.Contains("completion-banner", StringComparison.Ordinal));
-    Assert.Contains(opsHtml, text => text.Contains("Goal complete", StringComparison.Ordinal));
+    Assert.Contains(opsHtml, text => text.Contains("Goal verified", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("manual-only verification", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("No execution, dispatch, or process proof is recorded", StringComparison.Ordinal));
     Assert.False(opsHtml.Contains("No operator action is required.", StringComparison.Ordinal));
@@ -1791,6 +1791,34 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goalPrefix));
     Assert.Contains(goalHtml, text => text.Contains("This task is complete and has passing verification evidence.", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_verified_goal_banner_points_to_acceptance_landing_and_cleanup")]
+    public void DashboardRendererVerifiedGoalBannerPointsToAcceptanceLandingAndCleanup()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Ready for acceptance",
+        [new TaskSpec(TaskId.New(), "Finish the simple goal", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", Environment.CurrentDirectory, DateTimeOffset.UtcNow));
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord("dotnet test", Environment.CurrentDirectory, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+
+    Assert.Equal(GoalStatus.Verified, goal.Status);
+    Assert.True(gate.IsSatisfied, gate.Tasks.Single().Reason.ToString());
+    Assert.True(html.Contains("completion-banner", StringComparison.Ordinal));
+    Assert.True(html.Contains("Goal verified", StringComparison.Ordinal));
+    Assert.True(html.Contains("Next action: run acceptance, merge the goal branch, record landing evidence, and clean up the worktree", StringComparison.Ordinal));
+    Assert.False(html.Contains("No operator action is required.", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_builds_direct_controls_for_safe_actions")]
     public void DashboardNextActionControlsBuildsDirectControlsForSafeActions()
 {
@@ -3012,6 +3040,7 @@ static string ExtractTaskControls(string html, int taskNumber)
         var task = completed.Tasks.Single();
         kernel.ReportTaskProgress(completed.Id, task.Id, WorkTaskStatus.Completed, "Done.");
         kernel.RecordTaskVerification(completed.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "ok", string.Empty, DateTimeOffset.UtcNow));
+        kernel.CompleteGoal(completed.Id, "Done.");
         oldestCompletedPrefix ??= completed.Id.Value[..8];
     }
 

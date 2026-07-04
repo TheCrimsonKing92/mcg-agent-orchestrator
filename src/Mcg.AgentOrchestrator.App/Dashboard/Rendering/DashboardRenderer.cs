@@ -662,7 +662,7 @@ public static partial class DashboardRenderer
             }
             else
             {
-                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. No operator action is required.</span>");
+                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. Next action: run acceptance, merge the goal branch, record landing evidence, and clean up the worktree before treating the goal as completed.</span>");
             }
             html.AppendLine("</div>");
         }
