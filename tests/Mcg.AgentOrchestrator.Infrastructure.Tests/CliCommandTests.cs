@@ -6903,6 +6903,37 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_raw_completed_assigned_task_with_unmerged_branch_reopens_without_acceptance_blocker")]
+    public void TerminalGoalSweepRawCompletedAssignedTaskWithUnmergedBranchReopensWithoutAcceptanceBlocker()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Raw completed assigned with unmerged branch", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            CommitGoalWork(root, goal.Id, "src/raw-completed-assigned.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var goalResult = Assert.Single(result.Goals);
+
+            Assert.Contains(goalResult.Repairs, repair => repair.Kind == "terminal-task-desync");
+            Assert.DoesNotContain(goalResult.Blockers, blocker => blocker.Kind == "completed-branch-unmerged");
+            Assert.Empty(goalResult.Blockers);
+            Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+            Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+            Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_normalizes_raw_completed_unmerged_branch_before_merge")]
     public void CliAcceptanceNormalizesRawCompletedUnmergedBranchBeforeMerge()
     {
