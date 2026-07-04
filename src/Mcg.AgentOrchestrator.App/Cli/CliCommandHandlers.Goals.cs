@@ -505,13 +505,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "status":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintGoal(context.CurrentGoal, ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath));
+            ConsoleViews.PrintGoal(
+                context.CurrentGoal,
+                ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
+                ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
             PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             return false;
 
         case "monitor":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(context.CurrentGoal.Id));
+            ConsoleViews.PrintMonitor(
+                context.Kernel.BuildMonitor(context.CurrentGoal.Id),
+                ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
             return false;
 
         case "readiness":
@@ -1994,6 +1999,12 @@ internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStoreP
     {
         return null;
     }
+}
+
+private static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)
+{
+    var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
+    return DashboardResponseMapper.GoalStatusText(goal.Status, lifecycle);
 }
 
 private static void PrintBacklogIntakeRecord(BacklogIntakeRecord record, AgentOrchestratorKernel kernel)

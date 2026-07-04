@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -63,7 +64,10 @@ internal sealed record MonitorDto(
     IReadOnlyList<StatusCountDto> StatusCounts,
     int PendingHumanInputCount,
     IReadOnlyList<AttentionDto> Attention,
-    DateTimeOffset? LastTimelineEventAt);
+    DateTimeOffset? LastTimelineEventAt)
+{
+    public string StatusText { get; init; } = DashboardDisplayNames.Display(Status);
+}
 
 internal sealed record GoalSupervisorPlanDto(
     string GoalId,
@@ -252,7 +256,10 @@ internal sealed record GoalWorkSummaryDto(
     IReadOnlyList<TaskWorkSummaryDto> Tasks,
     string? MonitoringStreamPath = null,
     ParallelExecutionPlanDto? ParallelPlan = null,
-    GoalTestImpactDto? TestImpact = null);
+    GoalTestImpactDto? TestImpact = null)
+{
+    public string StatusText { get; init; } = DashboardDisplayNames.Display(Status);
+}
 
 internal sealed record GoalTestImpactDto(
     bool RequiresBuild,

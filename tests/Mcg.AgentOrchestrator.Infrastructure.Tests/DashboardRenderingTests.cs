@@ -530,8 +530,8 @@ public sealed class DashboardRenderingTests
     Assert.Equal($"acceptance {goal.Id.Value[..8]}", workSummary.OperatorDisposition.NextSafeCommand);
 }
 
-    [Xunit.Fact(DisplayName = "DashboardResponseMapper_projects_manual_acceptance_cleaned_goal_as_completed")]
-    public void DashboardResponseMapperProjectsManualAcceptanceCleanedGoalAsCompleted()
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_surfaces_cleaned_goal_status_text")]
+    public void DashboardResponseMapperSurfacesCleanedGoalStatusText()
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
@@ -564,6 +564,10 @@ public sealed class DashboardRenderingTests
     Assert.Equal(GoalStatus.Completed, summary.Status);
     Assert.Equal(GoalStatus.Completed, detail.Goal.Status);
     Assert.Equal(GoalStatus.Completed, streamBatch.Snapshot.Monitor.Status);
+    Assert.Equal("CleanedUp", workSummary.StatusText);
+    Assert.Equal("CleanedUp", summary.StatusText);
+    Assert.Equal("CleanedUp", detail.Goal.StatusText);
+    Assert.Equal("CleanedUp", streamBatch.Snapshot.Monitor.StatusText);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
