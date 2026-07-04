@@ -985,10 +985,10 @@ public sealed class WorkerDispatchTests
         var disposition = new GoalOperatorDispositionSurface(new TestClock(DateTimeOffset.Parse("2026-07-03T07:15:00Z")))
             .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: true, executionDirectory: root);
 
-        Assert.Equal(GoalStatus.Completed, goal.Status);
-        Assert.Equal(OperatorDispositionState.Recover, disposition.State);
-        Assert.Equal($"workspace remove {goal.Id.Value[..8]}", disposition.NextSafeCommand);
-        Assert.Contains("goal-worktree-cleanup-debt", disposition.Blockers);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Equal(OperatorDispositionState.Accept, disposition.State);
+        Assert.Equal($"acceptance {goal.Id.Value[..8]}", disposition.NextSafeCommand);
+        Assert.DoesNotContain("goal-worktree-cleanup-debt", disposition.Blockers);
     }
 
     [Xunit.Fact(DisplayName = "GoalOperatorDisposition_flags_stale_terminal_human_wait_desync")]

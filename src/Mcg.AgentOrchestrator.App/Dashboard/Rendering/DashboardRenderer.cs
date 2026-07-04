@@ -652,17 +652,17 @@ public static partial class DashboardRenderer
             : string.Empty;
         html.AppendLine($"<div class=\"meta\">Goal {Encode(goal.Id.Value)} &middot; <span class=\"pill\">{Encode(Display(goal.Status))}</span> &middot; Last event {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}{goalJsonLink}</div>");
         html.AppendLine("</div>");
-        if (goal.Status == GoalStatus.Completed && verificationGate.IsSatisfied)
+        if (goal.Status == GoalStatus.Verified && verificationGate.IsSatisfied)
         {
             html.AppendLine("<div class=\"completion-banner\">");
-            html.AppendLine("<strong>Goal complete</strong>");
+            html.AppendLine("<strong>Goal verified</strong>");
             if (IsManualOnlyCompletion(evidence))
             {
                 html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed with manual-only verification. No execution, dispatch, or process proof is recorded; inspect the verification note before treating this as implemented work.</span>");
             }
             else
             {
-                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. No operator action is required.</span>");
+                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. Next action: run acceptance, merge the goal branch, record landing evidence, and clean up the worktree before treating the goal as completed.</span>");
             }
             html.AppendLine("</div>");
         }

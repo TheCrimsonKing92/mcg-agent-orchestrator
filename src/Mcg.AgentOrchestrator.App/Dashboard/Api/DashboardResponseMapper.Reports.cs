@@ -7,12 +7,12 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardResponseMapper
 {
-public static MonitorDto ToMonitorDto(GoalMonitor monitor)
+public static MonitorDto ToMonitorDto(GoalMonitor monitor, GoalLifecycleState? lifecycleState = null)
 {
     return new MonitorDto(
         monitor.GoalId.Value,
         SummaryText(monitor.Objective),
-        monitor.Status,
+        EffectiveStatus(monitor.Status, lifecycleState),
         monitor.TotalTasks,
         monitor.TaskStatusCounts.Select(count => new StatusCountDto(count.Status, count.Count)).ToList(),
         monitor.PendingHumanInputCount,
@@ -109,12 +109,15 @@ private static CompiledGoalGraphDto ToCompiledGoalGraphDto(CompiledGoalGraph gra
             finding.Message)).ToList());
 }
 
-public static GoalAcceptanceSummaryDto ToGoalAcceptanceSummaryDto(Goal goal, GoalAcceptanceSummary summary)
+public static GoalAcceptanceSummaryDto ToGoalAcceptanceSummaryDto(
+    Goal goal,
+    GoalAcceptanceSummary summary,
+    GoalLifecycleState? lifecycleState = null)
 {
     return new GoalAcceptanceSummaryDto(
         summary.GoalId.Value,
         SummaryText(summary.Objective),
-        summary.Status,
+        EffectiveStatus(summary.Status, lifecycleState),
         summary.IsAccepted,
         summary.TotalTasks,
         summary.PassedTasks,
@@ -258,7 +261,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     return new GoalWorkSummaryDto(
         goal.Id.Value,
         SummaryText(goal.Objective),
-        goal.Status,
+        EffectiveStatus(goal.Status, ResolveLifecycle(goal, executionDirectory)),
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
@@ -270,6 +273,27 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
         ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
         testImpact);
+}
+
+private static GoalStatus EffectiveStatus(GoalStatus status, GoalLifecycleState? lifecycleState) =>
+    status == GoalStatus.Completed && lifecycleState != GoalLifecycleState.CleanedUp
+        ? GoalStatus.Verified
+        : status;
+
+private static GoalLifecycleState? ResolveLifecycle(Goal goal, string? executionDirectory)
+{
+    if (string.IsNullOrWhiteSpace(executionDirectory))
+    {
+        return goal.Status == GoalStatus.Completed ? GoalLifecycleState.Verified : null;
+    }
+
+    var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
+    var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+    var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+    var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
+    var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
+
+    return GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp));
 }
 
 private static GoalTestImpactDto BuildGoalTestImpactDto(

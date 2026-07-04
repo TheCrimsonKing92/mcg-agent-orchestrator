@@ -9,6 +9,7 @@ internal static class DashboardDisplayNames
         GoalStatus.Draft => "Draft",
         GoalStatus.Active => "Active",
         GoalStatus.WaitingForHuman => "Waiting for human",
+        GoalStatus.Verified => "Verified",
         GoalStatus.Completed => "Completed",
         GoalStatus.Failed => "Failed",
         GoalStatus.Cancelled => "Cancelled",

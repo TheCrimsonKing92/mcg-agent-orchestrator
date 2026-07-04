@@ -6228,7 +6228,7 @@ public sealed class CliCommandTests
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.UtcNow));
-        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
 
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
         File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");
@@ -6413,7 +6413,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal)));
 
-        Xunit.Assert.Contains("state changed during acceptance verification", ex.Message);
+        Xunit.Assert.Contains("changed during acceptance verification", ex.Message);
         Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
         Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
     }
@@ -6903,6 +6903,83 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_raw_completed_assigned_task_with_unmerged_branch_reopens_without_acceptance_blocker")]
+    public void TerminalGoalSweepRawCompletedAssignedTaskWithUnmergedBranchReopensWithoutAcceptanceBlocker()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Raw completed assigned with unmerged branch", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            CommitGoalWork(root, goal.Id, "src/raw-completed-assigned.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var goalResult = Assert.Single(result.Goals);
+
+            Assert.Contains(goalResult.Repairs, repair => repair.Kind == "terminal-task-desync");
+            Assert.DoesNotContain(goalResult.Blockers, blocker => blocker.Kind == "completed-branch-unmerged");
+            Assert.Empty(goalResult.Blockers);
+            Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+            Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+            Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_normalizes_raw_completed_unmerged_branch_before_merge")]
+    public void CliAcceptanceNormalizesRawCompletedUnmergedBranchBeforeMerge()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Raw completed but unmerged", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/raw-completed.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+            goal = kernel.GetGoal(goal.Id);
+            Goal? currentGoal = goal;
+            var workspace = CreateRefinedWorkspace(root);
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("Acceptance repair: normalized raw Completed goal", output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.True(File.Exists(Path.Combine(root, "src", "raw-completed.txt")));
+            Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
+            Xunit.Assert.True(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_early_exits_print_blocker")]
     public void TerminalGoalSweepConductLoopEarlyExitsPrintBlocker()
     {
@@ -7209,6 +7286,8 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(active.Id, agents);
         kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
             new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+        completed = kernel.GetGoal(completed.Id);
         kernel.SetGoalDependency(active.Id, completed.Id);
         var repository = new InMemoryTransactionalStateRepository(kernel);
 
@@ -7930,7 +8009,7 @@ public sealed class CliCommandTests
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
         kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
             "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
         var goalPrefix = goal.Id.Value[..8];
 
         var output = CaptureConsole(() =>
@@ -7951,7 +8030,7 @@ public sealed class CliCommandTests
         var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
             e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
         Xunit.Assert.NotNull(cleanupEntry);
-        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
         Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
     }
 }

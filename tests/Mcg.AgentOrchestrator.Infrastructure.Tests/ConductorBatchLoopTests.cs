@@ -191,6 +191,7 @@ public sealed class ConductorBatchLoopTests
         {
             var completed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), $"completed goal {i}");
             PassVerification(kernel, completed, completed.Tasks.Single());
+            kernel.CompleteGoal(completed.Id, "Test fixture: historical goal already landed, recorded, and cleaned up.");
             completedGoalIds.Add(completed.Id);
         }
 
@@ -198,7 +199,7 @@ public sealed class ConductorBatchLoopTests
         var createdWorkspaces = new List<GoalId>();
         var driver = MakeDriver(
             getFacts: goal => completedGoalIds.Contains(goal.Id)
-                ? new GoalLifecycleFacts(IsCleanedUp: true)
+                ? new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true)
                 : GoalLifecycleFacts.None,
             createWorkspace: goal =>
             {
@@ -591,7 +592,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Retried);
         Assert.Equal(0, summary.Escalated);
         Assert.Equal(0, summary.Advanced);
-        Assert.Empty(ticks);
+        var tick = Assert.Single(ticks);
+        Assert.Equal(1, tick.Done);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_operator_retry_clears_prior_verified_acceptance_escalation")]
@@ -1958,6 +1960,7 @@ public sealed class ConductorBatchLoopTests
 
         PassVerification(kernel, verifiedGoal, verifiedGoal.Tasks.Single());
         PassVerification(kernel, cleanedUpGoal, cleanedUpGoal.Tasks.Single());
+        kernel.CompleteGoal(cleanedUpGoal.Id, "Test fixture: historical goal already landed, recorded, and cleaned up.");
         kernel.CancelGoal(cancelledGoal.Id, "test cancel");
         kernel.SupersedeGoal(supersededGoal.Id, "test supersede");
 
@@ -1974,7 +1977,7 @@ public sealed class ConductorBatchLoopTests
             {
                 driverCalls.Add(goal.Id);
                 return goal.Id == cleanedUpGoal.Id
-                    ? new GoalLifecycleFacts(IsCleanedUp: true)
+                    ? new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true)
                     : GoalLifecycleFacts.None;
             },
             land: goal =>

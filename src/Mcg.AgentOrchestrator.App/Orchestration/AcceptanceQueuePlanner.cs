@@ -42,7 +42,7 @@ internal static class AcceptanceQueuePlanner
         AutonomyPolicy policy)
     {
         var items = kernel.Goals
-            .Where(goal => goal.Status == GoalStatus.Completed ||
+            .Where(goal => goal.Status is GoalStatus.Verified or GoalStatus.Completed ||
                 GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
                 BranchExists(executionDirectory, GoalWorktrees.BranchName(goal.Id)))
             .OrderBy(goal => FirstTimelineAt(goal) ?? DateTimeOffset.MaxValue)
@@ -67,11 +67,11 @@ internal static class AcceptanceQueuePlanner
         var acceptanceAllowed = policy.Allows(AutonomyAction.Acceptance);
         var cleanupAllowed = policy.Allows(AutonomyAction.WorkspaceCleanup);
 
-        if (goal.Status != GoalStatus.Completed)
+        if (goal.Status != GoalStatus.Verified)
         {
             return Item(
                 AcceptanceQueueDisposition.Blocked,
-                "goal is not completed",
+                "goal is not verified",
                 $"monitor {goalPrefix}");
         }
 

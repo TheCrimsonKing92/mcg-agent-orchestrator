@@ -26,6 +26,7 @@ public enum GoalStatus
     Draft,
     Active,
     WaitingForHuman,
+    Verified,
     Completed,
     Failed,
     Cancelled,

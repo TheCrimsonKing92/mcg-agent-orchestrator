@@ -645,6 +645,41 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Equal(expectedState.ToString(), doc.RootElement.GetProperty("currentState").GetString());
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_lifecycle_facts_treat_manual_acceptance_and_workspace_remove_as_cleaned")]
+    public async Task MonitorGoalLifecycleFactsTreatManualAcceptanceAndWorkspaceRemoveAsCleaned()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Complete manually", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Monitor manual acceptance lifecycle", [task]);
+        kernel.ActivateGoal(goal.Id, []);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        GoalOperationJournal.Completed(root, goal, "acceptance", "Acceptance passed and merge completed.");
+        GoalOperationJournal.Completed(root, goal, "workspace:remove", "Workspace removed.");
+        kernel.CompleteGoal(goal.Id, "Manual acceptance completed after cleanup evidence.");
+        using var output = new StringWriter();
+
+        await GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value[..8], "--once", "--format", "ndjson", "--event-kind", "goal.snapshot"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal(GoalLifecycleState.CleanedUp.ToString(), doc.RootElement.GetProperty("currentState").GetString());
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_local_current_state_reports_open_clarification")]
     public async Task MonitorGoalLocalCurrentStateReportsOpenClarification()
     {

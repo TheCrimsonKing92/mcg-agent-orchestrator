@@ -732,13 +732,9 @@ internal static class GoalMonitoringSubscriptionCommand
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var workspaceExists = worktree is not null;
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-        var isMerged = journal.LatestByOperation.Any(entry =>
-            entry.Operation == "conductor:land" && entry.Status == GoalOperationStatus.Completed);
-        var isRecorded = journal.LatestByOperation.Any(entry =>
-            entry.Operation == "conductor:record" && entry.Status == GoalOperationStatus.Completed);
-        var isCleanedUp = journal.LatestByOperation.Any(entry =>
-            entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed)
-            || (!workspaceExists && goal.Status == GoalStatus.Completed);
+        var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+        var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
+        var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
         var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
         var isBlocked = goal.LatestAcceptanceFailure is not null ||
             journal.LatestByOperation.Any(entry =>

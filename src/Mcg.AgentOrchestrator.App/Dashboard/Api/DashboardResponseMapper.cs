@@ -6,20 +6,23 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardResponseMapper
 {
-public static GoalSummaryDto ToGoalSummary(Goal goal)
+public static GoalSummaryDto ToGoalSummary(Goal goal, string? executionDirectory = null)
 {
     return new GoalSummaryDto(
         goal.Id.Value,
         OutputTextPreview.CreateSummary(goal.Objective).Text,
-        goal.Status,
+        EffectiveStatus(goal.Status, ResolveLifecycle(goal, executionDirectory)),
         goal.Tasks.Count,
         goal.Timeline.LastOrDefault()?.OccurredAt);
 }
 
-public static GoalDetailDto ToGoalDetailDto(AgentOrchestratorKernel kernel, Goal goal)
+public static GoalDetailDto ToGoalDetailDto(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? executionDirectory = null)
 {
     return new GoalDetailDto(
-        ToGoalSummary(goal),
+        ToGoalSummary(goal, executionDirectory),
         goal.Tasks.Select(task => ToTaskSummaryDto(goal, task)).ToList(),
         kernel.BuildVerificationGate(goal.Id).IsSatisfied,
         MonitoringStreamPath: DashboardMonitoringEvents.StreamPath(goal.Id.Value));

@@ -27,6 +27,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
     private readonly Action<Goal> _record;
     private readonly Func<Goal, GoalWorktreeRemoveResult> _cleanup;
+    private readonly Action<Goal> _completeGoal;
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
@@ -58,17 +59,9 @@ internal sealed class ConductorDriver
             var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
                 ? summary
                 : new GoalOperationJournalSummary(GoalOperationJournal.PathFor(dir, goal.Id), [], [], []);
-            var isMerged = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
-            var isRecorded = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
-            var isCleanedUp = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed)
-                // A completed goal whose worktree is gone was landed + cleaned up outside the conductor
-                // (e.g. via the `acceptance` command, which merges + removes the workspace without
-                // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
-                // acceptance on a missing worktree and spam ghost escalations every tick.
-                || (!workspaceExists && goal.Status == GoalStatus.Completed);
+            var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+            var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
+            var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
             var hasOpenClarification = openClarificationGoalIds.Contains(goal.Id);
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
@@ -301,6 +294,7 @@ internal sealed class ConductorDriver
             RefreshJournal(goal.Id);
             return result;
         };
+        _completeGoal = goal => kernel.CompleteGoal(goal.Id, "Conductor completed goal after durable landing, recording, and cleanup evidence.");
 
         _writeEscalation = (goal, state, reason) =>
             OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}", channel);
@@ -355,6 +349,7 @@ internal sealed class ConductorDriver
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Action<Goal, IReadOnlyList<string>>? recordAcceptanceFailure = null,
         Action<Goal>? clearAcceptanceFailure = null,
+        Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null)
     {
@@ -378,6 +373,7 @@ internal sealed class ConductorDriver
         _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
         _record = record;
         _cleanup = cleanup;
+        _completeGoal = completeGoal ?? (_ => { });
         _writeEscalation = writeEscalation;
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
@@ -542,7 +538,7 @@ internal sealed class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Completed")),
+                new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
@@ -930,6 +926,7 @@ internal sealed class ConductorDriver
                     $"Workspace cleanup deferred; retry later. {FormatCleanupDiagnostic(cleanup)}"));
         }
 
+        _completeGoal(goal);
         return MakeResult(goal.Id.Value, goalPrefix, policy,
             new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Recorded, cleanup.Message));
     }

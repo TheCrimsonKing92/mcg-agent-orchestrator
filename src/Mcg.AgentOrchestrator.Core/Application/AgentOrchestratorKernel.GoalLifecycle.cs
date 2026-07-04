@@ -175,6 +175,24 @@ public sealed partial class AgentOrchestratorKernel
         return ReopenTerminalGoalWithNonTerminalTasks(goal, reason);
     }
 
+    public bool NormalizePrematureCompletedGoalToVerified(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.Completed)
+        {
+            return false;
+        }
+
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
     public TaskSpec RequeueInterruptedDispatch(GoalId goalId, TaskId taskId, string message)
     {
         var goal = GetGoal(goalId);
@@ -329,6 +347,30 @@ public sealed partial class AgentOrchestratorKernel
     public Goal CancelGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Cancelled, reason);
 
     public Goal SupersedeGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Superseded, reason);
+
+    public Goal CompleteGoal(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var completeReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(completeReason))
+        {
+            throw new ArgumentException("Goal completion reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status == GoalStatus.Completed)
+        {
+            return goal;
+        }
+
+        if (goal.Status != GoalStatus.Verified)
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verified goals can be completed.");
+        }
+
+        goal.SetStatus(GoalStatus.Completed);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
+        return goal;
+    }
 
     private Goal StopGoal(GoalId goalId, GoalStatus terminalStatus, string reason)
     {

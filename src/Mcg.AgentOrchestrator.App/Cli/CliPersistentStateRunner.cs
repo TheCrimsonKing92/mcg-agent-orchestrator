@@ -649,7 +649,7 @@ internal static class CliPersistentStateRunner
                     {
                         var transactionGoal = transactionKernel.Goals.FirstOrDefault(goal => goal.Id == request.GoalId)
                             ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
-                        if (transactionGoal.Status != GoalStatus.Completed)
+                        if (transactionGoal.Status != GoalStatus.Verified)
                         {
                             throw new InvalidOperationException(
                                 $"Goal '{request.GoalId.Value[..8]}' changed during acceptance verification; retry acceptance.");

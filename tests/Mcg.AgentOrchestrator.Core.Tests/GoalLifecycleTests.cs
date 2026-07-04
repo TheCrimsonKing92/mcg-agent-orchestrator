@@ -275,8 +275,8 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.AwaitingVerification, GoalLifecycle.ResolveState(goal));
 }
 
-    [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_when_goal_is_completed")]
-    public void ResolveStateReturnsVerifiedWhenGoalIsCompleted()
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_when_task_gates_pass")]
+    public void ResolveStateReturnsVerifiedWhenTaskGatesPass()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Verified", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
@@ -284,6 +284,21 @@ public sealed class GoalLifecycleTests
     var task = goal.Tasks.Single();
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalStatus.Verified, goal.Status);
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_for_completed_goal_without_integration_cleanup_facts")]
+    public void ResolveStateReturnsVerifiedForCompletedGoalWithoutIntegrationCleanupFacts()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Completed before durable cleanup", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.CompleteGoal(goal.Id, "Legacy completion before journal facts.");
 
     Assert.Equal(GoalStatus.Completed, goal.Status);
     Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
@@ -298,7 +313,7 @@ public sealed class GoalLifecycleTests
     var task = goal.Tasks.Single();
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
-    // Goal is Completed -> Verified: a conduct tick here would re-run ACCEPTANCE, not re-dispatch.
+    // Goal is Verified: a conduct tick here would run ACCEPTANCE, not re-dispatch.
     Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 
     kernel.RetryTask(goal.Id, task.Id, "acceptance failed; fix the test compile errors");
@@ -327,7 +342,7 @@ public sealed class GoalLifecycleTests
     CompleteWithVerification(kernel, goal, developer, "developer passed");
     CompleteWithVerification(kernel, goal, tester, "tester passed");
     CompleteWithVerification(kernel, goal, reviewer, "reviewer passed");
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
 
     kernel.RetryTask(goal.Id, developer.Id, "Developer output needs revision.");
 
@@ -436,6 +451,21 @@ public sealed class GoalLifecycleTests
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
 
     Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true)));
+}
+
+    [Xunit.Fact(DisplayName = "ResolveState_does_not_treat_cleanup_only_as_landed")]
+    public void ResolveStateDoesNotTreatCleanupOnlyAsLanded()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Cleanup only is not landed", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsCleanedUp: true)));
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsRecorded: true, IsCleanedUp: true)));
+    Assert.Equal(GoalLifecycleState.Merged, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(IsMerged: true, IsCleanedUp: true)));
 }
 
     [Xunit.Fact(DisplayName = "ResolveState_returns_Failed_when_task_has_failed_status")]
@@ -582,6 +612,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     var task = goal.Tasks.Single();
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.CompleteGoal(goal.Id, "Test completed after cleanup evidence.");
 
     var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "No longer needed."));
 

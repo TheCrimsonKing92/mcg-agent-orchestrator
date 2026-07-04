@@ -72,7 +72,7 @@ public sealed class TaskVerificationTests
         string.Empty,
         clock.UtcNow));
 
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
 }
     [Xunit.Fact(DisplayName = "RetryTask_reopens_task_and_preserves_verification_history")]
@@ -291,7 +291,7 @@ public sealed class TaskVerificationTests
     CompleteWithVerification(kernel, goal, developer, "developer ok", clock);
     CompleteWithVerification(kernel, goal, tester, "tester ok", clock);
     CompleteWithVerification(kernel, goal, reviewer, "reviewer ok", clock);
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
 
     kernel.RetryTask(goal.Id, developer.Id, "Developer output changed; downstream evidence is stale.");
 

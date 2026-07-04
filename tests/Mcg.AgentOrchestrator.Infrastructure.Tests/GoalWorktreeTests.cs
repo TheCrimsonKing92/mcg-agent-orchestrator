@@ -1268,6 +1268,46 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_does_not_complete_verified_goal_without_landing_evidence")]
+    public void CliWorkspaceRemoveDoesNotCompleteVerifiedGoalWithoutLandingEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove no terminal evidence", repo);
+            var order = new List<string>();
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                EventWriter = new RecordingGoalLifecycleEventWriter(order)
+            };
+
+            CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.DoesNotContain("remove-worktree", order);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.DoesNotContain(journal.LatestByOperation, entry =>
+                entry.Operation == "acceptance" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_prints_cleanup_backoff_skip_until")]
     public void CliWorkspaceRemovePrintsCleanupBackoffSkipUntil()
     {
@@ -1502,7 +1542,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             var sourceDirectory = Path.Combine(worktreePath, "src");
@@ -1546,7 +1586,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -1899,6 +1939,12 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("still running", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            var goalSnapshot = Assert.Single(kernel.ExportSnapshot().Goals);
+            Assert.Equal(GoalStatus.Verified, goalSnapshot.Status);
+            Assert.DoesNotContain($"Goal {goal.Id.Value[..8]} completed", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, kernel.BuildLoopHealthReport().CompletedGoalCount);
+            Assert.Empty(kernel.BuildProvenanceReport($"Landed goal {goal.Id.Value[..8]}").Goals);
         }
         finally
         {
@@ -2119,7 +2165,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2172,7 +2218,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2273,7 +2319,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2589,7 +2635,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "policy.txt"), "goal work");
@@ -2894,7 +2940,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2941,7 +2987,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2993,7 +3039,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             var generatedDirectory = Path.Combine(worktreePath, "src", "Feature", "bin", "Debug");
@@ -3039,7 +3085,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "skip.txt"), "goal work");
@@ -3556,7 +3602,7 @@ public sealed class GoalWorktreeIntegrationTests
                 outputLines);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
             Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
-            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
             Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
         }
         finally
@@ -3858,7 +3904,7 @@ public sealed class GoalWorktreeIntegrationTests
             });
 
             var goal = context.CurrentGoal!;
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("Autonomy policy: safe-auto", StringComparison.Ordinal));
             Assert.True(output.Contains("Stage acceptance: stopped.", StringComparison.Ordinal));
@@ -3946,7 +3992,7 @@ public sealed class GoalWorktreeIntegrationTests
             });
 
             var goal = context.CurrentGoal!;
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
             Assert.True(output.Contains("Next: acceptance", StringComparison.Ordinal));
@@ -3983,7 +4029,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var goal = context.CurrentGoal!;
             Assert.Equal("fake verifier boom", ex.Message);
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.Equal(1, fakeVerifier.RunCount);
         }
@@ -5014,7 +5060,7 @@ public sealed class GoalWorktreeIntegrationTests
                     "WORKER_RESULT:\nfiles: src/Old.cs\ncommands: old\nEND_WORKER_RESULT",
                     string.Empty,
                     oldDispatch.DispatchedAt.AddSeconds(10)));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
 
             kernel.RecordAcceptanceFailure(goal.Id, ["SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"]);
@@ -5249,7 +5295,7 @@ public sealed class GoalWorktreeIntegrationTests
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-        Assert.Equal(GoalStatus.Completed, goal.Status);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
         return goal;
     }
 
