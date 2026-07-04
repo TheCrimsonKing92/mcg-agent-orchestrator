@@ -2542,18 +2542,18 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             if (removeResult.IsComplete)
             {
                 GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", removeResult.Message);
-                if (goal.Status == GoalStatus.Verified)
-                    context.Kernel.CompleteGoal(goal.Id, "Workspace remove completed goal after landing and cleanup evidence.");
-                ReconcileLandedCleanedAcceptance(context, goal, "workspace remove", cleanupEvidenceRecorded: true);
-                context.EventWriter.AppendCleanedUp(goal.Id);
+                if (TryReconcileLandedCleanedAcceptance(context, goal, "workspace remove", out _, cleanupEvidenceRecorded: true))
+                {
+                    context.EventWriter.AppendCleanedUp(goal.Id);
+                }
             }
             else if (TryCompleteLandedBranchOnlyWorkspaceRemove(context, goal, removeResult, out var completedRemoveDetail))
             {
                 GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", completedRemoveDetail);
-                if (goal.Status == GoalStatus.Verified)
-                    context.Kernel.CompleteGoal(goal.Id, "Workspace remove completed goal after landing and cleanup evidence.");
-                ReconcileLandedCleanedAcceptance(context, goal, "workspace remove", cleanupEvidenceRecorded: true);
-                context.EventWriter.AppendCleanedUp(goal.Id);
+                if (TryReconcileLandedCleanedAcceptance(context, goal, "workspace remove", out _, cleanupEvidenceRecorded: true))
+                {
+                    context.EventWriter.AppendCleanedUp(goal.Id);
+                }
             }
             else
             {

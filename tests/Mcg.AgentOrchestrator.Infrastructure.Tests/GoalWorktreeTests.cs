@@ -1268,6 +1268,46 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_does_not_complete_verified_goal_without_landing_evidence")]
+    public void CliWorkspaceRemoveDoesNotCompleteVerifiedGoalWithoutLandingEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove no terminal evidence", repo);
+            var order = new List<string>();
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                EventWriter = new RecordingGoalLifecycleEventWriter(order)
+            };
+
+            CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.DoesNotContain("remove-worktree", order);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.DoesNotContain(journal.LatestByOperation, entry =>
+                entry.Operation == "acceptance" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_prints_cleanup_backoff_skip_until")]
     public void CliWorkspaceRemovePrintsCleanupBackoffSkipUntil()
     {
