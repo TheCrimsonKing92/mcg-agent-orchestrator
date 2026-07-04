@@ -436,7 +436,7 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            if (completedGoals.Contains(goal.Id.Value) || goal.Status != GoalStatus.Completed)
+            if (completedGoals.Contains(goal.Id.Value))
             {
                 continue;
             }
