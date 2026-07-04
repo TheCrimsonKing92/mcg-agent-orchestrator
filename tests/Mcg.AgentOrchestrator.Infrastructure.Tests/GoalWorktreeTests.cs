@@ -2119,7 +2119,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2172,7 +2172,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2273,7 +2273,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
