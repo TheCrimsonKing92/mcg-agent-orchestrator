@@ -549,6 +549,8 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         executionDirectory: root);
+    var summary = DashboardResponseMapper.ToGoalSummary(goal, root);
+    var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal, root);
     var streamBatch = GoalMonitoringStream.BuildBatch(
         kernel,
         goal,
@@ -559,6 +561,8 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(GoalStatus.Completed, goal.Status);
     Assert.Equal(GoalStatus.Completed, workSummary.Status);
+    Assert.Equal(GoalStatus.Completed, summary.Status);
+    Assert.Equal(GoalStatus.Completed, detail.Goal.Status);
     Assert.Equal(GoalStatus.Completed, streamBatch.Snapshot.Monitor.Status);
 }
 
