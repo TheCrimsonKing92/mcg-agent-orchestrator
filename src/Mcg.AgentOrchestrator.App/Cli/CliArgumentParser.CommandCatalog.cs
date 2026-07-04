@@ -110,6 +110,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "land",
     "conduct",
     "backlog-list",
+    "backlog-triage",
     "backlog-add",
     "backlog-show",
     "backlog-close",

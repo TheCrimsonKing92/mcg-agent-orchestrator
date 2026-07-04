@@ -10,6 +10,7 @@ internal static class CliCommandHelp
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
+    public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path>";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>";
@@ -49,6 +50,11 @@ internal static class CliCommandHelp
         BacklogListUsage,
         "List backlog items from the backlog store.",
         ["--all", "--limit", "--status", "--text", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogTriage = new(
+        BacklogTriageUsage,
+        "Print compact backlog triage buckets for daemon curation.",
+        ["--limit", "--stale-days", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
@@ -171,6 +177,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-list", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogList;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-triage", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogTriage;
             return true;
         }
 

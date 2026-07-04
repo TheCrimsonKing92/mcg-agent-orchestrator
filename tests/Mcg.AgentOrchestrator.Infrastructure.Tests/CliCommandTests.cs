@@ -149,6 +149,50 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("First Foo", item.Title);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_triage_filters_stale_open_items")]
+    public void CliBacklogTriageFiltersStaleOpenItems()
+    {
+        var now = DateTimeOffset.Parse("2026-07-03T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var items = new[]
+        {
+            BacklogItemFor("Very stale open", updatedAt: now.AddDays(-45)),
+            BacklogItemFor("Fresh open", updatedAt: now.AddDays(-2)),
+            BacklogItemFor("Closed stale", status: BacklogItemStatus.Done, updatedAt: now.AddDays(-60))
+        };
+
+        var output = CliCommandHandlers.RenderBacklogTriage(items, [], limit: 5, staleDays: 30, now);
+
+        Xunit.Assert.Contains("Stale open (>30d):", output);
+        Xunit.Assert.Contains("Very stale open", output);
+        Xunit.Assert.DoesNotContain("Fresh open", output);
+        Xunit.Assert.DoesNotContain("Closed stale", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_triage_links_active_goals")]
+    public void CliBacklogTriageLinksActiveGoals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var activeItem = store.AddAsync("Active linked backlog").GetAwaiter().GetResult();
+        var closedGoalItem = store.AddAsync("Terminal linked backlog").GetAwaiter().GetResult();
+        var kernel = new AgentOrchestratorKernel();
+        var activeGoal = kernel.CreateGoal("Active linked objective");
+        var completedGoal = kernel.CreateGoal("Completed linked objective");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(activeGoal.Id, agents);
+        kernel.ActivateGoal(completedGoal.Id, agents);
+        kernel.ReportTaskProgress(completedGoal.Id, completedGoal.Tasks[0].Id, WorkTaskStatus.Completed, "Done");
+        kernel.SetGoalSourceBacklogItemId(activeGoal.Id, activeItem.Id);
+        kernel.SetGoalSourceBacklogItemId(completedGoal.Id, closedGoalItem.Id);
+
+        var output = ExecuteCliAndCapture(["backlog-triage", "--limit", "5"], kernel, workspace);
+
+        Xunit.Assert.Contains("Active-linked open:", output);
+        Xunit.Assert.Contains($"goal={activeGoal.Id.Value[..8]}:Active Active linked backlog", output);
+        Xunit.Assert.DoesNotContain($"goal={completedGoal.Id.Value[..8]}:Completed", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_conduct_help_prints_usage_without_resolving_goal")]
     public void CliConductHelpPrintsUsageWithoutResolvingGoal()
     {
@@ -5215,8 +5259,9 @@ public sealed class CliCommandTests
     private static BacklogItem BacklogItemFor(
         string title,
         string body = "",
-        BacklogItemStatus status = BacklogItemStatus.Open) =>
-        new(Guid.NewGuid().ToString("n"), title, body, status, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, null);
+        BacklogItemStatus status = BacklogItemStatus.Open,
+        DateTimeOffset? updatedAt = null) =>
+        new(Guid.NewGuid().ToString("n"), title, body, status, DateTimeOffset.UtcNow, updatedAt ?? DateTimeOffset.UtcNow, null);
 
     private static string ExecuteCliAndCapture(
         IReadOnlyList<string> parts,
