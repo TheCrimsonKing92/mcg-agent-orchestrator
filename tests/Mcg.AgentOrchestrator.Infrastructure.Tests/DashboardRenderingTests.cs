@@ -526,6 +526,29 @@ public sealed class DashboardRenderingTests
     Assert.Equal($"acceptance {goal.Id.Value[..8]}", workSummary.OperatorDisposition.NextSafeCommand);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_projects_manual_acceptance_cleaned_goal_as_completed")]
+    public void DashboardResponseMapperProjectsManualAcceptanceCleanedGoalAsCompleted()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Manual acceptance cleaned", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", "", DateTimeOffset.UtcNow));
+    GoalOperationJournal.Completed(root, goal, "acceptance", "Acceptance passed and merge completed.");
+    GoalOperationJournal.Completed(root, goal, "workspace:remove", "Workspace removed.");
+    kernel.CompleteGoal(goal.Id, "Manual acceptance completed after cleanup evidence.");
+
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        executionDirectory: root);
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Completed, workSummary.Status);
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
     public void DashboardResponseMapperNextActionIncludesDispatchRecoveryPolicyAction()
     {

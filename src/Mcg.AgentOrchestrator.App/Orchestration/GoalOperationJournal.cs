@@ -129,6 +129,24 @@ internal static class GoalOperationJournal
         return BuildSummary(path, entries);
     }
 
+    public static bool HasCompletedLandingEvidence(GoalOperationJournalSummary journal) =>
+        journal.LatestByOperation.Any(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)));
+
+    public static bool HasCompletedRecordEvidence(GoalOperationJournalSummary journal) =>
+        journal.LatestByOperation.Any(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase)));
+
+    public static bool HasCompletedCleanupEvidence(GoalOperationJournalSummary journal) =>
+        journal.LatestByOperation.Any(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            (entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase)));
+
     public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(string executionDirectory) =>
         ReadAll(executionDirectory, []);
 

@@ -70,12 +70,9 @@ public sealed class ConductorDriverTests
         var dir = workspace.ExecutionDirectory;
         var workspaceExists = GoalWorktrees.TryResolve(dir, goal.Id) is not null;
         var journal = GoalOperationJournal.Read(dir, goal.Id);
-        var isMerged = journal.LatestByOperation.Any(e =>
-            e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
-        var isRecorded = journal.LatestByOperation.Any(e =>
-            e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
-        var isCleanedUp = journal.LatestByOperation.Any(e =>
-            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+        var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+        var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
+        var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
         var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
         return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }

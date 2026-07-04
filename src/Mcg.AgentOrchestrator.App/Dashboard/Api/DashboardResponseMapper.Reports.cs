@@ -289,12 +289,9 @@ private static GoalLifecycleState? ResolveLifecycle(Goal goal, string? execution
 
     var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
     var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-    var isMerged = journal.LatestByOperation.Any(entry =>
-        entry.Operation == "conductor:land" && entry.Status == GoalOperationStatus.Completed);
-    var isRecorded = journal.LatestByOperation.Any(entry =>
-        entry.Operation == "conductor:record" && entry.Status == GoalOperationStatus.Completed);
-    var isCleanedUp = journal.LatestByOperation.Any(entry =>
-        entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed);
+    var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+    var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
+    var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
 
     return GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp));
 }

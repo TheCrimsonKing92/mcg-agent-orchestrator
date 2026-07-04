@@ -59,12 +59,9 @@ internal sealed class ConductorDriver
             var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
                 ? summary
                 : new GoalOperationJournalSummary(GoalOperationJournal.PathFor(dir, goal.Id), [], [], []);
-            var isMerged = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
-            var isRecorded = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
-            var isCleanedUp = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+            var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+            var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
+            var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
             var hasOpenClarification = openClarificationGoalIds.Contains(goal.Id);
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
