@@ -1030,6 +1030,24 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new ArgumentException("--poll-seconds requires --watch.");
             }
 
+            var scopedReaper = new BackgroundDispatchRunner();
+            var scopedReconciled = scopedReaper.SweepExitedProcesses(context.Kernel, context.CurrentGoal.Id);
+            var refreshedGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
+            try
+            {
+                GoalManagementCommandService.RefreshDispatches(context.Kernel, refreshedGoal);
+                refreshedGoal = context.Kernel.GetGoal(refreshedGoal.Id);
+            }
+            catch
+            {
+            }
+
+            context.CurrentGoal = refreshedGoal;
+            if (scopedReconciled > 0)
+            {
+                Console.WriteLine($"[conduct] Reconciled {scopedReconciled} exited dispatch(es) for goal {context.CurrentGoal.Id.Value[..8]}.");
+            }
+
             var conductResult = conductDriver.AdvanceOnce(context.CurrentGoal, conductPolicy);
             Console.WriteLine($"Conduct {conductResult.GoalPrefix} [{conductResult.PolicyName}]: {conductResult.Outcome switch {
                 ConductorAdvanceOutcome.Executed e => $"executed from {e.FromState} — {e.Description}",

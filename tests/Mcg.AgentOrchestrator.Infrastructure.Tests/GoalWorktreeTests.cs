@@ -2685,6 +2685,100 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_conduct_scoped_reconciles_exited_dispatch_before_advance")]
+    public void CliConductScopedReconcilesExitedDispatchBeforeAdvance()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Scoped conduct reconcile", [new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+            var stdout = Path.Combine(repo, "planner.out.log");
+            var stderr = Path.Combine(repo, "planner.err.log");
+            var exit = Path.Combine(repo, "planner.exit.txt");
+            File.WriteAllText(stdout, "plan complete");
+            File.WriteAllText(stderr, string.Empty);
+            File.WriteAllText(exit, "0");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, startedAt));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    999999,
+                    "codex exec prompt.md",
+                    repo,
+                    stdout,
+                    stderr,
+                    exit,
+                    startedAt,
+                    null,
+                    null,
+                    OwnedProcessIds: [999999]));
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["conduct", goal.Id.Value[..8]], context));
+
+            var refreshedTask = kernel.GetTask(goal.Id, task.Id);
+            Assert.Equal(WorkTaskStatus.Completed, refreshedTask.Status);
+            Assert.Equal(0, refreshedTask.LastVerification!.ExitCode);
+            Assert.True(output.Contains("[conduct] Reconciled 1 exited dispatch", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_recover_reconciles_dead_running_task_with_exit_file")]
+    public void CliRecoverReconcilesDeadRunningTaskWithExitFile()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Recover unreconciled dispatch", [new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.Single();
+            var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+            var stdout = Path.Combine(repo, "planner.out.log");
+            var stderr = Path.Combine(repo, "planner.err.log");
+            var exit = Path.Combine(repo, "planner.exit.txt");
+            File.WriteAllText(stdout, "plan complete");
+            File.WriteAllText(stderr, string.Empty);
+            File.WriteAllText(exit, "0");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, startedAt));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    999999,
+                    "codex exec prompt.md",
+                    repo,
+                    stdout,
+                    stderr,
+                    exit,
+                    startedAt,
+                    null,
+                    null,
+                    OwnedProcessIds: [999999]));
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["recover", goal.Id.Value[..8], "reconcile finished dispatch"], context));
+
+            var refreshedTask = kernel.GetTask(goal.Id, task.Id);
+            Assert.Equal(WorkTaskStatus.Completed, refreshedTask.Status);
+            Assert.Equal(0, refreshedTask.LastVerification!.ExitCode);
+            Assert.False(output.Contains("nothing to recover", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_recover_resets_cancelled_tasks_without_disturbing_completed_or_running_tasks")]
     public void CliRecoverResetsCancelledTasksWithoutDisturbingCompletedOrRunningTasks()
     {
