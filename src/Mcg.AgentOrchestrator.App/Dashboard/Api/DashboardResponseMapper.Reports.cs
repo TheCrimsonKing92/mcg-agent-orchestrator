@@ -17,7 +17,10 @@ public static MonitorDto ToMonitorDto(GoalMonitor monitor, GoalLifecycleState? l
         monitor.TaskStatusCounts.Select(count => new StatusCountDto(count.Status, count.Count)).ToList(),
         monitor.PendingHumanInputCount,
         monitor.AttentionItems.Select(item => new AttentionDto(item.Kind, item.TaskId?.Value, TimelineText(item.Message))).ToList(),
-        monitor.LastTimelineEventAt);
+        monitor.LastTimelineEventAt)
+    {
+        StatusText = GoalStatusText(monitor.Status, lifecycleState)
+    };
 }
 
 public static BacklogGoalPlanDto ToBacklogGoalPlanDto(BacklogIntakePlan intake, GoalDependencyPlan plan)
@@ -257,11 +260,12 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
     var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, gate.IsSatisfied, executionDirectory);
+    var lifecycle = ResolveLifecycle(goal, executionDirectory);
 
     return new GoalWorkSummaryDto(
         goal.Id.Value,
         SummaryText(goal.Objective),
-        EffectiveStatus(goal.Status, ResolveLifecycle(goal, executionDirectory)),
+        EffectiveStatus(goal.Status, lifecycle),
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
@@ -272,13 +276,24 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
         ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
-        testImpact);
+        testImpact)
+    {
+        StatusText = GoalStatusText(goal.Status, lifecycle)
+    };
 }
 
 private static GoalStatus EffectiveStatus(GoalStatus status, GoalLifecycleState? lifecycleState) =>
     status == GoalStatus.Completed && lifecycleState != GoalLifecycleState.CleanedUp
         ? GoalStatus.Verified
         : status;
+
+internal static string GoalStatusText(GoalStatus status, GoalLifecycleState? lifecycleState) =>
+    lifecycleState switch
+    {
+        GoalLifecycleState.CleanedUp => nameof(GoalLifecycleState.CleanedUp),
+        GoalLifecycleState.Merged or GoalLifecycleState.Recorded => "Landed",
+        _ => DashboardDisplayNames.Display(EffectiveStatus(status, lifecycleState))
+    };
 
 private static GoalLifecycleState? ResolveLifecycle(Goal goal, string? executionDirectory)
 {

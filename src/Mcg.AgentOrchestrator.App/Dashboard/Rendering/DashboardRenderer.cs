@@ -293,7 +293,7 @@ public static partial class DashboardRenderer
             html.AppendLine($"<section><p class=\"meta\">Showing {displayedGoals.Count} of {goals.Count} goals.{focusNote}</p></section>");
         }
 
-        RenderGlobalAttentionSummary(html, kernel, displayedGoals);
+        RenderGlobalAttentionSummary(html, kernel, displayedGoals, options);
         RenderOperatorInbox(html, options);
 
         foreach (var goal in displayedGoals)
@@ -650,7 +650,7 @@ public static partial class DashboardRenderer
         var goalJsonLink = options.Workspace is not null
             ? $" &middot; <a href=\"/api/goals/{Encode(goalPrefix)}\" target=\"_blank\" rel=\"noopener\">Goal JSON</a>"
             : string.Empty;
-        html.AppendLine($"<div class=\"meta\">Goal {Encode(goal.Id.Value)} &middot; <span class=\"pill\">{Encode(Display(goal.Status))}</span> &middot; Last event {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}{goalJsonLink}</div>");
+        html.AppendLine($"<div class=\"meta\">Goal {Encode(goal.Id.Value)} &middot; <span class=\"pill\">{Encode(DisplayGoalStatus(goal, options))}</span> &middot; Last event {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}{goalJsonLink}</div>");
         html.AppendLine("</div>");
         if (goal.Status == GoalStatus.Verified && verificationGate.IsSatisfied)
         {
@@ -671,7 +671,8 @@ public static partial class DashboardRenderer
     private static void RenderGlobalAttentionSummary(
         StringBuilder html,
         AgentOrchestratorKernel kernel,
-        IReadOnlyList<Goal> displayedGoals)
+        IReadOnlyList<Goal> displayedGoals,
+        DashboardRenderOptions options)
     {
         html.AppendLine("<section>");
         html.AppendLine("<h2>Goals</h2>");
@@ -684,7 +685,7 @@ public static partial class DashboardRenderer
             var inputClass = monitor.PendingHumanInputCount > 0 ? " class=\"bad\"" : "";
             html.AppendLine("<tr>");
             html.AppendLine($"<td><a href=\"/goal/{Encode(prefix)}\">{Encode(TruncateObjective(goal.Objective))}</a></td>");
-            html.AppendLine($"<td><span class=\"pill\">{Encode(Display(goal.Status))}</span></td>");
+            html.AppendLine($"<td><span class=\"pill\">{Encode(DisplayGoalStatus(goal, options))}</span></td>");
             html.AppendLine($"<td>{monitor.TotalTasks}</td>");
             html.AppendLine($"<td{attentionClass}>{monitor.AttentionItems.Count}</td>");
             html.AppendLine($"<td{inputClass}>{monitor.PendingHumanInputCount}</td>");

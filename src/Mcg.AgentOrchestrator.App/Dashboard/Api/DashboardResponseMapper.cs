@@ -8,12 +8,16 @@ internal static partial class DashboardResponseMapper
 {
 public static GoalSummaryDto ToGoalSummary(Goal goal, string? executionDirectory = null)
 {
+    var lifecycle = ResolveLifecycle(goal, executionDirectory);
     return new GoalSummaryDto(
         goal.Id.Value,
         OutputTextPreview.CreateSummary(goal.Objective).Text,
-        EffectiveStatus(goal.Status, ResolveLifecycle(goal, executionDirectory)),
+        EffectiveStatus(goal.Status, lifecycle),
         goal.Tasks.Count,
-        goal.Timeline.LastOrDefault()?.OccurredAt);
+        goal.Timeline.LastOrDefault()?.OccurredAt)
+    {
+        StatusText = GoalStatusText(goal.Status, lifecycle)
+    };
 }
 
 public static GoalDetailDto ToGoalDetailDto(
