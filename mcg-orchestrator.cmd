@@ -19,7 +19,7 @@ if exist "%LOCK_DIR%" powershell -NoProfile -Command "$ld='%LOCK_DIR%';$threshol
 :: source files, skip build entirely. The HEAD marker catches merges where source timestamps do
 :: not reliably make the existing binary look stale.
 if exist "%APP_DLL%" (
-    powershell -NoProfile -Command "$dll=Get-Item '%APP_DLL%';$gitHead='';try{$gitHead=(& git -C '%ROOT%' rev-parse HEAD 2>$null).Trim()}catch{};$marker='%APP_HEAD%';$headOk=($gitHead -eq '' -or ((Test-Path -LiteralPath $marker) -and ((Get-Content -Raw -LiteralPath $marker).Trim() -eq $gitHead)));$stale=Get-ChildItem '%ROOT%src' -Recurse -Include *.cs,*.csproj,*.props -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -gt $dll.LastWriteTime} | Select-Object -First 1;if($headOk -and -not $stale){exit 0}else{exit 1}"
+    powershell -NoProfile -Command "$dll=Get-Item '%APP_DLL%';$gitHead='';try{$gitHead=(& git -C '%ROOT%.' rev-parse HEAD).Trim()}catch{};$marker='%APP_HEAD%';$headOk=($gitHead -eq '' -or ((Test-Path -LiteralPath $marker) -and ((Get-Content -Raw -LiteralPath $marker).Trim() -eq $gitHead)));$stale=Get-ChildItem '%ROOT%src' -Recurse -Include *.cs,*.csproj,*.props -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -gt $dll.LastWriteTime} | Select-Object -First 1;if($headOk -and -not $stale){exit 0}else{exit 1}"
     if not errorlevel 1 goto run_app
 )
 
@@ -42,12 +42,12 @@ for /f "delims=" %%a in ('powershell -NoProfile -Command "(Get-Process -Id $PID)
 if defined MYPID echo %MYPID%>"%LOCK_DIR%\owner.pid"
 
 set "BUILD_LOG=%TEMP%\mcg-build-%RANDOM%.log"
-"%DOTNET_HOST%" build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly >"%BUILD_LOG%" 2>&1
+call "%DOTNET_HOST%" build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly >"%BUILD_LOG%" 2>&1
 set BUILD_EXIT=%ERRORLEVEL%
 rmdir /s /q "%LOCK_DIR%" 2>nul
 
 if %BUILD_EXIT% neq 0 goto build_failed
-powershell -NoProfile -Command "try{$gitHead=(& git -C '%ROOT%' rev-parse HEAD 2>$null).Trim();if($gitHead){Set-Content -LiteralPath '%APP_HEAD%' -Value $gitHead -NoNewline -Encoding ASCII}}catch{}"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Update-AppDllGitHeadMarker.ps1" "%ROOT%." "%APP_HEAD%"
 del "%BUILD_LOG%" 2>nul
 
 :run_app
