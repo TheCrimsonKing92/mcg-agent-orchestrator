@@ -108,6 +108,57 @@ public sealed class LauncherScriptTests
         Assert.True(launcher.Contains("App.dll.git-head", StringComparison.Ordinal));
         Assert.True(launcher.Contains("rev-parse HEAD", StringComparison.Ordinal));
         Assert.True(launcher.Contains("Set-Content -LiteralPath '%APP_HEAD%'", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_uses_fresh_launcher")]
+    public void InvokeOrchestratorCommandDefaultPathUsesFreshLauncher()
+    {
+        using var sandbox = CreateDefaultLauncherSandbox();
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Invoke-OrchestratorCommand.ps1",
+            "workspace",
+            "remove",
+            "abc12345");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
+    }
+
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_default_path_starts_fresh_launcher")]
+    public void StartOrchestratorCommandDefaultPathStartsFreshLauncher()
+    {
+        using var sandbox = CreateDefaultLauncherSandbox(includeStartCommand: true);
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            "-Name",
+            "fresh-launcher-test",
+            "workspace",
+            "remove",
+            "abc12345");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var root = document.RootElement;
+        var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        var launcherPath = Path.Combine(sandbox.RepositoryRoot, "mcg-orchestrator.cmd");
+        Assert.Equal(new[] { launcherPath, "workspace", "remove", "abc12345" }, args);
+
+        var stdoutPath = root.GetProperty("stdoutPath").GetString()
+            ?? throw new InvalidOperationException("Start command did not emit stdoutPath.");
+        WaitForFile(stdoutPath, TimeSpan.FromSeconds(10));
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (!File.Exists(sandbox.InvocationPath) && DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(100);
+        }
+
+        Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
     [Xunit.Fact(DisplayName = "ResolveRunDir_repopulates_cached_copy_when_native_sqlite_asset_is_missing")]
@@ -656,6 +707,37 @@ public sealed class LauncherScriptTests
         return new RepoScriptArgumentSandbox(repoRoot, Path.Combine(relativeDirectory, "record-arguments.ps1"), directory);
     }
 
+    private static DefaultLauncherSandbox CreateDefaultLauncherSandbox(bool includeStartCommand = false)
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"default-launcher-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        Directory.CreateDirectory(scriptsPath);
+
+        var sourceRoot = FindLauncherSourceRoot();
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
+            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorCommand.ps1"),
+            Path.Combine(scriptsPath, "Invoke-OrchestratorCommand.ps1"));
+        if (includeStartCommand)
+        {
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Start-OrchestratorCommand.ps1"),
+                Path.Combine(scriptsPath, "Start-OrchestratorCommand.ps1"));
+        }
+
+        var invocationPath = Path.Combine(repositoryRoot, "launcher-invocation.txt");
+        File.WriteAllText(Path.Combine(repositoryRoot, "mcg-orchestrator.cmd"), $"""
+            @echo off
+            echo launcher %*>"{invocationPath}"
+            echo launcher %*
+            exit /b 0
+            """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+        return new DefaultLauncherSandbox(repositoryRoot, invocationPath);
+    }
+
     private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo
@@ -1002,6 +1084,26 @@ public sealed class LauncherScriptTests
             try
             {
                 Directory.Delete(sandboxPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class DefaultLauncherSandbox(string repositoryRoot, string invocationPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string InvocationPath { get; } = invocationPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
             }
             catch (IOException)
             {

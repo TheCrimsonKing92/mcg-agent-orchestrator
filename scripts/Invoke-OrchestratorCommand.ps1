@@ -30,6 +30,20 @@ if ($Arguments.Count -eq 0) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($AppDll)) {
+    $launcher = Join-Path $repoRoot "mcg-orchestrator.cmd"
+    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+        throw "Orchestrator launcher not found: $launcher"
+    }
+
+    & $launcher @Arguments
+    if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    return
+}
+
 $resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
     Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
 } else {

@@ -104,8 +104,9 @@ try {
         throw "Usage: .\scripts\Start-OrchestratorCommand.ps1 [-Name <name>] <orchestrator-args...>"
     }
 
-    $resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
-        Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+    $usesDefaultLauncher = [string]::IsNullOrWhiteSpace($AppDll)
+    $resolvedAppDll = if ($usesDefaultLauncher) {
+        Join-Path $repoRoot "mcg-orchestrator.cmd"
     } else {
         [System.IO.Path]::GetFullPath($AppDll)
     }
@@ -119,15 +120,26 @@ try {
     $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
     $processArguments = @($resolvedAppDll) + $Arguments
 
-    if (-not (Test-Path -LiteralPath $resolvedAppDll)) {
+    if (-not (Test-Path -LiteralPath $resolvedAppDll -PathType Leaf)) {
+        if ($usesDefaultLauncher) {
+            throw "Orchestrator launcher not found: $resolvedAppDll"
+        }
+
         throw "App DLL not found. Build the app first: $resolvedAppDll"
     }
 
-    $processArgumentLine = ($processArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
-    $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
-    if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
-        $dotnetPath = "dotnet"
+    $executablePath = $resolvedAppDll
+    $launchArguments = @($Arguments)
+    if (-not $usesDefaultLauncher) {
+        $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+        if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
+            $dotnetPath = "dotnet"
+        }
+
+        $executablePath = $dotnetPath
+        $launchArguments = @($resolvedAppDll) + $Arguments
     }
+    $processArgumentLine = ($launchArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
 
     $previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
     $previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
@@ -139,7 +151,7 @@ try {
         $process = Start-Process `
             -WindowStyle Hidden `
             -PassThru `
-            -FilePath $dotnetPath `
+            -FilePath $executablePath `
             -WorkingDirectory $repoRoot `
             -ArgumentList $processArgumentLine `
             -RedirectStandardOutput $stdoutPath `

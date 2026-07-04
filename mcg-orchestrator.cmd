@@ -7,6 +7,8 @@ set "LOCK_STALE_SECONDS=60"
 set "APP_PROJECT=%ROOT%src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj"
 set "APP_DLL=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
 set "APP_HEAD=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll.git-head"
+set "DOTNET_HOST=dotnet"
+if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNET_PATH%"
 
 :: Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 :: A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
@@ -40,7 +42,7 @@ for /f "delims=" %%a in ('powershell -NoProfile -Command "(Get-Process -Id $PID)
 if defined MYPID echo %MYPID%>"%LOCK_DIR%\owner.pid"
 
 set "BUILD_LOG=%TEMP%\mcg-build-%RANDOM%.log"
-dotnet build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly >"%BUILD_LOG%" 2>&1
+"%DOTNET_HOST%" build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly >"%BUILD_LOG%" 2>&1
 set BUILD_EXIT=%ERRORLEVEL%
 rmdir /s /q "%LOCK_DIR%" 2>nul
 
@@ -61,7 +63,7 @@ if not defined RUNDIR (
     echo ERROR: could not prepare isolated orchestrator run directory; see resolver error above and retry after repair >&2
     exit /b 1
 )
-dotnet "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %*
+"%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %*
 exit /b %ERRORLEVEL%
 
 :build_failed
