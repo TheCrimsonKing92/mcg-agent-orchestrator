@@ -19,7 +19,7 @@ public sealed class StatusProjectorTests
         var waiting = Goal("waiting-123456", "Needs operator answer", GoalStatus.WaitingForHuman, now.AddMinutes(-2),
             Task(AgentRole.Planner, WorkTaskStatus.Completed),
             Task(AgentRole.Developer, WorkTaskStatus.WaitingForHuman));
-        var landed = Goal("landed-123456", "Recently landed", GoalStatus.Completed, now.AddMinutes(-1),
+        var landed = GoalWithLifecycle("landed-123456", "Recently landed", GoalStatus.Completed, now.AddMinutes(-1), GoalLifecycleState.CleanedUp,
             Task(AgentRole.Developer, WorkTaskStatus.Completed));
 
         var projection = StatusProjector.Project(new StatusProjectionInput(
@@ -39,6 +39,23 @@ public sealed class StatusProjectorTests
         Assert.Contains(projection.RenderedContent, text => text.Contains("Open escalations: 2", StringComparison.Ordinal));
         Assert.Contains(projection.RenderedContent, text => text.Contains("https://discord.example/escalations", StringComparison.Ordinal));
         Assert.False(projection.Unchanged);
+    }
+
+    [Xunit.Fact(DisplayName = "StatusProjector_keeps_completed_without_cleanup_evidence_out_of_landed_bucket")]
+    public void StatusProjectorKeepsCompletedWithoutCleanupEvidenceOutOfLandedBucket()
+    {
+        var now = new DateTimeOffset(2026, 06, 18, 04, 30, 00, TimeSpan.Zero);
+        var unintegrated = Goal("raw-completed", "Completed before cleanup facts", GoalStatus.Completed, now.AddMinutes(-1),
+            Task(AgentRole.Developer, WorkTaskStatus.Completed));
+
+        var projection = StatusProjector.Project(new StatusProjectionInput([unintegrated], 0, null, now));
+
+        Assert.Empty(projection.Buckets.Landed);
+        var item = Assert.Single(projection.Buckets.AlmostDone);
+        Assert.Equal("raw-completed", item.Id);
+        Assert.Equal("accepting", item.Stage);
+        Assert.Equal("integration or cleanup required", item.Health);
+        Assert.Contains(projection.RenderedContent, text => text.Contains("integration or cleanup required", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "StatusProjector_reports_unchanged_for_byte_identical_render")]
@@ -63,6 +80,15 @@ public sealed class StatusProjectorTests
         DateTimeOffset lastEventAt,
         params StatusProjectionTask[] tasks) =>
         new(id, objective, status, tasks, lastEventAt);
+
+    private static StatusProjectionGoal GoalWithLifecycle(
+        string id,
+        string objective,
+        GoalStatus status,
+        DateTimeOffset lastEventAt,
+        GoalLifecycleState lifecycleState,
+        params StatusProjectionTask[] tasks) =>
+        new(id, objective, status, tasks, lastEventAt, lifecycleState);
 
     private static StatusProjectionTask Task(AgentRole role, WorkTaskStatus status) =>
         new(role, status);

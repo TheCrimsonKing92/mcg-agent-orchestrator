@@ -51,7 +51,7 @@ public static class GoalLifecycle
             if (facts.IsCleanedUp) return GoalLifecycleState.CleanedUp;
             if (facts.IsRecorded)  return GoalLifecycleState.Recorded;
             if (facts.IsMerged)    return GoalLifecycleState.Merged;
-            return GoalLifecycleState.CleanedUp;
+            return GoalLifecycleState.Verified;
         }
 
         if (goal.Status == GoalStatus.Verified)

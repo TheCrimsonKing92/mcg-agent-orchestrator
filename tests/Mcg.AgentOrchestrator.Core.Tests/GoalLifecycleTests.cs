@@ -289,6 +289,21 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
 }
 
+    [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_for_completed_goal_without_integration_cleanup_facts")]
+    public void ResolveStateReturnsVerifiedForCompletedGoalWithoutIntegrationCleanupFacts()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Completed before durable cleanup", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.CompleteGoal(goal.Id, "Legacy completion before journal facts.");
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
+}
+
     [Xunit.Fact(DisplayName = "RetryTask_on_a_Verified_goal_downgrades_to_Active_so_the_conductor_redispatches")]
     public void RetryTaskOnVerifiedGoalDowngradesToActiveForRedispatch()
 {

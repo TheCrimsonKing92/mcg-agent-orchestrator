@@ -628,7 +628,8 @@ internal static partial class CliCommandHandlers
             kernel.Goals,
             openEscalations,
             BuildOperatorInboxUrl(catalog.DashboardBaseUrl),
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+            factProvider: goal => GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(context.Workspace, goal)));
         await progressView.ReconcileAsync(projection, cancellationToken);
     }
 

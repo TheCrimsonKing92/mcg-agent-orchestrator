@@ -11,14 +11,16 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        return Json(DashboardResponseMapper.ToMonitorDto(current.BuildMonitor(goal.Id)));
+        var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(services.Workspace, goal));
+        return Json(DashboardResponseMapper.ToMonitorDto(current.BuildMonitor(goal.Id), lifecycle));
     }
 
     private static async Task<IResult> GetAcceptanceAsync(HttpContext context, DashboardEndpointServices services)
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        return Json(DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, current.BuildGoalAcceptanceSummary(goal.Id)));
+        var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(services.Workspace, goal));
+        return Json(DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, current.BuildGoalAcceptanceSummary(goal.Id), lifecycle));
     }
 
     private static async Task<IResult> GetEvidenceAsync(HttpContext context, DashboardEndpointServices services)

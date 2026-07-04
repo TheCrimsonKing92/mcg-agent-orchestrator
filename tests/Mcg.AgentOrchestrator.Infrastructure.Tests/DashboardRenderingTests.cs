@@ -503,6 +503,29 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_projects_unintegrated_completed_goal_as_verified")]
+    public void DashboardResponseMapperProjectsUnintegratedCompletedGoalAsVerified()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Legacy completed before cleanup facts", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.CompleteGoal(goal.Id, "Legacy completion.");
+
+    var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
+    var acceptance = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, kernel.BuildGoalAcceptanceSummary(goal.Id));
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, monitor.Status);
+    Assert.Equal(GoalStatus.Verified, acceptance.Status);
+    Assert.Equal(GoalStatus.Verified, workSummary.Status);
+    Assert.Equal(OperatorDispositionState.Accept, workSummary.OperatorDisposition.State);
+    Assert.Equal($"acceptance {goal.Id.Value[..8]}", workSummary.OperatorDisposition.NextSafeCommand);
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
     public void DashboardResponseMapperNextActionIncludesDispatchRecoveryPolicyAction()
     {

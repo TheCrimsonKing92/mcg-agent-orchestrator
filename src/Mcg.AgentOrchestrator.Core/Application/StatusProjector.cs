@@ -7,7 +7,8 @@ public sealed record StatusProjectionGoal(
     string Objective,
     GoalStatus Status,
     IReadOnlyList<StatusProjectionTask> Tasks,
-    DateTimeOffset? LastEventAt);
+    DateTimeOffset? LastEventAt,
+    GoalLifecycleState? LifecycleState = null);
 
 public sealed record StatusProjectionTask(
     AgentRole Role,
@@ -55,7 +56,7 @@ public static class StatusProjector
                 continue;
 
             var item = BuildItem(goal);
-            if (goal.Status == GoalStatus.Completed && goal.LastEventAt >= landedCutoff)
+            if (goal.LifecycleState == GoalLifecycleState.CleanedUp && goal.LastEventAt >= landedCutoff)
             {
                 landed.Add(item);
                 continue;
@@ -63,6 +64,7 @@ public static class StatusProjector
 
             if (goal.Status == GoalStatus.WaitingForHuman ||
                 goal.Status == GoalStatus.Verified ||
+                goal.Status == GoalStatus.Completed ||
                 item.PercentComplete >= 80 ||
                 item.Stage.Equals("accepting", StringComparison.Ordinal))
             {
@@ -88,7 +90,8 @@ public static class StatusProjector
         int openEscalationCount,
         string? escalationThreadUrl,
         DateTimeOffset now,
-        string? previousRenderedContent = null)
+        string? previousRenderedContent = null,
+        Func<Goal, GoalLifecycleFacts>? factProvider = null)
     {
         return new StatusProjectionInput(
             goals.Select(goal => new StatusProjectionGoal(
@@ -96,7 +99,8 @@ public static class StatusProjector
                     goal.Objective,
                     goal.Status,
                     goal.Tasks.Select(task => new StatusProjectionTask(task.RequiredRole, task.Status)).ToList(),
-                    goal.Timeline.OrderByDescending(evt => evt.OccurredAt).FirstOrDefault()?.OccurredAt))
+                    goal.Timeline.OrderByDescending(evt => evt.OccurredAt).FirstOrDefault()?.OccurredAt,
+                    ResolveLifecycle(goal, factProvider)))
                 .ToList(),
             openEscalationCount,
             escalationThreadUrl,
@@ -121,6 +125,8 @@ public static class StatusProjector
 
     private static string DetermineStage(StatusProjectionGoal goal)
     {
+        if (goal.LifecycleState is GoalLifecycleState.Merged or GoalLifecycleState.Recorded)
+            return "cleanup";
         if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
             return "accepting";
         if (goal.Status == GoalStatus.WaitingForHuman ||
@@ -148,7 +154,21 @@ public static class StatusProjector
             return "running";
         if (goal.Tasks.Any(task => task.Status == WorkTaskStatus.Assigned))
             return "ready";
-        return goal.Status == GoalStatus.Completed ? "complete" : "queued";
+        if (goal.LifecycleState == GoalLifecycleState.CleanedUp)
+            return "complete";
+        return goal.Status == GoalStatus.Completed ? "integration or cleanup required" : "queued";
+    }
+
+    private static GoalLifecycleState? ResolveLifecycle(
+        Goal goal,
+        Func<Goal, GoalLifecycleFacts>? factProvider)
+    {
+        if (factProvider is null)
+        {
+            return goal.Status == GoalStatus.Completed ? GoalLifecycleState.Verified : null;
+        }
+
+        return GoalLifecycle.ResolveState(goal, factProvider(goal));
     }
 
     private static string Render(
