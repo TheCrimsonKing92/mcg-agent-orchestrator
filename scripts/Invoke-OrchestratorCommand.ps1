@@ -44,11 +44,7 @@ if ([string]::IsNullOrWhiteSpace($AppDll)) {
     return
 }
 
-$resolvedAppDll = if ([string]::IsNullOrWhiteSpace($AppDll)) {
-    Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
-} else {
-    [System.IO.Path]::GetFullPath($AppDll)
-}
+$resolvedAppDll = [System.IO.Path]::GetFullPath($AppDll)
 
 $rootWithSeparator = $repoRoot.TrimEnd(
     [System.IO.Path]::DirectorySeparatorChar,
