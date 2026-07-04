@@ -6,10 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-public static void PrintMonitor(GoalMonitor monitor)
+public static void PrintMonitor(GoalMonitor monitor, string? statusText = null)
 {
     Console.WriteLine();
-    Console.WriteLine($"Goal {monitor.GoalId.Value[..8]} {monitor.Status}: {OutputTextPreview.CreateSummary(monitor.Objective).Text}");
+    Console.WriteLine($"Goal {monitor.GoalId.Value[..8]} {statusText ?? monitor.Status.ToString()}: {OutputTextPreview.CreateSummary(monitor.Objective).Text}");
     Console.WriteLine($"Tasks: {monitor.TotalTasks}");
     Console.WriteLine("Status counts:");
 

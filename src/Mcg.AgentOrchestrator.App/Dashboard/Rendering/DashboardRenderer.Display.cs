@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
 
@@ -6,6 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 public static partial class DashboardRenderer
 {
     private static string Display(GoalStatus status) => DashboardDisplayNames.Display(status);
+    private static string DisplayGoalStatus(Goal goal, DashboardRenderOptions options) =>
+        DashboardResponseMapper.ToGoalSummary(goal, options.Workspace?.ExecutionDirectory).StatusText;
     private static string Display(WorkTaskStatus status) => DashboardDisplayNames.Display(status);
     private static string Display(ProgressKind kind) => DashboardDisplayNames.Display(kind);
     private static string Display(TaskAttentionKind kind) => DashboardDisplayNames.Display(kind);

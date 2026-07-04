@@ -382,6 +382,202 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_updates_AppDll_git_head_marker_after_successful_rebuild")]
+    public void InvokeIsolatedDotnetUpdatesAppDllGitHeadMarkerAfterSuccessfulRebuild()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        try
+        {
+            RunCommand("git", workDirectory, "init", "--initial-branch=main");
+            RunCommand("git", workDirectory, "config", "user.email", "test@example.invalid");
+            RunCommand("git", workDirectory, "config", "user.name", "Isolated Dotnet Test");
+            File.WriteAllText(Path.Combine(workDirectory, "README.md"), "base");
+            RunCommand("git", workDirectory, "add", "README.md");
+            RunCommand("git", workDirectory, "commit", "-m", "base");
+            var expectedHead = RunCommand("git", workDirectory, "rev-parse", "HEAD").Trim();
+
+            var shimPath = Path.Combine(shimDirectory, "dotnet.cmd");
+            File.WriteAllText(
+                shimPath,
+                """
+                @echo off
+                if "%~1"=="build-server" exit /b 0
+                set "APP_DIR=%CD%\src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0"
+                mkdir "%APP_DIR%" >nul 2>nul
+                echo rebuilt>"%APP_DIR%\Mcg.AgentOrchestrator.App.dll"
+                exit /b 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-InputFormat");
+            startInfo.ArgumentList.Add("None");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("feedbeef");
+            startInfo.ArgumentList.Add("-AttemptName");
+            startInfo.ArgumentList.Add("Marker Test");
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add("Fake.Tests.csproj");
+            startInfo.ArgumentList.Add("--no-restore");
+            startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+
+            var markerPath = Path.Combine(
+                workDirectory,
+                "src",
+                "Mcg.AgentOrchestrator.App",
+                "bin",
+                "Debug",
+                "net10.0",
+                "Mcg.AgentOrchestrator.App.dll.git-head");
+            Assert.Equal(expectedHead, File.ReadAllText(markerPath).Trim());
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_does_not_update_stale_AppDll_marker_after_non_App_success")]
+    public void InvokeIsolatedDotnetDoesNotUpdateStaleAppDllMarkerAfterNonAppSuccess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        try
+        {
+            RunCommand("git", workDirectory, "init", "--initial-branch=main");
+            RunCommand("git", workDirectory, "config", "user.email", "test@example.invalid");
+            RunCommand("git", workDirectory, "config", "user.name", "Isolated Dotnet Test");
+            File.WriteAllText(Path.Combine(workDirectory, "README.md"), "base");
+            RunCommand("git", workDirectory, "add", "README.md");
+            RunCommand("git", workDirectory, "commit", "-m", "base");
+            var currentHead = RunCommand("git", workDirectory, "rev-parse", "HEAD").Trim();
+            Assert.NotEqual("stale-test-head", currentHead);
+
+            var appOutputPath = Path.Combine(
+                workDirectory,
+                "src",
+                "Mcg.AgentOrchestrator.App",
+                "bin",
+                "Debug",
+                "net10.0");
+            Directory.CreateDirectory(appOutputPath);
+            var appDllPath = Path.Combine(appOutputPath, "Mcg.AgentOrchestrator.App.dll");
+            var markerPath = appDllPath + ".git-head";
+            File.WriteAllText(appDllPath, "stale app host");
+            File.WriteAllText(markerPath, "stale-test-head");
+            var appDllLastWriteTime = File.GetLastWriteTimeUtc(appDllPath);
+
+            var shimPath = Path.Combine(shimDirectory, "dotnet.cmd");
+            File.WriteAllText(
+                shimPath,
+                """
+                @echo off
+                exit /b 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-InputFormat");
+            startInfo.ArgumentList.Add("None");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("feedbeef");
+            startInfo.ArgumentList.Add("-AttemptName");
+            startInfo.ArgumentList.Add("Non App Marker Test");
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add("Fake.Tests.csproj");
+            startInfo.ArgumentList.Add("--no-restore");
+            startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+
+            Assert.Equal("stale-test-head", File.ReadAllText(markerPath).Trim());
+            Assert.Equal(appDllLastWriteTime, File.GetLastWriteTimeUtc(appDllPath));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
     private static string ResolveRepositoryRoot()
     {
         var environmentRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
@@ -408,6 +604,33 @@ public sealed class DotnetBuildEnvironmentManagerTests
     {
         return !string.IsNullOrWhiteSpace(path) &&
             File.Exists(Path.Combine(path, "scripts", "Invoke-IsolatedDotnet.ps1"));
+    }
+
+    private static string RunCommand(string fileName, string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(10000), $"{fileName} did not exit within 10 seconds.");
+        Assert.True(
+            process.ExitCode == 0,
+            $"{fileName} {string.Join(' ', arguments)} exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+        return stdout;
     }
 
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]

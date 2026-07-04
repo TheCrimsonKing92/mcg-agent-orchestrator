@@ -107,7 +107,80 @@ public sealed class LauncherScriptTests
 
         Assert.True(launcher.Contains("App.dll.git-head", StringComparison.Ordinal));
         Assert.True(launcher.Contains("rev-parse HEAD", StringComparison.Ordinal));
-        Assert.True(launcher.Contains("Set-Content -LiteralPath '%APP_HEAD%'", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("scripts\\Update-AppDllGitHeadMarker.ps1", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_uses_fresh_launcher")]
+    public void InvokeOrchestratorCommandDefaultPathUsesFreshLauncher()
+    {
+        using var sandbox = CreateDefaultLauncherSandbox();
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Invoke-OrchestratorCommand.ps1",
+            "workspace",
+            "remove",
+            "abc12345");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_refreshes_git_head_marker_after_stale_rebuild")]
+    public void InvokeOrchestratorCommandDefaultPathRefreshesGitHeadMarkerAfterStaleRebuild()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var sandbox = CreateStaleMarkerLauncherSandbox();
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Invoke-OrchestratorCommand.ps1",
+            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath },
+            "help",
+            "operator-commands");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Equal(sandbox.ExpectedHead, File.ReadAllText(sandbox.MarkerPath).Trim());
+        Assert.Contains("build ", File.ReadAllText(sandbox.DotnetLogPath));
+    }
+
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_default_path_starts_fresh_launcher")]
+    public void StartOrchestratorCommandDefaultPathStartsFreshLauncher()
+    {
+        using var sandbox = CreateDefaultLauncherSandbox(includeStartCommand: true);
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            "-Name",
+            "fresh-launcher-test",
+            "workspace",
+            "remove",
+            "abc12345");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var root = document.RootElement;
+        var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        var launcherPath = Path.Combine(sandbox.RepositoryRoot, "mcg-orchestrator.cmd");
+        Assert.Equal(new[] { launcherPath, "workspace", "remove", "abc12345" }, args);
+
+        var stdoutPath = root.GetProperty("stdoutPath").GetString()
+            ?? throw new InvalidOperationException("Start command did not emit stdoutPath.");
+        WaitForFile(stdoutPath, TimeSpan.FromSeconds(10));
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (!File.Exists(sandbox.InvocationPath) && DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(100);
+        }
+
+        Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
     [Xunit.Fact(DisplayName = "ResolveRunDir_repopulates_cached_copy_when_native_sqlite_asset_is_missing")]
@@ -656,7 +729,106 @@ public sealed class LauncherScriptTests
         return new RepoScriptArgumentSandbox(repoRoot, Path.Combine(relativeDirectory, "record-arguments.ps1"), directory);
     }
 
-    private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments)
+    private static DefaultLauncherSandbox CreateDefaultLauncherSandbox(bool includeStartCommand = false)
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"default-launcher-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        Directory.CreateDirectory(scriptsPath);
+
+        var sourceRoot = FindLauncherSourceRoot();
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
+            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorCommand.ps1"),
+            Path.Combine(scriptsPath, "Invoke-OrchestratorCommand.ps1"));
+        if (includeStartCommand)
+        {
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Start-OrchestratorCommand.ps1"),
+                Path.Combine(scriptsPath, "Start-OrchestratorCommand.ps1"));
+        }
+
+        var invocationPath = Path.Combine(repositoryRoot, "launcher-invocation.txt");
+        File.WriteAllText(Path.Combine(repositoryRoot, "mcg-orchestrator.cmd"), $"""
+            @echo off
+            echo launcher %*>"{invocationPath}"
+            echo launcher %*
+            exit /b 0
+            """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+        return new DefaultLauncherSandbox(repositoryRoot, invocationPath);
+    }
+
+    private static StaleMarkerLauncherSandbox CreateStaleMarkerLauncherSandbox()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"stale-marker-launcher-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var appSourcePath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App");
+        var appOutputPath = Path.Combine(appSourcePath, "bin", "Debug", "net10.0");
+        var shimPath = Path.Combine(repositoryRoot, "shim");
+        Directory.CreateDirectory(scriptsPath);
+        Directory.CreateDirectory(appSourcePath);
+        Directory.CreateDirectory(appOutputPath);
+        Directory.CreateDirectory(shimPath);
+
+        var sourceRoot = FindLauncherSourceRoot();
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
+            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorCommand.ps1"),
+            Path.Combine(scriptsPath, "Invoke-OrchestratorCommand.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "resolve-run-dir.ps1"),
+            Path.Combine(scriptsPath, "resolve-run-dir.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
+            Path.Combine(scriptsPath, "Update-AppDllGitHeadMarker.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "mcg-orchestrator.cmd"),
+            Path.Combine(repositoryRoot, "mcg-orchestrator.cmd"));
+
+        File.WriteAllText(Path.Combine(appSourcePath, "Mcg.AgentOrchestrator.App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(appSourcePath, "Program.cs"), "Console.WriteLine(\"test\");");
+
+        var appDllPath = Path.Combine(appOutputPath, "Mcg.AgentOrchestrator.App.dll");
+        var markerPath = appDllPath + ".git-head";
+        File.WriteAllText(appDllPath, "stale app");
+        File.WriteAllText(Path.Combine(appOutputPath, "e_sqlite3.dll"), "native");
+        File.WriteAllText(markerPath, "stale-test-head");
+
+        RunGit(repositoryRoot, "init", "--initial-branch=main");
+        RunGit(repositoryRoot, "config", "user.email", "test@example.invalid");
+        RunGit(repositoryRoot, "config", "user.name", "Launcher Script Test");
+        RunGit(repositoryRoot, "add", ".");
+        RunGit(repositoryRoot, "commit", "-m", "base");
+        var expectedHead = RunGitForOutput(repositoryRoot, "rev-parse", "HEAD").Trim();
+
+        var dotnetLogPath = Path.Combine(repositoryRoot, "dotnet.log");
+        var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
+        File.WriteAllText(dotnetShimPath, $"""
+            @echo off
+            echo %*>>"{dotnetLogPath}"
+            if "%~1"=="build" (
+              echo rebuilt>"{appDllPath}"
+              echo native>"{Path.Combine(appOutputPath, "e_sqlite3.dll")}"
+              exit /b 0
+            )
+            exit /b 0
+            """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+        return new StaleMarkerLauncherSandbox(repositoryRoot, dotnetShimPath, dotnetLogPath, markerPath, expectedHead);
+    }
+
+    private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments) =>
+        RunInvokeRepoScript(repositoryRoot, relativeScriptPath, environment: null, arguments);
+
+    private static ProcessResult RunInvokeRepoScript(
+        string repositoryRoot,
+        string relativeScriptPath,
+        IReadOnlyDictionary<string, string?>? environment,
+        params string[] arguments)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -667,6 +839,14 @@ public sealed class LauncherScriptTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        if (environment is not null)
+        {
+            foreach (var (name, value) in environment)
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
+
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
         startInfo.ArgumentList.Add("Bypass");
@@ -856,6 +1036,27 @@ public sealed class LauncherScriptTests
         Assert.Equal(0, result.ExitCode);
     }
 
+    private static string RunGitForOutput(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        var result = RunProcess(startInfo, $"git {string.Join(' ', arguments)}");
+        Assert.Equal(0, result.ExitCode);
+        return result.Stdout;
+    }
+
     private static ProcessResult RunProcess(ProcessStartInfo startInfo, string description)
     {
         using var process = Process.Start(startInfo)
@@ -1002,6 +1203,54 @@ public sealed class LauncherScriptTests
             try
             {
                 Directory.Delete(sandboxPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class DefaultLauncherSandbox(string repositoryRoot, string invocationPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string InvocationPath { get; } = invocationPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class StaleMarkerLauncherSandbox(
+        string repositoryRoot,
+        string dotnetShimPath,
+        string dotnetLogPath,
+        string markerPath,
+        string expectedHead) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string DotnetShimPath { get; } = dotnetShimPath;
+        public string DotnetLogPath { get; } = dotnetLogPath;
+        public string MarkerPath { get; } = markerPath;
+        public string ExpectedHead { get; } = expectedHead;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
             }
             catch (IOException)
             {

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -330,7 +331,10 @@ internal sealed record DistributedArchitectureDto(
     }
 }
 
-internal sealed record GoalSummaryDto(string Id, string Objective, GoalStatus Status, int TotalTasks, DateTimeOffset? LastEventAt);
+internal sealed record GoalSummaryDto(string Id, string Objective, GoalStatus Status, int TotalTasks, DateTimeOffset? LastEventAt)
+{
+    public string StatusText { get; init; } = DashboardDisplayNames.Display(Status);
+}
 
 internal sealed record GoalDetailDto(
     GoalSummaryDto Goal,
