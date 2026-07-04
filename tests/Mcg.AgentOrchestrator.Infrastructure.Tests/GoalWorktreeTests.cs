@@ -3562,7 +3562,7 @@ public sealed class GoalWorktreeIntegrationTests
                 outputLines);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
             Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
-            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
             Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
         }
         finally

@@ -7953,7 +7953,7 @@ public sealed class CliCommandTests
         var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
             e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
         Xunit.Assert.NotNull(cleanupEntry);
-        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
         Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
     }
 }
