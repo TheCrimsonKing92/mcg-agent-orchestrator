@@ -181,6 +181,38 @@ function Update-AppDllGitHeadMarker {
     }
 }
 
+function Get-AppDllSnapshot {
+    $repositoryRoot = (Get-Location).Path
+    $appDll = Join-Path $repositoryRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+    if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
+        return [pscustomobject]@{
+            Exists = $false
+            Length = 0
+            LastWriteTimeUtcTicks = 0
+        }
+    }
+
+    $item = Get-Item -LiteralPath $appDll
+    return [pscustomobject]@{
+        Exists = $true
+        Length = $item.Length
+        LastWriteTimeUtcTicks = $item.LastWriteTimeUtc.Ticks
+    }
+}
+
+function Test-AppDllChangedSinceSnapshot {
+    param([object]$Snapshot)
+
+    $current = Get-AppDllSnapshot
+    if (-not $current.Exists) {
+        return $false
+    }
+
+    return (-not $Snapshot.Exists) -or
+        ($current.Length -ne $Snapshot.Length) -or
+        ($current.LastWriteTimeUtcTicks -ne $Snapshot.LastWriteTimeUtcTicks)
+}
+
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 $hostTempBase = Get-HostTempBase
 $isolatedRoot = Get-IsolatedRootBase
@@ -274,9 +306,10 @@ try {
         }
     }
 
+    $appDllBeforeDotnet = Get-AppDllSnapshot
     & dotnet @DotnetArguments @isolatedArguments
     $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0) {
+    if ($exitCode -eq 0 -and (Test-AppDllChangedSinceSnapshot -Snapshot $appDllBeforeDotnet)) {
         Update-AppDllGitHeadMarker
     }
 }
