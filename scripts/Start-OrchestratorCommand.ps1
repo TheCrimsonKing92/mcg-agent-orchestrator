@@ -94,6 +94,7 @@ function Write-LaunchFailure {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$launcher = Join-Path $repoRoot "mcg-orchestrator.cmd"
 $stdoutPath = $null
 $stderrPath = $null
 $processArguments = @()
@@ -104,9 +105,9 @@ try {
         throw "Usage: .\scripts\Start-OrchestratorCommand.ps1 [-Name <name>] <orchestrator-args...>"
     }
 
-    $usesDefaultLauncher = [string]::IsNullOrWhiteSpace($AppDll)
-    $resolvedAppDll = if ($usesDefaultLauncher) {
-        Join-Path $repoRoot "mcg-orchestrator.cmd"
+    $usesLauncher = [string]::IsNullOrWhiteSpace($AppDll)
+    $targetExecutable = if ($usesLauncher) {
+        $launcher
     } else {
         [System.IO.Path]::GetFullPath($AppDll)
     }
@@ -118,27 +119,28 @@ try {
     $safeName = ConvertTo-SafeName $Name
     $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
     $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
-    $processArguments = @($resolvedAppDll) + $Arguments
+    $processArguments = @($targetExecutable) + $Arguments
 
-    if (-not (Test-Path -LiteralPath $resolvedAppDll -PathType Leaf)) {
-        if ($usesDefaultLauncher) {
-            throw "Orchestrator launcher not found: $resolvedAppDll"
-        }
-
-        throw "App DLL not found. Build the app first: $resolvedAppDll"
+    if (-not (Test-Path -LiteralPath $targetExecutable -PathType Leaf)) {
+        throw "Launcher or App DLL not found: $targetExecutable"
     }
 
-    $executablePath = $resolvedAppDll
-    $launchArguments = @($Arguments)
-    if (-not $usesDefaultLauncher) {
-        $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
-        if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
-            $dotnetPath = "dotnet"
+    $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+    if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
+        $dotnetPath = "dotnet"
+    }
+
+    $processFilePath = $dotnetPath
+    $launchArguments = $processArguments
+    if ($usesLauncher) {
+        $processFilePath = $env:ComSpec
+        if ([string]::IsNullOrWhiteSpace($processFilePath)) {
+            $processFilePath = "cmd.exe"
         }
 
-        $executablePath = $dotnetPath
-        $launchArguments = @($resolvedAppDll) + $Arguments
+        $launchArguments = @("/d", "/c") + $processArguments
     }
+
     $processArgumentLine = ($launchArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
 
     $previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
@@ -151,7 +153,7 @@ try {
         $process = Start-Process `
             -WindowStyle Hidden `
             -PassThru `
-            -FilePath $executablePath `
+            -FilePath $processFilePath `
             -WorkingDirectory $repoRoot `
             -ArgumentList $processArgumentLine `
             -RedirectStandardOutput $stdoutPath `

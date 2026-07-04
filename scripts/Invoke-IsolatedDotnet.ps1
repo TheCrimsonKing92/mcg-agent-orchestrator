@@ -38,6 +38,11 @@ if ($DotnetArguments.Count -eq 0) {
     throw "Usage: .\scripts\Invoke-IsolatedDotnet.ps1 [-GoalPrefix <goal-prefix>] test Mcg.AgentOrchestrator.sln --verbosity minimal"
 }
 
+if ($env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "1" -or
+    $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "true") {
+    throw "Worker-side .NET self-verification is disabled. Report tests: not-run - orchestrator acceptance gate verifies via stable slots."
+}
+
 function ConvertTo-SafePathSegment {
     param([string]$Value)
     $safe = ($Value.Trim().ToLowerInvariant().ToCharArray() | ForEach-Object {
@@ -281,6 +286,7 @@ $env:TMP = $processTempPath
 Remove-Item Env:MCG_WORKER_SANDBOX -ErrorAction SilentlyContinue
 Remove-Item Env:MCG_WORKER_ACCOUNT -ErrorAction SilentlyContinue
 Remove-Item Env:MCG_WORKER_CREDENTIAL_TARGET -ErrorAction SilentlyContinue
+Remove-Item Env:MCG_ORCHESTRATOR_WORKER_DISPATCH -ErrorAction SilentlyContinue
 
 $lockStream = $null
 $lockHeld = $false

@@ -41,6 +41,7 @@ public sealed record WorkerSandboxOptions(
     public const string EnabledVariable = "MCG_WORKER_SANDBOX";
     public const string AccountVariable = "MCG_WORKER_ACCOUNT";
     public const string CredentialTargetVariable = "MCG_WORKER_CREDENTIAL_TARGET";
+    public const string DispatchWorkerVariable = "MCG_ORCHESTRATOR_WORKER_DISPATCH";
 
     public const string DefaultAccount = "mcg-worker";
     public const string DefaultCredentialTarget = "mcg-orchestrator-worker";

@@ -183,6 +183,33 @@ public sealed class LauncherScriptTests
         Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
+    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_defaults_to_launcher_refresh_path")]
+    public void InvokeOrchestratorCommandDefaultsToLauncherRefreshPath()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-OrchestratorCommand.ps1"));
+
+        Assert.True(script.Contains("$launcher = Join-Path $repoRoot \"mcg-orchestrator.cmd\"", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("if ([string]::IsNullOrWhiteSpace($AppDll))", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("& $launcher @Arguments", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("[System.IO.Path]::GetFullPath($AppDll)", StringComparison.Ordinal), script);
+        Assert.DoesNotContain("bin\\Debug\\net10.0\\Mcg.AgentOrchestrator.App.dll", script, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_defaults_to_launcher_refresh_path")]
+    public void StartOrchestratorCommandDefaultsToLauncherRefreshPath()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Start-OrchestratorCommand.ps1"));
+
+        Assert.True(script.Contains("$launcher = Join-Path $repoRoot \"mcg-orchestrator.cmd\"", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("$usesLauncher = [string]::IsNullOrWhiteSpace($AppDll)", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("$processFilePath = $env:ComSpec", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("$launchArguments = @(\"/d\", \"/c\") + $processArguments", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("[System.IO.Path]::GetFullPath($AppDll)", StringComparison.Ordinal), script);
+        Assert.DoesNotContain("bin\\Debug\\net10.0\\Mcg.AgentOrchestrator.App.dll", script, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ResolveRunDir_repopulates_cached_copy_when_native_sqlite_asset_is_missing")]
     public void ResolveRunDirRepopulatesCachedCopyWhenNativeSqliteAssetIsMissing()
     {
@@ -606,7 +633,7 @@ public sealed class LauncherScriptTests
         Assert.True(script.Contains("[CmdletBinding(PositionalBinding = $false)]", StringComparison.Ordinal));
         Assert.True(script.Contains("[Parameter(ValueFromRemainingArguments = $true)]", StringComparison.Ordinal));
         Assert.True(script.Contains("[string[]]$Arguments", StringComparison.Ordinal));
-        Assert.True(script.Contains("$processArguments = @($resolvedAppDll) + $Arguments", StringComparison.Ordinal));
+        Assert.True(script.Contains("$processArguments = @($targetExecutable) + $Arguments", StringComparison.Ordinal));
         Assert.False(script.Contains("Position =", StringComparison.OrdinalIgnoreCase));
 
         var startInfo = new ProcessStartInfo
