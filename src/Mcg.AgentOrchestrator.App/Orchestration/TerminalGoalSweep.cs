@@ -54,11 +54,13 @@ internal static class TerminalGoalSweep
             }
 
             var goal = kernel.GetGoal(originalGoal.Id);
+            var isAcceptedOrVerifiedGitGoal = goal.Status is GoalStatus.Verified or GoalStatus.Completed &&
+                GoalWorktrees.IsGitWorkTree(executionDirectory);
             var isCompletedGitGoal = goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory);
-            var hasGoalBranchArtifact = isCompletedGitGoal &&
+            var hasGoalBranchArtifact = isAcceptedOrVerifiedGitGoal &&
                 (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
                  GoalWorktrees.HasBranch(executionDirectory, goal.Id));
-            var branchAlreadyLanded = isCompletedGitGoal &&
+            var branchAlreadyLanded = isAcceptedOrVerifiedGitGoal &&
                 hasGoalBranchArtifact &&
                 GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
@@ -124,19 +126,21 @@ internal static class TerminalGoalSweep
             }
 
             if (!blockedByDirtyWorktree &&
-                goal.Status == GoalStatus.Completed &&
-                GoalWorktrees.IsGitWorkTree(executionDirectory))
+                isAcceptedOrVerifiedGitGoal &&
+                hasGoalBranchArtifact &&
+                !GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
             {
-                if (!GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
-                {
-                    blockers.Add(new TerminalGoalSweepBlocker(
-                        "completed-branch-unmerged",
-                        $"completed goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
-                        $"acceptance {prefix}"));
-                    results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
-                    continue;
-                }
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "completed-branch-unmerged",
+                    $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
+                    $"acceptance {prefix}"));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
 
+            if (!blockedByDirtyWorktree &&
+                (isCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchAlreadyLanded)))
+            {
                 var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
