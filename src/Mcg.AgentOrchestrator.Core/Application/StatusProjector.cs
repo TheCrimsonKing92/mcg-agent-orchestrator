@@ -62,6 +62,7 @@ public static class StatusProjector
             }
 
             if (goal.Status == GoalStatus.WaitingForHuman ||
+                goal.Status == GoalStatus.Verified ||
                 item.PercentComplete >= 80 ||
                 item.Stage.Equals("accepting", StringComparison.Ordinal))
             {
@@ -120,7 +121,7 @@ public static class StatusProjector
 
     private static string DetermineStage(StatusProjectionGoal goal)
     {
-        if (goal.Status == GoalStatus.Completed)
+        if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
             return "accepting";
         if (goal.Status == GoalStatus.WaitingForHuman ||
             goal.Tasks.Any(task => task.Status == WorkTaskStatus.WaitingForHuman))

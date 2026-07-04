@@ -737,8 +737,7 @@ internal static class GoalMonitoringSubscriptionCommand
         var isRecorded = journal.LatestByOperation.Any(entry =>
             entry.Operation == "conductor:record" && entry.Status == GoalOperationStatus.Completed);
         var isCleanedUp = journal.LatestByOperation.Any(entry =>
-            entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed)
-            || (!workspaceExists && goal.Status == GoalStatus.Completed);
+            entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed);
         var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
         var isBlocked = goal.LatestAcceptanceFailure is not null ||
             journal.LatestByOperation.Any(entry =>

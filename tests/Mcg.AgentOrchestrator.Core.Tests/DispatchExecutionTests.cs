@@ -703,7 +703,7 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
         clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
 }
 }
 

@@ -45,8 +45,16 @@ public static class GoalLifecycle
         if (goal.Tasks.Any(t => t.Status == WorkTaskStatus.Failed))
             return GoalLifecycleState.Failed;
 
-        // Completed goal — resolve post-completion stage from facts (later stages win)
+        // Accepted goal — resolve post-acceptance stage from facts (later stages win)
         if (goal.Status == GoalStatus.Completed)
+        {
+            if (facts.IsCleanedUp) return GoalLifecycleState.CleanedUp;
+            if (facts.IsRecorded)  return GoalLifecycleState.Recorded;
+            if (facts.IsMerged)    return GoalLifecycleState.Merged;
+            return GoalLifecycleState.CleanedUp;
+        }
+
+        if (goal.Status == GoalStatus.Verified)
         {
             if (facts.IsCleanedUp) return GoalLifecycleState.CleanedUp;
             if (facts.IsRecorded)  return GoalLifecycleState.Recorded;

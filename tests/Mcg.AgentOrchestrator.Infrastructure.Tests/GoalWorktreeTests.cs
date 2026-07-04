@@ -1502,7 +1502,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             var sourceDirectory = Path.Combine(worktreePath, "src");
@@ -1546,7 +1546,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2589,7 +2589,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "policy.txt"), "goal work");
@@ -2894,7 +2894,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2941,7 +2941,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2993,7 +2993,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             var generatedDirectory = Path.Combine(worktreePath, "src", "Feature", "bin", "Debug");
@@ -3039,7 +3039,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "skip.txt"), "goal work");
@@ -3858,7 +3858,7 @@ public sealed class GoalWorktreeIntegrationTests
             });
 
             var goal = context.CurrentGoal!;
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("Autonomy policy: safe-auto", StringComparison.Ordinal));
             Assert.True(output.Contains("Stage acceptance: stopped.", StringComparison.Ordinal));
@@ -3946,7 +3946,7 @@ public sealed class GoalWorktreeIntegrationTests
             });
 
             var goal = context.CurrentGoal!;
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
             Assert.True(output.Contains("Next: acceptance", StringComparison.Ordinal));
@@ -3983,7 +3983,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var goal = context.CurrentGoal!;
             Assert.Equal("fake verifier boom", ex.Message);
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.Equal(1, fakeVerifier.RunCount);
         }
@@ -5014,7 +5014,7 @@ public sealed class GoalWorktreeIntegrationTests
                     "WORKER_RESULT:\nfiles: src/Old.cs\ncommands: old\nEND_WORKER_RESULT",
                     string.Empty,
                     oldDispatch.DispatchedAt.AddSeconds(10)));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
 
             kernel.RecordAcceptanceFailure(goal.Id, ["SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"]);
@@ -5249,7 +5249,7 @@ public sealed class GoalWorktreeIntegrationTests
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-        Assert.Equal(GoalStatus.Completed, goal.Status);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
         return goal;
     }
 

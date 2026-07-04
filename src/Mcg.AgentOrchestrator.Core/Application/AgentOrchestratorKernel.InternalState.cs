@@ -17,7 +17,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
         {
-            goal.SetStatus(GoalStatus.Completed);
+            goal.SetStatus(GoalStatus.Verified);
             return;
         }
 

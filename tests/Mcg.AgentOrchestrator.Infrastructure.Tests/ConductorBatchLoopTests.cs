@@ -591,7 +591,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Retried);
         Assert.Equal(0, summary.Escalated);
         Assert.Equal(0, summary.Advanced);
-        Assert.Empty(ticks);
+        var tick = Assert.Single(ticks);
+        Assert.Equal(1, tick.Done);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_operator_retry_clears_prior_verified_acceptance_escalation")]

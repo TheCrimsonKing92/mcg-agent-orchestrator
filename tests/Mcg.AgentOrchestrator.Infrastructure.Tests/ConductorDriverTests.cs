@@ -75,8 +75,7 @@ public sealed class ConductorDriverTests
         var isRecorded = journal.LatestByOperation.Any(e =>
             e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
         var isCleanedUp = journal.LatestByOperation.Any(e =>
-            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed)
-            || (!workspaceExists && goal.Status == GoalStatus.Completed);
+            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
         var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
         return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }

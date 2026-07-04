@@ -27,6 +27,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
     private readonly Action<Goal> _record;
     private readonly Func<Goal, GoalWorktreeRemoveResult> _cleanup;
+    private readonly Action<Goal> _completeGoal;
     private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
@@ -63,12 +64,7 @@ internal sealed class ConductorDriver
             var isRecorded = journal.LatestByOperation.Any(e =>
                 e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
             var isCleanedUp = journal.LatestByOperation.Any(e =>
-                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed)
-                // A completed goal whose worktree is gone was landed + cleaned up outside the conductor
-                // (e.g. via the `acceptance` command, which merges + removes the workspace without
-                // writing the conductor journal). Treat it as terminal so the loop doesn't re-run
-                // acceptance on a missing worktree and spam ghost escalations every tick.
-                || (!workspaceExists && goal.Status == GoalStatus.Completed);
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
             var hasOpenClarification = openClarificationGoalIds.Contains(goal.Id);
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
@@ -301,6 +297,7 @@ internal sealed class ConductorDriver
             RefreshJournal(goal.Id);
             return result;
         };
+        _completeGoal = goal => kernel.CompleteGoal(goal.Id, "Conductor completed goal after durable landing, recording, and cleanup evidence.");
 
         _writeEscalation = (goal, state, reason) =>
             OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}", channel);
@@ -355,6 +352,7 @@ internal sealed class ConductorDriver
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Action<Goal, IReadOnlyList<string>>? recordAcceptanceFailure = null,
         Action<Goal>? clearAcceptanceFailure = null,
+        Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null)
     {
@@ -378,6 +376,7 @@ internal sealed class ConductorDriver
         _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
         _record = record;
         _cleanup = cleanup;
+        _completeGoal = completeGoal ?? (_ => { });
         _writeEscalation = writeEscalation;
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
@@ -930,6 +929,7 @@ internal sealed class ConductorDriver
                     $"Workspace cleanup deferred; retry later. {FormatCleanupDiagnostic(cleanup)}"));
         }
 
+        _completeGoal(goal);
         return MakeResult(goal.Id.Value, goalPrefix, policy,
             new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Recorded, cleanup.Message));
     }

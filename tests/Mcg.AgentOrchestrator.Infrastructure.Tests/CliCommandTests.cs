@@ -6228,7 +6228,7 @@ public sealed class CliCommandTests
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.UtcNow));
-        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
 
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
         File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");

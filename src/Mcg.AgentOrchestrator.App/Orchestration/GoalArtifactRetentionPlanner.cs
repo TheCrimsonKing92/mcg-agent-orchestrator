@@ -88,7 +88,7 @@ internal static class GoalArtifactRetentionPlanner
         return goal.Status switch
         {
             GoalStatus.Completed when acceptance.IsAccepted && !hasWorktree && !hasBranch => RetentionGoalState.AcceptedCleaned,
-            GoalStatus.Completed when acceptance.IsAccepted => RetentionGoalState.ReadyForAcceptance,
+            GoalStatus.Verified when acceptance.IsAccepted => RetentionGoalState.ReadyForAcceptance,
             GoalStatus.Completed => RetentionGoalState.Waiting,
             GoalStatus.Failed => RetentionGoalState.Failed,
             GoalStatus.Cancelled => RetentionGoalState.Abandoned,

@@ -112,13 +112,13 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             }
         }
 
-        if (goal.Status != GoalStatus.Completed)
+        if (goal.Status != GoalStatus.Verified)
         {
             AddBlocker(
                 blockers,
                 nextCommands,
                 "goal-not-completed",
-                $"Goal status is {goal.Status}; acceptance requires Completed.",
+                $"Goal status is {goal.Status}; acceptance requires Verified.",
                 $"monitor {goal.Id.Value[..8]}");
         }
         else

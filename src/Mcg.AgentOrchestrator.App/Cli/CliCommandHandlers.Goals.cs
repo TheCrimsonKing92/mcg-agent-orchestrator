@@ -188,10 +188,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var landedGoal = context.CurrentGoal;
             var landedId = landedGoal.Id;
             var landedGp = landedId.Value[..8];
-            if (landedGoal.Status != GoalStatus.Completed)
+            if (landedGoal.Status is not (GoalStatus.Verified or GoalStatus.Completed))
                 throw new InvalidOperationException(
-                    $"goal-mark-landed is only valid for Completed goals; goal {landedGp} is {landedGoal.Status}. " +
-                    "Active or InProgress goals self-heal via the conductor; only Completed (force-landed) goals need this command.");
+                    $"goal-mark-landed is only valid for Verified or Completed goals; goal {landedGp} is {landedGoal.Status}. " +
+                    "Active or InProgress goals self-heal via the conductor; only verified force-landed goals need this command.");
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
             var cleanupDeadline = GoalMarkLandedCleanupDeadline.Start(
@@ -379,6 +379,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (cleanupComplete)
             {
                 GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:cleanup", $"Goal {landedGp} marked as landed out-of-band; workspace removed.");
+                if (landedGoal.Status == GoalStatus.Verified)
+                    context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing, recording, and cleanup evidence.");
                 context.EventWriter.AppendCleanedUp(landedId);
             }
             else
@@ -1229,7 +1231,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     var runGoalResult = RunGoal(context, goal, allowLargePaidSubscriptionStart: true);
     Console.WriteLine("Stage run-goal:");
     ConsoleViews.PrintRunGoalResult(goal, runGoalResult);
-    if (goal.Status != GoalStatus.Completed)
+    if (goal.Status != GoalStatus.Verified)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "run-goal", runGoalResult.StopReason);
         var next = BuildLifecycleRunGoalNextCommand(goalPrefix, runGoalResult);
@@ -1237,7 +1239,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
         throw new InvalidOperationException($"{commandName} stopped after run-goal. Next: {next}");
     }
 
-    GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "run-goal", "Goal reached Completed status.");
+    GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "run-goal", "Goal reached Verified status.");
     if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.Acceptance, $"{commandName} acceptance", out var acceptancePolicyError))
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "acceptance", acceptancePolicyError);
@@ -1295,6 +1297,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+    context.Kernel.CompleteGoal(goal.Id, "Lifecycle command completed goal after acceptance merge and workspace cleanup evidence.");
     ReconcileLandedCleanedAcceptance(context, goal, "workspace cleanup");
     context.EventWriter.AppendCleanedUp(goal.Id);
 }
@@ -1385,6 +1388,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         }
 
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        context.Kernel.CompleteGoal(goal.Id, "Acceptance queue completed goal after merge and workspace cleanup evidence.");
         ReconcileLandedCleanedAcceptance(context, goal, "workspace cleanup");
         context.EventWriter.AppendCleanedUp(goal.Id);
         context.PersistCheckpoint(context.Kernel);
@@ -2538,12 +2542,16 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             if (removeResult.IsComplete)
             {
                 GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", removeResult.Message);
+                if (goal.Status == GoalStatus.Verified)
+                    context.Kernel.CompleteGoal(goal.Id, "Workspace remove completed goal after landing and cleanup evidence.");
                 ReconcileLandedCleanedAcceptance(context, goal, "workspace remove", cleanupEvidenceRecorded: true);
                 context.EventWriter.AppendCleanedUp(goal.Id);
             }
             else if (TryCompleteLandedBranchOnlyWorkspaceRemove(context, goal, removeResult, out var completedRemoveDetail))
             {
                 GoalOperationJournal.Completed(executionDirectory, goal, "workspace:remove", completedRemoveDetail);
+                if (goal.Status == GoalStatus.Verified)
+                    context.Kernel.CompleteGoal(goal.Id, "Workspace remove completed goal after landing and cleanup evidence.");
                 ReconcileLandedCleanedAcceptance(context, goal, "workspace remove", cleanupEvidenceRecorded: true);
                 context.EventWriter.AppendCleanedUp(goal.Id);
             }
@@ -2573,16 +2581,16 @@ private static void PrintWorkspaceUsage()
 private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
-    if (goal.Status != GoalStatus.Completed)
-    {
-        return false;
-    }
-
     if (TryReconcileLandedCleanedAcceptance(context, goal, "acceptance retry", out var reconciledDetail))
     {
         Console.WriteLine(reconciledDetail);
         context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
         return true;
+    }
+
+    if (goal.Status != GoalStatus.Verified)
+    {
+        return false;
     }
 
     var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
@@ -2786,6 +2794,11 @@ private static bool TryReconcileLandedCleanedAcceptance(
         return false;
     }
 
+    if (goal.Status == GoalStatus.Verified)
+    {
+        context.Kernel.CompleteGoal(goal.Id, $"Acceptance repaired after durable landing and cleanup evidence from {source}.");
+    }
+
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     detail = $"Acceptance repaired: goal {goal.Id.Value[..8]} is already landed and workspace cleanup is recorded ({source}).";
     return true;
@@ -2798,9 +2811,9 @@ private static bool HasLandedCleanedTerminalEvidence(
     bool cleanupEvidenceRecorded = false)
 {
     var goalPrefix = goal.Id.Value[..8];
-    if (goal.Status != GoalStatus.Completed)
+    if (goal.Status is not (GoalStatus.Verified or GoalStatus.Completed))
     {
-        detail = $"acceptance repair blocked: goal {goalPrefix} is {goal.Status}, not Completed.";
+        detail = $"acceptance repair blocked: goal {goalPrefix} is {goal.Status}, not Verified or Completed.";
         return false;
     }
 
@@ -3223,6 +3236,7 @@ private static void CleanupGoalWorkspaceAfterMerge(
     if (removeResult.IsComplete)
     {
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
+        context.Kernel.CompleteGoal(goal.Id, "Acceptance completed goal after merge and workspace cleanup evidence.");
         ReconcileLandedCleanedAcceptance(context, goal, "workspace cleanup");
         context.EventWriter.AppendCleanedUp(goal.Id);
     }
