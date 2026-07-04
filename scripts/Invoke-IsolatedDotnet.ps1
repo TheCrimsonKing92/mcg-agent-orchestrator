@@ -163,6 +163,24 @@ function Initialize-ArtifactsDirectory {
     ($marker | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath $ownerPath
 }
 
+function Update-AppDllGitHeadMarker {
+    $repositoryRoot = (Get-Location).Path
+    $appOutput = Join-Path $repositoryRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0"
+    $appDll = Join-Path $appOutput "Mcg.AgentOrchestrator.App.dll"
+    if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $gitHead = (& git -C $repositoryRoot rev-parse HEAD 2>$null).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($gitHead)) {
+            Set-Content -LiteralPath "$appDll.git-head" -Value $gitHead -NoNewline -Encoding ASCII
+        }
+    }
+    catch {
+    }
+}
+
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 $hostTempBase = Get-HostTempBase
 $isolatedRoot = Get-IsolatedRootBase
@@ -258,6 +276,9 @@ try {
 
     & dotnet @DotnetArguments @isolatedArguments
     $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        Update-AppDllGitHeadMarker
+    }
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
