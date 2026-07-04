@@ -6413,7 +6413,7 @@ public sealed class CliCommandTests
             ref profiles,
             ref currentGoal)));
 
-        Xunit.Assert.Contains("state changed during acceptance verification", ex.Message);
+        Xunit.Assert.Contains("changed during acceptance verification", ex.Message);
         Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
         Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
     }
@@ -7209,6 +7209,8 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(active.Id, agents);
         kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
             new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+        completed = kernel.GetGoal(completed.Id);
         kernel.SetGoalDependency(active.Id, completed.Id);
         var repository = new InMemoryTransactionalStateRepository(kernel);
 
@@ -7930,7 +7932,7 @@ public sealed class CliCommandTests
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
         kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
             "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
         var goalPrefix = goal.Id.Value[..8];
 
         var output = CaptureConsole(() =>
