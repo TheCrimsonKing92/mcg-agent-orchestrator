@@ -1899,6 +1899,12 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("still running", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            var goalSnapshot = Assert.Single(kernel.ExportSnapshot().Goals);
+            Assert.Equal(GoalStatus.Verified, goalSnapshot.Status);
+            Assert.DoesNotContain($"Goal {goal.Id.Value[..8]} completed", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, kernel.BuildLoopHealthReport().CompletedGoalCount);
+            Assert.Empty(kernel.BuildProvenanceReport($"Landed goal {goal.Id.Value[..8]}").Goals);
         }
         finally
         {

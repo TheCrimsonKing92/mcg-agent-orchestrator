@@ -36,7 +36,7 @@ public static class LoopHealthReport
         var requests = humanInputRequests.Where(r => goalIds.Contains(r.GoalId)).ToList();
 
         var allTasks = window.SelectMany(g => g.Tasks).ToList();
-        var completedGoals = window.Where(g => g.Status is GoalStatus.Verified or GoalStatus.Completed).ToList();
+        var completedGoals = window.Where(g => g.Status == GoalStatus.Completed).ToList();
 
         var totalDispatches = window.Sum(g =>
             g.Timeline.Count(e => e.Kind == ProgressKind.TaskDispatchRecorded));

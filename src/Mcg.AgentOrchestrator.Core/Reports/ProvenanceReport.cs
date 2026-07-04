@@ -46,7 +46,7 @@ public static class ProvenanceReport
         Func<string, bool>? shaExists = null)
     {
         var goalList = goals.ToList();
-        var completedGoals = goalList.Where(g => g.Status is GoalStatus.Verified or GoalStatus.Completed).ToList();
+        var completedGoals = goalList.Where(g => g.Status == GoalStatus.Completed).ToList();
         var goalRecords = completedGoals.Select(BuildGoalRecord).ToList();
 
         var backedCount = goalRecords.Count(r => r.ProvenanceStatus == ProvenanceStatus.Backed);

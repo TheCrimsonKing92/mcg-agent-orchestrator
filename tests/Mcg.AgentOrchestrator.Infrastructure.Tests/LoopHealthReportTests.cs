@@ -105,10 +105,14 @@ public sealed class LoopHealthReportTests
     public void LoopHealthMedianTimeToAcceptanceIsNullWhenNoCompletedGoals()
     {
         var kernel = new AgentOrchestratorKernel();
-        kernel.CreateGoal("Incomplete goal", [MakeTask()]);
+        var goal = kernel.CreateGoal("Verified but not landed goal", [MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        RecordVerifiedDispatch(kernel, goal, goal.Tasks[0]);
 
         var report = kernel.BuildLoopHealthReport();
 
+        Assert.Equal(0, report.CompletedGoalCount);
+        Assert.Equal(0.0, report.DispatchesPerSuccessfulMerge);
         Assert.True(report.MedianTimeToAcceptanceHours is null);
     }
 
@@ -306,6 +310,23 @@ public sealed class LoopHealthReportTests
         Assert.Equal(0.0, report.FalsePassRate);
     }
 
+    [Xunit.Fact(DisplayName = "LoopHealth_verified_goal_is_not_counted_as_completed")]
+    public void LoopHealthVerifiedGoalIsNotCountedAsCompleted()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Verified but unmerged", [MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        RecordVerifiedDispatch(kernel, goal, goal.Tasks[0]);
+
+        var report = kernel.BuildLoopHealthReport();
+
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Equal(1, report.GoalCount);
+        Assert.Equal(0, report.CompletedGoalCount);
+        Assert.Equal(0.0, report.DispatchesPerSuccessfulMerge);
+        Assert.True(report.MedianTimeToAcceptanceHours is null);
+    }
+
     [Xunit.Fact(DisplayName = "LoopHealth_false_pass_rate_counts_consensus_met_for_failed_or_cancelled_goals")]
     public void LoopHealthFalsePassRateCountsConsensusMetForFailedOrCancelledGoals()
     {
@@ -405,6 +426,36 @@ public sealed class LoopHealthReportTests
         new(TaskId.New(), "Developer implementation task", AgentRole.Developer);
 
     private static void RecordCompletedDispatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string providerName = "Anthropic",
+        string modelName = "claude-sonnet-4-6")
+    {
+        var dispatch = new TaskDispatchRecord(
+            "worker-cli",
+            DispatchCommand,
+            WorkDir,
+            DateTimeOffset.UtcNow,
+            ProviderName: providerName,
+            ModelName: modelName);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+        var verification = new TaskVerificationRecord(
+            DispatchCommand,
+            WorkDir,
+            0,
+            "Task completed successfully.",
+            string.Empty,
+            DateTimeOffset.UtcNow);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+        if (goal.Status == GoalStatus.Verified)
+        {
+            kernel.CompleteGoal(goal.Id, "Completed after durable integration and cleanup evidence.");
+        }
+    }
+
+    private static void RecordVerifiedDispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
