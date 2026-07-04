@@ -227,8 +227,8 @@ internal sealed class WorkerArtifactWriter
                 string.Empty,
                 "## Build/Test Verification",
                 "- Do not run raw `dotnet test` or `dotnet build` directly: raw testhost binds an unauthorized port and blocks on a Windows Firewall prompt during unattended runs.",
-                "- DO self-verify before reporting using the goal-scoped wrapper `.\\scripts\\Invoke-IsolatedDotnet.ps1` (see the Isolated .NET Verification section for the exact `-GoalPrefix`/`-AttemptName` command). It pins obj/bin/artifacts under the goal build root.",
-                "- The orchestrator acceptance gate re-verifies from goal-scoped build outputs before merge; a compile/test failure you can catch with the wrapper is a failure you must fix, not defer."
+                "- Do not run `.\\scripts\\Invoke-IsolatedDotnet.ps1` from a subscription worker either; the orchestrator acceptance gate owns .NET build/test verification through stable firewall-authorized slots.",
+                "- When reporting, use `tests: not-run - orchestrator acceptance gate verifies via stable slots` unless you ran a non-.NET check that cannot trigger testhost."
             ]);
         }
 
@@ -322,9 +322,10 @@ internal sealed class WorkerArtifactWriter
             lines.Add(string.Empty);
             if (toolchain == Toolchain.Dotnet)
             {
-                lines.Add("## Isolated .NET Verification");
-                lines.Add($"- Use `.\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal` instead of raw `dotnet test` for .NET checks.");
-                lines.Add($"- Goal build metadata and test artifacts are recorded under `{DotnetBuildEnvironmentManager.GoalRoot(goal.Id)}`; the artifact path is `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`.");
+                lines.Add("## .NET Verification Delegated To Acceptance");
+                lines.Add("- Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`; those commands can create per-worktree testhost firewall prompts.");
+                lines.Add($"- The orchestrator acceptance gate verifies .NET changes through stable slots under `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}` before merge.");
+                lines.Add("- In WORKER_RESULT, report `tests: not-run - orchestrator acceptance gate verifies via stable slots` for skipped .NET verification.");
             }
             else if (toolchain == Toolchain.Go)
             {

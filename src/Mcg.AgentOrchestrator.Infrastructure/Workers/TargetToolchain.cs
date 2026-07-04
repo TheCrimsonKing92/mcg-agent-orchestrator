@@ -88,7 +88,7 @@ public static class TargetToolchainDetector
         toolchain switch
         {
             Toolchain.Dotnet =>
-                $".\\scripts\\Invoke-IsolatedDotnet.ps1 -GoalPrefix {goalPrefix} -AttemptName {attemptName} test <project-or-sln> --verbosity minimal",
+                "do not run .NET build/test in subscription workers; report tests: not-run - orchestrator acceptance gate verifies via stable slots",
             Toolchain.Go => "go test ./...",
             Toolchain.Node => "npm test (or package.json test script)",
             Toolchain.Python => "python -m pytest (or project test command)",
@@ -97,7 +97,7 @@ public static class TargetToolchainDetector
 
     public static string GetBrokerBuildTestNote(Toolchain toolchain) => toolchain switch
     {
-        Toolchain.Dotnet => "avoiding raw unisolated `dotnet test`",
+        Toolchain.Dotnet => "delegating .NET build/test verification to the orchestrator acceptance gate",
         Toolchain.Go => "running `go test ./...` or focused package tests",
         Toolchain.Node => "running `npm test` or package.json scripts",
         Toolchain.Python => "running `python -m pytest` or project test commands",

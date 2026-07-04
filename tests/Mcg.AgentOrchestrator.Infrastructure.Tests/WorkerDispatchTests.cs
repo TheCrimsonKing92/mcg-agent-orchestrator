@@ -6272,10 +6272,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(digest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.Contains(digest, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
-    Assert.Contains(deterministic, text => text.Contains("## Isolated .NET Verification", StringComparison.Ordinal));
-    Assert.Contains(deterministic, text => text.Contains(".\\scripts\\Invoke-IsolatedDotnet.ps1", StringComparison.Ordinal));
-    Assert.Contains(deterministic, text => text.Contains("-GoalPrefix", StringComparison.Ordinal));
-    Assert.Contains(deterministic, text => text.Contains("instead of raw `dotnet test`", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("## .NET Verification Delegated To Acceptance", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("The orchestrator acceptance gate verifies .NET changes through stable slots", StringComparison.Ordinal));
+    Assert.Contains(deterministic, text => text.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", StringComparison.Ordinal));
     Assert.Contains(deterministic, text => text.Contains("## Required Verification Policy", StringComparison.Ordinal));
     Assert.Contains(deterministic, text => text.Contains("Requires tests:", StringComparison.Ordinal));
     Assert.Contains(workflowBrokers, text => text.Contains("build-test-selection", StringComparison.Ordinal));

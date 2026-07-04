@@ -179,8 +179,8 @@ public sealed class ToolchainDetectionTests
         Xunit.Assert.DoesNotContain("Invoke-IsolatedDotnet", brokers, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_deterministic_verification_uses_dotnet_for_dotnet_repo")]
-    public void WorkerContextArtifactsDeterministicVerificationUsesDotnetForDotnetRepo()
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_deterministic_verification_delegates_dotnet_to_acceptance")]
+    public void WorkerContextArtifactsDeterministicVerificationDelegatesDotnetToAcceptance()
     {
         var root = CreateTempDirectory();
         File.WriteAllText(Path.Combine(root, "MyApp.sln"), "");
@@ -194,8 +194,9 @@ public sealed class ToolchainDetectionTests
         var contextDir = WorkerContextArtifacts.Write(goal, task, root);
         var verification = File.ReadAllText(Path.Combine(contextDir, "deterministic-verification.md"));
 
-        Xunit.Assert.Contains("Invoke-IsolatedDotnet", verification, StringComparison.Ordinal);
-        Xunit.Assert.Contains("dotnet test", verification, StringComparison.Ordinal);
+        Xunit.Assert.Contains(".NET Verification Delegated To Acceptance", verification, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", verification, StringComparison.Ordinal);
+        Xunit.Assert.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", verification, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalObjectivePlanner_required_tools_does_not_leak_dotnet_script_for_generic_build_goal")]
