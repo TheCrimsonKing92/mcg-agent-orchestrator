@@ -280,8 +280,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("-p:BuildInParallel=false", configuredArguments);
     }
 
-    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_and_clears_worker_environment_for_dotnet_child")]
-    public void InvokeIsolatedDotnetForwardsArgsAndClearsWorkerEnvironmentForDotnetChild()
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_when_operator_sandbox_config_is_inherited")]
+    public void InvokeIsolatedDotnetForwardsArgsWhenOperatorSandboxConfigIsInherited()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -341,7 +341,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
-            startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.EnabledVariable);
+            startInfo.EnvironmentVariables[WorkerSandboxOptions.EnabledVariable] = "1";
             startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
             startInfo.EnvironmentVariables[WorkerSandboxOptions.AccountVariable] = "sandbox-user";
             startInfo.EnvironmentVariables[WorkerSandboxOptions.CredentialTargetVariable] = "sandbox-target";
