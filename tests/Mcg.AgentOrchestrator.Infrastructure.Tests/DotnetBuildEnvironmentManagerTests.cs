@@ -639,7 +639,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
 
             Assert.NotEqual(0, process.ExitCode);
-            Assert.False(File.Exists(logPath), "dotnet shim should not be invoked for worker-side self-verification.");
+            Assert.True(!File.Exists(logPath), "dotnet shim should not be invoked for worker-side self-verification.");
             Assert.True(stderr.Contains("Worker-side .NET self-verification is disabled", StringComparison.Ordinal), stderr);
             Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
         }

@@ -115,7 +115,8 @@ public sealed class DispatchProcessHostTests
             Assert.Equal(0, result);
             Assert.Equal("0", File.ReadAllText(exitPath).Trim());
             Assert.Equal("1", File.ReadAllText(envPath).Trim());
-            Assert.Contains("worker-env-captured", File.ReadAllText(stdoutPath), StringComparison.Ordinal);
+            var stdout = File.ReadAllText(stdoutPath);
+            Assert.True(stdout.Contains("worker-env-captured", StringComparison.Ordinal), stdout);
             Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(stderrPath)), File.ReadAllText(stderrPath));
         }
         finally
