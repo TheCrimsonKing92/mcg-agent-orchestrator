@@ -85,6 +85,7 @@ public static class DispatchProcessHost
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        ProtectWorkspaceBoundary(parameters.WorkingDirectory);
         var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
         if (preparation.RecoveryAction is { } action)
         {
@@ -459,6 +460,22 @@ public static class DispatchProcessHost
         {
             // Best-effort: if git ignores fail to write, the worktree inspection will simply see the
             // scratch dir; the commit recovery still excludes it via pathspec.
+        }
+    }
+
+    private static void ProtectWorkspaceBoundary(string worktree)
+    {
+        var parent = Directory.GetParent(worktree);
+        if (parent is null || !parent.Exists)
+        {
+            return;
+        }
+
+        _ = SetMediumIntegrity(parent.FullName);
+
+        foreach (var file in parent.EnumerateFiles())
+        {
+            _ = SetMediumIntegrity(file.FullName);
         }
     }
 

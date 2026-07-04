@@ -861,6 +861,7 @@ public sealed class DispatchProcessHostTests
             Assert.Equal(0, exitCode);
             Assert.Contains("outside-write-denied", File.ReadAllText(stdoutPath));
             Assert.Equal("outside-protected", File.ReadAllText(outsideWorkspaceFile));
+            Assert.True(GetMandatoryIntegrityRid(outsideWorkspaceFile) >= MediumIntegrityRid);
             Assert.Equal("created", File.ReadAllText(workspaceCreate).Trim());
             Assert.Equal("modified", File.ReadAllText(workerFile).Trim());
             Assert.False(File.Exists(workspaceDelete));
