@@ -130,6 +130,18 @@ internal static class TerminalGoalSweep
                 hasGoalBranchArtifact &&
                 !GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
             {
+                if (goal.Status == GoalStatus.Completed &&
+                    kernel.NormalizePrematureCompletedGoalToVerified(
+                        goal.Id,
+                        "terminal stale-goal sweep: normalized raw Completed goal with unmerged branch back to Verified for acceptance."))
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "completed-branch-normalized",
+                        $"completed goal with unmerged branch {GoalWorktrees.BranchName(goal.Id)} was normalized to Verified",
+                        $"acceptance {prefix}"));
+                    goal = kernel.GetGoal(originalGoal.Id);
+                }
+
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "completed-branch-unmerged",
                     $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",

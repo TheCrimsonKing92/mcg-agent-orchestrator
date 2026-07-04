@@ -175,6 +175,24 @@ public sealed partial class AgentOrchestratorKernel
         return ReopenTerminalGoalWithNonTerminalTasks(goal, reason);
     }
 
+    public bool NormalizePrematureCompletedGoalToVerified(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.Completed)
+        {
+            return false;
+        }
+
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
     public TaskSpec RequeueInterruptedDispatch(GoalId goalId, TaskId taskId, string message)
     {
         var goal = GetGoal(goalId);

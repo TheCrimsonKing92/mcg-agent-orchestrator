@@ -2588,6 +2588,13 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return true;
     }
 
+    if (TryNormalizePrematureCompletedGoalForAcceptance(context, goal, out var normalizedGoal, out var normalizedDetail))
+    {
+        Console.WriteLine(normalizedDetail);
+        goal = normalizedGoal;
+        context.CurrentGoal = normalizedGoal;
+    }
+
     if (goal.Status != GoalStatus.Verified)
     {
         return false;
@@ -2740,6 +2747,48 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     RecordAcceptanceCompleted(context, goal);
+    return true;
+}
+
+private static bool TryNormalizePrematureCompletedGoalForAcceptance(
+    CliExecutionContext context,
+    Goal goal,
+    out Goal normalizedGoal,
+    out string detail)
+{
+    normalizedGoal = goal;
+    var goalPrefix = goal.Id.Value[..8];
+    if (goal.Status != GoalStatus.Completed)
+    {
+        detail = $"acceptance normalization skipped: goal {goalPrefix} is {goal.Status}.";
+        return false;
+    }
+
+    if (!GoalWorktrees.IsGitWorkTree(context.Workspace.ExecutionDirectory))
+    {
+        detail = $"acceptance normalization skipped: goal {goalPrefix} is not in a git worktree.";
+        return false;
+    }
+
+    var hasBranchArtifact = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null ||
+        GoalWorktrees.HasBranch(context.Workspace.ExecutionDirectory, goal.Id);
+    if (!hasBranchArtifact ||
+        GoalWorktrees.IsBranchMergedIntoCurrent(context.Workspace.ExecutionDirectory, goal.Id))
+    {
+        detail = $"acceptance normalization skipped: goal {goalPrefix} has no unmerged goal branch.";
+        return false;
+    }
+
+    if (!context.Kernel.NormalizePrematureCompletedGoalToVerified(
+            goal.Id,
+            "acceptance: normalized raw Completed goal with unmerged branch back to Verified before merge."))
+    {
+        detail = $"acceptance normalization skipped: goal {goalPrefix} does not have passed task verification gates.";
+        return false;
+    }
+
+    normalizedGoal = context.Kernel.GetGoal(goal.Id);
+    detail = $"Acceptance repair: normalized raw Completed goal {goalPrefix} to Verified so acceptance can merge {context.Worktrees.BranchName(goal.Id)}.";
     return true;
 }
 
