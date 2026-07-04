@@ -280,8 +280,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("-p:BuildInParallel=false", configuredArguments);
     }
 
-    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_and_strips_worker_environment")]
-    public void InvokeIsolatedDotnetForwardsArgsAndStripsWorkerEnvironment()
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_and_clears_worker_environment_for_dotnet_child")]
+    public void InvokeIsolatedDotnetForwardsArgsAndClearsWorkerEnvironmentForDotnetChild()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -341,7 +341,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
-            startInfo.EnvironmentVariables[WorkerSandboxOptions.EnabledVariable] = "1";
+            startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.EnabledVariable);
+            startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
             startInfo.EnvironmentVariables[WorkerSandboxOptions.AccountVariable] = "sandbox-user";
             startInfo.EnvironmentVariables[WorkerSandboxOptions.CredentialTargetVariable] = "sandbox-target";
 
@@ -564,6 +565,83 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             Assert.Equal("stale-test-head", File.ReadAllText(markerPath).Trim());
             Assert.Equal(appDllLastWriteTime, File.GetLastWriteTimeUtc(appDllPath));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_blocks_worker_dispatch_before_dotnet_launch")]
+    public void InvokeIsolatedDotnetBlocksWorkerDispatchBeforeDotnetLaunch()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        try
+        {
+            var logPath = Path.Combine(root, "dotnet.log");
+            var shimPath = Path.Combine(shimDirectory, "dotnet.cmd");
+            File.WriteAllText(
+                shimPath,
+                """
+                @echo off
+                >> "%DOTNET_SHIM_LOG%" echo args=%*
+                exit /b 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-InputFormat");
+            startInfo.ArgumentList.Add("None");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("feedbeef");
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add("Fake.Tests.csproj");
+            startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+            startInfo.EnvironmentVariables[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.False(File.Exists(logPath), "dotnet shim should not be invoked for worker-side self-verification.");
+            Assert.True(stderr.Contains("Worker-side .NET self-verification is disabled", StringComparison.Ordinal), stderr);
+            Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
         }
         finally
         {

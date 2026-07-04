@@ -85,6 +85,45 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_marks_worker_processes_with_dispatch_environment")]
+    public void DispatchProcessHostMarksWorkerProcessesWithDispatchEnvironment()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-env-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var envPath = Path.Combine(dir, "worker-env.txt");
+            var stdoutPath = Path.Combine(dir, "out.log");
+            var stderrPath = Path.Combine(dir, "err.log");
+            var exitPath = Path.Combine(dir, "exit.txt");
+            var command = $"Set-Content -LiteralPath '{envPath}' -Value $env:{WorkerSandboxOptions.DispatchWorkerVariable}; Write-Output worker-env-captured";
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                command,
+                dir,
+                stdoutPath,
+                stderrPath,
+                exitPath,
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Codex);
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters);
+
+            var result = DispatchProcessHost.Run(parametersPath);
+
+            Assert.Equal(0, result);
+            Assert.Equal("0", File.ReadAllText(exitPath).Trim());
+            Assert.Equal("1", File.ReadAllText(envPath).Trim());
+            Assert.Contains("worker-env-captured", File.ReadAllText(stdoutPath), StringComparison.Ordinal);
+            Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(stderrPath)), File.ReadAllText(stderrPath));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_child_receives_prompt_stdin_bytes_and_eof_without_paid_worker")]
     public void DispatchProcessHostChildReceivesPromptStdinBytesAndEofWithoutPaidWorker()
     {

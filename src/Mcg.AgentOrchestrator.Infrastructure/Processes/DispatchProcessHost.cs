@@ -666,6 +666,8 @@ public static void DropToLow() {
                 startInfo.Environment["UseSharedCompilation"] = "false";
             }
 
+            startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);

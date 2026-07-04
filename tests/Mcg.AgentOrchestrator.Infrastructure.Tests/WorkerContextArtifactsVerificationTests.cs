@@ -3,8 +3,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerContextArtifactsVerificationTests
 {
-    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_directs_developers_to_self_verify_via_isolated_dotnet")]
-    public void WorkerContextArtifactsDirectsDevelopersToSelfVerifyViaIsolatedDotnet()
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_directs_developers_to_skip_dotnet_self_verify")]
+    public void WorkerContextArtifactsDirectsDevelopersToSkipDotnetSelfVerify()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -19,6 +19,7 @@ public sealed class WorkerContextArtifactsVerificationTests
         Xunit.Assert.True(verificationIndex >= 0);
         Xunit.Assert.True(verificationIndex < descriptionIndex);
         Xunit.Assert.Contains("Do not run raw `dotnet test` or `dotnet build` directly", currentTask);
-        Xunit.Assert.Contains("Invoke-IsolatedDotnet.ps1", currentTask);
+        Xunit.Assert.Contains("Do not run `.\\scripts\\Invoke-IsolatedDotnet.ps1` from a subscription worker either", currentTask);
+        Xunit.Assert.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", currentTask);
     }
 }

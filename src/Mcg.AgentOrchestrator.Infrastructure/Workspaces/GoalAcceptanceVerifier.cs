@@ -1136,6 +1136,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.EnabledVariable);
         startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.AccountVariable);
         startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.CredentialTargetVariable);
+        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
         int? startedProcessId = null;
         try
