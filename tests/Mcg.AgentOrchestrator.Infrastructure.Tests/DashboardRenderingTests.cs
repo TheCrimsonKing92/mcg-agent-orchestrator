@@ -517,11 +517,15 @@ public sealed class DashboardRenderingTests
     var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
     var acceptance = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, kernel.BuildGoalAcceptanceSummary(goal.Id));
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+    var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
+    var monitoringBatch = DashboardMonitoringEvents.BuildBatch(kernel, goal, sinceEventId: 0);
 
     Assert.Equal(GoalStatus.Completed, goal.Status);
     Assert.Equal(GoalStatus.Verified, monitor.Status);
     Assert.Equal(GoalStatus.Verified, acceptance.Status);
     Assert.Equal(GoalStatus.Verified, workSummary.Status);
+    Assert.Equal(GoalStatus.Verified, detail.Goal.Status);
+    Assert.Equal(GoalStatus.Verified, monitoringBatch.Snapshot.Monitor.Status);
     Assert.Equal(OperatorDispositionState.Accept, workSummary.OperatorDisposition.State);
     Assert.Equal($"acceptance {goal.Id.Value[..8]}", workSummary.OperatorDisposition.NextSafeCommand);
 }
@@ -539,14 +543,23 @@ public sealed class DashboardRenderingTests
     GoalOperationJournal.Completed(root, goal, "acceptance", "Acceptance passed and merge completed.");
     GoalOperationJournal.Completed(root, goal, "workspace:remove", "Workspace removed.");
     kernel.CompleteGoal(goal.Id, "Manual acceptance completed after cleanup evidence.");
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
 
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
         goal,
         executionDirectory: root);
+    var streamBatch = GoalMonitoringStream.BuildBatch(
+        kernel,
+        goal,
+        sinceEventId: 0,
+        [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
+        WorkerProfileCatalog.Default(),
+        workspace);
 
     Assert.Equal(GoalStatus.Completed, goal.Status);
     Assert.Equal(GoalStatus.Completed, workSummary.Status);
+    Assert.Equal(GoalStatus.Completed, streamBatch.Snapshot.Monitor.Status);
 }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]

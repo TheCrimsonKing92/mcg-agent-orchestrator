@@ -11,7 +11,7 @@ public static GoalSummaryDto ToGoalSummary(Goal goal)
     return new GoalSummaryDto(
         goal.Id.Value,
         OutputTextPreview.CreateSummary(goal.Objective).Text,
-        goal.Status,
+        EffectiveStatus(goal.Status, ResolveLifecycle(goal, executionDirectory: null)),
         goal.Tasks.Count,
         goal.Timeline.LastOrDefault()?.OccurredAt);
 }

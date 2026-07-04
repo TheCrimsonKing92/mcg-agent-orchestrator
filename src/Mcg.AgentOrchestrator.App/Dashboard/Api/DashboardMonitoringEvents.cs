@@ -40,10 +40,12 @@ internal static class DashboardMonitoringEvents
         long sinceEventId,
         OperatorInboxReportDto? operatorInbox,
         ProviderCapacityScheduleDto? providerCapacity,
-        GoalOperatorDisposition? conductorDisposition = null)
+        GoalOperatorDisposition? conductorDisposition = null,
+        GoalLifecycleState? lifecycleState = null)
     {
         var allEvents = BuildTimelineEvents(goal);
-        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity, conductorDisposition);
+        lifecycleState ??= goal.Status == GoalStatus.Completed ? GoalLifecycleState.Verified : null;
+        var snapshot = BuildSnapshot(kernel, goal, allEvents.Count, operatorInbox, providerCapacity, conductorDisposition, lifecycleState);
         return new GoalMonitoringBatchDto(
             goal.Id.Value,
             Math.Max(0, sinceEventId),
@@ -113,7 +115,8 @@ internal static class DashboardMonitoringEvents
         long lastEventId,
         OperatorInboxReportDto? operatorInbox,
         ProviderCapacityScheduleDto? providerCapacity,
-        GoalOperatorDisposition? conductorDisposition)
+        GoalOperatorDisposition? conductorDisposition,
+        GoalLifecycleState? lifecycleState)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var verification = kernel.BuildVerificationGate(goal.Id);
@@ -122,7 +125,7 @@ internal static class DashboardMonitoringEvents
             goal.Id.Value,
             DateTimeOffset.UtcNow,
             lastEventId,
-            DashboardResponseMapper.ToMonitorDto(monitor),
+            DashboardResponseMapper.ToMonitorDto(monitor, lifecycleState),
             goal.Tasks.Select(task => new TaskMonitoringSnapshotDto(
                 ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
                 task.Id.Value,
