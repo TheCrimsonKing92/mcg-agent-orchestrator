@@ -567,6 +567,48 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_preflight_does_not_inherit_dispatch_worker_marker")]
+    public void DispatchProcessHostPreflightDoesNotInheritDispatchWorkerMarker()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-shim-preflight-env-test", Guid.NewGuid().ToString("n"));
+        var sandboxBin = Path.Combine(dir, "bin");
+        Directory.CreateDirectory(sandboxBin);
+        var marker = Path.Combine(dir, "marker.txt");
+        WriteEnvironmentMarkerShim(Path.Combine(sandboxBin, "git.cmd"), marker, "git");
+        WriteEnvironmentMarkerShim(Path.Combine(sandboxBin, "dotnet.cmd"), marker, "dotnet");
+        try
+        {
+            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            startInfo.Environment["PATH"] = sandboxBin;
+            startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: true);
+
+            DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters);
+
+            var lines = File.ReadAllLines(marker);
+            Assert.Contains("git --version dispatch=", lines);
+            Assert.Contains("dotnet --version dispatch=", lines);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_preflight_fails_when_shimmed_command_exits_nonzero")]
     public void DispatchProcessHostPreflightFailsWhenShimExitsNonZero()
     {
@@ -1000,6 +1042,18 @@ public sealed class DispatchProcessHostTests
             $"""
             @echo off
             echo {commandName} %*>>"{escapedMarker}"
+            exit /b 0
+            """);
+    }
+
+    private static void WriteEnvironmentMarkerShim(string path, string marker, string commandName)
+    {
+        var escapedMarker = marker.Replace("%", "%%", StringComparison.Ordinal);
+        File.WriteAllText(
+            path,
+            $"""
+            @echo off
+            echo {commandName} %* dispatch=%{WorkerSandboxOptions.DispatchWorkerVariable}%>>"{escapedMarker}"
             exit /b 0
             """);
     }

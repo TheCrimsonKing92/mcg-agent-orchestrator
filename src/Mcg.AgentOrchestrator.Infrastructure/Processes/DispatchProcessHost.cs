@@ -349,6 +349,7 @@ public static class DispatchProcessHost
         {
             startInfo.Environment["PATH"] = path;
         }
+        startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
         using var process = Process.Start(startInfo);
         if (process is null)
@@ -666,8 +667,6 @@ public static void DropToLow() {
                 startInfo.Environment["UseSharedCompilation"] = "false";
             }
 
-            startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
-
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
@@ -679,6 +678,7 @@ public static void DropToLow() {
 
             WriteHeartbeat("starting");
             RequireStartGate();
+            startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             worker = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start worker process.");
             workerGroup = OwnedProcessGroup.Attach(worker);

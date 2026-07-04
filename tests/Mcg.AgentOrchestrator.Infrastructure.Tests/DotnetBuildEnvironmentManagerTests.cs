@@ -627,10 +627,10 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.ArgumentList.Add("feedbeef");
             startInfo.ArgumentList.Add("test");
             startInfo.ArgumentList.Add("Fake.Tests.csproj");
-            startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
-            startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
-            startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
-            startInfo.EnvironmentVariables[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+            startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+            startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
 
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start PowerShell.");
@@ -658,12 +658,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
     private static string ResolveRepositoryRoot()
     {
-        var environmentRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
-        if (IsRepositoryRoot(environmentRoot))
-        {
-            return Path.GetFullPath(environmentRoot!);
-        }
-
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
@@ -673,6 +667,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
             }
 
             directory = directory.Parent;
+        }
+
+        var environmentRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+        if (IsRepositoryRoot(environmentRoot))
+        {
+            return Path.GetFullPath(environmentRoot!);
         }
 
         throw new InvalidOperationException("Could not resolve repository root for Invoke-IsolatedDotnet.ps1.");
